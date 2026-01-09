@@ -9,6 +9,7 @@ pub use crate::core::{
     AlignItems,
     JustifyContent,
     Display,
+    Position,
     Overflow,
     TextWrap,
     BorderStyle,

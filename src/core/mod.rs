@@ -12,6 +12,7 @@ pub use style::{
     AlignSelf,
     JustifyContent,
     Display,
+    Position,
     Overflow,
     TextWrap,
     BorderStyle,

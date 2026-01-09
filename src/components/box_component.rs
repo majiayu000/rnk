@@ -3,7 +3,7 @@
 use crate::core::{
     Element, ElementType, Style, Color,
     FlexDirection, AlignItems, AlignSelf, JustifyContent,
-    Dimension, Edges, BorderStyle, Overflow,
+    Dimension, Edges, BorderStyle, Overflow, Position,
 };
 
 /// Box component builder
@@ -293,6 +293,44 @@ impl Box {
     /// Set vertical overflow
     pub fn overflow_y(mut self, overflow: Overflow) -> Self {
         self.style.overflow_y = overflow;
+        self
+    }
+
+    // === Positioning ===
+
+    /// Set position type
+    pub fn position(mut self, position: Position) -> Self {
+        self.style.position = position;
+        self
+    }
+
+    /// Set position to absolute
+    pub fn position_absolute(mut self) -> Self {
+        self.style.position = Position::Absolute;
+        self
+    }
+
+    /// Set top position
+    pub fn top(mut self, value: f32) -> Self {
+        self.style.top = Some(value);
+        self
+    }
+
+    /// Set right position
+    pub fn right(mut self, value: f32) -> Self {
+        self.style.right = Some(value);
+        self
+    }
+
+    /// Set bottom position
+    pub fn bottom(mut self, value: f32) -> Self {
+        self.style.bottom = Some(value);
+        self
+    }
+
+    /// Set left position
+    pub fn left(mut self, value: f32) -> Self {
+        self.style.left = Some(value);
         self
     }
 

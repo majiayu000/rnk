@@ -238,3 +238,37 @@ fn test_reactive_ui_pattern() {
     assert_eq!(text1, Some(&"Selected: 0".to_string()));
     assert_eq!(text2, Some(&"Selected: 5".to_string()));
 }
+
+#[test]
+fn test_position_absolute() {
+    let element = Box::new()
+        .width(40)
+        .height(20)
+        .child(
+            Box::new()
+                .position_absolute()
+                .top(5.0)
+                .left(10.0)
+                .child(Text::new("Absolute").into_element())
+                .into_element()
+        )
+        .into_element();
+
+    // Verify position is set correctly
+    let absolute_child = element.children.iter().next().unwrap();
+    assert_eq!(absolute_child.style.position, Position::Absolute);
+    assert_eq!(absolute_child.style.top, Some(5.0));
+    assert_eq!(absolute_child.style.left, Some(10.0));
+
+    // Test layout computation
+    let mut engine = LayoutEngine::new();
+    engine.compute(&element, 80, 24);
+
+    let child_layout = engine.get_layout(absolute_child.id);
+    assert!(child_layout.is_some());
+
+    // Absolute positioned element should be at the specified position
+    let layout = child_layout.unwrap();
+    assert_eq!(layout.x, 10.0);
+    assert_eq!(layout.y, 5.0);
+}

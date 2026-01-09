@@ -113,6 +113,23 @@ impl From<Display> for taffy::Display {
     }
 }
 
+/// Position type
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Position {
+    #[default]
+    Relative,
+    Absolute,
+}
+
+impl From<Position> for taffy::Position {
+    fn from(pos: Position) -> Self {
+        match pos {
+            Position::Relative => taffy::Position::Relative,
+            Position::Absolute => taffy::Position::Absolute,
+        }
+    }
+}
+
 /// Overflow behavior
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Overflow {
@@ -266,6 +283,13 @@ pub struct Style {
     // Display
     pub display: Display,
 
+    // Positioning
+    pub position: Position,
+    pub top: Option<f32>,
+    pub right: Option<f32>,
+    pub bottom: Option<f32>,
+    pub left: Option<f32>,
+
     // Flexbox
     pub flex_direction: FlexDirection,
     pub flex_wrap: bool,
@@ -338,6 +362,13 @@ impl Style {
     pub fn to_taffy(&self) -> taffy::Style {
         taffy::Style {
             display: self.display.into(),
+            position: self.position.into(),
+            inset: taffy::Rect {
+                top: self.top.map(taffy::LengthPercentageAuto::Length).unwrap_or(taffy::LengthPercentageAuto::Auto),
+                right: self.right.map(taffy::LengthPercentageAuto::Length).unwrap_or(taffy::LengthPercentageAuto::Auto),
+                bottom: self.bottom.map(taffy::LengthPercentageAuto::Length).unwrap_or(taffy::LengthPercentageAuto::Auto),
+                left: self.left.map(taffy::LengthPercentageAuto::Length).unwrap_or(taffy::LengthPercentageAuto::Auto),
+            },
             flex_direction: self.flex_direction.into(),
             flex_wrap: if self.flex_wrap {
                 taffy::FlexWrap::Wrap
