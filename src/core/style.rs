@@ -316,6 +316,10 @@ pub struct Style {
     // Overflow
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
+
+    // Static output marker (internal use)
+    #[doc(hidden)]
+    pub is_static: bool,
 }
 
 impl Style {

@@ -47,6 +47,8 @@ where
     options: AppOptions,
     should_exit: Arc<AtomicBool>,
     needs_render: Arc<AtomicBool>,
+    /// Lines of static content that have been committed
+    static_lines: Vec<String>,
 }
 
 impl<F> App<F>
@@ -77,6 +79,7 @@ where
             options,
             should_exit: Arc::new(AtomicBool::new(false)),
             needs_render,
+            static_lines: Vec::new(),
         }
     }
 
@@ -171,20 +174,118 @@ where
         // Clear app context after render
         set_app_context(None);
 
-        // Compute layout
-        self.layout_engine.compute(&root, width, height);
+        // Extract and commit static content
+        let new_static_lines = self.extract_static_content(&root, width);
+        if !new_static_lines.is_empty() {
+            self.commit_static_content(&new_static_lines)?;
+        }
+
+        // Filter out static elements from the tree for dynamic rendering
+        let dynamic_root = self.filter_static_elements(&root);
+
+        // Compute layout for dynamic content
+        self.layout_engine.compute(&dynamic_root, width, height);
 
         // Get the actual content size from layout
-        let root_layout = self.layout_engine.get_layout(root.id).unwrap_or_default();
+        let root_layout = self.layout_engine.get_layout(dynamic_root.id).unwrap_or_default();
         let content_width = (root_layout.width as u16).max(1).min(width);
         let content_height = (root_layout.height as u16).max(1).min(height);
 
         // Render to output buffer sized to content
         let mut output = Output::new(content_width, content_height);
-        self.render_element(&root, &mut output, 0.0, 0.0);
+        self.render_element(&dynamic_root, &mut output, 0.0, 0.0);
 
         // Write to terminal
         self.terminal.render(&output.render())
+    }
+
+    /// Extract static content from the element tree
+    fn extract_static_content(&self, element: &Element, width: u16) -> Vec<String> {
+        let mut lines = Vec::new();
+
+        if element.style.is_static {
+            // Render static element to get its content
+            let mut engine = LayoutEngine::new();
+            engine.compute(element, width, 100); // Use large height for static content
+
+            let layout = engine.get_layout(element.id).unwrap_or_default();
+            let mut output = Output::new(layout.width as u16, layout.height as u16);
+            self.render_element_to_output(element, &engine, &mut output, 0.0, 0.0);
+
+            let rendered = output.render();
+            for line in rendered.lines() {
+                lines.push(line.to_string());
+            }
+        }
+
+        // Check children for static content
+        for child in &element.children {
+            lines.extend(self.extract_static_content(child, width));
+        }
+
+        lines
+    }
+
+    /// Commit static content to the terminal (write permanently)
+    fn commit_static_content(&mut self, new_lines: &[String]) -> std::io::Result<()> {
+        use std::io::{stdout, Write};
+
+        let mut stdout = stdout();
+        for line in new_lines {
+            // Write the line and move to next line
+            writeln!(stdout, "{}", line)?;
+            self.static_lines.push(line.clone());
+        }
+        stdout.flush()?;
+
+        Ok(())
+    }
+
+    /// Filter out static elements from the tree
+    fn filter_static_elements(&self, element: &Element) -> Element {
+        let mut new_element = element.clone();
+
+        // Remove static children
+        new_element.children = element.children
+            .iter()
+            .filter(|child| !child.style.is_static)
+            .map(|child| self.filter_static_elements(child))
+            .collect();
+
+        new_element
+    }
+
+    /// Render element to output buffer (helper for static content)
+    fn render_element_to_output(&self, element: &Element, engine: &LayoutEngine, output: &mut Output, offset_x: f32, offset_y: f32) {
+        let layout = engine.get_layout(element.id).unwrap_or_default();
+
+        let x = (offset_x + layout.x) as u16;
+        let y = (offset_y + layout.y) as u16;
+        let width = layout.width as u16;
+        let height = layout.height as u16;
+
+        if element.style.background_color.is_some() {
+            output.fill_rect(x, y, width, height, ' ', &element.style);
+        }
+
+        if element.style.has_border() {
+            self.render_border(element, output, x, y, width, height);
+        }
+
+        if let Some(text) = &element.text_content {
+            let text_x = x + if element.style.has_border() { 1 } else { 0 }
+                + element.style.padding.left as u16;
+            let text_y = y + if element.style.has_border() { 1 } else { 0 }
+                + element.style.padding.top as u16;
+            output.write(text_x, text_y, text, &element.style);
+        }
+
+        let child_offset_x = offset_x + layout.x;
+        let child_offset_y = offset_y + layout.y;
+
+        for child in &element.children {
+            self.render_element_to_output(child, engine, output, child_offset_x, child_offset_y);
+        }
     }
 
     fn render_element(&self, element: &Element, output: &mut Output, offset_x: f32, offset_y: f32) {

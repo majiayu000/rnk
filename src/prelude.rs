@@ -20,6 +20,8 @@ pub use crate::components::{
     Newline,
     Spacer,
     Transform,
+    Static,
+    static_output,
 };
 
 pub use crate::renderer::render;
