@@ -238,9 +238,14 @@ impl Terminal {
         // If this is the first render, just write the output
         if prev_count == 0 {
             for (i, line) in new_lines.iter().enumerate() {
-                write!(stdout, "{}", line)?;
+                // Move to column 0 and write line
+                write!(stdout, "{}{}{}",
+                    ansi::cursor_to_column(0),
+                    ansi::erase_line(),
+                    line
+                )?;
                 if i < new_count - 1 {
-                    writeln!(stdout)?;
+                    write!(stdout, "\r\n")?; // Use \r\n for raw mode
                 }
             }
             stdout.flush()?;
@@ -252,39 +257,29 @@ impl Terminal {
         if prev_count > 1 {
             write!(stdout, "{}", ansi::cursor_up(prev_count as u16 - 1))?;
         }
-        write!(stdout, "{}", ansi::cursor_to_column(0))?;
 
         // Render each line
         for (i, new_line) in new_lines.iter().enumerate() {
-            let old_line = self.previous_lines.get(i).map(|s| s.as_str());
-
-            // Always clear and rewrite for simplicity (could optimize later)
-            if old_line != Some(*new_line) || i >= prev_count {
-                write!(stdout, "{}{}", ansi::erase_line(), new_line)?;
-            } else {
-                // Skip unchanged lines but still move cursor
-                write!(stdout, "{}", new_line)?;
-            }
+            // Always move to column 0, clear line, and write
+            write!(stdout, "{}{}{}",
+                ansi::cursor_to_column(0),
+                ansi::erase_line(),
+                new_line
+            )?;
 
             if i < new_count - 1 {
-                writeln!(stdout)?;
+                write!(stdout, "\r\n")?; // Use \r\n for raw mode
             }
         }
 
         // Clear extra lines if new output is shorter
         if new_count < prev_count {
             for _ in new_count..prev_count {
-                writeln!(stdout)?;
-                write!(stdout, "{}", ansi::erase_line())?;
+                write!(stdout, "\r\n{}{}", ansi::cursor_to_column(0), ansi::erase_line())?;
             }
             // Move back up to end of new content
-            if prev_count > new_count {
-                write!(stdout, "{}", ansi::cursor_up((prev_count - new_count) as u16))?;
-            }
+            write!(stdout, "{}", ansi::cursor_up((prev_count - new_count) as u16))?;
         }
-
-        // Clear to end of line (remove any trailing characters)
-        write!(stdout, "{}", ansi::erase_end_of_line())?;
 
         stdout.flush()?;
 
