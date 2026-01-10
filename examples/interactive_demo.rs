@@ -264,15 +264,18 @@ fn render_element(
         }
     }
 
-    // Text
+    // Text - must account for border and padding
     if let Some(text) = &element.text_content {
-        output.write(x, y, text, &element.style);
+        let text_x = x + if element.style.has_border() { 1 } else { 0 }
+            + element.style.padding.left as u16;
+        let text_y = y + if element.style.has_border() { 1 } else { 0 }
+            + element.style.padding.top as u16;
+        output.write(text_x, text_y, text, &element.style);
     }
 
-    // Children
-    let border = if element.style.has_border() { 1.0 } else { 0.0 };
-    let cx = offset_x + layout.x + element.style.padding.left + border;
-    let cy = offset_y + layout.y + element.style.padding.top + border;
+    // Children - taffy already accounts for padding and border in child positions
+    let cx = offset_x + layout.x;
+    let cy = offset_y + layout.y;
 
     for child in element.children.iter() {
         if child.style.position == Position::Absolute {
@@ -290,16 +293,18 @@ fn main() -> std::io::Result<()> {
     execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
 
     let mut state = DemoState::default();
-    let (width, height) = terminal::size()?;
 
     // Main loop
     loop {
+        // Get current terminal size (in case it changed)
+        let (width, height) = terminal::size()?;
+
         // Render
         let element = render_ui(&state);
         let output = render_to_string(&element, width, height);
 
         execute!(stdout, cursor::MoveTo(0, 0), terminal::Clear(ClearType::All))?;
-        print!("{}", output);
+        write!(stdout, "{}", output)?;
         stdout.flush()?;
 
         // Handle input

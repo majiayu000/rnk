@@ -2,6 +2,7 @@
 
 use crate::core::{Color, Style};
 use std::fmt::Write as FmtWrite;
+use unicode_width::UnicodeWidthChar;
 
 /// A styled character in the output grid
 #[derive(Debug, Clone, Default)]
@@ -117,16 +118,50 @@ impl Output {
                 break;
             }
 
+            let char_width = ch.width().unwrap_or(1);
+
             // Check clip region
             if let Some(clip) = self.clip_stack.last() {
                 if !clip.contains(col as u16, row as u16) {
-                    col += 1;
+                    col += char_width;
                     continue;
                 }
             }
 
+            // Handle overwriting wide character's second half (placeholder)
+            // If current position is a placeholder '\0', we're breaking a wide char
+            if self.grid[row][col].ch == '\0' && col > 0 {
+                // Clear the first half of the broken wide char
+                self.grid[row][col - 1] = StyledChar::new(' ');
+            }
+
+            // Handle overwriting wide character's first half
+            // If current position has a wide char, its placeholder will be orphaned
+            let old_char_width = self.grid[row][col].ch.width().unwrap_or(1);
+            if old_char_width == 2 && col + 1 < self.grid[row].len() {
+                // Clear the orphaned placeholder
+                self.grid[row][col + 1] = StyledChar::new(' ');
+            }
+
             self.grid[row][col] = StyledChar::with_style(ch, style);
-            col += 1;
+
+            // For wide characters (width=2), mark the next cell as a placeholder
+            if char_width == 2 && col + 1 < self.grid[row].len() {
+                // Check if we're about to overwrite another wide char's first half
+                if self.grid[row][col + 1].ch == '\0' {
+                    // This shouldn't happen as we just handled it, but be safe
+                } else {
+                    let next_char_width = self.grid[row][col + 1].ch.width().unwrap_or(1);
+                    if next_char_width == 2 && col + 2 < self.grid[row].len() {
+                        // Clear the placeholder of the wide char we're overwriting
+                        self.grid[row][col + 2] = StyledChar::new(' ');
+                    }
+                }
+                // Use a special marker for wide char continuation
+                self.grid[row][col + 1] = StyledChar::new('\0');
+            }
+
+            col += char_width;
         }
     }
 
@@ -146,7 +181,29 @@ impl Output {
             }
         }
 
+        // Handle overwriting wide character's second half (placeholder)
+        if self.grid[row][col].ch == '\0' && col > 0 {
+            self.grid[row][col - 1] = StyledChar::new(' ');
+        }
+
+        // Handle overwriting wide character's first half
+        let old_char_width = self.grid[row][col].ch.width().unwrap_or(1);
+        if old_char_width == 2 && col + 1 < self.grid[row].len() {
+            self.grid[row][col + 1] = StyledChar::new(' ');
+        }
+
         self.grid[row][col] = StyledChar::with_style(ch, style);
+
+        // For wide characters (width=2), mark the next cell as a placeholder
+        let char_width = ch.width().unwrap_or(1);
+        if char_width == 2 && col + 1 < self.grid[row].len() {
+            // Handle overwriting the next position's wide char if any
+            let next_char_width = self.grid[row][col + 1].ch.width().unwrap_or(1);
+            if next_char_width == 2 && col + 2 < self.grid[row].len() {
+                self.grid[row][col + 2] = StyledChar::new(' ');
+            }
+            self.grid[row][col + 1] = StyledChar::new('\0');
+        }
     }
 
     /// Fill a rectangle with a character
@@ -173,10 +230,31 @@ impl Output {
         let mut lines: Vec<String> = Vec::new();
 
         for row in self.grid.iter() {
+            // First, find the last non-space, non-placeholder character
+            // This determines where meaningful content ends
+            let mut last_content_idx = 0;
+            for (i, cell) in row.iter().enumerate() {
+                // Consider any non-default-space character as content
+                // A space with styling (color, bg, etc) is still content
+                if cell.ch != '\0' && (cell.ch != ' ' || cell.has_style()) {
+                    last_content_idx = i + 1;
+                }
+            }
+
             let mut line = String::new();
             let mut current_style: Option<StyledChar> = None;
 
-            for cell in row {
+            for (i, cell) in row.iter().enumerate() {
+                // Stop at trailing whitespace (unstyled spaces at the end)
+                if i >= last_content_idx {
+                    break;
+                }
+
+                // Skip wide character continuation placeholders
+                if cell.ch == '\0' {
+                    continue;
+                }
+
                 // Check if we need to change style
                 let need_style_change = match &current_style {
                     None => cell.has_style(),
@@ -184,8 +262,10 @@ impl Output {
                 };
 
                 if need_style_change {
-                    // Reset and apply new style
-                    line.push_str("\x1b[0m");
+                    // Only reset if we had a previous style (not for first styled char)
+                    if current_style.is_some() {
+                        line.push_str("\x1b[0m");
+                    }
                     self.apply_style(&mut line, cell);
                     current_style = Some(cell.clone());
                 }
@@ -198,9 +278,7 @@ impl Output {
                 line.push_str("\x1b[0m");
             }
 
-            // Trim trailing whitespace (like ink does)
-            let trimmed = line.trim_end();
-            lines.push(trimmed.to_string());
+            lines.push(line);
         }
 
         // Remove trailing empty lines
@@ -208,7 +286,7 @@ impl Output {
             lines.pop();
         }
 
-        lines.join("\n")
+        lines.join("\r\n")
     }
 
     fn apply_style(&self, result: &mut String, cell: &StyledChar) {
@@ -321,5 +399,105 @@ mod tests {
 
         let rendered = output.render();
         assert!(rendered.contains("\x1b["));
+    }
+
+    #[test]
+    fn test_wide_char_placeholder() {
+        let mut output = Output::new(80, 24);
+        output.write(0, 0, "你好", &Style::default());
+
+        // '你' at position 0, placeholder at position 1
+        assert_eq!(output.grid[0][0].ch, '你');
+        assert_eq!(output.grid[0][1].ch, '\0');
+        // '好' at position 2, placeholder at position 3
+        assert_eq!(output.grid[0][2].ch, '好');
+        assert_eq!(output.grid[0][3].ch, '\0');
+    }
+
+    #[test]
+    fn test_overwrite_wide_char_placeholder() {
+        let mut output = Output::new(80, 24);
+        // Write a wide char first
+        output.write(0, 0, "你", &Style::default());
+        assert_eq!(output.grid[0][0].ch, '你');
+        assert_eq!(output.grid[0][1].ch, '\0');
+
+        // Overwrite the placeholder with a narrow char
+        output.write_char(1, 0, 'X', &Style::default());
+
+        // The wide char should be replaced with space (broken)
+        assert_eq!(output.grid[0][0].ch, ' ');
+        assert_eq!(output.grid[0][1].ch, 'X');
+    }
+
+    #[test]
+    fn test_overwrite_wide_char_first_half() {
+        let mut output = Output::new(80, 24);
+        // Write a wide char first
+        output.write(0, 0, "你", &Style::default());
+        assert_eq!(output.grid[0][0].ch, '你');
+        assert_eq!(output.grid[0][1].ch, '\0');
+
+        // Overwrite the first half with a narrow char
+        output.write_char(0, 0, 'X', &Style::default());
+
+        // The wide char's placeholder should be cleared
+        assert_eq!(output.grid[0][0].ch, 'X');
+        assert_eq!(output.grid[0][1].ch, ' ');
+    }
+
+    #[test]
+    fn test_wide_char_render_no_duplicate() {
+        let mut output = Output::new(80, 24);
+        output.write(0, 0, "你好世界", &Style::default());
+
+        let rendered = output.render();
+        // Should contain exactly these 4 chars, no placeholders visible
+        assert_eq!(rendered, "你好世界");
+    }
+
+    #[test]
+    fn test_raw_mode_line_endings() {
+        // Raw mode requires CRLF line endings, not just LF
+        let mut output = Output::new(40, 5);
+        output.write(0, 0, "Line 1", &Style::default());
+        output.write(0, 1, "Line 2", &Style::default());
+        output.write(0, 2, "Line 3", &Style::default());
+
+        let rendered = output.render();
+
+        // Must use CRLF for raw mode compatibility
+        assert!(
+            rendered.contains("\r\n"),
+            "Output must use CRLF line endings for raw mode"
+        );
+
+        // Count that we don't have standalone LF (without CR before it)
+        let lines: Vec<&str> = rendered.split("\r\n").collect();
+        assert!(lines.len() >= 3, "Should have at least 3 lines");
+
+        // Verify no standalone LF within lines
+        for line in &lines {
+            assert!(
+                !line.contains('\n'),
+                "Should not have standalone LF within lines"
+            );
+        }
+    }
+
+    #[test]
+    fn test_line_alignment_in_output() {
+        // Test that multi-line output will render with correct alignment
+        let mut output = Output::new(20, 3);
+        output.write(0, 0, "AAAA", &Style::default());
+        output.write(0, 1, "BBBB", &Style::default());
+        output.write(0, 2, "CCCC", &Style::default());
+
+        let rendered = output.render();
+        let lines: Vec<&str> = rendered.split("\r\n").collect();
+
+        assert_eq!(lines[0], "AAAA");
+        assert_eq!(lines[1], "BBBB");
+        assert_eq!(lines[2], "CCCC");
     }
 }

@@ -1,0 +1,141 @@
+name: Tink Quality Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ============================================
+  # Static Analysis
+  # ============================================
+  format:
+    name: Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --all-targets -- -D warnings
+
+  # ============================================
+  # Unit Tests
+  # ============================================
+  test-lib:
+    name: Library Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --lib
+
+  test-doc:
+    name: Doc Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --doc
+
+  # ============================================
+  # Property Tests
+  # ============================================
+  property-tests:
+    name: Property Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --test property_tests
+
+  # ============================================
+  # Integration Tests
+  # ============================================
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --test '*'
+
+  # ============================================
+  # Build Examples
+  # ============================================
+  examples:
+    name: Build Examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --examples
+
+  # ============================================
+  # Cross-Platform Tests
+  # ============================================
+  cross-platform:
+    name: Cross Platform (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --lib
+
+  # ============================================
+  # Code Coverage
+  # ============================================
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-tarpaulin
+      - run: cargo tarpaulin --out Xml
+      - uses: codecov/codecov-action@v3
+        with:
+          files: cobertura.xml
+          fail_ci_if_error: false
+
+  # ============================================
+  # MIRI (Memory Safety)
+  # ============================================
+  miri:
+    name: Miri (Memory Safety)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - run: cargo miri test --lib -- layout::measure
+        continue-on-error: true  # Miri may not support all dependencies
+
+  # ============================================
+  # Final Gate
+  # ============================================
+  quality-gate:
+    name: Quality Gate
+    needs: [format, clippy, test-lib, test-doc, property-tests, integration, examples, cross-platform]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "All quality checks passed!"
