@@ -50,4 +50,5 @@ pub use crate::hooks::{
     StderrHandle,
     Dimensions,
     MeasureRef,
+    use_is_screen_reader_enabled,
 };
