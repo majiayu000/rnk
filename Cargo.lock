@@ -1138,6 +1138,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "rnk"
+version = "0.2.0"
+dependencies = [
+ "crossterm",
+ "ctrlc",
+ "env_logger",
+ "log",
+ "proptest",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "taffy",
+ "textwrap",
+ "thiserror",
+ "tokio",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
 name = "rustix"
 version = "0.38.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1505,26 +1525,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "tink"
-version = "0.2.0"
-dependencies = [
- "crossterm",
- "ctrlc",
- "env_logger",
- "log",
- "proptest",
- "reqwest",
- "serde",
- "serde_json",
- "taffy",
- "textwrap",
- "thiserror",
- "tokio",
- "unicode-segmentation",
- "unicode-width",
 ]
 
 [[package]]

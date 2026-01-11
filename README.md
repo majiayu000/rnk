@@ -1,4 +1,4 @@
-# Tink
+# rnk
 
 A React-like declarative terminal UI framework for Rust, inspired by [Ink](https://github.com/vadimdemedes/ink).
 
@@ -18,16 +18,16 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-tink = "0.2"
+rnk = "0.2"
 ```
 
 ## Example
 
 ```rust
-use tink::prelude::*;
+use rnk::prelude::*;
 
 fn main() {
-    tink::run(app);
+    rnk::run(app);
 }
 
 fn app() -> Element {

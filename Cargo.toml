@@ -1,12 +1,12 @@
 [package]
-name = "tink"
+name = "rnk"
 version = "0.2.0"
 edition = "2024"
 description = "A React-like declarative terminal UI framework for Rust, inspired by Ink"
 license = "MIT"
 repository = "https://github.com/majiayu000/tink"
 homepage = "https://github.com/majiayu000/tink"
-documentation = "https://docs.rs/tink"
+documentation = "https://docs.rs/rnk"
 readme = "README.md"
 keywords = ["tui", "terminal", "ui", "cli", "react"]
 categories = ["command-line-interface", "gui"]
@@ -14,11 +14,11 @@ authors = ["majiayu000 <1835304752@qq.com>"]
 exclude = ["examples/*", "docs/*", ".github/*"]
 
 [lib]
-name = "tink"
+name = "rnk"
 path = "src/lib.rs"
 
 [[bin]]
-name = "tink"
+name = "rnk"
 path = "src/main.rs"
 
 [features]
