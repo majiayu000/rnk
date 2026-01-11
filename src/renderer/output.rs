@@ -120,6 +120,14 @@ impl Output {
 
             let char_width = ch.width().unwrap_or(1);
 
+            // Handle wide character at buffer boundary - skip if it won't fit
+            if char_width == 2 && col + 1 >= self.grid[row].len() {
+                // Wide char would extend past buffer, write a space instead
+                self.grid[row][col] = StyledChar::with_style(' ', style);
+                col += 1;
+                continue;
+            }
+
             // Check clip region
             if let Some(clip) = self.clip_stack.last() {
                 if !clip.contains(col as u16, row as u16) {
@@ -174,6 +182,15 @@ impl Output {
             return;
         }
 
+        let char_width = ch.width().unwrap_or(1);
+
+        // Handle wide character at buffer boundary - skip if it won't fit
+        if char_width == 2 && col + 1 >= self.grid[row].len() {
+            // Wide char would extend past buffer, write a space instead
+            self.grid[row][col] = StyledChar::with_style(' ', style);
+            return;
+        }
+
         // Check clip region
         if let Some(clip) = self.clip_stack.last() {
             if !clip.contains(x, y) {
@@ -195,7 +212,6 @@ impl Output {
         self.grid[row][col] = StyledChar::with_style(ch, style);
 
         // For wide characters (width=2), mark the next cell as a placeholder
-        let char_width = ch.width().unwrap_or(1);
         if char_width == 2 && col + 1 < self.grid[row].len() {
             // Handle overwriting the next position's wide char if any
             let next_char_width = self.grid[row][col + 1].ch.width().unwrap_or(1);
@@ -499,5 +515,34 @@ mod tests {
         assert_eq!(lines[0], "AAAA");
         assert_eq!(lines[1], "BBBB");
         assert_eq!(lines[2], "CCCC");
+    }
+
+    #[test]
+    fn test_wide_char_at_boundary() {
+        // Wide char at end of buffer should be replaced with space
+        let mut output = Output::new(5, 1);
+        output.write(3, 0, "你", &Style::default());
+
+        // Position 3 should be a space, position 4 is at boundary
+        assert_eq!(output.grid[0][3].ch, '你');
+        assert_eq!(output.grid[0][4].ch, '\0');
+
+        // Now test when wide char would extend past buffer
+        let mut output2 = Output::new(5, 1);
+        output2.write(4, 0, "你", &Style::default());
+
+        // Should write a space instead since wide char won't fit
+        assert_eq!(output2.grid[0][4].ch, ' ');
+    }
+
+    #[test]
+    fn test_wide_char_at_exact_boundary() {
+        // Test when wide char is at the last valid position
+        let mut output = Output::new(4, 1);
+        output.write(2, 0, "你", &Style::default());
+
+        // Wide char at position 2-3 should fit exactly
+        assert_eq!(output.grid[0][2].ch, '你');
+        assert_eq!(output.grid[0][3].ch, '\0');
     }
 }

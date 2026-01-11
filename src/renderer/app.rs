@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use crossterm::event::Event;
 
 use crate::core::Element;
@@ -49,6 +49,10 @@ where
     needs_render: Arc<AtomicBool>,
     /// Lines of static content that have been committed
     static_lines: Vec<String>,
+    /// Last known terminal width (for detecting width decreases)
+    last_width: u16,
+    /// Last known terminal height
+    last_height: u16,
 }
 
 impl<F> App<F>
@@ -71,6 +75,9 @@ where
             needs_render_clone.store(true, Ordering::SeqCst);
         }));
 
+        // Get initial terminal size
+        let (initial_width, initial_height) = Terminal::size().unwrap_or((80, 24));
+
         Self {
             component,
             terminal: Terminal::new(),
@@ -80,11 +87,15 @@ where
             should_exit: Arc::new(AtomicBool::new(false)),
             needs_render,
             static_lines: Vec::new(),
+            last_width: initial_width,
+            last_height: initial_height,
         }
     }
 
     /// Run the application
     pub fn run(&mut self) -> std::io::Result<()> {
+        use std::time::Instant;
+
         // Enter terminal mode
         if self.options.alternate_screen {
             self.terminal.enter()?;
@@ -148,12 +159,34 @@ where
                 // Request re-render after input
                 self.needs_render.store(true, Ordering::SeqCst);
             }
-            Event::Resize(_, _) => {
+            Event::Resize(new_width, new_height) => {
+                // Handle resize - clear screen if width decreased to prevent artifacts
+                self.handle_resize(new_width, new_height);
                 // Re-render on resize
                 self.needs_render.store(true, Ordering::SeqCst);
             }
             _ => {}
         }
+    }
+
+    /// Handle terminal resize events
+    ///
+    /// When terminal width decreases, clears the screen to prevent rendering artifacts.
+    /// This follows the same pattern as Ink and Bubbletea.
+    fn handle_resize(&mut self, new_width: u16, new_height: u16) {
+        use crossterm::{execute, terminal::{Clear, ClearType}};
+        use std::io::stdout;
+
+        // If width decreased, clear the screen to prevent artifacts
+        // This is necessary because content that was visible at the old width
+        // may now extend past the right edge
+        if new_width < self.last_width {
+            let _ = execute!(stdout(), Clear(ClearType::All));
+        }
+
+        // Update tracked size
+        self.last_width = new_width;
+        self.last_height = new_height;
     }
 
     fn render_frame(&mut self) -> std::io::Result<()> {

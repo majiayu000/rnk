@@ -14,6 +14,10 @@ path = "src/lib.rs"
 name = "tink"
 path = "src/main.rs"
 
+[features]
+default = []
+testing = []  # Enable testing utilities in release builds
+
 [dependencies]
 # Layout engine
 taffy = "0.7"
@@ -34,8 +38,16 @@ log = "0.4"
 # Error handling
 thiserror = "2.0"
 
+# Signal handling
+ctrlc = { version = "3.4", features = ["termination"] }
+
 [dev-dependencies]
 env_logger = "0.11"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+proptest = "1.4"  # Property-based testing
 
 [[example]]
 name = "hello"
@@ -44,3 +56,7 @@ path = "examples/hello.rs"
 [[example]]
 name = "counter"
 path = "examples/counter.rs"
+
+[[example]]
+name = "glm_chat"
+path = "examples/glm_chat.rs"

@@ -1,6 +1,6 @@
 //! Standard I/O hooks for accessing stdin, stdout, and stderr
 
-use std::io::{self, Stdout, Stderr, Write};
+use std::io::{self, IsTerminal, Stdout, Stderr, Write};
 
 /// Handle for writing to stdout
 #[derive(Clone, Copy)]
@@ -57,10 +57,22 @@ impl StderrHandle {
 pub struct StdinHandle;
 
 impl StdinHandle {
-    /// Check if stdin is a TTY
+    /// Check if stdin is a TTY (terminal)
+    ///
+    /// Returns true when stdin is connected to a terminal,
+    /// false when input is piped or redirected.
     pub fn is_tty(&self) -> bool {
-        // Use crossterm's is_raw_mode_enabled to check
-        crossterm::terminal::is_raw_mode_enabled().unwrap_or(false)
+        io::stdin().is_terminal()
+    }
+
+    /// Check if stdout is a TTY (terminal)
+    pub fn stdout_is_tty(&self) -> bool {
+        io::stdout().is_terminal()
+    }
+
+    /// Check if stderr is a TTY (terminal)
+    pub fn stderr_is_tty(&self) -> bool {
+        io::stderr().is_terminal()
     }
 
     /// Read a line from stdin (blocking)

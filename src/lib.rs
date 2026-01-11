@@ -31,6 +31,10 @@ pub mod components;
 pub mod hooks;
 pub mod layout;
 pub mod renderer;
+pub mod runtime;
+
+/// Testing utilities for verifying UI components
+pub mod testing;
 
 // Re-export prelude
 pub mod prelude;
