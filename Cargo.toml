@@ -1,10 +1,17 @@
 [package]
 name = "tink"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "A terminal UI framework inspired by ink"
+description = "A React-like declarative terminal UI framework for Rust, inspired by Ink"
 license = "MIT"
-repository = "https://github.com/user/tink"
+repository = "https://github.com/majiayu000/tink"
+homepage = "https://github.com/majiayu000/tink"
+documentation = "https://docs.rs/tink"
+readme = "README.md"
+keywords = ["tui", "terminal", "ui", "cli", "react"]
+categories = ["command-line-interface", "gui"]
+authors = ["majiayu000 <1835304752@qq.com>"]
+exclude = ["examples/*", "docs/*", ".github/*"]
 
 [lib]
 name = "tink"
