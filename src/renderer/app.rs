@@ -149,7 +149,7 @@ where
         match event {
             Event::Key(key_event) => {
                 // Handle Ctrl+C
-                if self.options.exit_on_ctrl_c && Terminal::is_ctrl_c(&Event::Key(key_event.clone())) {
+                if self.options.exit_on_ctrl_c && Terminal::is_ctrl_c(&Event::Key(key_event)) {
                     self.should_exit.store(true, Ordering::SeqCst);
                     return;
                 }

@@ -1,9 +1,9 @@
 //! Debug render for interactive demo
 
-use tink::prelude::*;
-use tink::core::Dimension;
-use tink::layout::LayoutEngine;
-use tink::renderer::Output;
+use rnk::prelude::*;
+use rnk::core::Dimension;
+use rnk::layout::LayoutEngine;
+use rnk::renderer::Output;
 
 fn main() {
     let element = create_demo_ui();
@@ -84,7 +84,7 @@ fn render_element(
     offset_y: f32,
     depth: usize,
 ) {
-    use tink::core::{Display, Position};
+    use rnk::core::{Display, Position};
 
     if element.style.display == Display::None {
         return;

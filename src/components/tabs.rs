@@ -2,7 +2,7 @@
 //!
 //! Provides a tab bar widget with selectable tabs.
 
-use crate::core::{Color, Element, Style, FlexDirection};
+use crate::core::{Color, Element, Style};
 use crate::components::{Box as TinkBox, Text, Span, Line};
 
 /// Tab item

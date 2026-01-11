@@ -301,11 +301,10 @@ impl List {
                 if self.highlight_style.inverse {
                     text = text.inverse();
                 }
-            } else if let Some(ref item_style) = item.style {
-                if let Some(color) = item_style.color {
+            } else if let Some(ref item_style) = item.style
+                && let Some(color) = item_style.color {
                     text = text.color(color);
                 }
-            }
 
             container = container.child(text.into_element());
         }

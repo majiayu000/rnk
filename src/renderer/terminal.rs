@@ -34,6 +34,7 @@ mod ansi {
     }
 
     /// Move cursor down n lines
+    #[allow(dead_code)]
     pub fn cursor_down(n: u16) -> String {
         if n == 0 {
             String::new()
@@ -43,6 +44,7 @@ mod ansi {
     }
 
     /// Erase from cursor to end of line
+    #[allow(dead_code)]
     pub fn erase_end_of_line() -> &'static str {
         "\x1b[K"
     }
@@ -53,6 +55,7 @@ mod ansi {
     }
 
     /// Erase n lines (moves up and clears each line)
+    #[allow(dead_code)]
     pub fn erase_lines(n: usize) -> String {
         if n == 0 {
             return String::new();
@@ -80,11 +83,13 @@ mod ansi {
     }
 
     /// Save cursor position
+    #[allow(dead_code)]
     pub fn save_cursor() -> &'static str {
         "\x1b[s"
     }
 
     /// Restore cursor position
+    #[allow(dead_code)]
     pub fn restore_cursor() -> &'static str {
         "\x1b[u"
     }
@@ -326,7 +331,7 @@ impl Terminal {
                 write!(stdout, "{}", ansi::cursor_up(line_count as u16 - 1))?;
             }
             for _ in 0..line_count {
-                write!(stdout, "{}{}\n", ansi::cursor_to_column(0), ansi::erase_line())?;
+                writeln!(stdout, "{}{}", ansi::cursor_to_column(0), ansi::erase_line())?;
             }
             // Move back up
             write!(stdout, "{}", ansi::cursor_up(line_count as u16))?;

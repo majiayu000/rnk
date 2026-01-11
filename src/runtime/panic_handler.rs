@@ -51,12 +51,10 @@ pub fn restore_terminal() {
 /// # Example
 ///
 /// ```no_run
-/// use tink::runtime::install_panic_hook;
+/// use rnk::runtime::install_panic_hook;
 ///
-/// fn main() {
-///     install_panic_hook();
-///     // Your app code here
-/// }
+/// install_panic_hook();
+/// // Your app code here
 /// ```
 pub fn install_panic_hook() {
     PANIC_HOOK_INSTALLED.call_once(|| {

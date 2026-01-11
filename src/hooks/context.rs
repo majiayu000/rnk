@@ -7,6 +7,9 @@ use std::rc::Rc;
 /// Callback type for triggering re-renders
 pub type RenderCallback = Rc<dyn Fn()>;
 
+/// Effect callback type that returns an optional cleanup function
+pub type EffectCallback = Box<dyn FnOnce() -> Option<Box<dyn FnOnce()>>>;
+
 /// Hook storage for a single hook
 #[derive(Clone)]
 pub struct HookStorage {
@@ -34,7 +37,7 @@ impl HookStorage {
 
 /// Effect to be run after render
 pub struct Effect {
-    pub callback: Box<dyn FnOnce() -> Option<Box<dyn FnOnce()>>>,
+    pub callback: EffectCallback,
     pub cleanup: Option<Box<dyn FnOnce()>>,
     pub deps: Option<Vec<u64>>,  // Hash of dependencies
 }
@@ -114,10 +117,8 @@ impl HookContext {
     /// Run all pending effects
     pub fn run_effects(&mut self) {
         // Run cleanup functions from previous render
-        for cleanup in self.cleanups.drain(..) {
-            if let Some(cleanup_fn) = cleanup {
-                cleanup_fn();
-            }
+        for cleanup_fn in self.cleanups.drain(..).flatten() {
+            cleanup_fn();
         }
 
         // Run new effects and collect cleanup functions
@@ -144,7 +145,7 @@ impl Default for HookContext {
 
 // Thread-local storage for the current hook context
 thread_local! {
-    static CURRENT_CONTEXT: RefCell<Option<Rc<RefCell<HookContext>>>> = RefCell::new(None);
+    static CURRENT_CONTEXT: RefCell<Option<Rc<RefCell<HookContext>>>> = const { RefCell::new(None) };
 }
 
 /// Get the current hook context

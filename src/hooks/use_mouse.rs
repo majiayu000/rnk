@@ -125,9 +125,12 @@ impl Mouse {
 /// Mouse handler type
 pub type MouseHandler = Box<dyn Fn(&Mouse)>;
 
+/// Internal mouse handler type (reference-counted for storage)
+type MouseHandlerRc = Rc<dyn Fn(&Mouse)>;
+
 thread_local! {
-    static MOUSE_HANDLERS: RefCell<Vec<Rc<dyn Fn(&Mouse)>>> = RefCell::new(Vec::new());
-    static MOUSE_ENABLED: RefCell<bool> = RefCell::new(false);
+    static MOUSE_HANDLERS: RefCell<Vec<MouseHandlerRc>> = RefCell::new(Vec::new());
+    static MOUSE_ENABLED: RefCell<bool> = const { RefCell::new(false) };
 }
 
 /// Register a mouse handler

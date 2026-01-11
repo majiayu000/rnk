@@ -20,11 +20,11 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use tink::prelude::*;
-use tink::core::Dimension;
-use tink::hooks::{HookContext, with_hooks};
-use tink::layout::LayoutEngine;
-use tink::renderer::Output;
+use rnk::prelude::*;
+use rnk::core::Dimension;
+use rnk::hooks::{HookContext, with_hooks};
+use rnk::layout::LayoutEngine;
+use rnk::renderer::Output;
 
 /// A single todo item
 #[derive(Clone, Debug)]

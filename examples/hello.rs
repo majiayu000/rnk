@@ -3,12 +3,12 @@
 //! Run with: cargo run --example hello
 //! Press Ctrl+C to exit
 
-use tink::prelude::*;
-use tink::renderer::App;
+use rnk::prelude::*;
+use rnk::renderer::App;
 
 fn main() -> std::io::Result<()> {
     // Use inline mode (not alternate screen) so output stays visible
-    let options = tink::renderer::AppOptions {
+    let options = rnk::renderer::AppOptions {
         alternate_screen: false,
         ..Default::default()
     };

@@ -93,6 +93,7 @@ impl FocusManager {
     }
 
     /// Unregister a focusable element
+    #[allow(dead_code)]
     pub fn unregister(&mut self, id: usize) {
         if let Some(pos) = self.elements.iter().position(|e| e.id == id) {
             self.elements.remove(pos);
@@ -161,7 +162,7 @@ impl FocusManager {
     /// Focus a specific element by custom ID
     pub fn focus(&mut self, custom_id: &str) {
         if let Some(pos) = self.elements.iter().position(|e| {
-            e.custom_id.as_ref().map(|s| s.as_str()) == Some(custom_id) && e.is_active
+            e.custom_id.as_deref() == Some(custom_id) && e.is_active
         }) {
             self.focused_index = Some(pos);
         }
@@ -175,6 +176,7 @@ impl FocusManager {
     }
 
     /// Clear focus state for next render
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.elements.clear();
         // Keep focused_index for persistence across renders
@@ -187,6 +189,7 @@ thread_local! {
 }
 
 /// Set the focus manager (called by App during render)
+#[allow(dead_code)]
 pub fn with_focus_manager<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,

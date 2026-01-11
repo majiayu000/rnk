@@ -14,10 +14,10 @@ use crossterm::{
     terminal::{self, ClearType},
 };
 
-use tink::prelude::*;
-use tink::core::Dimension;
-use tink::layout::LayoutEngine;
-use tink::renderer::Output;
+use rnk::prelude::*;
+use rnk::core::Dimension;
+use rnk::layout::LayoutEngine;
+use rnk::renderer::Output;
 
 /// Demo state
 struct DemoState {

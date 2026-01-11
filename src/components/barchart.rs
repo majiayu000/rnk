@@ -212,7 +212,7 @@ impl BarChart {
             } else {
                 0
             };
-            let bar_str: String = std::iter::repeat(self.bar_char).take(bar_len).collect();
+            let bar_str: String = std::iter::repeat_n(self.bar_char, bar_len).collect();
             let mut bar_span = Span::new(bar_str);
             if let Some(color) = bar.color.or(self.default_color) {
                 bar_span = bar_span.color(color);

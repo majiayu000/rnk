@@ -4,7 +4,7 @@
 //!
 //! Run with: cargo run --example box_backgrounds
 
-use tink::prelude::*;
+use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
     render(app)

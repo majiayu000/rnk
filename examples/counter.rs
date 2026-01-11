@@ -1,6 +1,6 @@
 //! Interactive counter example demonstrating hooks
 
-use tink::prelude::*;
+use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
     render(counter_app)

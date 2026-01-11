@@ -136,15 +136,14 @@ fn simple_diff(expected: &str, actual: &str) -> String {
         }
     }
 
-    if diff.is_empty() {
-        if expected_lines.len() != actual_lines.len() {
+    if diff.is_empty()
+        && expected_lines.len() != actual_lines.len() {
             diff = format!(
                 "Line count differs: expected {}, got {}",
                 expected_lines.len(),
                 actual_lines.len()
             );
         }
-    }
 
     diff
 }

@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo run --example mouse_demo
 
-use tink::prelude::*;
+use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
     render(app)

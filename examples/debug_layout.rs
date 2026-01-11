@@ -1,8 +1,8 @@
 //! Debug layout for interactive demo
 
-use tink::prelude::*;
-use tink::core::Dimension;
-use tink::layout::LayoutEngine;
+use rnk::prelude::*;
+use rnk::core::Dimension;
+use rnk::layout::LayoutEngine;
 
 fn main() {
     let element = create_demo_ui();

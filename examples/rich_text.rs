@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo run --example rich_text
 
-use tink::prelude::*;
+use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
     render(app)

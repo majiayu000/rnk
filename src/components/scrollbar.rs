@@ -2,7 +2,7 @@
 //!
 //! Provides vertical and horizontal scrollbar widgets.
 
-use crate::core::{Color, Element, Style, FlexDirection};
+use crate::core::{Color, Element, FlexDirection};
 use crate::components::{Box as TinkBox, Text};
 
 /// Scrollbar orientation

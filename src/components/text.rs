@@ -214,7 +214,7 @@ impl Text {
         let content_str: String = content.into();
         let lines: Vec<Line> = content_str
             .lines()
-            .map(|line| Line::raw(line))
+            .map(Line::raw)
             .collect();
 
         Self {

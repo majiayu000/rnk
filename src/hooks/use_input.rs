@@ -69,15 +69,18 @@ impl Key {
     }
 }
 
-/// Input handler type
+/// Input handler type (boxed, for public use)
 pub type InputHandler = Box<dyn Fn(&str, &Key)>;
 
 /// Input handlers storage (global for the app)
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// Internal input handler type (reference-counted for storage)
+type InputHandlerRc = Rc<dyn Fn(&str, &Key)>;
+
 thread_local! {
-    static INPUT_HANDLERS: RefCell<Vec<Rc<dyn Fn(&str, &Key)>>> = RefCell::new(Vec::new());
+    static INPUT_HANDLERS: RefCell<Vec<InputHandlerRc>> = RefCell::new(Vec::new());
 }
 
 /// Register an input handler

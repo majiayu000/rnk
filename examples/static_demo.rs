@@ -2,9 +2,9 @@
 //!
 //! Run with: cargo run --example static_demo
 
-use tink::prelude::*;
-use tink::layout::LayoutEngine;
-use tink::renderer::Output;
+use rnk::prelude::*;
+use rnk::layout::LayoutEngine;
+use rnk::renderer::Output;
 
 fn main() {
     println!("=== Tink Static Demo ===\n");
@@ -118,7 +118,7 @@ fn render_static(root: &Element, width: u16, height: u16) {
 }
 
 fn render_element(element: &Element, engine: &LayoutEngine, output: &mut Output, offset_x: f32, offset_y: f32) {
-    use tink::layout::Layout;
+    use rnk::layout::Layout;
 
     let layout = engine.get_layout(element.id).unwrap_or(Layout::default());
 

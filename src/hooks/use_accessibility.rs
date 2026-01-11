@@ -32,12 +32,11 @@ fn detect_screen_reader() -> bool {
     }
 
     // Check if running in a known accessible terminal
-    if let Ok(term) = env::var("TERM") {
-        if term.contains("screen") || term.contains("tmux") {
+    if let Ok(term) = env::var("TERM")
+        && (term.contains("screen") || term.contains("tmux")) {
             // These often have accessibility features
             // but we can't be certain, so we don't return true
         }
-    }
 
     // Check macOS VoiceOver via defaults (if available)
     #[cfg(target_os = "macos")]
@@ -45,14 +44,12 @@ fn detect_screen_reader() -> bool {
         if let Ok(output) = std::process::Command::new("defaults")
             .args(["read", "com.apple.universalaccess", "voiceOverOnOffKey"])
             .output()
-        {
-            if output.status.success() {
+            && output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 if stdout.trim() == "1" {
                     return true;
                 }
             }
-        }
     }
 
     false
@@ -60,7 +57,7 @@ fn detect_screen_reader() -> bool {
 
 // Thread-local cache for screen reader status
 thread_local! {
-    static SCREEN_READER_ENABLED: std::cell::Cell<Option<bool>> = std::cell::Cell::new(None);
+    static SCREEN_READER_ENABLED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 /// Hook to check if a screen reader is enabled

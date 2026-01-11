@@ -1,9 +1,9 @@
 //! Debug with 80x24 terminal size
 
-use tink::prelude::*;
-use tink::core::Dimension;
-use tink::layout::LayoutEngine;
-use tink::renderer::Output;
+use rnk::prelude::*;
+use rnk::core::Dimension;
+use rnk::layout::LayoutEngine;
+use rnk::renderer::Output;
 
 fn main() {
     // Force 80x24 like the failing case
@@ -160,7 +160,7 @@ fn render_element(
     offset_x: f32,
     offset_y: f32,
 ) {
-    use tink::core::{Display, Position};
+    use rnk::core::{Display, Position};
 
     if element.style.display == Display::None {
         return;

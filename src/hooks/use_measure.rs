@@ -50,7 +50,7 @@ impl MeasureContext {
 
 // Thread-local storage for the measure context
 thread_local! {
-    static MEASURE_CONTEXT: std::cell::RefCell<Option<MeasureContext>> = std::cell::RefCell::new(None);
+    static MEASURE_CONTEXT: std::cell::RefCell<Option<MeasureContext>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Set the current measure context (called by App during render)

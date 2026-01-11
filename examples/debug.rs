@@ -1,8 +1,8 @@
 //! Debug example - prints layout info without terminal features
 
-use tink::prelude::*;
-use tink::layout::LayoutEngine;
-use tink::renderer::Output;
+use rnk::prelude::*;
+use rnk::layout::LayoutEngine;
+use rnk::renderer::Output;
 
 fn main() {
     let root = Box::new()
@@ -34,7 +34,7 @@ fn main() {
 }
 
 fn render_element(element: &Element, engine: &LayoutEngine, output: &mut Output, offset_x: f32, offset_y: f32) {
-    use tink::layout::Layout;
+    use rnk::layout::Layout;
 
     let layout = engine.get_layout(element.id).unwrap_or(Layout::default());
 

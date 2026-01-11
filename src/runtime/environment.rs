@@ -130,16 +130,19 @@ pub fn is_tty() -> bool {
 /// Get the terminal size, with fallback values
 ///
 /// Returns (80, 24) as fallback when size cannot be determined.
+#[allow(dead_code)]
 pub fn terminal_size() -> (u16, u16) {
     crossterm::terminal::size().unwrap_or((80, 24))
 }
 
 /// Get the TERM environment variable
+#[allow(dead_code)]
 pub fn term_program() -> Option<String> {
     std::env::var("TERM_PROGRAM").ok()
 }
 
 /// Check if running in a specific terminal emulator
+#[allow(dead_code)]
 pub fn is_terminal_emulator(name: &str) -> bool {
     term_program().map(|t| t.to_lowercase().contains(&name.to_lowercase())).unwrap_or(false)
 }

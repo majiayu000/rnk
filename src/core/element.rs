@@ -114,7 +114,7 @@ pub type TextTransform = Box<dyn Fn(&str) -> String + Send + Sync>;
 
 /// Span and Line types (re-exported from components::text)
 /// We use a simplified version here to avoid circular dependencies
-pub use crate::components::text::{Span, Line};
+pub use crate::components::text::Line;
 
 /// UI Element
 #[derive(Debug)]

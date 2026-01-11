@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo run --example todo
 
-use tink::prelude::*;
+use rnk::prelude::*;
 
 fn main() {
     // Create todo items state

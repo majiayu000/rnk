@@ -2,8 +2,8 @@
 //!
 //! Displays a small graph of data points using Unicode block characters.
 
-use crate::core::{Color, Element, Style};
-use crate::components::{Box as TinkBox, Text, Span, Line};
+use crate::core::{Color, Element};
+use crate::components::{Box as TinkBox, Text};
 
 /// Block characters for sparkline (from lowest to highest)
 const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];

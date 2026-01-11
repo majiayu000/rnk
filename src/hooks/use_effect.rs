@@ -105,8 +105,7 @@ where
     });
 
     let prev_deps_hash = storage.get::<EffectStorage>()
-        .map(|s| s.prev_deps_hash)
-        .flatten();
+        .and_then(|s| s.prev_deps_hash);
 
     // Check if deps changed
     let should_run = match prev_deps_hash {

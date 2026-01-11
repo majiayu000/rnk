@@ -12,7 +12,7 @@ use unicode_segmentation::UnicodeSegmentation;
 /// - Zero-width characters
 pub fn measure_text_width(text: &str) -> usize {
     text.graphemes(true)
-        .map(|g| UnicodeWidthStr::width(g))
+        .map(UnicodeWidthStr::width)
         .sum()
 }
 

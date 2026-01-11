@@ -2,7 +2,7 @@
 //!
 //! Provides progress bars and gauges for showing completion status.
 
-use crate::core::{Color, Element, Style};
+use crate::core::{Color, Element};
 use crate::components::{Box as TinkBox, Text, Span, Line};
 
 /// Progress bar style
@@ -203,7 +203,7 @@ impl Progress {
 
         // Filled portion
         if actual_filled > 0 {
-            let filled_str: String = std::iter::repeat(self.symbols.filled).take(actual_filled).collect();
+            let filled_str: String = std::iter::repeat_n(self.symbols.filled, actual_filled).collect();
             let mut filled_span = Span::new(filled_str);
             if let Some(color) = self.filled_color {
                 filled_span = filled_span.color(color);
@@ -212,20 +212,18 @@ impl Progress {
         }
 
         // Head character
-        if has_head {
-            if let Some(head) = self.symbols.head {
+        if has_head
+            && let Some(head) = self.symbols.head {
                 let mut head_span = Span::new(head.to_string());
                 if let Some(color) = self.filled_color {
                     head_span = head_span.color(color);
                 }
                 spans.push(head_span);
             }
-        }
 
         // Empty portion
-        let actual_empty = if has_head { empty_width } else { empty_width };
-        if actual_empty > 0 {
-            let empty_str: String = std::iter::repeat(self.symbols.empty).take(actual_empty).collect();
+        if empty_width > 0 {
+            let empty_str: String = std::iter::repeat_n(self.symbols.empty, empty_width).collect();
             let mut empty_span = Span::new(empty_str);
             if let Some(color) = self.empty_color {
                 empty_span = empty_span.color(color);
@@ -325,8 +323,8 @@ impl Gauge {
 
         let mut spans = Vec::new();
 
-        let filled_str: String = std::iter::repeat('█').take(filled).collect();
-        let empty_str: String = std::iter::repeat('░').take(empty).collect();
+        let filled_str: String = std::iter::repeat_n('█', filled).collect();
+        let empty_str: String = std::iter::repeat_n('░', empty).collect();
 
         let mut filled_span = Span::new(filled_str);
         if let Some(color) = self.color {

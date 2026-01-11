@@ -8,10 +8,10 @@ use crossterm::{
     execute,
 };
 
-use tink::prelude::*;
-use tink::core::Dimension;
-use tink::layout::LayoutEngine;
-use tink::renderer::Output;
+use rnk::prelude::*;
+use rnk::core::Dimension;
+use rnk::layout::LayoutEngine;
+use rnk::renderer::Output;
 
 fn main() -> std::io::Result<()> {
     let (width, height) = terminal::size()?;
@@ -140,7 +140,7 @@ fn render_element(
     offset_x: f32,
     offset_y: f32,
 ) {
-    use tink::core::{Display, Position};
+    use rnk::core::{Display, Position};
 
     if element.style.display == Display::None {
         return;

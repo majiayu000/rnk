@@ -23,7 +23,7 @@ impl AppContext {
 
 // Thread-local storage for the current app context
 thread_local! {
-    static APP_CONTEXT: std::cell::RefCell<Option<AppContext>> = std::cell::RefCell::new(None);
+    static APP_CONTEXT: std::cell::RefCell<Option<AppContext>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Set the current app context (called by App during render)
