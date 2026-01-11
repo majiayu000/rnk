@@ -585,15 +585,18 @@ fn render_element_recursive(
         render_border(element, output, x, y, w, h);
     }
 
-    // Render text content
+    // Render text content - must account for border and padding
     if let Some(text) = &element.text_content {
-        output.write(x, y, text, &element.style);
+        let text_x = x + if element.style.has_border() { 1 } else { 0 }
+            + element.style.padding.left as u16;
+        let text_y = y + if element.style.has_border() { 1 } else { 0 }
+            + element.style.padding.top as u16;
+        output.write(text_x, text_y, text, &element.style);
     }
 
-    // Calculate child offset (for padding and border)
-    let border_offset = if element.style.has_border() { 1.0 } else { 0.0 };
-    let child_offset_x = offset_x + layout.x + element.style.padding.left + border_offset;
-    let child_offset_y = offset_y + layout.y + element.style.padding.top + border_offset;
+    // Calculate child offset - taffy already accounts for padding and border in child positions
+    let child_offset_x = offset_x + layout.x;
+    let child_offset_y = offset_y + layout.y;
 
     // Render children
     for child in element.children.iter() {
