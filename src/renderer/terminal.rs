@@ -2,7 +2,7 @@
 
 use crossterm::{
     cursor::{Hide, Show, MoveTo},
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, Event, KeyCode, KeyModifiers, EnableMouseCapture, DisableMouseCapture},
     execute,
     terminal::{
         disable_raw_mode, enable_raw_mode,
@@ -100,6 +100,8 @@ pub struct Terminal {
     cursor_hidden: bool,
     /// Whether raw mode is enabled
     raw_mode: bool,
+    /// Whether mouse mode is enabled
+    mouse_enabled: bool,
 }
 
 impl Terminal {
@@ -110,6 +112,7 @@ impl Terminal {
             alternate_screen: false,
             cursor_hidden: false,
             raw_mode: false,
+            mouse_enabled: false,
         }
     }
 
@@ -125,6 +128,11 @@ impl Terminal {
 
     /// Exit raw mode and alternate screen
     pub fn exit(&mut self) -> std::io::Result<()> {
+        // Disable mouse capture first
+        if self.mouse_enabled {
+            execute!(stdout(), DisableMouseCapture)?;
+            self.mouse_enabled = false;
+        }
         if self.alternate_screen {
             execute!(stdout(), Show, LeaveAlternateScreen)?;
             self.alternate_screen = false;
@@ -154,6 +162,12 @@ impl Terminal {
     /// Exit inline mode
     pub fn exit_inline(&mut self) -> std::io::Result<()> {
         let mut stdout = stdout();
+
+        // Disable mouse capture first
+        if self.mouse_enabled {
+            execute!(stdout, DisableMouseCapture)?;
+            self.mouse_enabled = false;
+        }
 
         // Show cursor
         if self.cursor_hidden {
@@ -353,6 +367,29 @@ impl Terminal {
                 ..
             }) if modifiers.contains(KeyModifiers::CONTROL)
         )
+    }
+
+    /// Enable mouse capture
+    pub fn enable_mouse(&mut self) -> std::io::Result<()> {
+        if !self.mouse_enabled {
+            execute!(stdout(), EnableMouseCapture)?;
+            self.mouse_enabled = true;
+        }
+        Ok(())
+    }
+
+    /// Disable mouse capture
+    pub fn disable_mouse(&mut self) -> std::io::Result<()> {
+        if self.mouse_enabled {
+            execute!(stdout(), DisableMouseCapture)?;
+            self.mouse_enabled = false;
+        }
+        Ok(())
+    }
+
+    /// Check if mouse is enabled
+    pub fn is_mouse_enabled(&self) -> bool {
+        self.mouse_enabled
     }
 }
 

@@ -11,6 +11,7 @@ use crate::core::Element;
 use crate::hooks::context::{HookContext, with_hooks};
 use crate::hooks::use_app::{set_app_context, AppContext};
 use crate::hooks::use_input::{clear_input_handlers, dispatch_key_event};
+use crate::hooks::use_mouse::{dispatch_mouse_event, is_mouse_enabled, clear_mouse_handlers};
 use crate::layout::LayoutEngine;
 use crate::renderer::{Output, Terminal};
 
@@ -159,6 +160,13 @@ where
                 // Request re-render after input
                 self.needs_render.store(true, Ordering::SeqCst);
             }
+            Event::Mouse(mouse_event) => {
+                // Dispatch to mouse handlers
+                dispatch_mouse_event(&mouse_event);
+
+                // Request re-render after mouse event
+                self.needs_render.store(true, Ordering::SeqCst);
+            }
             Event::Resize(new_width, new_height) => {
                 // Handle resize - clear screen if width decreased to prevent artifacts
                 self.handle_resize(new_width, new_height);
@@ -190,8 +198,9 @@ where
     }
 
     fn render_frame(&mut self) -> std::io::Result<()> {
-        // Clear input handlers before render (they'll be re-registered)
+        // Clear input and mouse handlers before render (they'll be re-registered)
         clear_input_handlers();
+        clear_mouse_handlers();
 
         // Get terminal size
         let (width, height) = Terminal::size()?;
@@ -206,6 +215,13 @@ where
 
         // Clear app context after render
         set_app_context(None);
+
+        // Enable/disable mouse mode based on whether any component uses it
+        if is_mouse_enabled() {
+            self.terminal.enable_mouse()?;
+        } else {
+            self.terminal.disable_mouse()?;
+        }
 
         // Extract and commit static content
         let new_static_lines = self.extract_static_content(&root, width);
@@ -350,12 +366,17 @@ where
             self.render_border(element, output, x, y, width, height);
         }
 
-        // Render text content
-        if let Some(text) = &element.text_content {
-            let text_x = x + if element.style.has_border() { 1 } else { 0 }
-                + element.style.padding.left as u16;
-            let text_y = y + if element.style.has_border() { 1 } else { 0 }
-                + element.style.padding.top as u16;
+        // Render text content (simple or rich text with spans)
+        let text_x = x + if element.style.has_border() { 1 } else { 0 }
+            + element.style.padding.left as u16;
+        let text_y = y + if element.style.has_border() { 1 } else { 0 }
+            + element.style.padding.top as u16;
+
+        if let Some(spans) = &element.spans {
+            // Rich text with multiple spans
+            self.render_spans(spans, output, text_x, text_y);
+        } else if let Some(text) = &element.text_content {
+            // Simple text
             output.write(text_x, text_y, text, &element.style);
         }
 
@@ -424,6 +445,19 @@ where
         if element.style.border_right && width > 1 {
             for row in (y + 1)..(y + height - 1) {
                 output.write_char(x + width - 1, row, v.chars().next().unwrap(), &right_style);
+            }
+        }
+    }
+
+    /// Render rich text spans
+    fn render_spans(&self, lines: &[crate::components::text::Line], output: &mut Output, start_x: u16, start_y: u16) {
+        for (line_idx, line) in lines.iter().enumerate() {
+            let y = start_y + line_idx as u16;
+            let mut x = start_x;
+
+            for span in &line.spans {
+                output.write(x, y, &span.content, &span.style);
+                x += span.width() as u16;
             }
         }
     }

@@ -112,6 +112,10 @@ impl FromIterator<Element> for Children {
 #[allow(dead_code)]
 pub type TextTransform = Box<dyn Fn(&str) -> String + Send + Sync>;
 
+/// Span and Line types (re-exported from components::text)
+/// We use a simplified version here to avoid circular dependencies
+pub use crate::components::text::{Span, Line};
+
 /// UI Element
 #[derive(Debug)]
 pub struct Element {
@@ -123,8 +127,10 @@ pub struct Element {
     pub style: Style,
     /// Child elements
     pub children: Children,
-    /// Text content (for Text elements)
+    /// Text content (for Text elements) - simple text
     pub text_content: Option<String>,
+    /// Rich text spans (for Text elements with mixed styles)
+    pub spans: Option<Vec<Line>>,
     /// Key for reconciliation
     pub key: Option<String>,
 }
@@ -137,6 +143,7 @@ impl Clone for Element {
             style: self.style.clone(),
             children: self.children.clone(),
             text_content: self.text_content.clone(),
+            spans: self.spans.clone(),
             key: self.key.clone(),
         }
     }
@@ -151,6 +158,7 @@ impl Element {
             style: Style::new(),
             children: Children::new(),
             text_content: None,
+            spans: None,
             key: None,
         }
     }
@@ -163,6 +171,7 @@ impl Element {
             style: Style::new(),
             children: Children::new(),
             text_content: None,
+            spans: None,
             key: None,
         }
     }
