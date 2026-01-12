@@ -70,5 +70,9 @@ name = "glm_chat"
 path = "examples/glm_chat.rs"
 
 [[example]]
+name = "glm_chat_old"
+path = "examples/glm_chat_old.rs"
+
+[[example]]
 name = "render_api_demo"
 path = "examples/render_api_demo.rs"
