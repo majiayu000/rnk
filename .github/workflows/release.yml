@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+
+      - name: Verify version matches tag
+        run: |
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
+            echo "Version mismatch: Cargo.toml has $CARGO_VERSION, but tag is v$TAG_VERSION"
+            exit 1
+          fi
+
+      - name: Run tests
+        run: cargo test --lib --verbose
+
+      - name: Publish to crates.io
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: publish
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          generate_release_notes: true
+          draft: false
+          prerelease: false
