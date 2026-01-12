@@ -126,6 +126,9 @@ pub use crate::core::{Color, Element, ElementId, Style};
 pub use crate::renderer::{
     AppBuilder,
     AppOptions,
+    IntoPrintable,
+    ModeSwitch,
+    Printable,
     // Types
     RenderHandle,
     enter_alt_screen,

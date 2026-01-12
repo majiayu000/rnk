@@ -70,8 +70,14 @@ impl AppContext {
     /// let app = use_app();
     /// app.println("Task completed!");
     /// app.println(format!("Processed {} items", count));
+    ///
+    /// // Print elements
+    /// let banner = Box::new()
+    ///     .child(Text::new("Welcome!").bold().into_element())
+    ///     .into_element();
+    /// app.println(banner);
     /// ```
-    pub fn println(&self, message: impl std::fmt::Display) {
+    pub fn println(&self, message: impl crate::renderer::IntoPrintable) {
         crate::renderer::println(message);
     }
 

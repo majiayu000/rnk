@@ -26,8 +26,41 @@ use crate::renderer::{Output, Terminal};
 /// Global render flag storage for cross-thread render requests
 static GLOBAL_RENDER_FLAG: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
 
+/// Printable content that can be sent to println
+#[derive(Clone)]
+pub enum Printable {
+    /// Plain text message
+    Text(String),
+    /// Rendered element (boxed to reduce enum size)
+    Element(Box<Element>),
+}
+
+/// Trait for types that can be printed via println
+pub trait IntoPrintable {
+    /// Convert into a printable value
+    fn into_printable(self) -> Printable;
+}
+
+impl IntoPrintable for String {
+    fn into_printable(self) -> Printable {
+        Printable::Text(self)
+    }
+}
+
+impl IntoPrintable for &str {
+    fn into_printable(self) -> Printable {
+        Printable::Text(self.to_string())
+    }
+}
+
+impl IntoPrintable for Element {
+    fn into_printable(self) -> Printable {
+        Printable::Element(Box::new(self))
+    }
+}
+
 /// Global println message queue
-static PRINTLN_QUEUE: std::sync::OnceLock<Mutex<Vec<String>>> = std::sync::OnceLock::new();
+static PRINTLN_QUEUE: std::sync::OnceLock<Mutex<Vec<Printable>>> = std::sync::OnceLock::new();
 
 /// Global mode switch request
 static MODE_SWITCH_REQUEST: std::sync::OnceLock<Mutex<Option<ModeSwitch>>> =
@@ -88,26 +121,36 @@ fn take_render_request() -> bool {
 ///
 /// In fullscreen mode, this is a no-op (messages are ignored, like Bubbletea).
 ///
-/// # Example
+/// Supports both plain text and rendered elements:
+///
+/// # Examples
 ///
 /// ```ignore
 /// use rnk::println;
 ///
-/// // In an input handler or background thread
+/// // Simple text
 /// rnk::println("Task completed successfully!");
 /// rnk::println(format!("Downloaded {} files", count));
+///
+/// // Complex components
+/// let banner = Box::new()
+///     .border_style(BorderStyle::Round)
+///     .padding(1)
+///     .child(Text::new("Welcome!").bold().into_element())
+///     .into_element();
+/// rnk::println(banner);
 /// ```
-pub fn println(message: impl std::fmt::Display) {
+pub fn println(message: impl IntoPrintable) {
     if let Some(queue) = PRINTLN_QUEUE.get() {
         if let Ok(mut q) = queue.lock() {
-            q.push(message.to_string());
+            q.push(message.into_printable());
         }
     }
     request_render();
 }
 
 /// Take all queued println messages
-fn take_println_messages() -> Vec<String> {
+fn take_println_messages() -> Vec<Printable> {
     if let Some(queue) = PRINTLN_QUEUE.get() {
         if let Ok(mut q) = queue.lock() {
             std::mem::take(&mut *q)
@@ -219,7 +262,7 @@ impl RenderHandle {
     }
 
     /// Print a message that persists above the UI
-    pub fn println(&self, message: impl std::fmt::Display) {
+    pub fn println(&self, message: impl IntoPrintable) {
         println(message);
     }
 
@@ -524,20 +567,51 @@ where
     }
 
     /// Handle println messages (like Bubbletea's Println)
-    fn handle_println_messages(&mut self, messages: &[String]) -> std::io::Result<()> {
+    fn handle_println_messages(&mut self, messages: &[Printable]) -> std::io::Result<()> {
         // Println only works in inline mode
         if self.terminal.is_alt_screen() {
             return Ok(());
         }
 
+        // Get terminal width for rendering elements
+        let (width, _) = Terminal::size().unwrap_or((80, 24));
+
         for message in messages {
-            self.terminal.println(message)?;
+            match message {
+                Printable::Text(text) => {
+                    // Simple text - print directly
+                    self.terminal.println(text)?;
+                }
+                Printable::Element(element) => {
+                    // Render element to string first
+                    let rendered = self.render_element_to_string(element, width);
+                    self.terminal.println(&rendered)?;
+                }
+            }
         }
 
         // Force repaint after println
         self.terminal.repaint();
 
         Ok(())
+    }
+
+    /// Render an element to a string (for println)
+    fn render_element_to_string(&self, element: &Element, width: u16) -> String {
+        // Create a temporary layout engine
+        let mut engine = LayoutEngine::new();
+        engine.compute(element, width, 1000); // Use large height for static content
+
+        // Get layout dimensions
+        let layout = engine.get_layout(element.id).unwrap_or_default();
+        let content_width = (layout.width as u16).max(1).min(width);
+        let content_height = (layout.height as u16).max(1);
+
+        // Render to output buffer
+        let mut output = Output::new(content_width, content_height);
+        self.render_element_to_output(element, &engine, &mut output, 0.0, 0.0);
+
+        output.render()
     }
 
     fn handle_event(&mut self, event: Event) {
