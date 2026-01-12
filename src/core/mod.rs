@@ -1,22 +1,12 @@
 //! Core types and abstractions
 
+mod color;
 mod element;
 mod style;
-mod color;
 
-pub use element::{Element, ElementId, ElementType, Children};
-pub use style::{
-    Style,
-    FlexDirection,
-    AlignItems,
-    AlignSelf,
-    JustifyContent,
-    Display,
-    Position,
-    Overflow,
-    TextWrap,
-    BorderStyle,
-    Dimension,
-    Edges,
-};
 pub use color::Color;
+pub use element::{Children, Element, ElementId, ElementType};
+pub use style::{
+    AlignItems, AlignSelf, BorderStyle, Dimension, Display, Edges, FlexDirection, JustifyContent,
+    Overflow, Position, Style, TextWrap,
+};

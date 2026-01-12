@@ -2,8 +2,8 @@
 //!
 //! Provides progress bars and gauges for showing completion status.
 
+use crate::components::{Box as TinkBox, Line, Span, Text};
 use crate::core::{Color, Element};
-use crate::components::{Box as TinkBox, Text, Span, Line};
 
 /// Progress bar style
 #[derive(Debug, Clone)]
@@ -195,15 +195,17 @@ impl Progress {
         let empty_width = bar_width.saturating_sub(filled_width);
 
         // Handle head character
-        let (actual_filled, has_head) = if self.symbols.head.is_some() && filled_width > 0 && filled_width < bar_width {
-            (filled_width.saturating_sub(1), true)
-        } else {
-            (filled_width, false)
-        };
+        let (actual_filled, has_head) =
+            if self.symbols.head.is_some() && filled_width > 0 && filled_width < bar_width {
+                (filled_width.saturating_sub(1), true)
+            } else {
+                (filled_width, false)
+            };
 
         // Filled portion
         if actual_filled > 0 {
-            let filled_str: String = std::iter::repeat_n(self.symbols.filled, actual_filled).collect();
+            let filled_str: String =
+                std::iter::repeat_n(self.symbols.filled, actual_filled).collect();
             let mut filled_span = Span::new(filled_str);
             if let Some(color) = self.filled_color {
                 filled_span = filled_span.color(color);
@@ -212,14 +214,13 @@ impl Progress {
         }
 
         // Head character
-        if has_head
-            && let Some(head) = self.symbols.head {
-                let mut head_span = Span::new(head.to_string());
-                if let Some(color) = self.filled_color {
-                    head_span = head_span.color(color);
-                }
-                spans.push(head_span);
+        if has_head && let Some(head) = self.symbols.head {
+            let mut head_span = Span::new(head.to_string());
+            if let Some(color) = self.filled_color {
+                head_span = head_span.color(color);
             }
+            spans.push(head_span);
+        }
 
         // Empty portion
         if empty_width > 0 {
@@ -249,8 +250,7 @@ impl Progress {
         }
 
         let text = Text::line(Line::from_spans(spans));
-        let mut container = TinkBox::new()
-            .child(text.into_element());
+        let mut container = TinkBox::new().child(text.into_element());
 
         if let Some(key) = self.key {
             container = container.key(key);
@@ -347,8 +347,7 @@ impl Gauge {
         }
 
         let text = Text::line(Line::from_spans(spans));
-        let mut container = TinkBox::new()
-            .child(text.into_element());
+        let mut container = TinkBox::new().child(text.into_element());
 
         if let Some(key) = self.key {
             container = container.key(key);
@@ -370,9 +369,7 @@ mod tests {
 
     #[test]
     fn test_progress_creation() {
-        let progress = Progress::new()
-            .progress(0.5)
-            .width(20);
+        let progress = Progress::new().progress(0.5).width(20);
 
         assert_eq!(progress.width, 20);
         assert!((progress.progress - 0.5).abs() < 0.01);
@@ -380,8 +377,7 @@ mod tests {
 
     #[test]
     fn test_progress_ratio() {
-        let progress = Progress::new()
-            .ratio(50, 100);
+        let progress = Progress::new().ratio(50, 100);
 
         assert!((progress.progress - 0.5).abs() < 0.01);
     }
@@ -397,9 +393,7 @@ mod tests {
 
     #[test]
     fn test_gauge_creation() {
-        let gauge = Gauge::new()
-            .progress(0.75)
-            .label("CPU");
+        let gauge = Gauge::new().progress(0.75).label("CPU");
 
         assert!((gauge.progress - 0.75).abs() < 0.01);
         assert_eq!(gauge.label, Some("CPU".to_string()));

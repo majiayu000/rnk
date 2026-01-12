@@ -20,10 +20,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use rnk::prelude::*;
 use rnk::core::Dimension;
 use rnk::hooks::{HookContext, with_hooks};
 use rnk::layout::LayoutEngine;
+use rnk::prelude::*;
 use rnk::renderer::Output;
 
 /// A single todo item
@@ -101,18 +101,18 @@ fn render_header() -> Element {
         .child(
             Text::new("========================================")
                 .color(Color::Cyan)
-                .into_element()
+                .into_element(),
         )
         .child(
             Text::new("        TINK TODO APPLICATION           ")
                 .color(Color::White)
                 .bold()
-                .into_element()
+                .into_element(),
         )
         .child(
             Text::new("========================================")
                 .color(Color::Cyan)
-                .into_element()
+                .into_element(),
         )
         .into_element()
 }
@@ -153,35 +153,56 @@ fn render_stats(state: &AppState) -> Element {
                 .color(Color::Yellow)
                 .bold()
                 .underline()
-                .into_element()
+                .into_element(),
         )
         .child(Newline::new().into_element())
         .child(
             Box::new()
                 .flex_direction(FlexDirection::Row)
                 .child(Text::new("Total:     ").color(Color::White).into_element())
-                .child(Text::new(format!("{}", total)).color(Color::Cyan).bold().into_element())
-                .into_element()
+                .child(
+                    Text::new(format!("{}", total))
+                        .color(Color::Cyan)
+                        .bold()
+                        .into_element(),
+                )
+                .into_element(),
         )
         .child(
             Box::new()
                 .flex_direction(FlexDirection::Row)
                 .child(Text::new("Completed: ").color(Color::White).into_element())
-                .child(Text::new(format!("{}", completed)).color(Color::Green).bold().into_element())
-                .into_element()
+                .child(
+                    Text::new(format!("{}", completed))
+                        .color(Color::Green)
+                        .bold()
+                        .into_element(),
+                )
+                .into_element(),
         )
         .child(
             Box::new()
                 .flex_direction(FlexDirection::Row)
                 .child(Text::new("Pending:   ").color(Color::White).into_element())
-                .child(Text::new(format!("{}", pending)).color(Color::Red).bold().into_element())
-                .into_element()
+                .child(
+                    Text::new(format!("{}", pending))
+                        .color(Color::Red)
+                        .bold()
+                        .into_element(),
+                )
+                .into_element(),
         )
         .child(Newline::new().into_element())
         .child(
             Text::new(progress_bar)
-                .color(if percentage >= 80 { Color::Green } else if percentage >= 50 { Color::Yellow } else { Color::Red })
-                .into_element()
+                .color(if percentage >= 80 {
+                    Color::Green
+                } else if percentage >= 50 {
+                    Color::Yellow
+                } else {
+                    Color::Red
+                })
+                .into_element(),
         )
         .into_element()
 }
@@ -189,7 +210,11 @@ fn render_stats(state: &AppState) -> Element {
 /// Single todo item component
 fn render_todo_item(item: &TodoItem, is_selected: bool, index: usize) -> Element {
     let checkbox = if item.completed { "[x]" } else { "[ ]" };
-    let status_color = if item.completed { Color::Green } else { Color::White };
+    let status_color = if item.completed {
+        Color::Green
+    } else {
+        Color::White
+    };
 
     let mut container = Box::new()
         .flex_direction(FlexDirection::Row)
@@ -213,24 +238,25 @@ fn render_todo_item(item: &TodoItem, is_selected: bool, index: usize) -> Element
         .child(
             Text::new(format!("{:2}. ", index + 1))
                 .color(Color::Ansi256(240))
-                .into_element()
+                .into_element(),
         )
         .child(
             Text::new(checkbox)
-                .color(if item.completed { Color::Green } else { Color::Ansi256(240) })
+                .color(if item.completed {
+                    Color::Green
+                } else {
+                    Color::Ansi256(240)
+                })
                 .bold()
-                .into_element()
+                .into_element(),
         )
-        .child(
-            Text::new(" ")
-                .into_element()
-        )
+        .child(Text::new(" ").into_element())
         .child(text_component.into_element())
         .child(Spacer::new().into_element())
         .child(
             Text::new(&item.created_at)
                 .color(Color::Ansi256(240))
-                .into_element()
+                .into_element(),
         )
         .into_element()
 }
@@ -258,15 +284,19 @@ fn render_todo_list(state: &AppState) -> Element {
                         .color(Color::Blue)
                         .bold()
                         .underline()
-                        .into_element()
+                        .into_element(),
                 )
                 .child(Spacer::new().into_element())
                 .child(
-                    Text::new(if state.show_completed { "[Show All]" } else { "[Hide Done]" })
-                        .color(Color::Ansi256(240))
-                        .into_element()
+                    Text::new(if state.show_completed {
+                        "[Show All]"
+                    } else {
+                        "[Hide Done]"
+                    })
+                    .color(Color::Ansi256(240))
+                    .into_element(),
                 )
-                .into_element()
+                .into_element(),
         );
 
     if filtered_todos.is_empty() {
@@ -278,13 +308,17 @@ fn render_todo_list(state: &AppState) -> Element {
                     Text::new("No todos yet! Press 'a' to add one.")
                         .color(Color::Ansi256(240))
                         .italic()
-                        .into_element()
+                        .into_element(),
                 )
-                .into_element()
+                .into_element(),
         );
     } else {
         for (display_idx, item) in filtered_todos.iter().enumerate() {
-            let actual_idx = state.todos.iter().position(|t| t.id == item.id).unwrap_or(0);
+            let actual_idx = state
+                .todos
+                .iter()
+                .position(|t| t.id == item.id)
+                .unwrap_or(0);
             let is_selected = actual_idx == state.selected_index;
             list = list.child(render_todo_item(item, is_selected, display_idx));
         }
@@ -303,13 +337,13 @@ fn render_status_bar(state: &AppState) -> Element {
         .child(
             Text::new(&state.status_message)
                 .color(Color::White)
-                .into_element()
+                .into_element(),
         )
         .child(Spacer::new().into_element())
         .child(
             Text::new("Press 'h' for help | 'q' to quit")
                 .color(Color::Ansi256(240))
-                .into_element()
+                .into_element(),
         )
         .into_element()
 }
@@ -338,10 +372,10 @@ fn render_help_popup(show: bool) -> Element {
                     Text::new("Keyboard Shortcuts")
                         .color(Color::Magenta)
                         .bold()
-                        .into_element()
+                        .into_element(),
                 )
                 .child(Spacer::new().into_element())
-                .into_element()
+                .into_element(),
         )
         .child(Newline::new().into_element())
         .child(render_help_row("j / Down", "Move down"))
@@ -360,9 +394,9 @@ fn render_help_popup(show: bool) -> Element {
                     Text::new("Press 'h' to close")
                         .color(Color::Ansi256(240))
                         .italic()
-                        .into_element()
+                        .into_element(),
                 )
-                .into_element()
+                .into_element(),
         )
         .into_element()
 }
@@ -374,19 +408,10 @@ fn render_help_row(key: &str, desc: &str) -> Element {
         .child(
             Box::new()
                 .width(12)
-                .child(
-                    Text::new(key)
-                        .color(Color::Cyan)
-                        .bold()
-                        .into_element()
-                )
-                .into_element()
+                .child(Text::new(key).color(Color::Cyan).bold().into_element())
+                .into_element(),
         )
-        .child(
-            Text::new(desc)
-                .color(Color::White)
-                .into_element()
-        )
+        .child(Text::new(desc).color(Color::White).into_element())
         .into_element()
 }
 
@@ -402,29 +427,21 @@ fn render_quick_actions() -> Element {
                 .color(Color::Magenta)
                 .bold()
                 .underline()
-                .into_element()
+                .into_element(),
         )
         .child(Newline::new().into_element())
         .child(
             Text::new("  [a] Add Todo")
                 .color(Color::Green)
-                .into_element()
+                .into_element(),
         )
-        .child(
-            Text::new("  [d] Delete")
-                .color(Color::Red)
-                .into_element()
-        )
+        .child(Text::new("  [d] Delete").color(Color::Red).into_element())
         .child(
             Text::new("  [c] Filter")
                 .color(Color::Yellow)
-                .into_element()
+                .into_element(),
         )
-        .child(
-            Text::new("  [h] Help")
-                .color(Color::Cyan)
-                .into_element()
-        )
+        .child(Text::new("  [h] Help").color(Color::Cyan).into_element())
         .into_element()
 }
 
@@ -434,7 +451,7 @@ fn render_transform_demo() -> Element {
         .child(
             Text::new("this text is transformed to uppercase")
                 .color(Color::Ansi256(245))
-                .into_element()
+                .into_element(),
         )
         .into_element()
 }
@@ -463,7 +480,7 @@ fn render_app(state: &AppState) -> Element {
                         .child(render_quick_actions())
                         .child(Newline::new().into_element())
                         .child(render_transform_demo())
-                        .into_element()
+                        .into_element(),
                 )
                 // Spacer between panels
                 .child(Box::new().width(2).into_element())
@@ -473,9 +490,9 @@ fn render_app(state: &AppState) -> Element {
                         .flex_grow(1.0)
                         .flex_direction(FlexDirection::Column)
                         .child(render_todo_list(state))
-                        .into_element()
+                        .into_element(),
                 )
-                .into_element()
+                .into_element(),
         )
         // Status bar
         .child(render_status_bar(state))
@@ -587,10 +604,10 @@ fn render_element_recursive(
 
     // Render text content - must account for border and padding
     if let Some(text) = &element.text_content {
-        let text_x = x + if element.style.has_border() { 1 } else { 0 }
-            + element.style.padding.left as u16;
-        let text_y = y + if element.style.has_border() { 1 } else { 0 }
-            + element.style.padding.top as u16;
+        let text_x =
+            x + if element.style.has_border() { 1 } else { 0 } + element.style.padding.left as u16;
+        let text_y =
+            y + if element.style.has_border() { 1 } else { 0 } + element.style.padding.top as u16;
         output.write(text_x, text_y, text, &element.style);
     }
 

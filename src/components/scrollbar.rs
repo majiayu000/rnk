@@ -2,8 +2,8 @@
 //!
 //! Provides vertical and horizontal scrollbar widgets.
 
-use crate::core::{Color, Element, FlexDirection};
 use crate::components::{Box as TinkBox, Text};
+use crate::core::{Color, Element, FlexDirection};
 
 /// Scrollbar orientation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -227,7 +227,11 @@ impl Scrollbar {
         // Track with thumb
         for i in 0..track_length {
             let is_thumb = i >= thumb_start && i < thumb_start + thumb_size;
-            let ch = if is_thumb { self.symbols.thumb } else { self.symbols.track };
+            let ch = if is_thumb {
+                self.symbols.thumb
+            } else {
+                self.symbols.track
+            };
             chars.push((ch, is_thumb));
         }
 
@@ -238,8 +242,7 @@ impl Scrollbar {
 
         // For vertical scrollbar, each character is on its own line
         if self.orientation == ScrollbarOrientation::Vertical {
-            let mut container = TinkBox::new()
-                .flex_direction(FlexDirection::Column);
+            let mut container = TinkBox::new().flex_direction(FlexDirection::Column);
 
             if let Some(key) = self.key {
                 container = container.key(key);
@@ -290,18 +293,14 @@ mod tests {
 
     #[test]
     fn test_scrollbar_creation() {
-        let scrollbar = Scrollbar::new()
-            .position(0.5)
-            .length(10);
+        let scrollbar = Scrollbar::new().position(0.5).length(10);
 
         assert_eq!(scrollbar.length, 10);
     }
 
     #[test]
     fn test_scrollbar_from_sizes() {
-        let scrollbar = Scrollbar::new()
-            .from_sizes(100, 20, 40)
-            .length(10);
+        let scrollbar = Scrollbar::new().from_sizes(100, 20, 40).length(10);
 
         // position should be 40/80 = 0.5
         assert!((scrollbar.position - 0.5).abs() < 0.01);

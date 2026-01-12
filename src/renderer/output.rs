@@ -130,10 +130,11 @@ impl Output {
 
             // Check clip region
             if let Some(clip) = self.clip_stack.last()
-                && !clip.contains(col as u16, row as u16) {
-                    col += char_width;
-                    continue;
-                }
+                && !clip.contains(col as u16, row as u16)
+            {
+                col += char_width;
+                continue;
+            }
 
             // Handle overwriting wide character's second half (placeholder)
             // If current position is a placeholder '\0', we're breaking a wide char
@@ -192,9 +193,10 @@ impl Output {
 
         // Check clip region
         if let Some(clip) = self.clip_stack.last()
-            && !clip.contains(x, y) {
-                return;
-            }
+            && !clip.contains(x, y)
+        {
+            return;
+        }
 
         // Handle overwriting wide character's second half (placeholder)
         if self.grid[row][col].ch == '\0' && col > 0 {

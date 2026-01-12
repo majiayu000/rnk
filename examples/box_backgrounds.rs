@@ -7,7 +7,7 @@
 use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
-    render(app)
+    render(app).run()
 }
 
 fn app() -> Element {
@@ -31,7 +31,12 @@ fn app() -> Element {
                         .background(Color::Green)
                         .padding(1)
                         .margin_right(1.0)
-                        .child(Text::new(" Green ").color(Color::White).bold().into_element())
+                        .child(
+                            Text::new(" Green ")
+                                .color(Color::White)
+                                .bold()
+                                .into_element(),
+                        )
                         .into_element(),
                 )
                 .child(
@@ -39,14 +44,24 @@ fn app() -> Element {
                         .background(Color::Blue)
                         .padding(1)
                         .margin_right(1.0)
-                        .child(Text::new(" Blue ").color(Color::White).bold().into_element())
+                        .child(
+                            Text::new(" Blue ")
+                                .color(Color::White)
+                                .bold()
+                                .into_element(),
+                        )
                         .into_element(),
                 )
                 .child(
                     Box::new()
                         .background(Color::Yellow)
                         .padding(1)
-                        .child(Text::new(" Yellow ").color(Color::Black).bold().into_element())
+                        .child(
+                            Text::new(" Yellow ")
+                                .color(Color::Black)
+                                .bold()
+                                .into_element(),
+                        )
                         .into_element(),
                 )
                 .into_element(),
@@ -61,7 +76,12 @@ fn app() -> Element {
                         .background(Color::Magenta)
                         .padding(1)
                         .margin_right(1.0)
-                        .child(Text::new(" Magenta ").color(Color::White).bold().into_element())
+                        .child(
+                            Text::new(" Magenta ")
+                                .color(Color::White)
+                                .bold()
+                                .into_element(),
+                        )
                         .into_element(),
                 )
                 .child(
@@ -69,7 +89,12 @@ fn app() -> Element {
                         .background(Color::Cyan)
                         .padding(1)
                         .margin_right(1.0)
-                        .child(Text::new(" Cyan ").color(Color::Black).bold().into_element())
+                        .child(
+                            Text::new(" Cyan ")
+                                .color(Color::Black)
+                                .bold()
+                                .into_element(),
+                        )
                         .into_element(),
                 )
                 .child(
@@ -77,7 +102,12 @@ fn app() -> Element {
                         .background(Color::White)
                         .padding(1)
                         .margin_right(1.0)
-                        .child(Text::new(" White ").color(Color::Black).bold().into_element())
+                        .child(
+                            Text::new(" White ")
+                                .color(Color::Black)
+                                .bold()
+                                .into_element(),
+                        )
                         .into_element(),
                 )
                 .child(
@@ -86,7 +116,12 @@ fn app() -> Element {
                         .border_style(BorderStyle::Single)
                         .border_color(Color::White)
                         .padding(1)
-                        .child(Text::new(" Black ").color(Color::White).bold().into_element())
+                        .child(
+                            Text::new(" Black ")
+                                .color(Color::White)
+                                .bold()
+                                .into_element(),
+                        )
                         .into_element(),
                 )
                 .into_element(),

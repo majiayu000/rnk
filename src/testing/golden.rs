@@ -6,8 +6,8 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::core::Element;
 use super::renderer::TestRenderer;
+use crate::core::Element;
 
 /// Directory for golden files
 const GOLDEN_DIR: &str = "tests/golden";
@@ -64,7 +64,11 @@ impl GoldenTest {
             GoldenResult::Created => {
                 println!("Golden file created: {}", self.golden_path().display());
             }
-            GoldenResult::Mismatch { expected, actual, diff } => {
+            GoldenResult::Mismatch {
+                expected,
+                actual,
+                diff,
+            } => {
                 panic!(
                     "\n\nGolden file mismatch for '{}':\n\n{}\n\nExpected:\n{}\n\nActual:\n{}\n",
                     self.name, diff, expected, actual
@@ -90,8 +94,7 @@ impl GoldenTest {
             return GoldenResult::Created;
         }
 
-        let expected = fs::read_to_string(&golden_path)
-            .unwrap_or_else(|_| String::new());
+        let expected = fs::read_to_string(&golden_path).unwrap_or_else(|_| String::new());
 
         if actual == expected {
             GoldenResult::Match
@@ -136,14 +139,13 @@ fn simple_diff(expected: &str, actual: &str) -> String {
         }
     }
 
-    if diff.is_empty()
-        && expected_lines.len() != actual_lines.len() {
-            diff = format!(
-                "Line count differs: expected {}, got {}",
-                expected_lines.len(),
-                actual_lines.len()
-            );
-        }
+    if diff.is_empty() && expected_lines.len() != actual_lines.len() {
+        diff = format!(
+            "Line count differs: expected {}, got {}",
+            expected_lines.len(),
+            actual_lines.len()
+        );
+    }
 
     diff
 }
@@ -162,8 +164,8 @@ macro_rules! golden_test {
     ($name:ident, $width:expr, $height:expr, $element:expr) => {
         #[test]
         fn $name() {
-            let golden = $crate::testing::GoldenTest::new(stringify!($name))
-                .with_size($width, $height);
+            let golden =
+                $crate::testing::GoldenTest::new(stringify!($name)).with_size($width, $height);
             golden.assert_match(&$element);
         }
     };

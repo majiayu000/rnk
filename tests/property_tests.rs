@@ -4,10 +4,10 @@
 
 use proptest::prelude::*;
 
-use tink::core::{Element, Dimension, FlexDirection};
-use tink::components::{Box as TinkBox, Text};
-use tink::testing::{TestRenderer, display_width};
-use tink::layout::measure::measure_text_width;
+use rnk::components::{Box as TinkBox, Text};
+use rnk::core::{Dimension, Element, FlexDirection};
+use rnk::layout::measure::measure_text_width;
+use rnk::testing::{TestRenderer, display_width};
 
 // ============================================================================
 // Unicode Width Property Tests

@@ -7,7 +7,7 @@
 use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
-    render(app)
+    render(app).run()
 }
 
 /// Sample user data
@@ -19,16 +19,56 @@ struct User {
 
 fn app() -> Element {
     let users = vec![
-        User { id: 0, name: "alice_dev", email: "alice@example.com" },
-        User { id: 1, name: "bob_smith", email: "bob.smith@mail.com" },
-        User { id: 2, name: "charlie123", email: "charlie@test.org" },
-        User { id: 3, name: "diana_code", email: "diana@company.io" },
-        User { id: 4, name: "eve_hacker", email: "eve@secure.net" },
-        User { id: 5, name: "frank_ops", email: "frank@devops.com" },
-        User { id: 6, name: "grace_ml", email: "grace@ai.research" },
-        User { id: 7, name: "henry_web", email: "henry@frontend.dev" },
-        User { id: 8, name: "iris_data", email: "iris@analytics.co" },
-        User { id: 9, name: "jack_api", email: "jack@backend.io" },
+        User {
+            id: 0,
+            name: "alice_dev",
+            email: "alice@example.com",
+        },
+        User {
+            id: 1,
+            name: "bob_smith",
+            email: "bob.smith@mail.com",
+        },
+        User {
+            id: 2,
+            name: "charlie123",
+            email: "charlie@test.org",
+        },
+        User {
+            id: 3,
+            name: "diana_code",
+            email: "diana@company.io",
+        },
+        User {
+            id: 4,
+            name: "eve_hacker",
+            email: "eve@secure.net",
+        },
+        User {
+            id: 5,
+            name: "frank_ops",
+            email: "frank@devops.com",
+        },
+        User {
+            id: 6,
+            name: "grace_ml",
+            email: "grace@ai.research",
+        },
+        User {
+            id: 7,
+            name: "henry_web",
+            email: "henry@frontend.dev",
+        },
+        User {
+            id: 8,
+            name: "iris_data",
+            email: "iris@analytics.co",
+        },
+        User {
+            id: 9,
+            name: "jack_api",
+            email: "jack@backend.io",
+        },
     ];
 
     Box::new()
@@ -65,7 +105,12 @@ fn app() -> Element {
                 .child(
                     Box::new()
                         .flex_grow(1.0)
-                        .child(Text::new("Email").bold().color(Color::Yellow).into_element())
+                        .child(
+                            Text::new("Email")
+                                .bold()
+                                .color(Color::Yellow)
+                                .into_element(),
+                        )
                         .into_element(),
                 )
                 .into_element(),
@@ -78,9 +123,7 @@ fn app() -> Element {
                 None
             };
 
-            let mut row = Box::new()
-                .flex_direction(FlexDirection::Row)
-                .padding_x(1.0);
+            let mut row = Box::new().flex_direction(FlexDirection::Row).padding_x(1.0);
 
             if let Some(bg_color) = bg {
                 row = row.background(bg_color);

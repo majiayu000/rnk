@@ -1,84 +1,48 @@
 //! Prelude module - commonly used imports
+//!
+//! This module re-exports the most commonly used types and functions
+//! for convenience. Import with:
+//!
+//! ```ignore
+//! use rnk::prelude::*;
+//! ```
 
 pub use crate::core::{
-    Color,
-    Element,
-    ElementId,
-    Style,
-    FlexDirection,
-    AlignItems,
-    JustifyContent,
-    Display,
-    Position,
-    Overflow,
-    TextWrap,
-    BorderStyle,
+    AlignItems, BorderStyle, Color, Display, Element, ElementId, FlexDirection, JustifyContent,
+    Overflow, Position, Style, TextWrap,
 };
 
 pub use crate::components::{
-    Box,
-    Text,
-    Span,
-    Line,
-    Newline,
-    Spacer,
-    Transform,
-    Static,
-    static_output,
-    List,
-    ListItem,
-    ListState,
-    Table,
-    Row,
-    Cell,
-    TableState,
-    Constraint,
-    Scrollbar,
-    ScrollbarSymbols,
-    Tabs,
-    Tab,
-    Progress,
-    ProgressSymbols,
-    Gauge,
-    Sparkline,
-    BarChart,
-    Bar,
+    Bar, BarChart, Box, Cell, Constraint, Gauge, Line, List, ListItem, ListState, Newline,
+    Progress, ProgressSymbols, Row, Scrollbar, ScrollbarSymbols, Spacer, Span, Sparkline, Static,
+    Tab, Table, TableState, Tabs, Text, Transform, static_output,
 };
 
-pub use crate::renderer::{render, request_render, render_handle, RenderHandle};
+// Rendering APIs
+pub use crate::renderer::{
+    AppBuilder,
+    AppOptions,
+    ModeSwitch,
+    // Types
+    RenderHandle,
+    enter_alt_screen,
+    exit_alt_screen,
+    is_alt_screen,
+    println,
+    // Main entry points
+    render,
+    render_fullscreen,
+    render_handle,
+    render_inline,
+    // Cross-thread APIs
+    request_render,
+};
 
+// Hooks
 pub use crate::hooks::{
-    use_signal,
-    use_effect,
-    use_input,
-    use_app,
-    use_focus,
-    use_focus_manager,
-    use_stdin,
-    use_stdout,
-    use_stderr,
-    use_measure,
-    measure_element,
-    use_mouse,
-    Signal,
-    Key,
-    AppContext,
-    FocusState,
-    FocusManagerHandle,
-    UseFocusOptions,
-    StdinHandle,
-    StdoutHandle,
-    StderrHandle,
-    Dimensions,
-    MeasureRef,
-    use_is_screen_reader_enabled,
-    Mouse,
-    MouseAction,
-    MouseButton,
-    use_scroll,
-    ScrollState,
-    ScrollHandle,
-    use_window_title,
-    use_window_title_fn,
-    set_window_title,
+    AppContext, Dimensions, FocusManagerHandle, FocusState, Key, MeasureRef, Mouse, MouseAction,
+    MouseButton, ScrollHandle, ScrollState, Signal, StderrHandle, StdinHandle, StdoutHandle,
+    UseFocusOptions, measure_element, set_window_title, use_app, use_effect, use_focus,
+    use_focus_manager, use_input, use_is_screen_reader_enabled, use_measure, use_mouse, use_scroll,
+    use_signal, use_stderr, use_stdin, use_stdout, use_window_title, use_window_title_fn,
 };

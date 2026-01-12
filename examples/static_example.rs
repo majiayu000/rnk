@@ -7,7 +7,7 @@
 use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
-    render(app)
+    render(app).run()
 }
 
 #[derive(Clone)]
@@ -45,16 +45,23 @@ fn app() -> Element {
     let add_log_clone = add_log.clone();
     let counter_clone = counter.clone();
 
-    use_input(move |ch, _key| {
-        match ch {
-            "q" => app.exit(),
-            "i" => add_log_clone(format!("Info message #{}", counter_clone.get()), LogLevel::Info),
-            "w" => add_log_clone(format!("Warning message #{}", counter_clone.get()), LogLevel::Warn),
-            "e" => add_log_clone(format!("Error message #{}", counter_clone.get()), LogLevel::Error),
-            "+" => counter_clone.update(|c| *c += 1),
-            "-" => counter_clone.update(|c| *c -= 1),
-            _ => {}
-        }
+    use_input(move |ch, _key| match ch {
+        "q" => app.exit(),
+        "i" => add_log_clone(
+            format!("Info message #{}", counter_clone.get()),
+            LogLevel::Info,
+        ),
+        "w" => add_log_clone(
+            format!("Warning message #{}", counter_clone.get()),
+            LogLevel::Warn,
+        ),
+        "e" => add_log_clone(
+            format!("Error message #{}", counter_clone.get()),
+            LogLevel::Error,
+        ),
+        "+" => counter_clone.update(|c| *c += 1),
+        "-" => counter_clone.update(|c| *c -= 1),
+        _ => {}
     });
 
     let current_logs = logs.get();
@@ -80,25 +87,21 @@ fn app() -> Element {
         .child(Newline::new().into_element())
         // Static log entries - these persist and don't get re-rendered
         .child(
-            Static::new(current_logs.clone(), |entry, _idx| {
-                render_log_entry(entry)
-            }).into_element(),
+            Static::new(current_logs.clone(), |entry, _idx| render_log_entry(entry)).into_element(),
         )
         // Separator
-        .child(
-            if !current_logs.is_empty() {
-                Box::new()
-                    .margin_y(1.0)
-                    .child(
-                        Text::new("─".repeat(40))
-                            .color(Color::Ansi256(240))
-                            .into_element(),
-                    )
-                    .into_element()
-            } else {
-                Box::new().into_element()
-            },
-        )
+        .child(if !current_logs.is_empty() {
+            Box::new()
+                .margin_y(1.0)
+                .child(
+                    Text::new("─".repeat(40))
+                        .color(Color::Ansi256(240))
+                        .into_element(),
+                )
+                .into_element()
+        } else {
+            Box::new().into_element()
+        })
         // Dynamic counter (this part re-renders)
         .child(
             Box::new()
@@ -111,7 +114,11 @@ fn app() -> Element {
                         .child(Text::new("Counter: ").into_element())
                         .child(
                             Text::new(format!("{}", current_counter))
-                                .color(if current_counter >= 0 { Color::Green } else { Color::Red })
+                                .color(if current_counter >= 0 {
+                                    Color::Green
+                                } else {
+                                    Color::Red
+                                })
                                 .bold()
                                 .into_element(),
                         )
@@ -144,12 +151,7 @@ fn render_log_entry(entry: &LogEntry) -> Element {
 
     Box::new()
         .flex_direction(FlexDirection::Row)
-        .child(
-            Text::new(prefix)
-                .color(color)
-                .bold()
-                .into_element(),
-        )
+        .child(Text::new(prefix).color(color).bold().into_element())
         .child(
             Text::new(format!(" {}", entry.message))
                 .color(Color::White)

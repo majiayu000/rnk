@@ -2,8 +2,8 @@
 //!
 //! Displays a small graph of data points using Unicode block characters.
 
-use crate::core::{Color, Element};
 use crate::components::{Box as TinkBox, Text};
+use crate::core::{Color, Element};
 
 /// Block characters for sparkline (from lowest to highest)
 const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -158,8 +158,7 @@ impl Sparkline {
             text = text.color(color);
         }
 
-        let mut container = TinkBox::new()
-            .child(text.into_element());
+        let mut container = TinkBox::new().child(text.into_element());
 
         if let Some(key) = self.key {
             container = container.key(key);
@@ -213,7 +212,8 @@ mod tests {
 
     #[test]
     fn test_sparkline_sampling() {
-        let sparkline = Sparkline::from_data(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]);
+        let sparkline =
+            Sparkline::from_data(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]);
         let sampled = sparkline.sample_data(5);
         assert_eq!(sampled.len(), 5);
     }

@@ -1,8 +1,8 @@
 //! Debug layout for interactive demo
 
-use rnk::prelude::*;
 use rnk::core::Dimension;
 use rnk::layout::LayoutEngine;
+use rnk::prelude::*;
 
 fn main() {
     let element = create_demo_ui();
@@ -30,9 +30,9 @@ fn create_demo_ui() -> Element {
                     Text::new("Interactive Demo")
                         .color(Color::Cyan)
                         .bold()
-                        .into_element()
+                        .into_element(),
                 )
-                .into_element()
+                .into_element(),
         )
         .child(Newline::new().into_element())
         // Main content - two columns
@@ -51,9 +51,9 @@ fn create_demo_ui() -> Element {
                             Text::new("Counter Demo")
                                 .color(Color::Yellow)
                                 .bold()
-                                .into_element()
+                                .into_element(),
                         )
-                        .into_element()
+                        .into_element(),
                 )
                 .child(Box::new().width(2).into_element())
                 // Right column - list
@@ -68,11 +68,11 @@ fn create_demo_ui() -> Element {
                             Text::new("List Navigation")
                                 .color(Color::Blue)
                                 .bold()
-                                .into_element()
+                                .into_element(),
                         )
-                        .into_element()
+                        .into_element(),
                 )
-                .into_element()
+                .into_element(),
         )
         .into_element()
 }

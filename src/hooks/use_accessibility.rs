@@ -11,11 +11,11 @@ fn detect_screen_reader() -> bool {
     let indicators = [
         "SCREEN_READER",
         "ACCESSIBILITY_ENABLED",
-        "ORCA_ENABLED",           // Linux Orca
-        "NVDA_RUNNING",           // Windows NVDA
-        "JAWS_RUNNING",           // Windows JAWS
-        "VOICEOVER_RUNNING",      // macOS VoiceOver
-        "TERM_PROGRAM",           // May indicate accessible terminal
+        "ORCA_ENABLED",      // Linux Orca
+        "NVDA_RUNNING",      // Windows NVDA
+        "JAWS_RUNNING",      // Windows JAWS
+        "VOICEOVER_RUNNING", // macOS VoiceOver
+        "TERM_PROGRAM",      // May indicate accessible terminal
     ];
 
     for var in indicators {
@@ -33,10 +33,11 @@ fn detect_screen_reader() -> bool {
 
     // Check if running in a known accessible terminal
     if let Ok(term) = env::var("TERM")
-        && (term.contains("screen") || term.contains("tmux")) {
-            // These often have accessibility features
-            // but we can't be certain, so we don't return true
-        }
+        && (term.contains("screen") || term.contains("tmux"))
+    {
+        // These often have accessibility features
+        // but we can't be certain, so we don't return true
+    }
 
     // Check macOS VoiceOver via defaults (if available)
     #[cfg(target_os = "macos")]
@@ -44,12 +45,13 @@ fn detect_screen_reader() -> bool {
         if let Ok(output) = std::process::Command::new("defaults")
             .args(["read", "com.apple.universalaccess", "voiceOverOnOffKey"])
             .output()
-            && output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                if stdout.trim() == "1" {
-                    return true;
-                }
+            && output.status.success()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.trim() == "1" {
+                return true;
             }
+        }
     }
 
     false

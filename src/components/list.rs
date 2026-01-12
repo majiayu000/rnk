@@ -2,8 +2,8 @@
 //!
 //! Provides a scrollable, selectable list widget similar to Ratatui's List.
 
+use crate::components::{Box as TinkBox, Line, Span, Text};
 use crate::core::{Color, Element, Style};
-use crate::components::{Box as TinkBox, Text, Span, Line};
 
 /// List item with content and optional styling
 #[derive(Debug, Clone)]
@@ -250,7 +250,8 @@ impl List {
         let symbol_width = self.highlight_symbol.as_ref().map(|s| s.len()).unwrap_or(0);
 
         // Get visible items
-        let visible_items: Vec<_> = self.items
+        let visible_items: Vec<_> = self
+            .items
             .iter()
             .enumerate()
             .skip(offset)
@@ -258,8 +259,7 @@ impl List {
             .collect();
 
         // Build list element
-        let mut container = TinkBox::new()
-            .flex_direction(crate::core::FlexDirection::Column);
+        let mut container = TinkBox::new().flex_direction(crate::core::FlexDirection::Column);
 
         if let Some(key) = self.key {
             container = container.key(key);
@@ -302,9 +302,10 @@ impl List {
                     text = text.inverse();
                 }
             } else if let Some(ref item_style) = item.style
-                && let Some(color) = item_style.color {
-                    text = text.color(color);
-                }
+                && let Some(color) = item_style.color
+            {
+                text = text.color(color);
+            }
 
             container = container.child(text.into_element());
         }

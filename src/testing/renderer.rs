@@ -6,8 +6,8 @@
 use std::collections::HashMap;
 use unicode_width::UnicodeWidthChar;
 
-use crate::core::{Element, ElementId, Display, Position};
-use crate::layout::{LayoutEngine, Layout};
+use crate::core::{Display, Element, ElementId, Position};
+use crate::layout::{Layout, LayoutEngine};
 use crate::renderer::Output;
 
 /// Test renderer configuration
@@ -246,20 +246,60 @@ pub enum LayoutError {
 impl std::fmt::Display for LayoutError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NegativeCoordinate { element_id, axis, value } => {
-                write!(f, "Element {:?} has negative {} coordinate: {}", element_id, axis, value)
+            Self::NegativeCoordinate {
+                element_id,
+                axis,
+                value,
+            } => {
+                write!(
+                    f,
+                    "Element {:?} has negative {} coordinate: {}",
+                    element_id, axis, value
+                )
             }
-            Self::NegativeDimension { element_id, dimension, value } => {
-                write!(f, "Element {:?} has negative {}: {}", element_id, dimension, value)
+            Self::NegativeDimension {
+                element_id,
+                dimension,
+                value,
+            } => {
+                write!(
+                    f,
+                    "Element {:?} has negative {}: {}",
+                    element_id, dimension, value
+                )
             }
-            Self::OutOfBounds { element_id, axis, position, limit } => {
-                write!(f, "Element {:?} {} position {} exceeds limit {}", element_id, axis, position, limit)
+            Self::OutOfBounds {
+                element_id,
+                axis,
+                position,
+                limit,
+            } => {
+                write!(
+                    f,
+                    "Element {:?} {} position {} exceeds limit {}",
+                    element_id, axis, position, limit
+                )
             }
-            Self::ChildOutsideParent { child_id, parent_id } => {
-                write!(f, "Child {:?} is outside parent {:?} bounds", child_id, parent_id)
+            Self::ChildOutsideParent {
+                child_id,
+                parent_id,
+            } => {
+                write!(
+                    f,
+                    "Child {:?} is outside parent {:?} bounds",
+                    child_id, parent_id
+                )
             }
-            Self::InvalidUnicodeWidth { text, expected, actual } => {
-                write!(f, "Text '{}' has width {} but expected {}", text, actual, expected)
+            Self::InvalidUnicodeWidth {
+                text,
+                expected,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "Text '{}' has width {} but expected {}",
+                    text, actual, expected
+                )
             }
         }
     }
@@ -295,9 +335,7 @@ pub fn strip_ansi_codes(s: &str) -> String {
 
 /// Calculate display width of text accounting for Unicode
 pub fn display_width(s: &str) -> usize {
-    s.chars()
-        .filter_map(|c| c.width())
-        .sum()
+    s.chars().filter_map(|c| c.width()).sum()
 }
 
 #[cfg(test)]
@@ -309,7 +347,10 @@ mod tests {
     fn test_strip_ansi_codes() {
         assert_eq!(strip_ansi_codes("\x1b[31mred\x1b[0m"), "red");
         assert_eq!(strip_ansi_codes("plain text"), "plain text");
-        assert_eq!(strip_ansi_codes("\x1b[1;32mbold green\x1b[0m"), "bold green");
+        assert_eq!(
+            strip_ansi_codes("\x1b[1;32mbold green\x1b[0m"),
+            "bold green"
+        );
     }
 
     #[test]
@@ -342,10 +383,7 @@ mod tests {
     #[test]
     fn test_get_layouts() {
         let renderer = TestRenderer::new(80, 24);
-        let element = TinkBox::new()
-            .width(20)
-            .height(5)
-            .into_element();
+        let element = TinkBox::new().width(20).height(5).into_element();
 
         let layouts = renderer.get_layouts(&element);
         assert!(!layouts.is_empty());

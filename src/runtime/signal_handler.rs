@@ -3,8 +3,8 @@
 //! Handles SIGINT (Ctrl+C), SIGTERM, and SIGHUP signals to ensure
 //! terminal state is restored before exit.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::runtime::restore_terminal;
 

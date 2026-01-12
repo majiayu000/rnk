@@ -2,8 +2,8 @@
 //!
 //! Displays horizontal or vertical bar charts.
 
+use crate::components::{Box as TinkBox, Line, Span, Text};
 use crate::core::{Color, Element, FlexDirection};
-use crate::components::{Box as TinkBox, Text, Span, Line};
 
 /// Bar chart orientation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -190,8 +190,7 @@ impl BarChart {
             0
         };
 
-        let mut container = TinkBox::new()
-            .flex_direction(FlexDirection::Column);
+        let mut container = TinkBox::new().flex_direction(FlexDirection::Column);
 
         if let Some(ref key) = self.key {
             container = container.key(key.clone());
@@ -242,8 +241,7 @@ impl BarChart {
         let max_value = self.bars.iter().map(|b| b.value).fold(0.0f64, f64::max);
         let height = self.bar_max_size as usize;
 
-        let mut container = TinkBox::new()
-            .flex_direction(FlexDirection::Column);
+        let mut container = TinkBox::new().flex_direction(FlexDirection::Column);
 
         if let Some(ref key) = self.key {
             container = container.key(key.clone());
@@ -306,8 +304,7 @@ mod tests {
 
     #[test]
     fn test_bar_creation() {
-        let bar = Bar::new("CPU", 75.0)
-            .color(Color::Green);
+        let bar = Bar::new("CPU", 75.0).color(Color::Green);
 
         assert_eq!(bar.label, "CPU");
         assert_eq!(bar.value, 75.0);

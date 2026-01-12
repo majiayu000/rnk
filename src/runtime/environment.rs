@@ -144,7 +144,9 @@ pub fn term_program() -> Option<String> {
 /// Check if running in a specific terminal emulator
 #[allow(dead_code)]
 pub fn is_terminal_emulator(name: &str) -> bool {
-    term_program().map(|t| t.to_lowercase().contains(&name.to_lowercase())).unwrap_or(false)
+    term_program()
+        .map(|t| t.to_lowercase().contains(&name.to_lowercase()))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

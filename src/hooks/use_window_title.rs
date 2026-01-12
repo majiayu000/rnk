@@ -2,7 +2,7 @@
 //!
 //! Provides functions to set the terminal window title.
 
-use std::io::{stdout, Write};
+use std::io::{Write, stdout};
 
 /// ANSI escape sequence for setting window title (OSC - Operating System Command)
 /// Format: ESC ] 0 ; <title> BEL  or  ESC ] 0 ; <title> ST

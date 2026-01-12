@@ -3,10 +3,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use tink::prelude::*;
-use tink::renderer::Output;
-use tink::layout::LayoutEngine;
-use tink::hooks::{HookContext, with_hooks};
+use rnk::hooks::{HookContext, with_hooks};
+use rnk::layout::LayoutEngine;
+use rnk::prelude::*;
+use rnk::renderer::Output;
 
 #[test]
 fn test_simple_box_render() {
@@ -30,12 +30,12 @@ fn test_nested_boxes() {
         .child(
             Box::new()
                 .child(Text::new("Row 1").into_element())
-                .into_element()
+                .into_element(),
         )
         .child(
             Box::new()
                 .child(Text::new("Row 2").into_element())
-                .into_element()
+                .into_element(),
         )
         .into_element();
 
@@ -62,7 +62,7 @@ fn test_styled_text() {
 #[test]
 fn test_output_buffer() {
     let mut output = Output::new(40, 10);
-    let style = tink::core::Style::default();
+    let style = rnk::core::Style::default();
 
     output.write(0, 0, "Hello, World!", &style);
     let rendered = output.render();
@@ -73,7 +73,7 @@ fn test_output_buffer() {
 #[test]
 fn test_colored_output() {
     let mut output = Output::new(40, 10);
-    let mut style = tink::core::Style::default();
+    let mut style = rnk::core::Style::default();
     style.color = Some(Color::Red);
     style.bold = true;
 
@@ -115,10 +115,7 @@ fn test_flex_properties() {
 
 #[test]
 fn test_padding_and_margin() {
-    let element = Box::new()
-        .padding(2)
-        .margin(1)
-        .into_element();
+    let element = Box::new().padding(2).margin(1).into_element();
 
     assert_eq!(element.style.padding.top, 2.0);
     assert_eq!(element.style.padding.right, 2.0);
@@ -232,8 +229,14 @@ fn test_reactive_ui_pattern() {
     });
 
     // First element had "Selected: 0", second has "Selected: 5"
-    let text1 = element1.children.get(0).and_then(|e| e.text_content.as_ref());
-    let text2 = element2.children.get(0).and_then(|e| e.text_content.as_ref());
+    let text1 = element1
+        .children
+        .get(0)
+        .and_then(|e| e.text_content.as_ref());
+    let text2 = element2
+        .children
+        .get(0)
+        .and_then(|e| e.text_content.as_ref());
 
     assert_eq!(text1, Some(&"Selected: 0".to_string()));
     assert_eq!(text2, Some(&"Selected: 5".to_string()));
@@ -250,7 +253,7 @@ fn test_position_absolute() {
                 .top(5.0)
                 .left(10.0)
                 .child(Text::new("Absolute").into_element())
-                .into_element()
+                .into_element(),
         )
         .into_element();
 
@@ -281,16 +284,16 @@ fn test_display_none() {
         .height(24)
         .child(
             Box::new()
-                .hidden()  // display: none
+                .hidden() // display: none
                 .width(20)
                 .height(10)
                 .child(Text::new("Hidden").into_element())
-                .into_element()
+                .into_element(),
         )
         .child(
             Box::new()
                 .child(Text::new("Visible").into_element())
-                .into_element()
+                .into_element(),
         )
         .into_element();
 

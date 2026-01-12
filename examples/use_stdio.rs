@@ -7,7 +7,7 @@
 use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
-    render(app)
+    render(app).run()
 }
 
 fn app() -> Element {
@@ -24,21 +24,19 @@ fn app() -> Element {
     let stdout_count_clone = stdout_count.clone();
     let stderr_count_clone = stderr_count.clone();
 
-    use_input(move |ch, _key| {
-        match ch {
-            "q" => app.exit(),
-            "o" => {
-                let count = stdout_count_clone.get();
-                stdout_count_clone.set(count + 1);
-                let _ = stdout_clone.writeln(&format!("[stdout] Message #{}", count + 1));
-            }
-            "e" => {
-                let count = stderr_count_clone.get();
-                stderr_count_clone.set(count + 1);
-                let _ = stderr_clone.writeln(&format!("[stderr] Error #{}", count + 1));
-            }
-            _ => {}
+    use_input(move |ch, _key| match ch {
+        "q" => app.exit(),
+        "o" => {
+            let count = stdout_count_clone.get();
+            stdout_count_clone.set(count + 1);
+            let _ = stdout_clone.writeln(&format!("[stdout] Message #{}", count + 1));
         }
+        "e" => {
+            let count = stderr_count_clone.get();
+            stderr_count_clone.set(count + 1);
+            let _ = stderr_clone.writeln(&format!("[stderr] Error #{}", count + 1));
+        }
+        _ => {}
     });
 
     let is_tty = stdin.is_tty();

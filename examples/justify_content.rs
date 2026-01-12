@@ -7,7 +7,7 @@
 use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
-    render(app)
+    render(app).run()
 }
 
 fn app() -> Element {

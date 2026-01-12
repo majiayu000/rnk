@@ -2,8 +2,8 @@
 //!
 //! Run with: cargo run --example static_demo
 
-use rnk::prelude::*;
 use rnk::layout::LayoutEngine;
+use rnk::prelude::*;
 use rnk::renderer::Output;
 
 fn main() {
@@ -32,7 +32,7 @@ fn demo_hello() {
             Text::new("Hello, Tink!")
                 .color(Color::Green)
                 .bold()
-                .into_element()
+                .into_element(),
         )
         .into_element();
 
@@ -45,7 +45,11 @@ fn demo_styled_text() {
         .padding(1.0)
         .child(Text::new("Bold text").bold().into_element())
         .child(Text::new("Red error").color(Color::Red).into_element())
-        .child(Text::new("Green success").color(Color::Green).into_element())
+        .child(
+            Text::new("Green success")
+                .color(Color::Green)
+                .into_element(),
+        )
         .child(Text::new("Dimmed text").dim().into_element())
         .into_element();
 
@@ -88,20 +92,16 @@ fn demo_counter() {
             Text::new("Counter App")
                 .bold()
                 .color(Color::Cyan)
-                .into_element()
+                .into_element(),
         )
         .child(Newline::new().into_element())
         .child(
             Text::new(&format!("Count: {}", count))
                 .color(Color::Yellow)
-                .into_element()
+                .into_element(),
         )
         .child(Newline::new().into_element())
-        .child(
-            Text::new("Press q to quit")
-                .dim()
-                .into_element()
-        )
+        .child(Text::new("Press q to quit").dim().into_element())
         .into_element();
 
     render_static(&root, 25, 10);
@@ -117,7 +117,13 @@ fn render_static(root: &Element, width: u16, height: u16) {
     println!("{}", output.render());
 }
 
-fn render_element(element: &Element, engine: &LayoutEngine, output: &mut Output, offset_x: f32, offset_y: f32) {
+fn render_element(
+    element: &Element,
+    engine: &LayoutEngine,
+    output: &mut Output,
+    offset_x: f32,
+    offset_y: f32,
+) {
     use rnk::layout::Layout;
 
     let layout = engine.get_layout(element.id).unwrap_or(Layout::default());
@@ -158,7 +164,12 @@ fn render_element(element: &Element, engine: &LayoutEngine, output: &mut Output,
                 output.write_char(col, bottom_y, h.chars().next().unwrap(), &border_style);
             }
             if width > 1 {
-                output.write_char(x + width - 1, bottom_y, br.chars().next().unwrap(), &border_style);
+                output.write_char(
+                    x + width - 1,
+                    bottom_y,
+                    br.chars().next().unwrap(),
+                    &border_style,
+                );
             }
         }
 
@@ -172,10 +183,10 @@ fn render_element(element: &Element, engine: &LayoutEngine, output: &mut Output,
 
     // Render text
     if let Some(text) = &element.text_content {
-        let text_x = x + if element.style.has_border() { 1 } else { 0 }
-            + element.style.padding.left as u16;
-        let text_y = y + if element.style.has_border() { 1 } else { 0 }
-            + element.style.padding.top as u16;
+        let text_x =
+            x + if element.style.has_border() { 1 } else { 0 } + element.style.padding.left as u16;
+        let text_y =
+            y + if element.style.has_border() { 1 } else { 0 } + element.style.padding.top as u16;
         output.write(text_x, text_y, text, &element.style);
     }
 

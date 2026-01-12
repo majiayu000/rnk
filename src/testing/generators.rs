@@ -3,8 +3,8 @@
 //! Provides generators for creating random but valid Element trees
 //! for use with property-based testing frameworks like proptest.
 
-use crate::core::{Element, Dimension, Color};
 use crate::components::{Box as TinkBox, Text};
+use crate::core::{Color, Dimension, Element};
 
 /// Generate a random color for testing
 pub fn random_color(seed: u8) -> Color {
@@ -59,13 +59,13 @@ pub const SAMPLE_TEXTS: &[&str] = &[
 
 /// Sample terminal dimensions for testing
 pub const SAMPLE_DIMENSIONS: &[(u16, u16)] = &[
-    (80, 24),   // Standard
-    (120, 40),  // Large
-    (40, 10),   // Small
-    (1, 1),     // Minimal
-    (200, 60),  // Very large
-    (80, 1),    // Single line
-    (1, 24),    // Single column
+    (80, 24),  // Standard
+    (120, 40), // Large
+    (40, 10),  // Small
+    (1, 1),    // Minimal
+    (200, 60), // Very large
+    (80, 1),   // Single line
+    (1, 24),   // Single column
 ];
 
 /// Generate a simple text element
@@ -153,27 +153,62 @@ pub struct UnicodeWidthTestCase {
 /// Unicode width test cases
 pub const UNICODE_WIDTH_CASES: &[UnicodeWidthTestCase] = &[
     // ASCII
-    UnicodeWidthTestCase { text: "a", expected_width: 1 },
-    UnicodeWidthTestCase { text: "hello", expected_width: 5 },
-    UnicodeWidthTestCase { text: " ", expected_width: 1 },
-
+    UnicodeWidthTestCase {
+        text: "a",
+        expected_width: 1,
+    },
+    UnicodeWidthTestCase {
+        text: "hello",
+        expected_width: 5,
+    },
+    UnicodeWidthTestCase {
+        text: " ",
+        expected_width: 1,
+    },
     // CJK (each character is 2 cells wide)
-    UnicodeWidthTestCase { text: "中", expected_width: 2 },
-    UnicodeWidthTestCase { text: "你好", expected_width: 4 },
-    UnicodeWidthTestCase { text: "日本語", expected_width: 6 },
-
+    UnicodeWidthTestCase {
+        text: "中",
+        expected_width: 2,
+    },
+    UnicodeWidthTestCase {
+        text: "你好",
+        expected_width: 4,
+    },
+    UnicodeWidthTestCase {
+        text: "日本語",
+        expected_width: 6,
+    },
     // Mixed
-    UnicodeWidthTestCase { text: "a中b", expected_width: 4 },
-    UnicodeWidthTestCase { text: "Hello 世界", expected_width: 10 },
-
+    UnicodeWidthTestCase {
+        text: "a中b",
+        expected_width: 4,
+    },
+    UnicodeWidthTestCase {
+        text: "Hello 世界",
+        expected_width: 10,
+    },
     // Box drawing (1 cell each)
-    UnicodeWidthTestCase { text: "─", expected_width: 1 },
-    UnicodeWidthTestCase { text: "│", expected_width: 1 },
-    UnicodeWidthTestCase { text: "╭", expected_width: 1 },
-    UnicodeWidthTestCase { text: "├─┤", expected_width: 3 },
-
+    UnicodeWidthTestCase {
+        text: "─",
+        expected_width: 1,
+    },
+    UnicodeWidthTestCase {
+        text: "│",
+        expected_width: 1,
+    },
+    UnicodeWidthTestCase {
+        text: "╭",
+        expected_width: 1,
+    },
+    UnicodeWidthTestCase {
+        text: "├─┤",
+        expected_width: 3,
+    },
     // Zero-width
-    UnicodeWidthTestCase { text: "", expected_width: 0 },
+    UnicodeWidthTestCase {
+        text: "",
+        expected_width: 0,
+    },
 ];
 
 #[cfg(test)]
@@ -202,11 +237,7 @@ mod tests {
 
     #[test]
     fn test_gen_row() {
-        let row = gen_row(vec![
-            gen_text("A"),
-            gen_text("B"),
-            gen_text("C"),
-        ]);
+        let row = gen_row(vec![gen_text("A"), gen_text("B"), gen_text("C")]);
         assert_eq!(row.children.len(), 3);
     }
 }

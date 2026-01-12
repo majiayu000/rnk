@@ -1,12 +1,17 @@
 use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
-    render(app)
+    render(app).run()
 }
 
 fn app() -> Element {
     Box::new()
         .padding(1)
-        .child(Text::new("Hello, rnk!").color(Color::Green).bold().into_element())
+        .child(
+            Text::new("Hello, rnk!")
+                .color(Color::Green)
+                .bold()
+                .into_element(),
+        )
         .into_element()
 }

@@ -1,8 +1,8 @@
 //! Debug with 80x24 terminal size
 
-use rnk::prelude::*;
 use rnk::core::Dimension;
 use rnk::layout::LayoutEngine;
+use rnk::prelude::*;
 use rnk::renderer::Output;
 
 fn main() {
@@ -37,8 +37,13 @@ fn create_ui() -> Element {
                 .border_color(Color::Cyan)
                 .padding_x(2.0)
                 .padding_y(1.0)
-                .child(Text::new("Tink Interactive Demo").color(Color::Cyan).bold().into_element())
-                .into_element()
+                .child(
+                    Text::new("Tink Interactive Demo")
+                        .color(Color::Cyan)
+                        .bold()
+                        .into_element(),
+                )
+                .into_element(),
         )
         .child(Newline::new().into_element())
         .child(
@@ -51,20 +56,38 @@ fn create_ui() -> Element {
                         .border_color(Color::Yellow)
                         .padding(1)
                         .flex_direction(FlexDirection::Column)
-                        .child(Text::new("Counter Demo").color(Color::Yellow).bold().underline().into_element())
+                        .child(
+                            Text::new("Counter Demo")
+                                .color(Color::Yellow)
+                                .bold()
+                                .underline()
+                                .into_element(),
+                        )
                         .child(Newline::new().into_element())
                         .child(
                             Box::new()
                                 .flex_direction(FlexDirection::Row)
                                 .child(Text::new("Value: ").color(Color::White).into_element())
                                 .child(Text::new("0").color(Color::Green).bold().into_element())
-                                .into_element()
+                                .into_element(),
                         )
                         .child(Newline::new().into_element())
-                        .child(Text::new("[+] Increment").color(Color::Ansi256(240)).into_element())
-                        .child(Text::new("[-] Decrement").color(Color::Ansi256(240)).into_element())
-                        .child(Text::new("[0] Reset").color(Color::Ansi256(240)).into_element())
-                        .into_element()
+                        .child(
+                            Text::new("[+] Increment")
+                                .color(Color::Ansi256(240))
+                                .into_element(),
+                        )
+                        .child(
+                            Text::new("[-] Decrement")
+                                .color(Color::Ansi256(240))
+                                .into_element(),
+                        )
+                        .child(
+                            Text::new("[0] Reset")
+                                .color(Color::Ansi256(240))
+                                .into_element(),
+                        )
+                        .into_element(),
                 )
                 .child(Box::new().width(2).into_element())
                 .child(
@@ -74,14 +97,24 @@ fn create_ui() -> Element {
                         .border_color(Color::Blue)
                         .padding(1)
                         .flex_direction(FlexDirection::Column)
-                        .child(Text::new("List Navigation").color(Color::Blue).bold().underline().into_element())
+                        .child(
+                            Text::new("List Navigation")
+                                .color(Color::Blue)
+                                .bold()
+                                .underline()
+                                .into_element(),
+                        )
                         .child(Newline::new().into_element())
                         .child(create_list_items())
                         .child(Newline::new().into_element())
-                        .child(Text::new("[j/k] Navigate").color(Color::Ansi256(240)).into_element())
-                        .into_element()
+                        .child(
+                            Text::new("[j/k] Navigate")
+                                .color(Color::Ansi256(240))
+                                .into_element(),
+                        )
+                        .into_element(),
                 )
-                .into_element()
+                .into_element(),
         )
         .child(Newline::new().into_element())
         .child(
@@ -89,8 +122,13 @@ fn create_ui() -> Element {
                 .border_style(BorderStyle::Single)
                 .border_color(Color::Magenta)
                 .padding(1)
-                .child(Text::new("Welcome! Press 'h' for help.").color(Color::Magenta).italic().into_element())
-                .into_element()
+                .child(
+                    Text::new("Welcome! Press 'h' for help.")
+                        .color(Color::Magenta)
+                        .italic()
+                        .into_element(),
+                )
+                .into_element(),
         )
         .into_element()
 }
@@ -103,9 +141,7 @@ fn create_list_items() -> Element {
 
     for (i, item) in items.iter().enumerate() {
         let is_selected = i == selected;
-        let mut row = Box::new()
-            .flex_direction(FlexDirection::Row)
-            .padding_x(1.0);
+        let mut row = Box::new().flex_direction(FlexDirection::Row).padding_x(1.0);
 
         if is_selected {
             row = row.background(Color::Ansi256(236));
@@ -116,12 +152,16 @@ fn create_list_items() -> Element {
                 Text::new(if is_selected { "> " } else { "  " })
                     .color(Color::Cyan)
                     .bold()
-                    .into_element()
+                    .into_element(),
             )
             .child(
                 Text::new(*item)
-                    .color(if is_selected { Color::White } else { Color::Ansi256(250) })
-                    .into_element()
+                    .color(if is_selected {
+                        Color::White
+                    } else {
+                        Color::Ansi256(250)
+                    })
+                    .into_element(),
             );
 
         container = container.child(row.into_element());
@@ -187,10 +227,20 @@ fn render_element(
         let mut style = element.style.clone();
 
         style.color = element.style.get_border_top_color();
-        output.write(x, y, &format!("{}{}{}", tl, hz.repeat((w as usize).saturating_sub(2)), tr), &style);
+        output.write(
+            x,
+            y,
+            &format!("{}{}{}", tl, hz.repeat((w as usize).saturating_sub(2)), tr),
+            &style,
+        );
 
         style.color = element.style.get_border_bottom_color();
-        output.write(x, y + h.saturating_sub(1), &format!("{}{}{}", bl, hz.repeat((w as usize).saturating_sub(2)), br), &style);
+        output.write(
+            x,
+            y + h.saturating_sub(1),
+            &format!("{}{}{}", bl, hz.repeat((w as usize).saturating_sub(2)), br),
+            &style,
+        );
 
         for row in 1..h.saturating_sub(1) {
             style.color = element.style.get_border_left_color();
@@ -201,10 +251,10 @@ fn render_element(
     }
 
     if let Some(text) = &element.text_content {
-        let text_x = x + if element.style.has_border() { 1 } else { 0 }
-            + element.style.padding.left as u16;
-        let text_y = y + if element.style.has_border() { 1 } else { 0 }
-            + element.style.padding.top as u16;
+        let text_x =
+            x + if element.style.has_border() { 1 } else { 0 } + element.style.padding.left as u16;
+        let text_y =
+            y + if element.style.has_border() { 1 } else { 0 } + element.style.padding.top as u16;
         output.write(text_x, text_y, text, &element.style);
     }
 
@@ -213,7 +263,13 @@ fn render_element(
 
     for child in element.children.iter() {
         if child.style.position == Position::Absolute {
-            render_element(child, engine, output, child.style.left.unwrap_or(0.0), child.style.top.unwrap_or(0.0));
+            render_element(
+                child,
+                engine,
+                output,
+                child.style.left.unwrap_or(0.0),
+                child.style.top.unwrap_or(0.0),
+            );
         } else {
             render_element(child, engine, output, cx, cy);
         }

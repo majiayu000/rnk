@@ -7,7 +7,7 @@
 use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
-    render(app)
+    render(app).run()
 }
 
 fn app() -> Element {
@@ -137,9 +137,21 @@ fn app() -> Element {
         .child(
             Box::new()
                 .flex_direction(FlexDirection::Column)
-                .child(Text::new("Try pressing different keys!").dim().into_element())
-                .child(Text::new("• Arrow keys, Enter, Tab, Escape").dim().into_element())
-                .child(Text::new("• Letters, numbers, symbols").dim().into_element())
+                .child(
+                    Text::new("Try pressing different keys!")
+                        .dim()
+                        .into_element(),
+                )
+                .child(
+                    Text::new("• Arrow keys, Enter, Tab, Escape")
+                        .dim()
+                        .into_element(),
+                )
+                .child(
+                    Text::new("• Letters, numbers, symbols")
+                        .dim()
+                        .into_element(),
+                )
                 .child(Text::new("• Ctrl/Alt/Shift + key").dim().into_element())
                 .child(Newline::new().into_element())
                 .child(Text::new("Press Ctrl+Q to quit").dim().into_element())

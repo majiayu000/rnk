@@ -7,7 +7,7 @@
 use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
-    render(app)
+    render(app).run()
 }
 
 fn app() -> Element {
@@ -64,9 +64,11 @@ fn app() -> Element {
             Box::new()
                 .flex_direction(FlexDirection::Column)
                 .min_height(10.0)
-                .children(current_messages.iter().map(|msg| {
-                    Text::new(msg).color(Color::White).into_element()
-                }))
+                .children(
+                    current_messages
+                        .iter()
+                        .map(|msg| Text::new(msg).color(Color::White).into_element()),
+                )
                 .into_element(),
         )
         .child(Newline::new().into_element())

@@ -7,7 +7,7 @@
 use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
-    render(app)
+    render(app).run()
 }
 
 fn app() -> Element {
@@ -57,7 +57,11 @@ fn app() -> Element {
                 .child(Text::new("  1 - Focus 'Username'").dim().into_element())
                 .child(Text::new("  2 - Focus 'Email'").dim().into_element())
                 .child(Text::new("  3 - Focus 'Password'").dim().into_element())
-                .child(Text::new("  Tab - Next, Shift+Tab - Previous").dim().into_element())
+                .child(
+                    Text::new("  Tab - Next, Shift+Tab - Previous")
+                        .dim()
+                        .into_element(),
+                )
                 .into_element(),
         )
         .child(Newline::new().into_element())
@@ -112,16 +116,14 @@ fn input_field(label: &str, id: &str) -> Element {
                 )
                 .into_element(),
         )
-        .child(
-            if focus.is_focused {
-                Text::new(" < focused")
-                    .color(Color::Green)
-                    .italic()
-                    .into_element()
-            } else {
-                Box::new().into_element()
-            },
-        )
+        .child(if focus.is_focused {
+            Text::new(" < focused")
+                .color(Color::Green)
+                .italic()
+                .into_element()
+        } else {
+            Box::new().into_element()
+        })
         .into_element()
 }
 
@@ -144,7 +146,11 @@ fn submit_button() -> Element {
         .padding_y(0.5)
         .child(
             Text::new("Submit")
-                .color(if focus.is_focused { Color::Black } else { Color::White })
+                .color(if focus.is_focused {
+                    Color::Black
+                } else {
+                    Color::White
+                })
                 .bold()
                 .into_element(),
         )

@@ -57,7 +57,8 @@ where
         let total_items = self.items.len();
 
         // Only render items that haven't been rendered yet
-        let new_items: Vec<Element> = self.items
+        let new_items: Vec<Element> = self
+            .items
             .iter()
             .enumerate()
             .skip(current_count)
@@ -107,7 +108,8 @@ mod tests {
         let element = with_hooks(ctx.clone(), || {
             Static::new(vec!["a", "b", "c"], |item, _| {
                 Text::new(*item).into_element()
-            }).into_element()
+            })
+            .into_element()
         });
 
         assert_eq!(element.children.len(), 3);
@@ -119,9 +121,7 @@ mod tests {
 
         // First render with 2 items
         let element1 = with_hooks(ctx.clone(), || {
-            Static::new(vec!["a", "b"], |item, _| {
-                Text::new(*item).into_element()
-            }).into_element()
+            Static::new(vec!["a", "b"], |item, _| Text::new(*item).into_element()).into_element()
         });
         assert_eq!(element1.children.len(), 2);
 
@@ -130,7 +130,8 @@ mod tests {
         let element2 = with_hooks(ctx.clone(), || {
             Static::new(vec!["a", "b", "c", "d"], |item, _| {
                 Text::new(*item).into_element()
-            }).into_element()
+            })
+            .into_element()
         });
 
         // Only new items should be rendered

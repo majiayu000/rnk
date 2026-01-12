@@ -34,7 +34,8 @@ fn main() -> std::io::Result<()> {
                 let mut s = state_clone.write().unwrap();
                 s.counter += 1;
                 let count = s.counter;
-                s.messages.push(format!("Update #{} from background thread", count));
+                s.messages
+                    .push(format!("Update #{} from background thread", count));
 
                 // Keep only last 5 messages
                 if s.messages.len() > 5 {
@@ -49,67 +50,47 @@ fn main() -> std::io::Result<()> {
 
     // Run the app with a closure that reads the shared state
     let state_for_render = Arc::clone(&state);
-    render(move || app(&state_for_render))
+    render(move || app(&state_for_render)).run()
 }
 
 fn app(state: &Arc<RwLock<AppState>>) -> Element {
     let s = state.read().unwrap();
 
-    let mut container = Box::new()
-        .flex_direction(FlexDirection::Column)
-        .padding(1);
+    let mut container = Box::new().flex_direction(FlexDirection::Column).padding(1);
 
     // Title
     container = container.child(
         Text::new("Cross-Thread Render Demo")
             .bold()
             .color(Color::Cyan)
-            .into_element()
+            .into_element(),
     );
 
-    container = container.child(
-        Text::new("─".repeat(30))
-            .dim()
-            .into_element()
-    );
+    container = container.child(Text::new("─".repeat(30)).dim().into_element());
 
     // Counter
     container = container.child(
         Box::new()
-            .child(Text::new(format!("Counter: {}", s.counter)).color(Color::Green).into_element())
-            .into_element()
+            .child(
+                Text::new(format!("Counter: {}", s.counter))
+                    .color(Color::Green)
+                    .into_element(),
+            )
+            .into_element(),
     );
 
-    container = container.child(
-        Text::new("")
-            .into_element()
-    );
+    container = container.child(Text::new("").into_element());
 
     // Messages
-    container = container.child(
-        Text::new("Recent messages:")
-            .bold()
-            .into_element()
-    );
+    container = container.child(Text::new("Recent messages:").bold().into_element());
 
     for msg in &s.messages {
-        container = container.child(
-            Text::new(format!("  • {}", msg))
-                .dim()
-                .into_element()
-        );
+        container = container.child(Text::new(format!("  • {}", msg)).dim().into_element());
     }
 
-    container = container.child(
-        Text::new("")
-            .into_element()
-    );
+    container = container.child(Text::new("").into_element());
 
-    container = container.child(
-        Text::new("Press Ctrl+C to exit")
-            .dim()
-            .into_element()
-    );
+    container = container.child(Text::new("Press Ctrl+C to exit").dim().into_element());
 
     container.into_element()
 }

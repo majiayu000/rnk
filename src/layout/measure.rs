@@ -1,7 +1,7 @@
 //! Text measurement utilities
 
-use unicode_width::UnicodeWidthStr;
 use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 /// Measure the display width of text using grapheme clusters
 ///
@@ -11,9 +11,7 @@ use unicode_segmentation::UnicodeSegmentation;
 /// - Combining characters (e.g., é = e + combining acute)
 /// - Zero-width characters
 pub fn measure_text_width(text: &str) -> usize {
-    text.graphemes(true)
-        .map(UnicodeWidthStr::width)
-        .sum()
+    text.graphemes(true).map(UnicodeWidthStr::width).sum()
 }
 
 /// Measure the display width using grapheme clusters (alias for measure_text_width)
@@ -303,7 +301,7 @@ mod tests {
     #[test]
     fn test_grapheme_clusters_combining() {
         // e + combining acute accent = 1 grapheme
-        let combined = "é";  // This is e + combining acute (2 code points)
+        let combined = "é"; // This is e + combining acute (2 code points)
         let graphemes: Vec<&str> = combined.graphemes(true).collect();
         // Note: The actual behavior depends on the string encoding
         // If it's precomposed (1 code point), it's 1 grapheme
@@ -323,7 +321,7 @@ mod tests {
     #[test]
     fn test_zero_width_characters() {
         // Zero-width joiner should have width 0
-        let zwj = "\u{200D}";  // Zero Width Joiner
+        let zwj = "\u{200D}"; // Zero Width Joiner
         assert_eq!(measure_text_width(zwj), 0);
     }
 }

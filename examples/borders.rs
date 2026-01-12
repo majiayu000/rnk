@@ -7,7 +7,7 @@
 use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
-    render(app)
+    render(app).run()
 }
 
 fn app() -> Element {
@@ -127,11 +127,7 @@ fn app() -> Element {
         .child(
             Box::new()
                 .margin_top(2.0)
-                .child(
-                    Text::new("Press 'q' to exit")
-                        .dim()
-                        .into_element(),
-                )
+                .child(Text::new("Press 'q' to exit").dim().into_element())
                 .into_element(),
         )
         .into_element()

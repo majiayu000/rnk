@@ -24,10 +24,7 @@ impl HookStorage {
     }
 
     pub fn get<T: Clone + 'static>(&self) -> Option<T> {
-        self.value
-            .borrow()
-            .downcast_ref::<T>()
-            .cloned()
+        self.value.borrow().downcast_ref::<T>().cloned()
     }
 
     pub fn set<T: 'static>(&self, value: T) {
@@ -39,7 +36,7 @@ impl HookStorage {
 pub struct Effect {
     pub callback: EffectCallback,
     pub cleanup: Option<Box<dyn FnOnce()>>,
-    pub deps: Option<Vec<u64>>,  // Hash of dependencies
+    pub deps: Option<Vec<u64>>, // Hash of dependencies
 }
 
 /// Hook context for a component
@@ -220,8 +217,8 @@ mod tests {
 
         // Second render - should get same hook
         ctx.begin_render();
-        let hook = ctx.use_hook(|| 999i32);  // init should be ignored
-        assert_eq!(hook.get::<i32>(), Some(2));  // should be 2, not 999
+        let hook = ctx.use_hook(|| 999i32); // init should be ignored
+        assert_eq!(hook.get::<i32>(), Some(2)); // should be 2, not 999
         ctx.end_render();
     }
 

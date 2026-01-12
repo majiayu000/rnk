@@ -4,11 +4,11 @@
 //!
 //! Run with: cargo run --example subprocess_output
 
-use std::process::Command;
 use rnk::prelude::*;
+use std::process::Command;
 
 fn main() -> std::io::Result<()> {
-    render(app)
+    render(app).run()
 }
 
 #[derive(Clone)]
@@ -63,7 +63,9 @@ fn app() -> Element {
             }
         } else if key.backspace || key.delete {
             if !is_running_clone.get() {
-                current_cmd_clone.update(|s| { s.pop(); });
+                current_cmd_clone.update(|s| {
+                    s.pop();
+                });
             }
         } else if !ch.is_empty() && !key.ctrl && !key.alt && !is_running_clone.get() {
             current_cmd_clone.update(|s| s.push_str(ch));
@@ -102,7 +104,11 @@ fn app() -> Element {
                         .flex_direction(FlexDirection::Row)
                         .child(
                             Text::new(if output.success { "✓ " } else { "✗ " })
-                                .color(if output.success { Color::Green } else { Color::Red })
+                                .color(if output.success {
+                                    Color::Green
+                                } else {
+                                    Color::Red
+                                })
                                 .into_element(),
                         )
                         .child(
@@ -132,12 +138,7 @@ fn app() -> Element {
                 .border_color(if running { Color::Yellow } else { Color::Green })
                 .padding(1)
                 .flex_direction(FlexDirection::Row)
-                .child(
-                    Text::new("$ ")
-                        .color(Color::Green)
-                        .bold()
-                        .into_element(),
-                )
+                .child(Text::new("$ ").color(Color::Green).bold().into_element())
                 .child({
                     let display_text = if running {
                         "Running...".to_string()
@@ -155,9 +156,21 @@ fn app() -> Element {
         .child(
             Box::new()
                 .flex_direction(FlexDirection::Column)
-                .child(Text::new("Type a command and press Enter to run").dim().into_element())
-                .child(Text::new("Try: echo hello, ls, date, pwd").dim().into_element())
-                .child(Text::new("Press 'q' to quit (when not running)").dim().into_element())
+                .child(
+                    Text::new("Type a command and press Enter to run")
+                        .dim()
+                        .into_element(),
+                )
+                .child(
+                    Text::new("Try: echo hello, ls, date, pwd")
+                        .dim()
+                        .into_element(),
+                )
+                .child(
+                    Text::new("Press 'q' to quit (when not running)")
+                        .dim()
+                        .into_element(),
+                )
                 .into_element(),
         )
         .into_element()

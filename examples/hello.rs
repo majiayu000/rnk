@@ -25,7 +25,7 @@ fn app() -> Element {
             Text::new("Hello, Tink!")
                 .color(Color::Green)
                 .bold()
-                .into_element()
+                .into_element(),
         )
         .into_element()
 }

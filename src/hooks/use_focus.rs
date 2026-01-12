@@ -76,7 +76,12 @@ impl FocusManager {
     }
 
     /// Register a focusable element
-    pub fn register(&mut self, custom_id: Option<String>, is_active: bool, auto_focus: bool) -> usize {
+    pub fn register(
+        &mut self,
+        custom_id: Option<String>,
+        is_active: bool,
+        auto_focus: bool,
+    ) -> usize {
         let id = generate_focus_id();
         self.elements.push(FocusableElement {
             id,
@@ -119,7 +124,8 @@ impl FocusManager {
 
     /// Focus next element
     pub fn focus_next(&mut self) {
-        let active_elements: Vec<usize> = self.elements
+        let active_elements: Vec<usize> = self
+            .elements
             .iter()
             .enumerate()
             .filter(|(_, e)| e.is_active)
@@ -131,14 +137,18 @@ impl FocusManager {
         }
 
         let current = self.focused_index.unwrap_or(0);
-        let current_pos = active_elements.iter().position(|&i| i == current).unwrap_or(0);
+        let current_pos = active_elements
+            .iter()
+            .position(|&i| i == current)
+            .unwrap_or(0);
         let next_pos = (current_pos + 1) % active_elements.len();
         self.focused_index = Some(active_elements[next_pos]);
     }
 
     /// Focus previous element
     pub fn focus_previous(&mut self) {
-        let active_elements: Vec<usize> = self.elements
+        let active_elements: Vec<usize> = self
+            .elements
             .iter()
             .enumerate()
             .filter(|(_, e)| e.is_active)
@@ -150,7 +160,10 @@ impl FocusManager {
         }
 
         let current = self.focused_index.unwrap_or(0);
-        let current_pos = active_elements.iter().position(|&i| i == current).unwrap_or(0);
+        let current_pos = active_elements
+            .iter()
+            .position(|&i| i == current)
+            .unwrap_or(0);
         let prev_pos = if current_pos == 0 {
             active_elements.len() - 1
         } else {
@@ -161,9 +174,11 @@ impl FocusManager {
 
     /// Focus a specific element by custom ID
     pub fn focus(&mut self, custom_id: &str) {
-        if let Some(pos) = self.elements.iter().position(|e| {
-            e.custom_id.as_deref() == Some(custom_id) && e.is_active
-        }) {
+        if let Some(pos) = self
+            .elements
+            .iter()
+            .position(|e| e.custom_id.as_deref() == Some(custom_id) && e.is_active)
+        {
             self.focused_index = Some(pos);
         }
     }
@@ -220,14 +235,13 @@ pub fn use_focus(options: UseFocusOptions) -> FocusState {
     // Register this component as focusable
     let focus_id = use_signal(|| {
         FOCUS_MANAGER.with(|fm| {
-            fm.borrow_mut().register(options.id.clone(), options.is_active, options.auto_focus)
+            fm.borrow_mut()
+                .register(options.id.clone(), options.is_active, options.auto_focus)
         })
     });
 
     // Get current focus state
-    let is_focused = FOCUS_MANAGER.with(|fm| {
-        fm.borrow().is_focused(focus_id.get())
-    });
+    let is_focused = FOCUS_MANAGER.with(|fm| fm.borrow().is_focused(focus_id.get()));
 
     FocusState { is_focused }
 }

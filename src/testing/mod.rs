@@ -15,12 +15,12 @@
 //! assert_eq!(output.trim(), "Hello");
 //! ```
 
-mod renderer;
 mod assertions;
-mod golden;
 mod generators;
+mod golden;
+mod renderer;
 
-pub use renderer::{TestRenderer, LayoutError, strip_ansi_codes, display_width};
 pub use assertions::*;
-pub use golden::*;
 pub use generators::*;
+pub use golden::*;
+pub use renderer::{LayoutError, TestRenderer, display_width, strip_ansi_codes};

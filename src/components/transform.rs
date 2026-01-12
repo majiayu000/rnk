@@ -50,9 +50,10 @@ impl Transform {
         // Apply transform to all text children
         for mut child in self.children {
             if let Some(ref transform) = self.transform
-                && let Some(text) = child.text_content.take() {
-                    child.text_content = Some(transform(&text));
-                }
+                && let Some(text) = child.text_content.take()
+            {
+                child.text_content = Some(transform(&text));
+            }
             element.add_child(child);
         }
 

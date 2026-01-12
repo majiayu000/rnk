@@ -1,7 +1,7 @@
 //! Element types for the UI tree
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use crate::core::Style;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Global element ID counter
 static ELEMENT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -201,7 +201,10 @@ impl Element {
 
     /// Check if this is a text element
     pub fn is_text(&self) -> bool {
-        matches!(self.element_type, ElementType::Text | ElementType::VirtualText)
+        matches!(
+            self.element_type,
+            ElementType::Text | ElementType::VirtualText
+        )
     }
 
     /// Check if this is a box element

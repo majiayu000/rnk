@@ -1,9 +1,8 @@
 //! Box component - Flexbox container
 
 use crate::core::{
-    Element, ElementType, Style, Color,
-    FlexDirection, AlignItems, AlignSelf, JustifyContent,
-    Dimension, Edges, BorderStyle, Overflow, Position, Display,
+    AlignItems, AlignSelf, BorderStyle, Color, Dimension, Display, Edges, Element, ElementType,
+    FlexDirection, JustifyContent, Overflow, Position, Style,
 };
 
 /// Box component builder

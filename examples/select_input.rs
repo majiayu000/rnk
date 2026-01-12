@@ -7,7 +7,7 @@
 use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
-    render(app)
+    render(app).run()
 }
 
 fn app() -> Element {
@@ -79,7 +79,11 @@ fn app() -> Element {
                 )
                 .child(
                     Text::new(*label)
-                        .color(if is_selected { *color } else { Color::Ansi256(245) })
+                        .color(if is_selected {
+                            *color
+                        } else {
+                            Color::Ansi256(245)
+                        })
                         .bold()
                         .into_element(),
                 )
@@ -87,23 +91,21 @@ fn app() -> Element {
         }))
         .child(Newline::new().into_element())
         // Confirmation message
-        .child(
-            if let Some(color) = current_confirmed {
-                Box::new()
-                    .border_style(BorderStyle::Round)
-                    .border_color(Color::Green)
-                    .padding(1)
-                    .child(
-                        Text::new(format!("You selected: {}", color))
-                            .color(Color::Green)
-                            .bold()
-                            .into_element(),
-                    )
-                    .into_element()
-            } else {
-                Box::new().into_element()
-            },
-        )
+        .child(if let Some(color) = current_confirmed {
+            Box::new()
+                .border_style(BorderStyle::Round)
+                .border_color(Color::Green)
+                .padding(1)
+                .child(
+                    Text::new(format!("You selected: {}", color))
+                        .color(Color::Green)
+                        .bold()
+                        .into_element(),
+                )
+                .into_element()
+        } else {
+            Box::new().into_element()
+        })
         .child(Newline::new().into_element())
         // Help
         .child(

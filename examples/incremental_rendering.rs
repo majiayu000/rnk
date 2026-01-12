@@ -7,7 +7,7 @@
 use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
-    render(app)
+    render(app).run()
 }
 
 #[derive(Clone)]
@@ -26,13 +26,30 @@ enum StepStatus {
 
 fn app() -> Element {
     let app = use_app();
-    let steps = use_signal(|| vec![
-        Step { name: "Initializing".to_string(), status: StepStatus::Pending },
-        Step { name: "Fetching dependencies".to_string(), status: StepStatus::Pending },
-        Step { name: "Building project".to_string(), status: StepStatus::Pending },
-        Step { name: "Running tests".to_string(), status: StepStatus::Pending },
-        Step { name: "Deploying".to_string(), status: StepStatus::Pending },
-    ]);
+    let steps = use_signal(|| {
+        vec![
+            Step {
+                name: "Initializing".to_string(),
+                status: StepStatus::Pending,
+            },
+            Step {
+                name: "Fetching dependencies".to_string(),
+                status: StepStatus::Pending,
+            },
+            Step {
+                name: "Building project".to_string(),
+                status: StepStatus::Pending,
+            },
+            Step {
+                name: "Running tests".to_string(),
+                status: StepStatus::Pending,
+            },
+            Step {
+                name: "Deploying".to_string(),
+                status: StepStatus::Pending,
+            },
+        ]
+    });
 
     let steps_clone = steps.clone();
 
@@ -82,7 +99,9 @@ fn app() -> Element {
     });
 
     let current_steps = steps.get();
-    let all_complete = current_steps.iter().all(|s| s.status == StepStatus::Complete);
+    let all_complete = current_steps
+        .iter()
+        .all(|s| s.status == StepStatus::Complete);
     let has_failed = current_steps.iter().any(|s| s.status == StepStatus::Failed);
 
     Box::new()
@@ -107,35 +126,33 @@ fn app() -> Element {
         .children(current_steps.iter().map(|step| render_step(step)))
         .child(Newline::new().into_element())
         // Status
-        .child(
-            if all_complete {
-                Box::new()
-                    .border_style(BorderStyle::Double)
-                    .border_color(Color::Green)
-                    .padding(1)
-                    .child(
-                        Text::new("All steps completed successfully!")
-                            .color(Color::Green)
-                            .bold()
-                            .into_element(),
-                    )
-                    .into_element()
-            } else if has_failed {
-                Box::new()
-                    .border_style(BorderStyle::Double)
-                    .border_color(Color::Red)
-                    .padding(1)
-                    .child(
-                        Text::new("Pipeline failed!")
-                            .color(Color::Red)
-                            .bold()
-                            .into_element(),
-                    )
-                    .into_element()
-            } else {
-                Box::new().into_element()
-            },
-        )
+        .child(if all_complete {
+            Box::new()
+                .border_style(BorderStyle::Double)
+                .border_color(Color::Green)
+                .padding(1)
+                .child(
+                    Text::new("All steps completed successfully!")
+                        .color(Color::Green)
+                        .bold()
+                        .into_element(),
+                )
+                .into_element()
+        } else if has_failed {
+            Box::new()
+                .border_style(BorderStyle::Double)
+                .border_color(Color::Red)
+                .padding(1)
+                .child(
+                    Text::new("Pipeline failed!")
+                        .color(Color::Red)
+                        .bold()
+                        .into_element(),
+                )
+                .into_element()
+        } else {
+            Box::new().into_element()
+        })
         .child(Newline::new().into_element())
         // Help
         .child(
@@ -162,11 +179,7 @@ fn render_step(step: &Step) -> Element {
     Box::new()
         .flex_direction(FlexDirection::Row)
         .margin_bottom(0.5)
-        .child(
-            Text::new(format!("{} ", icon))
-                .color(color)
-                .into_element(),
-        )
+        .child(Text::new(format!("{} ", icon)).color(color).into_element())
         .child(
             Text::new(&step.name)
                 .color(match step.status {
@@ -178,15 +191,13 @@ fn render_step(step: &Step) -> Element {
                 .bold()
                 .into_element(),
         )
-        .child(
-            if step.status == StepStatus::Running {
-                Text::new(" (in progress...)")
-                    .color(Color::Yellow)
-                    .italic()
-                    .into_element()
-            } else {
-                Box::new().into_element()
-            },
-        )
+        .child(if step.status == StepStatus::Running {
+            Text::new(" (in progress...)")
+                .color(Color::Yellow)
+                .italic()
+                .into_element()
+        } else {
+            Box::new().into_element()
+        })
         .into_element()
 }

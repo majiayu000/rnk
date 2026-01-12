@@ -1,8 +1,8 @@
 //! Signal hook for reactive state management
 
+use crate::hooks::context::{RenderCallback, current_context};
 use std::cell::RefCell;
 use std::rc::Rc;
-use crate::hooks::context::{current_context, RenderCallback};
 
 /// A reactive signal that triggers re-renders when updated
 #[derive(Clone)]
@@ -92,14 +92,13 @@ pub fn use_signal<T: Clone + 'static>(init: impl FnOnce() -> T) -> Signal<T> {
     // Use a wrapper that can be cloned
     let init_value = init();
 
-    let storage = ctx_ref.use_hook(|| {
-        SignalStorage {
-            signal: Signal::new(init_value.clone(), render_callback.clone()),
-        }
+    let storage = ctx_ref.use_hook(|| SignalStorage {
+        signal: Signal::new(init_value.clone(), render_callback.clone()),
     });
 
     // Get the signal from storage
-    storage.get::<SignalStorage<T>>()
+    storage
+        .get::<SignalStorage<T>>()
         .map(|s| s.signal)
         .unwrap_or_else(|| {
             // This shouldn't happen, but provide a sensible default
@@ -148,16 +147,14 @@ mod tests {
         let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         // First render
-        let signal1 = with_hooks(ctx.clone(), || {
-            use_signal(|| 0i32)
-        });
+        let signal1 = with_hooks(ctx.clone(), || use_signal(|| 0i32));
 
         assert_eq!(signal1.get(), 0);
         signal1.set(42);
 
         // Second render - should preserve value
         let signal2 = with_hooks(ctx.clone(), || {
-            use_signal(|| 999i32)  // init ignored
+            use_signal(|| 999i32) // init ignored
         });
 
         assert_eq!(signal2.get(), 42);

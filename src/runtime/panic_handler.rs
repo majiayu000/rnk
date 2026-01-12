@@ -7,8 +7,7 @@ use std::panic;
 use std::sync::Once;
 
 use crossterm::{
-    cursor,
-    execute,
+    cursor, execute,
     terminal::{self, LeaveAlternateScreen},
 };
 
@@ -65,9 +64,13 @@ pub fn install_panic_hook() {
             restore_terminal();
 
             // Print a separator for clarity
-            eprintln!("\n\x1b[1;31m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m");
+            eprintln!(
+                "\n\x1b[1;31m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m"
+            );
             eprintln!("\x1b[1;31mPanic occurred! Terminal state has been restored.\x1b[0m");
-            eprintln!("\x1b[1;31m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m\n");
+            eprintln!(
+                "\x1b[1;31m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m\n"
+            );
 
             // Call the original hook to print the panic info
             original_hook(panic_info);

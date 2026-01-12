@@ -1,8 +1,8 @@
 //! Element measurement hook
 
-use std::collections::HashMap;
 use crate::core::ElementId;
 use crate::layout::Layout;
+use std::collections::HashMap;
 
 /// Measurement result for an element
 #[derive(Debug, Clone, Copy, Default)]
@@ -31,7 +31,9 @@ pub struct MeasureContext {
 impl MeasureContext {
     /// Create a new measure context
     pub fn new() -> Self {
-        Self { layouts: HashMap::new() }
+        Self {
+            layouts: HashMap::new(),
+        }
     }
 
     /// Set layouts from a layout engine (called internally by the renderer)
@@ -46,7 +48,6 @@ impl MeasureContext {
             .map(|layout| Dimensions::from(*layout))
     }
 }
-
 
 // Thread-local storage for the measure context
 thread_local! {
@@ -109,9 +110,7 @@ pub fn use_measure() -> (MeasureRef, impl Fn() -> Option<Dimensions>) {
     let element_id_clone = element_id.clone();
 
     let measure_ref = MeasureRef { element_id };
-    let get_dimensions = move || {
-        element_id_clone.get().and_then(measure_element)
-    };
+    let get_dimensions = move || element_id_clone.get().and_then(measure_element);
 
     (measure_ref, get_dimensions)
 }

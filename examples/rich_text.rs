@@ -5,7 +5,7 @@
 use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
-    render(app)
+    render(app).run()
 }
 
 fn app() -> Element {
@@ -45,7 +45,8 @@ fn app() -> Element {
                 Span::new("on ").color(Color::Blue).underline(),
                 Span::new("one ").color(Color::Magenta),
                 Span::new("line!").color(Color::Cyan).bold(),
-            ]).into_element(),
+            ])
+            .into_element(),
         )
         .child(Newline::new().into_element())
         // Using Line builder
@@ -55,8 +56,9 @@ fn app() -> Element {
                     .span(Span::new("3. Using ").color(Color::Yellow))
                     .span(Span::new("Line").color(Color::Green).bold())
                     .span(Span::new(" builder for ").color(Color::White))
-                    .span(Span::new("fluent API").color(Color::Cyan).italic())
-            ).into_element(),
+                    .span(Span::new("fluent API").color(Color::Cyan).italic()),
+            )
+            .into_element(),
         )
         .child(Newline::new().into_element())
         // Status line example
@@ -76,7 +78,8 @@ fn app() -> Element {
                         Span::new(" | ").color(Color::Ansi256(240)),
                         Span::new("Errors: ").color(Color::White),
                         Span::new("0").color(Color::Green),
-                    ]).into_element(),
+                    ])
+                    .into_element(),
                 )
                 .into_element(),
         )
@@ -93,7 +96,8 @@ fn app() -> Element {
                 Span::new("INFO").color(Color::Blue).bold(),
                 Span::new("] ").color(Color::Ansi256(240)),
                 Span::new("Application started successfully").color(Color::White),
-            ]).into_element(),
+            ])
+            .into_element(),
         )
         .child(
             Text::spans(vec![
@@ -101,7 +105,8 @@ fn app() -> Element {
                 Span::new("WARN").color(Color::Yellow).bold(),
                 Span::new("] ").color(Color::Ansi256(240)),
                 Span::new("Cache miss for key 'user_123'").color(Color::White),
-            ]).into_element(),
+            ])
+            .into_element(),
         )
         .child(
             Text::spans(vec![
@@ -109,13 +114,10 @@ fn app() -> Element {
                 Span::new("ERROR").color(Color::Red).bold(),
                 Span::new("] ").color(Color::Ansi256(240)),
                 Span::new("Connection timeout after 30s").color(Color::White),
-            ]).into_element(),
+            ])
+            .into_element(),
         )
         .child(Newline::new().into_element())
-        .child(
-            Text::new("Press 'q' to exit")
-                .dim()
-                .into_element(),
-        )
+        .child(Text::new("Press 'q' to exit").dim().into_element())
         .into_element()
 }

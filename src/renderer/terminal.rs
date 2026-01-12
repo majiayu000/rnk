@@ -1,15 +1,23 @@
 //! Terminal handling with ANSI escape codes (ink-style)
+//!
+//! This module provides terminal abstraction supporting both inline and fullscreen modes,
+//! following patterns from Ink (JavaScript) and Bubbletea (Go).
+//!
+//! ## Modes
+//!
+//! - **Inline mode** (default): Renders in the current terminal position, output persists
+//!   in terminal history. Like Ink and Bubbletea's default behavior.
+//!
+//! - **Fullscreen mode**: Uses alternate screen buffer, content is cleared on exit.
+//!   Like vim, less, or Bubbletea's `WithAltScreen()`.
 
 use crossterm::{
-    cursor::{Hide, Show, MoveTo},
-    event::{self, Event, KeyCode, KeyModifiers, EnableMouseCapture, DisableMouseCapture},
+    cursor::{Hide, MoveTo, Show},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{
-        disable_raw_mode, enable_raw_mode,
-        EnterAlternateScreen, LeaveAlternateScreen,
-    },
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use std::io::{stdout, Write};
+use std::io::{Write, stdout};
 use std::time::Duration;
 
 /// ANSI escape codes for terminal control
@@ -17,6 +25,11 @@ mod ansi {
     /// Move cursor to specific position (1-indexed)
     pub fn cursor_to(row: u16, col: u16) -> String {
         format!("\x1b[{};{}H", row + 1, col + 1)
+    }
+
+    /// Move cursor to home position (0, 0)
+    pub fn cursor_home() -> &'static str {
+        "\x1b[H"
     }
 
     /// Move cursor to column (0-indexed)
@@ -44,7 +57,6 @@ mod ansi {
     }
 
     /// Erase from cursor to end of line
-    #[allow(dead_code)]
     pub fn erase_end_of_line() -> &'static str {
         "\x1b[K"
     }
@@ -67,9 +79,14 @@ mod ansi {
                 result.push_str("\x1b[1A"); // Move up
             }
             result.push_str("\x1b[2K"); // Erase line
-            result.push_str("\x1b[G");  // Move to column 0
+            result.push_str("\x1b[G"); // Move to column 0
         }
         result
+    }
+
+    /// Erase entire screen
+    pub fn erase_screen() -> &'static str {
+        "\x1b[2J"
     }
 
     /// Hide cursor
@@ -93,9 +110,26 @@ mod ansi {
     pub fn restore_cursor() -> &'static str {
         "\x1b[u"
     }
+
+    /// Enter alternate screen buffer (like vim, less)
+    pub fn enter_alt_screen() -> &'static str {
+        "\x1b[?1049h"
+    }
+
+    /// Leave alternate screen buffer
+    pub fn leave_alt_screen() -> &'static str {
+        "\x1b[?1049l"
+    }
 }
 
 /// Terminal abstraction with ink-style rendering
+///
+/// Supports both inline and fullscreen (alternate screen) modes:
+///
+/// - **Inline mode**: Output appears at current cursor position, persists in terminal history
+/// - **Fullscreen mode**: Uses alternate screen buffer, cleared on exit
+///
+/// Runtime mode switching is supported via `switch_to_alt_screen()` and `switch_to_inline()`.
 pub struct Terminal {
     /// Previous frame's lines for incremental rendering
     previous_lines: Vec<String>,
@@ -107,6 +141,8 @@ pub struct Terminal {
     raw_mode: bool,
     /// Whether mouse mode is enabled
     mouse_enabled: bool,
+    /// Number of lines rendered in inline mode (for cursor positioning)
+    inline_lines_rendered: usize,
 }
 
 impl Terminal {
@@ -118,7 +154,13 @@ impl Terminal {
             cursor_hidden: false,
             raw_mode: false,
             mouse_enabled: false,
+            inline_lines_rendered: 0,
         }
+    }
+
+    /// Check if currently in alternate screen mode
+    pub fn is_alt_screen(&self) -> bool {
+        self.alternate_screen
     }
 
     /// Enter raw mode and alternate screen (fullscreen mode)
@@ -160,6 +202,7 @@ impl Terminal {
         write!(stdout, "{}", ansi::hide_cursor())?;
         stdout.flush()?;
         self.cursor_hidden = true;
+        self.inline_lines_rendered = 0;
 
         Ok(())
     }
@@ -197,6 +240,137 @@ impl Terminal {
         Ok(())
     }
 
+    /// Switch to alternate screen mode at runtime
+    ///
+    /// This clears the current inline output and enters fullscreen mode.
+    /// Like Bubbletea's `EnterAltScreen` command.
+    pub fn switch_to_alt_screen(&mut self) -> std::io::Result<()> {
+        if self.alternate_screen {
+            return Ok(());
+        }
+
+        let mut stdout = stdout();
+
+        // First, clear any inline content we've rendered
+        self.clear_inline_content()?;
+
+        // Enter alternate screen using raw ANSI (more reliable for runtime switch)
+        write!(stdout, "{}", ansi::enter_alt_screen())?;
+        write!(stdout, "{}", ansi::erase_screen())?;
+        write!(stdout, "{}", ansi::cursor_home())?;
+
+        if !self.cursor_hidden {
+            write!(stdout, "{}", ansi::hide_cursor())?;
+            self.cursor_hidden = true;
+        }
+
+        stdout.flush()?;
+
+        self.alternate_screen = true;
+        self.previous_lines.clear();
+        self.inline_lines_rendered = 0;
+
+        Ok(())
+    }
+
+    /// Switch to inline mode at runtime
+    ///
+    /// This exits fullscreen mode and returns to normal terminal output.
+    /// Like Bubbletea's `ExitAltScreen` command.
+    pub fn switch_to_inline(&mut self) -> std::io::Result<()> {
+        if !self.alternate_screen {
+            return Ok(());
+        }
+
+        let mut stdout = stdout();
+
+        // Leave alternate screen using raw ANSI
+        write!(stdout, "{}", ansi::leave_alt_screen())?;
+
+        // Show cursor temporarily (we'll hide it again on next render)
+        if self.cursor_hidden {
+            write!(stdout, "{}", ansi::show_cursor())?;
+            self.cursor_hidden = false;
+        }
+
+        stdout.flush()?;
+
+        self.alternate_screen = false;
+        self.previous_lines.clear();
+        self.inline_lines_rendered = 0;
+
+        // Re-hide cursor for rendering
+        write!(stdout, "{}", ansi::hide_cursor())?;
+        stdout.flush()?;
+        self.cursor_hidden = true;
+
+        Ok(())
+    }
+
+    /// Clear inline content (for mode switching or println)
+    fn clear_inline_content(&mut self) -> std::io::Result<()> {
+        if self.previous_lines.is_empty() {
+            return Ok(());
+        }
+
+        let mut stdout = stdout();
+        let line_count = self.previous_lines.len();
+
+        // Move up to the start of our content
+        if line_count > 1 {
+            write!(stdout, "{}", ansi::cursor_up(line_count as u16 - 1))?;
+        }
+
+        // Clear each line
+        write!(stdout, "{}", ansi::cursor_to_column(0))?;
+        for i in 0..line_count {
+            write!(stdout, "{}", ansi::erase_line())?;
+            if i < line_count - 1 {
+                write!(stdout, "\r\n")?;
+            }
+        }
+
+        // Move back up to where we started
+        if line_count > 1 {
+            write!(stdout, "{}", ansi::cursor_up(line_count as u16 - 1))?;
+        }
+        write!(stdout, "{}", ansi::cursor_to_column(0))?;
+
+        stdout.flush()?;
+
+        self.previous_lines.clear();
+        self.inline_lines_rendered = 0;
+
+        Ok(())
+    }
+
+    /// Write persistent output above the UI (like Bubbletea's Println)
+    ///
+    /// In inline mode, this clears the current UI, writes the message,
+    /// and the UI will be re-rendered below it.
+    ///
+    /// In fullscreen mode, this is a no-op (messages are ignored).
+    pub fn println(&mut self, message: &str) -> std::io::Result<()> {
+        // Println only works in inline mode (like Bubbletea)
+        if self.alternate_screen {
+            return Ok(());
+        }
+
+        let mut stdout = stdout();
+
+        // Clear current UI content
+        self.clear_inline_content()?;
+
+        // Write the message with proper line endings
+        for line in message.lines() {
+            write!(stdout, "{}{}\r\n", line, ansi::erase_end_of_line())?;
+        }
+
+        stdout.flush()?;
+
+        Ok(())
+    }
+
     /// Render output to terminal (ink-style incremental rendering)
     pub fn render(&mut self, output: &str) -> std::io::Result<()> {
         if self.alternate_screen {
@@ -221,7 +395,9 @@ impl Terminal {
 
             if old_line != Some(*new_line) {
                 // Move to line and clear it, then write new content
-                write!(stdout, "{}{}{}",
+                write!(
+                    stdout,
+                    "{}{}{}",
                     ansi::cursor_to(i as u16, 0),
                     ansi::erase_line(),
                     new_line
@@ -232,7 +408,9 @@ impl Terminal {
         // Clear any extra lines from previous render
         if self.previous_lines.len() > new_lines.len() {
             for i in new_lines.len()..self.previous_lines.len() {
-                write!(stdout, "{}{}",
+                write!(
+                    stdout,
+                    "{}{}",
                     ansi::cursor_to(i as u16, 0),
                     ansi::erase_line()
                 )?;
@@ -248,6 +426,9 @@ impl Terminal {
     }
 
     /// Render in inline mode (like ink's default behavior)
+    ///
+    /// This renders at the current cursor position, using cursor movement
+    /// to update in place. Content persists in terminal history.
     fn render_inline(&mut self, output: &str) -> std::io::Result<()> {
         let mut stdout = stdout();
         let new_lines: Vec<&str> = output.lines().collect();
@@ -258,7 +439,9 @@ impl Terminal {
         if prev_count == 0 {
             for (i, line) in new_lines.iter().enumerate() {
                 // Move to column 0 and write line
-                write!(stdout, "{}{}{}",
+                write!(
+                    stdout,
+                    "{}{}{}",
                     ansi::cursor_to_column(0),
                     ansi::erase_line(),
                     line
@@ -269,41 +452,61 @@ impl Terminal {
             }
             stdout.flush()?;
             self.previous_lines = new_lines.iter().map(|s| s.to_string()).collect();
+            self.inline_lines_rendered = new_count;
             return Ok(());
         }
 
-        // Move cursor to the start of our output area
+        // Move cursor to the start of our output area (like Bubbletea's CursorUp)
         if prev_count > 1 {
             write!(stdout, "{}", ansi::cursor_up(prev_count as u16 - 1))?;
         }
 
-        // Render each line
+        // Render each line with incremental updates
         for (i, new_line) in new_lines.iter().enumerate() {
-            // Always move to column 0, clear line, and write
-            write!(stdout, "{}{}{}",
-                ansi::cursor_to_column(0),
-                ansi::erase_line(),
-                new_line
-            )?;
+            let old_line = self.previous_lines.get(i).map(|s| s.as_str());
+
+            // Only update changed lines (optimization)
+            if old_line != Some(*new_line) {
+                write!(
+                    stdout,
+                    "{}{}{}",
+                    ansi::cursor_to_column(0),
+                    ansi::erase_line(),
+                    new_line
+                )?;
+            }
 
             if i < new_count - 1 {
-                write!(stdout, "\r\n")?; // Use \r\n for raw mode
+                write!(stdout, "\r\n")?;
+            } else {
+                // Stay on the last line
+                write!(stdout, "{}", ansi::cursor_to_column(0))?;
             }
         }
 
         // Clear extra lines if new output is shorter
         if new_count < prev_count {
             for _ in new_count..prev_count {
-                write!(stdout, "\r\n{}{}", ansi::cursor_to_column(0), ansi::erase_line())?;
+                write!(
+                    stdout,
+                    "\r\n{}{}",
+                    ansi::cursor_to_column(0),
+                    ansi::erase_line()
+                )?;
             }
             // Move back up to end of new content
-            write!(stdout, "{}", ansi::cursor_up((prev_count - new_count) as u16))?;
+            write!(
+                stdout,
+                "{}",
+                ansi::cursor_up((prev_count - new_count) as u16)
+            )?;
         }
 
         stdout.flush()?;
 
         // Store current lines for next comparison
         self.previous_lines = new_lines.iter().map(|s| s.to_string()).collect();
+        self.inline_lines_rendered = new_count;
 
         Ok(())
     }
@@ -320,7 +523,9 @@ impl Terminal {
         if self.alternate_screen {
             execute!(stdout, MoveTo(0, 0))?;
             for i in 0..line_count {
-                write!(stdout, "{}{}",
+                write!(
+                    stdout,
+                    "{}{}",
                     ansi::cursor_to(i as u16, 0),
                     ansi::erase_line()
                 )?;
@@ -331,7 +536,12 @@ impl Terminal {
                 write!(stdout, "{}", ansi::cursor_up(line_count as u16 - 1))?;
             }
             for _ in 0..line_count {
-                writeln!(stdout, "{}{}", ansi::cursor_to_column(0), ansi::erase_line())?;
+                writeln!(
+                    stdout,
+                    "{}{}",
+                    ansi::cursor_to_column(0),
+                    ansi::erase_line()
+                )?;
             }
             // Move back up
             write!(stdout, "{}", ansi::cursor_up(line_count as u16))?;
@@ -339,8 +549,14 @@ impl Terminal {
 
         stdout.flush()?;
         self.previous_lines.clear();
+        self.inline_lines_rendered = 0;
 
         Ok(())
+    }
+
+    /// Force a full repaint on next render
+    pub fn repaint(&mut self) {
+        self.previous_lines.clear();
     }
 
     /// Get terminal size
@@ -430,5 +646,25 @@ mod tests {
         assert_eq!(ansi::cursor_to(5, 10), "\x1b[6;11H");
         assert_eq!(ansi::cursor_up(3), "\x1b[3A");
         assert_eq!(ansi::erase_line(), "\x1b[2K");
+        assert_eq!(ansi::cursor_home(), "\x1b[H");
+        assert_eq!(ansi::erase_screen(), "\x1b[2J");
+        assert_eq!(ansi::enter_alt_screen(), "\x1b[?1049h");
+        assert_eq!(ansi::leave_alt_screen(), "\x1b[?1049l");
+    }
+
+    #[test]
+    fn test_terminal_new() {
+        let terminal = Terminal::new();
+        assert!(!terminal.is_alt_screen());
+        assert!(terminal.previous_lines.is_empty());
+        assert_eq!(terminal.inline_lines_rendered, 0);
+    }
+
+    #[test]
+    fn test_repaint_clears_previous_lines() {
+        let mut terminal = Terminal::new();
+        terminal.previous_lines = vec!["line1".to_string(), "line2".to_string()];
+        terminal.repaint();
+        assert!(terminal.previous_lines.is_empty());
     }
 }

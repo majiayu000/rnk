@@ -2,8 +2,8 @@
 //!
 //! Provides a table widget with headers, rows, and optional selection.
 
-use crate::core::{Color, Element, Style, FlexDirection};
-use crate::components::{Box as TinkBox, Text, Span, Line};
+use crate::components::{Box as TinkBox, Line, Span, Text};
+use crate::core::{Color, Element, FlexDirection, Style};
 
 /// Table cell content
 #[derive(Debug, Clone)]
@@ -274,8 +274,7 @@ impl Table {
         let separator = self.column_separator.as_deref().unwrap_or(" ");
         let symbol_width = self.highlight_symbol.as_ref().map(|s| s.len()).unwrap_or(0);
 
-        let mut container = TinkBox::new()
-            .flex_direction(FlexDirection::Column);
+        let mut container = TinkBox::new().flex_direction(FlexDirection::Column);
 
         if let Some(ref key) = self.key {
             container = container.key(key.clone());
@@ -298,7 +297,13 @@ impl Table {
     }
 
     /// Render a single row
-    fn render_row(&self, row: &Row, separator: &str, is_selected: bool, symbol_width: usize) -> Element {
+    fn render_row(
+        &self,
+        row: &Row,
+        separator: &str,
+        is_selected: bool,
+        symbol_width: usize,
+    ) -> Element {
         let mut spans = Vec::new();
 
         // Add highlight symbol if configured

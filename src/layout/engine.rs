@@ -1,9 +1,9 @@
 //! Layout engine using Taffy
 
-use std::collections::HashMap;
-use taffy::{TaffyTree, NodeId, AvailableSpace};
 use crate::core::{Element, ElementId, ElementType};
 use crate::layout::measure::measure_text_width;
+use std::collections::HashMap;
+use taffy::{AvailableSpace, NodeId, TaffyTree};
 
 /// Computed layout for an element
 #[derive(Debug, Clone, Copy, Default)]
@@ -69,7 +69,8 @@ impl LayoutEngine {
                 .new_leaf_with_context(taffy_style, context)
                 .ok()?
         } else {
-            let node = self.taffy
+            let node = self
+                .taffy
                 .new_with_children(taffy_style, &child_nodes)
                 .ok()?;
             // Set context for non-text nodes too
@@ -158,13 +159,13 @@ fn measure_text_node(
     let text_width = measure_text_width(text) as f32;
     let text_height = text.lines().count().max(1) as f32;
 
-    let width = known_dimensions.width.unwrap_or_else(|| {
-        match available_space.width {
+    let width = known_dimensions
+        .width
+        .unwrap_or_else(|| match available_space.width {
             AvailableSpace::Definite(w) => text_width.min(w),
             AvailableSpace::MinContent => text_width,
             AvailableSpace::MaxContent => text_width,
-        }
-    });
+        });
 
     let height = known_dimensions.height.unwrap_or(text_height);
 

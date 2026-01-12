@@ -1,6 +1,6 @@
 //! Standard I/O hooks for accessing stdin, stdout, and stderr
 
-use std::io::{self, IsTerminal, Stdout, Stderr, Write};
+use std::io::{self, IsTerminal, Stderr, Stdout, Write};
 
 /// Handle for writing to stdout
 #[derive(Clone, Copy)]

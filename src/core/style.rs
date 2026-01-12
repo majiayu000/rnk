@@ -176,7 +176,16 @@ pub enum BorderStyle {
 
 impl BorderStyle {
     /// Get border characters: (top_left, top_right, bottom_left, bottom_right, horizontal, vertical)
-    pub fn chars(&self) -> (&'static str, &'static str, &'static str, &'static str, &'static str, &'static str) {
+    pub fn chars(
+        &self,
+    ) -> (
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+    ) {
         match self {
             BorderStyle::None => (" ", " ", " ", " ", " ", " "),
             BorderStyle::Single => ("┌", "┐", "└", "┘", "─", "│"),
@@ -243,19 +252,39 @@ pub struct Edges {
 
 impl Edges {
     pub fn new(top: f32, right: f32, bottom: f32, left: f32) -> Self {
-        Self { top, right, bottom, left }
+        Self {
+            top,
+            right,
+            bottom,
+            left,
+        }
     }
 
     pub fn all(value: f32) -> Self {
-        Self { top: value, right: value, bottom: value, left: value }
+        Self {
+            top: value,
+            right: value,
+            bottom: value,
+            left: value,
+        }
     }
 
     pub fn horizontal(value: f32) -> Self {
-        Self { top: 0.0, right: value, bottom: 0.0, left: value }
+        Self {
+            top: 0.0,
+            right: value,
+            bottom: 0.0,
+            left: value,
+        }
     }
 
     pub fn vertical(value: f32) -> Self {
-        Self { top: value, right: 0.0, bottom: value, left: 0.0 }
+        Self {
+            top: value,
+            right: 0.0,
+            bottom: value,
+            left: 0.0,
+        }
     }
 }
 
@@ -368,10 +397,22 @@ impl Style {
             display: self.display.into(),
             position: self.position.into(),
             inset: taffy::Rect {
-                top: self.top.map(taffy::LengthPercentageAuto::Length).unwrap_or(taffy::LengthPercentageAuto::Auto),
-                right: self.right.map(taffy::LengthPercentageAuto::Length).unwrap_or(taffy::LengthPercentageAuto::Auto),
-                bottom: self.bottom.map(taffy::LengthPercentageAuto::Length).unwrap_or(taffy::LengthPercentageAuto::Auto),
-                left: self.left.map(taffy::LengthPercentageAuto::Length).unwrap_or(taffy::LengthPercentageAuto::Auto),
+                top: self
+                    .top
+                    .map(taffy::LengthPercentageAuto::Length)
+                    .unwrap_or(taffy::LengthPercentageAuto::Auto),
+                right: self
+                    .right
+                    .map(taffy::LengthPercentageAuto::Length)
+                    .unwrap_or(taffy::LengthPercentageAuto::Auto),
+                bottom: self
+                    .bottom
+                    .map(taffy::LengthPercentageAuto::Length)
+                    .unwrap_or(taffy::LengthPercentageAuto::Auto),
+                left: self
+                    .left
+                    .map(taffy::LengthPercentageAuto::Length)
+                    .unwrap_or(taffy::LengthPercentageAuto::Auto),
             },
             flex_direction: self.flex_direction.into(),
             flex_wrap: if self.flex_wrap {
@@ -416,8 +457,16 @@ impl Style {
             border: if self.border_style.is_visible() {
                 taffy::Rect {
                     top: taffy::LengthPercentage::Length(if self.border_top { 1.0 } else { 0.0 }),
-                    right: taffy::LengthPercentage::Length(if self.border_right { 1.0 } else { 0.0 }),
-                    bottom: taffy::LengthPercentage::Length(if self.border_bottom { 1.0 } else { 0.0 }),
+                    right: taffy::LengthPercentage::Length(if self.border_right {
+                        1.0
+                    } else {
+                        0.0
+                    }),
+                    bottom: taffy::LengthPercentage::Length(if self.border_bottom {
+                        1.0
+                    } else {
+                        0.0
+                    }),
                     left: taffy::LengthPercentage::Length(if self.border_left { 1.0 } else { 0.0 }),
                 }
             } else {

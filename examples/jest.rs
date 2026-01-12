@@ -4,11 +4,11 @@
 //!
 //! Run with: cargo run --example jest
 
-use std::time::{Duration, Instant};
 use rnk::prelude::*;
+use std::time::{Duration, Instant};
 
 fn main() -> std::io::Result<()> {
-    render(app)
+    render(app).run()
 }
 
 #[derive(Clone)]
@@ -79,7 +79,11 @@ fn app() -> Element {
 
                 if let Some(test) = running.get(completed_idx) {
                     let path = test.path.clone();
-                    let status = if rand_bool() { TestStatus::Pass } else { TestStatus::Fail };
+                    let status = if rand_bool() {
+                        TestStatus::Pass
+                    } else {
+                        TestStatus::Fail
+                    };
 
                     running_clone.update(|tests| {
                         tests.retain(|t| t.path != path);
@@ -96,8 +100,14 @@ fn app() -> Element {
     let elapsed = start_time.get().elapsed();
     let completed = completed_tests.get();
     let running = running_tests.get();
-    let passed = completed.iter().filter(|t| t.status == TestStatus::Pass).count();
-    let failed = completed.iter().filter(|t| t.status == TestStatus::Fail).count();
+    let passed = completed
+        .iter()
+        .filter(|t| t.status == TestStatus::Pass)
+        .count();
+    let failed = completed
+        .iter()
+        .filter(|t| t.status == TestStatus::Fail)
+        .count();
     let is_finished = completed.len() == 10 && running.is_empty();
 
     Box::new()
@@ -106,22 +116,24 @@ fn app() -> Element {
         // Completed tests (using Static-like rendering)
         .children(completed.iter().map(|test| render_test(test)))
         // Running tests
-        .child(
-            if !running.is_empty() {
-                Box::new()
-                    .flex_direction(FlexDirection::Column)
-                    .margin_top(1.0)
-                    .children(running.iter().map(|test| render_test(test)))
-                    .into_element()
-            } else {
-                Box::new().into_element()
-            },
-        )
+        .child(if !running.is_empty() {
+            Box::new()
+                .flex_direction(FlexDirection::Column)
+                .margin_top(1.0)
+                .children(running.iter().map(|test| render_test(test)))
+                .into_element()
+        } else {
+            Box::new().into_element()
+        })
         // Summary
         .child(Newline::new().into_element())
         .child(render_summary(is_finished, passed, failed, elapsed))
         .child(Newline::new().into_element())
-        .child(Text::new("Press 'n' or Space to advance, 'q' to exit").dim().into_element())
+        .child(
+            Text::new("Press 'n' or Space to advance, 'q' to exit")
+                .dim()
+                .into_element(),
+        )
         .into_element()
 }
 
@@ -137,12 +149,7 @@ fn render_test(test: &TestResult) -> Element {
         .child(
             Box::new()
                 .background(color)
-                .child(
-                    Text::new(badge)
-                        .color(Color::Black)
-                        .bold()
-                        .into_element(),
-                )
+                .child(Text::new(badge).color(Color::Black).bold().into_element())
                 .into_element(),
         )
         .child(
@@ -180,7 +187,11 @@ fn render_summary(is_finished: bool, passed: usize, failed: usize, elapsed: Dura
                 .child(Text::new(", ").into_element())
                 .child(
                     Text::new(format!("{} failed", failed))
-                        .color(if failed > 0 { Color::Red } else { Color::Ansi256(240) })
+                        .color(if failed > 0 {
+                            Color::Red
+                        } else {
+                            Color::Ansi256(240)
+                        })
                         .bold()
                         .into_element(),
                 )
@@ -194,16 +205,22 @@ fn render_summary(is_finished: bool, passed: usize, failed: usize, elapsed: Dura
                 .child(Text::new(time_str).color(Color::Yellow).into_element())
                 .into_element(),
         )
-        .child(
-            if is_finished {
-                Text::new(if failed == 0 { "All tests passed!" } else { "Some tests failed" })
-                    .color(if failed == 0 { Color::Green } else { Color::Red })
-                    .bold()
-                    .into_element()
+        .child(if is_finished {
+            Text::new(if failed == 0 {
+                "All tests passed!"
             } else {
-                Text::new("Running...").color(Color::Yellow).into_element()
-            },
-        )
+                "Some tests failed"
+            })
+            .color(if failed == 0 {
+                Color::Green
+            } else {
+                Color::Red
+            })
+            .bold()
+            .into_element()
+        } else {
+            Text::new("Running...").color(Color::Yellow).into_element()
+        })
         .into_element()
 }
 
@@ -211,5 +228,7 @@ fn rand_bool() -> bool {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .subsec_nanos() % 2 == 0
+        .subsec_nanos()
+        % 2
+        == 0
 }

@@ -1,8 +1,8 @@
 //! Effect hook for side effects
 
-use std::hash::{Hash, Hasher};
+use crate::hooks::context::{Effect, current_context};
 use std::collections::hash_map::DefaultHasher;
-use crate::hooks::context::{current_context, Effect};
+use std::hash::{Hash, Hasher};
 
 /// Trait for types that can be used as effect dependencies
 pub trait Deps {
@@ -104,13 +104,14 @@ where
         prev_deps_hash: None,
     });
 
-    let prev_deps_hash = storage.get::<EffectStorage>()
+    let prev_deps_hash = storage
+        .get::<EffectStorage>()
         .and_then(|s| s.prev_deps_hash);
 
     // Check if deps changed
     let should_run = match prev_deps_hash {
-        None => true,  // First render
-        Some(prev) => prev != new_deps_hash,  // Deps changed
+        None => true,                        // First render
+        Some(prev) => prev != new_deps_hash, // Deps changed
     };
 
     if should_run {
@@ -185,10 +186,13 @@ mod tests {
 
         let effect_ran_clone = effect_ran.clone();
         with_hooks(ctx.clone(), || {
-            use_effect(move || {
-                *effect_ran_clone.borrow_mut() = true;
-                None
-            }, ());
+            use_effect(
+                move || {
+                    *effect_ran_clone.borrow_mut() = true;
+                    None
+                },
+                (),
+            );
         });
 
         assert!(*effect_ran.borrow());
@@ -202,30 +206,39 @@ mod tests {
         // First render with deps = 1
         let run_count_clone = run_count.clone();
         with_hooks(ctx.clone(), || {
-            use_effect(move || {
-                *run_count_clone.borrow_mut() += 1;
-                None
-            }, (1i32,));
+            use_effect(
+                move || {
+                    *run_count_clone.borrow_mut() += 1;
+                    None
+                },
+                (1i32,),
+            );
         });
         assert_eq!(*run_count.borrow(), 1);
 
         // Second render with same deps = 1 (should not run)
         let run_count_clone = run_count.clone();
         with_hooks(ctx.clone(), || {
-            use_effect(move || {
-                *run_count_clone.borrow_mut() += 1;
-                None
-            }, (1i32,));
+            use_effect(
+                move || {
+                    *run_count_clone.borrow_mut() += 1;
+                    None
+                },
+                (1i32,),
+            );
         });
-        assert_eq!(*run_count.borrow(), 1);  // Still 1
+        assert_eq!(*run_count.borrow(), 1); // Still 1
 
         // Third render with different deps = 2 (should run)
         let run_count_clone = run_count.clone();
         with_hooks(ctx.clone(), || {
-            use_effect(move || {
-                *run_count_clone.borrow_mut() += 1;
-                None
-            }, (2i32,));
+            use_effect(
+                move || {
+                    *run_count_clone.borrow_mut() += 1;
+                    None
+                },
+                (2i32,),
+            );
         });
         assert_eq!(*run_count.borrow(), 2);
     }
@@ -238,11 +251,14 @@ mod tests {
         // First render - effect with cleanup
         let cleanup_ran_clone = cleanup_ran.clone();
         with_hooks(ctx.clone(), || {
-            use_effect(move || {
-                Some(Box::new(move || {
-                    *cleanup_ran_clone.borrow_mut() = true;
-                }) as Box<dyn FnOnce()>)
-            }, (1i32,));
+            use_effect(
+                move || {
+                    Some(Box::new(move || {
+                        *cleanup_ran_clone.borrow_mut() = true;
+                    }) as Box<dyn FnOnce()>)
+                },
+                (1i32,),
+            );
         });
 
         // Cleanup hasn't run yet

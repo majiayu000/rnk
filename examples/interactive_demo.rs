@@ -4,7 +4,7 @@
 //!
 //! Run with: cargo run --example interactive_demo
 
-use std::io::{stdout, Write};
+use std::io::{Write, stdout};
 use std::time::Duration;
 
 use crossterm::{
@@ -14,9 +14,9 @@ use crossterm::{
     terminal::{self, ClearType},
 };
 
-use rnk::prelude::*;
 use rnk::core::Dimension;
 use rnk::layout::LayoutEngine;
+use rnk::prelude::*;
 use rnk::renderer::Output;
 
 /// Demo state
@@ -61,9 +61,9 @@ fn render_ui(state: &DemoState) -> Element {
                     Text::new("Tink Interactive Demo")
                         .color(Color::Cyan)
                         .bold()
-                        .into_element()
+                        .into_element(),
                 )
-                .into_element()
+                .into_element(),
         )
         .child(Newline::new().into_element())
         // Main content - two columns
@@ -83,7 +83,7 @@ fn render_ui(state: &DemoState) -> Element {
                                 .color(Color::Yellow)
                                 .bold()
                                 .underline()
-                                .into_element()
+                                .into_element(),
                         )
                         .child(Newline::new().into_element())
                         .child(
@@ -92,17 +92,33 @@ fn render_ui(state: &DemoState) -> Element {
                                 .child(Text::new("Value: ").color(Color::White).into_element())
                                 .child(
                                     Text::new(format!("{}", state.counter))
-                                        .color(if state.counter >= 0 { Color::Green } else { Color::Red })
+                                        .color(if state.counter >= 0 {
+                                            Color::Green
+                                        } else {
+                                            Color::Red
+                                        })
                                         .bold()
-                                        .into_element()
+                                        .into_element(),
                                 )
-                                .into_element()
+                                .into_element(),
                         )
                         .child(Newline::new().into_element())
-                        .child(Text::new("[+] Increment").color(Color::Ansi256(240)).into_element())
-                        .child(Text::new("[-] Decrement").color(Color::Ansi256(240)).into_element())
-                        .child(Text::new("[0] Reset").color(Color::Ansi256(240)).into_element())
-                        .into_element()
+                        .child(
+                            Text::new("[+] Increment")
+                                .color(Color::Ansi256(240))
+                                .into_element(),
+                        )
+                        .child(
+                            Text::new("[-] Decrement")
+                                .color(Color::Ansi256(240))
+                                .into_element(),
+                        )
+                        .child(
+                            Text::new("[0] Reset")
+                                .color(Color::Ansi256(240))
+                                .into_element(),
+                        )
+                        .into_element(),
                 )
                 .child(Box::new().width(2).into_element())
                 // Right column - list
@@ -118,39 +134,44 @@ fn render_ui(state: &DemoState) -> Element {
                                 .color(Color::Blue)
                                 .bold()
                                 .underline()
-                                .into_element()
+                                .into_element(),
                         )
                         .child(Newline::new().into_element())
-                        .children(
-                            state.items.iter().enumerate().map(|(i, item)| {
-                                let is_selected = i == state.selected_item;
-                                let mut row = Box::new()
-                                    .flex_direction(FlexDirection::Row)
-                                    .padding_x(1.0);
+                        .children(state.items.iter().enumerate().map(|(i, item)| {
+                            let is_selected = i == state.selected_item;
+                            let mut row =
+                                Box::new().flex_direction(FlexDirection::Row).padding_x(1.0);
 
-                                if is_selected {
-                                    row = row.background(Color::Ansi256(236));
-                                }
+                            if is_selected {
+                                row = row.background(Color::Ansi256(236));
+                            }
 
-                                row.child(
-                                    Text::new(if is_selected { "> " } else { "  " })
-                                        .color(Color::Cyan)
-                                        .bold()
-                                        .into_element()
-                                )
-                                .child(
-                                    Text::new(item)
-                                        .color(if is_selected { Color::White } else { Color::Ansi256(250) })
-                                        .into_element()
-                                )
-                                .into_element()
-                            })
-                        )
+                            row.child(
+                                Text::new(if is_selected { "> " } else { "  " })
+                                    .color(Color::Cyan)
+                                    .bold()
+                                    .into_element(),
+                            )
+                            .child(
+                                Text::new(item)
+                                    .color(if is_selected {
+                                        Color::White
+                                    } else {
+                                        Color::Ansi256(250)
+                                    })
+                                    .into_element(),
+                            )
+                            .into_element()
+                        }))
                         .child(Newline::new().into_element())
-                        .child(Text::new("[j/k] Navigate").color(Color::Ansi256(240)).into_element())
-                        .into_element()
+                        .child(
+                            Text::new("[j/k] Navigate")
+                                .color(Color::Ansi256(240))
+                                .into_element(),
+                        )
+                        .into_element(),
                 )
-                .into_element()
+                .into_element(),
         )
         .child(Newline::new().into_element())
         // Status messages
@@ -163,9 +184,9 @@ fn render_ui(state: &DemoState) -> Element {
                     Text::new(state.messages.last().unwrap_or(&"".to_string()))
                         .color(Color::Magenta)
                         .italic()
-                        .into_element()
+                        .into_element(),
                 )
-                .into_element()
+                .into_element(),
         )
         // Help popup (absolute positioned, conditionally shown)
         .child(render_help_popup(state.show_popup))
@@ -191,19 +212,35 @@ fn render_help_popup(show: bool) -> Element {
             Text::new("  HELP  ")
                 .color(Color::Green)
                 .bold()
-                .into_element()
+                .into_element(),
         )
         .child(Newline::new().into_element())
-        .child(Text::new("  +/-/0  Counter controls").color(Color::White).into_element())
-        .child(Text::new("  j/k    Navigate list").color(Color::White).into_element())
-        .child(Text::new("  h      Toggle this help").color(Color::White).into_element())
-        .child(Text::new("  q/Esc  Quit").color(Color::White).into_element())
+        .child(
+            Text::new("  +/-/0  Counter controls")
+                .color(Color::White)
+                .into_element(),
+        )
+        .child(
+            Text::new("  j/k    Navigate list")
+                .color(Color::White)
+                .into_element(),
+        )
+        .child(
+            Text::new("  h      Toggle this help")
+                .color(Color::White)
+                .into_element(),
+        )
+        .child(
+            Text::new("  q/Esc  Quit")
+                .color(Color::White)
+                .into_element(),
+        )
         .child(Newline::new().into_element())
         .child(
             Text::new("Press 'h' to close")
                 .color(Color::Ansi256(240))
                 .italic()
-                .into_element()
+                .into_element(),
         )
         .into_element()
 }
@@ -251,10 +288,20 @@ fn render_element(
         let mut style = element.style.clone();
 
         style.color = element.style.get_border_top_color();
-        output.write(x, y, &format!("{}{}{}", tl, hz.repeat((w as usize).saturating_sub(2)), tr), &style);
+        output.write(
+            x,
+            y,
+            &format!("{}{}{}", tl, hz.repeat((w as usize).saturating_sub(2)), tr),
+            &style,
+        );
 
         style.color = element.style.get_border_bottom_color();
-        output.write(x, y + h.saturating_sub(1), &format!("{}{}{}", bl, hz.repeat((w as usize).saturating_sub(2)), br), &style);
+        output.write(
+            x,
+            y + h.saturating_sub(1),
+            &format!("{}{}{}", bl, hz.repeat((w as usize).saturating_sub(2)), br),
+            &style,
+        );
 
         for row in 1..h.saturating_sub(1) {
             style.color = element.style.get_border_left_color();
@@ -266,10 +313,10 @@ fn render_element(
 
     // Text - must account for border and padding
     if let Some(text) = &element.text_content {
-        let text_x = x + if element.style.has_border() { 1 } else { 0 }
-            + element.style.padding.left as u16;
-        let text_y = y + if element.style.has_border() { 1 } else { 0 }
-            + element.style.padding.top as u16;
+        let text_x =
+            x + if element.style.has_border() { 1 } else { 0 } + element.style.padding.left as u16;
+        let text_y =
+            y + if element.style.has_border() { 1 } else { 0 } + element.style.padding.top as u16;
         output.write(text_x, text_y, text, &element.style);
     }
 
@@ -279,7 +326,13 @@ fn render_element(
 
     for child in element.children.iter() {
         if child.style.position == Position::Absolute {
-            render_element(child, engine, output, child.style.left.unwrap_or(0.0), child.style.top.unwrap_or(0.0));
+            render_element(
+                child,
+                engine,
+                output,
+                child.style.left.unwrap_or(0.0),
+                child.style.top.unwrap_or(0.0),
+            );
         } else {
             render_element(child, engine, output, cx, cy);
         }
@@ -303,7 +356,11 @@ fn main() -> std::io::Result<()> {
         let element = render_ui(&state);
         let output = render_to_string(&element, width, height);
 
-        execute!(stdout, cursor::MoveTo(0, 0), terminal::Clear(ClearType::All))?;
+        execute!(
+            stdout,
+            cursor::MoveTo(0, 0),
+            terminal::Clear(ClearType::All)
+        )?;
         write!(stdout, "{}", output)?;
         stdout.flush()?;
 
@@ -314,10 +371,11 @@ fn main() -> std::io::Result<()> {
                     KeyCode::Char('q') | KeyCode::Esc => break,
                     KeyCode::Char('h') => {
                         state.show_popup = !state.show_popup;
-                        state.messages.push(
-                            if state.show_popup { "Help opened".into() }
-                            else { "Help closed".into() }
-                        );
+                        state.messages.push(if state.show_popup {
+                            "Help opened".into()
+                        } else {
+                            "Help closed".into()
+                        });
                     }
                     KeyCode::Char('+') | KeyCode::Char('=') => {
                         state.counter += 1;
@@ -334,13 +392,17 @@ fn main() -> std::io::Result<()> {
                     KeyCode::Char('j') | KeyCode::Down => {
                         if state.selected_item < state.items.len() - 1 {
                             state.selected_item += 1;
-                            state.messages.push(format!("Selected: {}", state.items[state.selected_item]));
+                            state
+                                .messages
+                                .push(format!("Selected: {}", state.items[state.selected_item]));
                         }
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
                         if state.selected_item > 0 {
                             state.selected_item -= 1;
-                            state.messages.push(format!("Selected: {}", state.items[state.selected_item]));
+                            state
+                                .messages
+                                .push(format!("Selected: {}", state.items[state.selected_item]));
                         }
                     }
                     _ => {}

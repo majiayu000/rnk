@@ -17,7 +17,7 @@
 //! ])
 //! ```
 
-use crate::core::{Element, ElementType, Style, Color, TextWrap};
+use crate::core::{Color, Element, ElementType, Style, TextWrap};
 
 /// A styled text fragment
 ///
@@ -212,13 +212,14 @@ impl Text {
     /// Create a new Text with content (single style)
     pub fn new(content: impl Into<String>) -> Self {
         let content_str: String = content.into();
-        let lines: Vec<Line> = content_str
-            .lines()
-            .map(Line::raw)
-            .collect();
+        let lines: Vec<Line> = content_str.lines().map(Line::raw).collect();
 
         Self {
-            lines: if lines.is_empty() { vec![Line::raw("")] } else { lines },
+            lines: if lines.is_empty() {
+                vec![Line::raw("")]
+            } else {
+                lines
+            },
             style: Style::new(),
             key: None,
         }
@@ -405,8 +406,7 @@ impl Text {
         element.key = self.key;
 
         // Check if this is simple text (single span per line, no mixed styles)
-        let is_simple = self.lines.len() == 1
-            && self.lines[0].spans.len() == 1;
+        let is_simple = self.lines.len() == 1 && self.lines[0].spans.len() == 1;
 
         if is_simple {
             // Simple text: use text_content for backward compatibility
@@ -486,9 +486,7 @@ mod tests {
 
     #[test]
     fn test_span_creation() {
-        let span = Span::new("Hello")
-            .color(Color::Green)
-            .bold();
+        let span = Span::new("Hello").color(Color::Green).bold();
 
         assert_eq!(span.content, "Hello");
         assert_eq!(span.style.color, Some(Color::Green));
@@ -513,7 +511,8 @@ mod tests {
         let element = Text::spans(vec![
             Span::new("Hello ").color(Color::White),
             Span::new("World").color(Color::Green),
-        ]).into_element();
+        ])
+        .into_element();
 
         // Should have spans, not simple text_content
         assert!(element.spans.is_some());
@@ -536,12 +535,8 @@ mod tests {
     #[test]
     fn test_multiline_text() {
         let text = Text::from_lines(vec![
-            Line::from_spans(vec![
-                Span::new("Line 1").bold(),
-            ]),
-            Line::from_spans(vec![
-                Span::new("Line 2").italic(),
-            ]),
+            Line::from_spans(vec![Span::new("Line 1").bold()]),
+            Line::from_spans(vec![Span::new("Line 2").italic()]),
         ]);
 
         assert_eq!(text.lines.len(), 2);

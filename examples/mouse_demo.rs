@@ -5,7 +5,7 @@
 use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
-    render(app)
+    render(app).run()
 }
 
 fn app() -> Element {
@@ -90,11 +90,16 @@ fn app() -> Element {
                     Text::spans(vec![
                         Span::new("Position: ").color(Color::White),
                         Span::new("(").color(Color::Ansi256(240)),
-                        Span::new(format!("{}", mouse_x.get())).color(Color::Green).bold(),
+                        Span::new(format!("{}", mouse_x.get()))
+                            .color(Color::Green)
+                            .bold(),
                         Span::new(", ").color(Color::Ansi256(240)),
-                        Span::new(format!("{}", mouse_y.get())).color(Color::Green).bold(),
+                        Span::new(format!("{}", mouse_y.get()))
+                            .color(Color::Green)
+                            .bold(),
                         Span::new(")").color(Color::Ansi256(240)),
-                    ]).into_element(),
+                    ])
+                    .into_element(),
                 )
                 .into_element(),
         )
@@ -109,7 +114,8 @@ fn app() -> Element {
                     Text::spans(vec![
                         Span::new("Last Action: ").color(Color::White),
                         Span::new(last_action.get()).color(Color::Magenta).bold(),
-                    ]).into_element(),
+                    ])
+                    .into_element(),
                 )
                 .into_element(),
         )
@@ -122,16 +128,15 @@ fn app() -> Element {
                 .child(
                     Text::spans(vec![
                         Span::new("Click Count: ").color(Color::White),
-                        Span::new(format!("{}", click_count.get())).color(Color::Cyan).bold(),
-                    ]).into_element(),
+                        Span::new(format!("{}", click_count.get()))
+                            .color(Color::Cyan)
+                            .bold(),
+                    ])
+                    .into_element(),
                 )
                 .into_element(),
         )
         .child(Newline::new().into_element())
-        .child(
-            Text::new("Press 'q' to exit")
-                .dim()
-                .into_element(),
-        )
+        .child(Text::new("Press 'q' to exit").dim().into_element())
         .into_element()
 }

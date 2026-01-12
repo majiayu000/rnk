@@ -1,8 +1,8 @@
 //! Debug render for interactive demo
 
-use rnk::prelude::*;
 use rnk::core::Dimension;
 use rnk::layout::LayoutEngine;
+use rnk::prelude::*;
 use rnk::renderer::Output;
 
 fn main() {
@@ -33,9 +33,9 @@ fn create_demo_ui() -> Element {
                     Text::new("Interactive Demo")
                         .color(Color::Cyan)
                         .bold()
-                        .into_element()
+                        .into_element(),
                 )
-                .into_element()
+                .into_element(),
         )
         .child(Newline::new().into_element())
         // Main content - two columns
@@ -52,9 +52,9 @@ fn create_demo_ui() -> Element {
                         .child(
                             Text::new("Counter Demo")
                                 .color(Color::Yellow)
-                                .into_element()
+                                .into_element(),
                         )
-                        .into_element()
+                        .into_element(),
                 )
                 .child(Box::new().width(2).into_element())
                 // Right column
@@ -67,11 +67,11 @@ fn create_demo_ui() -> Element {
                         .child(
                             Text::new("List Navigation")
                                 .color(Color::Blue)
-                                .into_element()
+                                .into_element(),
                         )
-                        .into_element()
+                        .into_element(),
                 )
-                .into_element()
+                .into_element(),
         )
         .into_element()
 }
@@ -121,10 +121,20 @@ fn render_element(
         let mut style = element.style.clone();
 
         style.color = element.style.get_border_top_color();
-        output.write(x, y, &format!("{}{}{}", tl, hz.repeat((w as usize).saturating_sub(2)), tr), &style);
+        output.write(
+            x,
+            y,
+            &format!("{}{}{}", tl, hz.repeat((w as usize).saturating_sub(2)), tr),
+            &style,
+        );
 
         style.color = element.style.get_border_bottom_color();
-        output.write(x, y + h.saturating_sub(1), &format!("{}{}{}", bl, hz.repeat((w as usize).saturating_sub(2)), br), &style);
+        output.write(
+            x,
+            y + h.saturating_sub(1),
+            &format!("{}{}{}", bl, hz.repeat((w as usize).saturating_sub(2)), br),
+            &style,
+        );
 
         for row in 1..h.saturating_sub(1) {
             style.color = element.style.get_border_left_color();
@@ -136,17 +146,24 @@ fn render_element(
 
     // Text
     if let Some(text) = &element.text_content {
-        let text_x = x + if element.style.has_border() { 1 } else { 0 }
-            + element.style.padding.left as u16;
-        let text_y = y + if element.style.has_border() { 1 } else { 0 }
-            + element.style.padding.top as u16;
+        let text_x =
+            x + if element.style.has_border() { 1 } else { 0 } + element.style.padding.left as u16;
+        let text_y =
+            y + if element.style.has_border() { 1 } else { 0 } + element.style.padding.top as u16;
         output.write(text_x, text_y, text, &element.style);
     }
 
     // Children
     for child in element.children.iter() {
         if child.style.position == Position::Absolute {
-            render_element(child, engine, output, child.style.left.unwrap_or(0.0), child.style.top.unwrap_or(0.0), depth + 1);
+            render_element(
+                child,
+                engine,
+                output,
+                child.style.left.unwrap_or(0.0),
+                child.style.top.unwrap_or(0.0),
+                depth + 1,
+            );
         } else {
             render_element(child, engine, output, abs_x, abs_y, depth + 1);
         }

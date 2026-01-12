@@ -6,11 +6,13 @@ use rnk::prelude::*;
 
 fn main() {
     // Create todo items state
-    let todos = use_signal(|| vec![
-        ("Learn Rust".to_string(), false),
-        ("Build tink framework".to_string(), true),
-        ("Create todo app".to_string(), false),
-    ]);
+    let todos = use_signal(|| {
+        vec![
+            ("Learn Rust".to_string(), false),
+            ("Build tink framework".to_string(), true),
+            ("Create todo app".to_string(), false),
+        ]
+    });
 
     // Selected index state
     let selected = use_signal(|| 0usize);
@@ -42,7 +44,9 @@ fn main() {
                     input_buffer.set(String::new());
                     adding.set(false);
                 } else if key.backspace {
-                    input_buffer.update(|s| { s.pop(); });
+                    input_buffer.update(|s| {
+                        s.pop();
+                    });
                 } else if !input.is_empty() && !key.ctrl && !key.alt {
                     // Regular character input
                     input_buffer.update(|s| s.push_str(input));
@@ -118,7 +122,7 @@ fn build_ui(
             Text::new("Todo App")
                 .bold()
                 .color(Color::Cyan)
-                .into_element()
+                .into_element(),
         )
         .into_element();
 
@@ -139,13 +143,9 @@ fn build_ui(
         let mut text_component = Text::new(&item_text);
 
         if is_selected {
-            text_component = text_component
-                .color(Color::Yellow)
-                .bold();
+            text_component = text_component.color(Color::Yellow).bold();
         } else if *done {
-            text_component = text_component
-                .color(Color::BrightBlack)
-                .dim();
+            text_component = text_component.color(Color::BrightBlack).dim();
         }
 
         items_box = items_box.child(text_component.into_element());
@@ -156,7 +156,7 @@ fn build_ui(
             Text::new("No todos yet. Press 'a' to add one!")
                 .color(Color::BrightBlack)
                 .italic()
-                .into_element()
+                .into_element(),
         );
     }
 
@@ -169,7 +169,7 @@ fn build_ui(
             .child(
                 Text::new(&format!("New todo: {}_", input_buffer.get()))
                     .color(Color::Green)
-                    .into_element()
+                    .into_element(),
             )
             .into_element()
     } else {
@@ -187,7 +187,7 @@ fn build_ui(
         .child(
             Text::new(&stats_text)
                 .color(Color::BrightBlack)
-                .into_element()
+                .into_element(),
         )
         .into_element();
 
@@ -205,7 +205,7 @@ fn build_ui(
             Text::new(help_text)
                 .color(Color::BrightBlack)
                 .dim()
-                .into_element()
+                .into_element(),
         )
         .into_element();
 

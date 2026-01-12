@@ -7,7 +7,7 @@
 use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
-    render(app)
+    render(app).run()
 }
 
 fn app() -> Element {
@@ -77,18 +77,16 @@ fn app() -> Element {
             Box::new()
                 .flex_direction(FlexDirection::Row)
                 .child(Text::new("Screen Reader: ").into_element())
-                .child(
-                    if is_screen_reader {
-                        Text::new("Enabled")
-                            .color(Color::Green)
-                            .bold()
-                            .into_element()
-                    } else {
-                        Text::new("Disabled")
-                            .color(Color::Ansi256(245))
-                            .into_element()
-                    },
-                )
+                .child(if is_screen_reader {
+                    Text::new("Enabled")
+                        .color(Color::Green)
+                        .bold()
+                        .into_element()
+                } else {
+                    Text::new("Disabled")
+                        .color(Color::Ansi256(245))
+                        .into_element()
+                })
                 .into_element(),
         )
         .child(Newline::new().into_element())
@@ -113,22 +111,29 @@ fn app() -> Element {
 
             Box::new()
                 .flex_direction(FlexDirection::Row)
-                .background(if is_selected { Some(Color::Ansi256(236)) } else { None }.unwrap_or(Color::Black))
+                .background(
+                    if is_selected {
+                        Some(Color::Ansi256(236))
+                    } else {
+                        None
+                    }
+                    .unwrap_or(Color::Black),
+                )
                 .child(
                     Text::new(display_label)
-                        .color(if is_selected { Color::Cyan } else { Color::White })
+                        .color(if is_selected {
+                            Color::Cyan
+                        } else {
+                            Color::White
+                        })
                         .bold()
                         .into_element(),
                 )
-                .child(
-                    if is_selected && is_screen_reader {
-                        Text::new(" (selected)")
-                            .color(Color::Green)
-                            .into_element()
-                    } else {
-                        Box::new().into_element()
-                    },
-                )
+                .child(if is_selected && is_screen_reader {
+                    Text::new(" (selected)").color(Color::Green).into_element()
+                } else {
+                    Box::new().into_element()
+                })
                 .into_element()
         }))
         .child(Newline::new().into_element())
@@ -138,15 +143,13 @@ fn app() -> Element {
                 .flex_direction(FlexDirection::Column)
                 .child(Text::new("Controls:").dim().into_element())
                 .child(Text::new("  j/k or arrows - Navigate").dim().into_element())
-                .child(
-                    if is_screen_reader {
-                        Text::new("  1-5 - Jump to item (screen reader mode)")
-                            .dim()
-                            .into_element()
-                    } else {
-                        Box::new().into_element()
-                    },
-                )
+                .child(if is_screen_reader {
+                    Text::new("  1-5 - Jump to item (screen reader mode)")
+                        .dim()
+                        .into_element()
+                } else {
+                    Box::new().into_element()
+                })
                 .child(Text::new("  q - Quit").dim().into_element())
                 .into_element(),
         )

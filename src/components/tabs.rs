@@ -2,8 +2,8 @@
 //!
 //! Provides a tab bar widget with selectable tabs.
 
+use crate::components::{Box as TinkBox, Line, Span, Text};
 use crate::core::{Color, Element, Style};
-use crate::components::{Box as TinkBox, Text, Span, Line};
 
 /// Tab item
 #[derive(Debug, Clone)]
@@ -182,8 +182,7 @@ impl Tabs {
         }
 
         let text = Text::line(Line::from_spans(spans));
-        let mut container = TinkBox::new()
-            .child(text.into_element());
+        let mut container = TinkBox::new().child(text.into_element());
 
         if let Some(key) = self.key {
             container = container.key(key);
@@ -217,17 +216,13 @@ mod tests {
 
     #[test]
     fn test_tabs_selected() {
-        let tabs = Tabs::from_items(vec!["A", "B", "C"])
-            .selected(1);
+        let tabs = Tabs::from_items(vec!["A", "B", "C"]).selected(1);
         assert_eq!(tabs.selected, 1);
     }
 
     #[test]
     fn test_tabs_divider() {
-        let tabs = Tabs::new()
-            .tab("Home")
-            .tab("Settings")
-            .divider(" │ ");
+        let tabs = Tabs::new().tab("Home").tab("Settings").divider(" │ ");
         assert_eq!(tabs.divider, " │ ");
     }
 }

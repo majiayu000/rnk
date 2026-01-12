@@ -7,7 +7,7 @@
 use rnk::prelude::*;
 
 fn main() -> std::io::Result<()> {
-    render(app)
+    render(app).run()
 }
 
 fn app() -> Element {
@@ -76,22 +76,15 @@ fn focusable_item(label: &str, _index: usize) -> Element {
                         .bold()
                         .into_element(),
                 )
-                .child(
-                    Text::new(label)
-                        .color(text_color)
-                        .bold()
-                        .into_element(),
-                )
-                .child(
-                    if focus.is_focused {
-                        Text::new(" (focused)")
-                            .color(Color::Green)
-                            .italic()
-                            .into_element()
-                    } else {
-                        Box::new().into_element()
-                    },
-                )
+                .child(Text::new(label).color(text_color).bold().into_element())
+                .child(if focus.is_focused {
+                    Text::new(" (focused)")
+                        .color(Color::Green)
+                        .italic()
+                        .into_element()
+                } else {
+                    Box::new().into_element()
+                })
                 .into_element(),
         )
         .into_element()

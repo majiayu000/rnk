@@ -1,24 +1,53 @@
 //! Application runner
+//!
+//! This module provides the main application runner with support for:
+//! - Inline mode (default, like Ink/Bubbletea)
+//! - Fullscreen mode (alternate screen, like vim)
+//! - Runtime mode switching
+//! - Println for persistent output
+//! - Cross-thread render requests
 
+use crossterm::event::Event;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
-use crossterm::event::Event;
+use std::sync::{Arc, Mutex};
 
 use crate::core::Element;
 use crate::hooks::context::{HookContext, with_hooks};
-use crate::hooks::use_app::{set_app_context, AppContext};
+use crate::hooks::use_app::{AppContext, set_app_context};
 use crate::hooks::use_input::{clear_input_handlers, dispatch_key_event};
-use crate::hooks::use_mouse::{dispatch_mouse_event, is_mouse_enabled, clear_mouse_handlers};
+use crate::hooks::use_mouse::{clear_mouse_handlers, dispatch_mouse_event, is_mouse_enabled};
 use crate::layout::LayoutEngine;
 use crate::renderer::{Output, Terminal};
 
-// === Global render trigger for cross-thread render requests ===
+// === Global state for cross-thread communication ===
 
-/// Global render flag storage
+/// Global render flag storage for cross-thread render requests
 static GLOBAL_RENDER_FLAG: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
+
+/// Global println message queue
+static PRINTLN_QUEUE: std::sync::OnceLock<Mutex<Vec<String>>> = std::sync::OnceLock::new();
+
+/// Global mode switch request
+static MODE_SWITCH_REQUEST: std::sync::OnceLock<Mutex<Option<ModeSwitch>>> =
+    std::sync::OnceLock::new();
+
+/// Mode switch direction
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModeSwitch {
+    /// Switch to alternate screen (fullscreen)
+    EnterAltScreen,
+    /// Switch to inline mode
+    ExitAltScreen,
+}
+
+/// Initialize global state (called by App::run)
+fn init_global_state(render_flag: Arc<AtomicBool>) {
+    let _ = GLOBAL_RENDER_FLAG.set(render_flag);
+    let _ = PRINTLN_QUEUE.set(Mutex::new(Vec::new()));
+    let _ = MODE_SWITCH_REQUEST.set(Mutex::new(None));
+}
 
 /// Request a re-render from any thread.
 ///
@@ -44,9 +73,7 @@ pub fn request_render() {
 }
 
 /// Check if a render has been requested and reset the flag.
-///
-/// This is called by the main event loop to check for external render requests.
-pub fn take_render_request() -> bool {
+fn take_render_request() -> bool {
     if let Some(flag) = GLOBAL_RENDER_FLAG.get() {
         flag.swap(false, Ordering::SeqCst)
     } else {
@@ -54,10 +81,113 @@ pub fn take_render_request() -> bool {
     }
 }
 
-/// Initialize the global render flag (called by App::run)
-fn init_global_render_flag(flag: Arc<AtomicBool>) {
-    let _ = GLOBAL_RENDER_FLAG.set(flag);
+/// Print a message that persists above the UI (like Bubbletea's Println).
+///
+/// In inline mode, this clears the current UI, writes the message,
+/// and the UI is re-rendered below it. The message stays in terminal history.
+///
+/// In fullscreen mode, this is a no-op (messages are ignored, like Bubbletea).
+///
+/// # Example
+///
+/// ```ignore
+/// use rnk::println;
+///
+/// // In an input handler or background thread
+/// rnk::println("Task completed successfully!");
+/// rnk::println(format!("Downloaded {} files", count));
+/// ```
+pub fn println(message: impl std::fmt::Display) {
+    if let Some(queue) = PRINTLN_QUEUE.get() {
+        if let Ok(mut q) = queue.lock() {
+            q.push(message.to_string());
+        }
+    }
+    request_render();
 }
+
+/// Take all queued println messages
+fn take_println_messages() -> Vec<String> {
+    if let Some(queue) = PRINTLN_QUEUE.get() {
+        if let Ok(mut q) = queue.lock() {
+            std::mem::take(&mut *q)
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    }
+}
+
+/// Request to enter alternate screen mode (fullscreen).
+///
+/// This can be called from any thread. The mode switch happens
+/// on the next render cycle.
+///
+/// # Example
+///
+/// ```ignore
+/// use rnk::enter_alt_screen;
+///
+/// // Switch to fullscreen mode
+/// enter_alt_screen();
+/// ```
+pub fn enter_alt_screen() {
+    if let Some(req) = MODE_SWITCH_REQUEST.get() {
+        if let Ok(mut r) = req.lock() {
+            *r = Some(ModeSwitch::EnterAltScreen);
+        }
+    }
+    request_render();
+}
+
+/// Request to exit alternate screen mode (return to inline).
+///
+/// This can be called from any thread. The mode switch happens
+/// on the next render cycle.
+///
+/// # Example
+///
+/// ```ignore
+/// use rnk::exit_alt_screen;
+///
+/// // Return to inline mode
+/// exit_alt_screen();
+/// ```
+pub fn exit_alt_screen() {
+    if let Some(req) = MODE_SWITCH_REQUEST.get() {
+        if let Ok(mut r) = req.lock() {
+            *r = Some(ModeSwitch::ExitAltScreen);
+        }
+    }
+    request_render();
+}
+
+/// Take mode switch request if any
+fn take_mode_switch_request() -> Option<ModeSwitch> {
+    if let Some(req) = MODE_SWITCH_REQUEST.get() {
+        if let Ok(mut r) = req.lock() {
+            r.take()
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+/// Check if currently in alternate screen mode.
+///
+/// Returns `None` if no app is running.
+pub fn is_alt_screen() -> Option<bool> {
+    // This is set during render, so we need a global flag
+    ALT_SCREEN_STATE
+        .get()
+        .map(|flag| flag.load(Ordering::SeqCst))
+}
+
+/// Global alt screen state flag
+static ALT_SCREEN_STATE: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
 
 /// A handle for requesting renders from any thread.
 ///
@@ -87,6 +217,26 @@ impl RenderHandle {
     pub fn request_render(&self) {
         self.flag.store(true, Ordering::SeqCst);
     }
+
+    /// Print a message that persists above the UI
+    pub fn println(&self, message: impl std::fmt::Display) {
+        println(message);
+    }
+
+    /// Request to enter fullscreen mode
+    pub fn enter_alt_screen(&self) {
+        enter_alt_screen();
+    }
+
+    /// Request to exit fullscreen mode
+    pub fn exit_alt_screen(&self) {
+        exit_alt_screen();
+    }
+
+    /// Check if currently in fullscreen mode
+    pub fn is_alt_screen(&self) -> bool {
+        is_alt_screen().unwrap_or(false)
+    }
 }
 
 /// Get a render handle for cross-thread render requests.
@@ -98,28 +248,123 @@ pub fn render_handle() -> Option<RenderHandle> {
     })
 }
 
-// === End of global render trigger ===
+// === Application Options ===
 
-/// Application options
+/// Application options for configuring the renderer
 #[derive(Debug, Clone)]
 pub struct AppOptions {
-    /// Target frames per second
+    /// Target frames per second (default: 60)
     pub fps: u32,
-    /// Exit on Ctrl+C
+    /// Exit on Ctrl+C (default: true)
     pub exit_on_ctrl_c: bool,
-    /// Use alternate screen
+    /// Use alternate screen / fullscreen mode (default: false = inline mode)
+    ///
+    /// - `false` (default): Inline mode, like Ink and Bubbletea's default.
+    ///   Output appears at current cursor position and persists in terminal history.
+    ///
+    /// - `true`: Fullscreen mode, like vim or Bubbletea's `WithAltScreen()`.
+    ///   Uses alternate screen buffer, content is cleared on exit.
     pub alternate_screen: bool,
 }
 
 impl Default for AppOptions {
     fn default() -> Self {
         Self {
-            fps: 30,
+            fps: 60, // Bubbletea default
             exit_on_ctrl_c: true,
-            alternate_screen: true,
+            alternate_screen: false, // Inline mode by default (like Ink/Bubbletea)
         }
     }
 }
+
+// === App Builder ===
+
+/// Builder for configuring and running an application.
+///
+/// This provides a fluent API similar to Bubbletea's `WithXxx()` options.
+///
+/// # Example
+///
+/// ```ignore
+/// use rnk::prelude::*;
+///
+/// // Inline mode (default)
+/// render(my_app).run()?;
+///
+/// // Fullscreen mode
+/// render(my_app).fullscreen().run()?;
+///
+/// // Custom configuration
+/// render(my_app)
+///     .fullscreen()
+///     .fps(30)
+///     .exit_on_ctrl_c(false)
+///     .run()?;
+/// ```
+pub struct AppBuilder<F>
+where
+    F: Fn() -> Element,
+{
+    component: F,
+    options: AppOptions,
+}
+
+impl<F> AppBuilder<F>
+where
+    F: Fn() -> Element,
+{
+    /// Create a new app builder with default options (inline mode)
+    pub fn new(component: F) -> Self {
+        Self {
+            component,
+            options: AppOptions::default(),
+        }
+    }
+
+    /// Use fullscreen mode (alternate screen buffer).
+    ///
+    /// Like Bubbletea's `WithAltScreen()`.
+    pub fn fullscreen(mut self) -> Self {
+        self.options.alternate_screen = true;
+        self
+    }
+
+    /// Use inline mode (default).
+    ///
+    /// Output appears at current cursor position and persists in terminal history.
+    pub fn inline(mut self) -> Self {
+        self.options.alternate_screen = false;
+        self
+    }
+
+    /// Set the target frames per second.
+    ///
+    /// Default is 60 FPS.
+    pub fn fps(mut self, fps: u32) -> Self {
+        self.options.fps = fps;
+        self
+    }
+
+    /// Set whether to exit on Ctrl+C.
+    ///
+    /// Default is `true`.
+    pub fn exit_on_ctrl_c(mut self, exit: bool) -> Self {
+        self.options.exit_on_ctrl_c = exit;
+        self
+    }
+
+    /// Get the current options
+    pub fn options(&self) -> &AppOptions {
+        &self.options
+    }
+
+    /// Run the application
+    pub fn run(self) -> std::io::Result<()> {
+        App::with_options(self.component, self.options).run()
+    }
+}
+
+// === Application State ===
 
 /// Application state
 pub struct App<F>
@@ -133,6 +378,7 @@ where
     options: AppOptions,
     should_exit: Arc<AtomicBool>,
     needs_render: Arc<AtomicBool>,
+    alt_screen_state: Arc<AtomicBool>,
     /// Lines of static content that have been committed
     static_lines: Vec<String>,
     /// Last known terminal width (for detecting width decreases)
@@ -145,7 +391,7 @@ impl<F> App<F>
 where
     F: Fn() -> Element,
 {
-    /// Create a new app with default options
+    /// Create a new app with default options (inline mode)
     pub fn new(component: F) -> Self {
         Self::with_options(component, AppOptions::default())
     }
@@ -153,13 +399,16 @@ where
     /// Create a new app with custom options
     pub fn with_options(component: F, options: AppOptions) -> Self {
         let needs_render = Arc::new(AtomicBool::new(true));
+        let alt_screen_state = Arc::new(AtomicBool::new(options.alternate_screen));
         let hook_context = Rc::new(RefCell::new(HookContext::new()));
 
         // Set up render callback
         let needs_render_clone = needs_render.clone();
-        hook_context.borrow_mut().set_render_callback(Rc::new(move || {
-            needs_render_clone.store(true, Ordering::SeqCst);
-        }));
+        hook_context
+            .borrow_mut()
+            .set_render_callback(Rc::new(move || {
+                needs_render_clone.store(true, Ordering::SeqCst);
+            }));
 
         // Get initial terminal size
         let (initial_width, initial_height) = Terminal::size().unwrap_or((80, 24));
@@ -172,6 +421,7 @@ where
             options,
             should_exit: Arc::new(AtomicBool::new(false)),
             needs_render,
+            alt_screen_state,
             static_lines: Vec::new(),
             last_width: initial_width,
             last_height: initial_height,
@@ -180,16 +430,19 @@ where
 
     /// Run the application
     pub fn run(&mut self) -> std::io::Result<()> {
-        use std::time::Instant;
+        use std::time::{Duration, Instant};
 
-        // Initialize global render flag for cross-thread render requests
-        init_global_render_flag(Arc::clone(&self.needs_render));
+        // Initialize global state for cross-thread communication
+        init_global_state(Arc::clone(&self.needs_render));
+        let _ = ALT_SCREEN_STATE.set(Arc::clone(&self.alt_screen_state));
 
-        // Enter terminal mode
+        // Enter terminal mode based on options
         if self.options.alternate_screen {
             self.terminal.enter()?;
+            self.alt_screen_state.store(true, Ordering::SeqCst);
         } else {
             self.terminal.enter_inline()?;
+            self.alt_screen_state.store(false, Ordering::SeqCst);
         }
 
         let frame_duration = Duration::from_millis(1000 / self.options.fps as u64);
@@ -213,7 +466,18 @@ where
                 self.needs_render.store(true, Ordering::SeqCst);
             }
 
-            // Throttle rendering - only render if needed or time elapsed
+            // Handle mode switch requests
+            if let Some(mode_switch) = take_mode_switch_request() {
+                self.handle_mode_switch(mode_switch)?;
+            }
+
+            // Handle println messages
+            let messages = take_println_messages();
+            if !messages.is_empty() {
+                self.handle_println_messages(&messages)?;
+            }
+
+            // Throttle rendering - only render if needed and time elapsed
             let now = Instant::now();
             let time_elapsed = now.duration_since(last_render) >= frame_duration;
             let render_requested = self.needs_render.load(Ordering::SeqCst);
@@ -229,11 +493,49 @@ where
         clear_input_handlers();
 
         // Exit terminal mode
-        if self.options.alternate_screen {
+        if self.terminal.is_alt_screen() {
             self.terminal.exit()?;
         } else {
             self.terminal.exit_inline()?;
         }
+
+        Ok(())
+    }
+
+    /// Handle mode switch request
+    fn handle_mode_switch(&mut self, mode_switch: ModeSwitch) -> std::io::Result<()> {
+        match mode_switch {
+            ModeSwitch::EnterAltScreen => {
+                if !self.terminal.is_alt_screen() {
+                    self.terminal.switch_to_alt_screen()?;
+                    self.alt_screen_state.store(true, Ordering::SeqCst);
+                    self.terminal.repaint();
+                }
+            }
+            ModeSwitch::ExitAltScreen => {
+                if self.terminal.is_alt_screen() {
+                    self.terminal.switch_to_inline()?;
+                    self.alt_screen_state.store(false, Ordering::SeqCst);
+                    self.terminal.repaint();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Handle println messages (like Bubbletea's Println)
+    fn handle_println_messages(&mut self, messages: &[String]) -> std::io::Result<()> {
+        // Println only works in inline mode
+        if self.terminal.is_alt_screen() {
+            return Ok(());
+        }
+
+        for message in messages {
+            self.terminal.println(message)?;
+        }
+
+        // Force repaint after println
+        self.terminal.repaint();
 
         Ok(())
     }
@@ -275,14 +577,14 @@ where
     /// When terminal width decreases, clears the screen to prevent rendering artifacts.
     /// This follows the same pattern as Ink and Bubbletea.
     fn handle_resize(&mut self, new_width: u16, new_height: u16) {
-        use crossterm::{execute, terminal::{Clear, ClearType}};
+        use crossterm::execute;
+        use crossterm::terminal::{Clear, ClearType};
         use std::io::stdout;
 
         // If width decreased, clear the screen to prevent artifacts
-        // This is necessary because content that was visible at the old width
-        // may now extend past the right edge
         if new_width < self.last_width {
             let _ = execute!(stdout(), Clear(ClearType::All));
+            self.terminal.repaint();
         }
 
         // Update tracked size
@@ -302,9 +604,7 @@ where
         set_app_context(Some(AppContext::new(self.should_exit.clone())));
 
         // Build element tree with hooks context
-        let root = with_hooks(self.hook_context.clone(), || {
-            (self.component)()
-        });
+        let root = with_hooks(self.hook_context.clone(), || (self.component)());
 
         // Clear app context after render
         set_app_context(None);
@@ -329,7 +629,10 @@ where
         self.layout_engine.compute(&dynamic_root, width, height);
 
         // Get the actual content size from layout
-        let root_layout = self.layout_engine.get_layout(dynamic_root.id).unwrap_or_default();
+        let root_layout = self
+            .layout_engine
+            .get_layout(dynamic_root.id)
+            .unwrap_or_default();
         let content_width = (root_layout.width as u16).max(1).min(width);
         let content_height = (root_layout.height as u16).max(1).min(height);
 
@@ -370,7 +673,7 @@ where
 
     /// Commit static content to the terminal (write permanently)
     fn commit_static_content(&mut self, new_lines: &[String]) -> std::io::Result<()> {
-        use std::io::{stdout, Write};
+        use std::io::{Write, stdout};
 
         let mut stdout = stdout();
         for line in new_lines {
@@ -388,7 +691,8 @@ where
         let mut new_element = element.clone();
 
         // Remove static children
-        new_element.children = element.children
+        new_element.children = element
+            .children
             .iter()
             .filter(|child| !child.style.is_static)
             .map(|child| self.filter_static_elements(child))
@@ -398,7 +702,14 @@ where
     }
 
     /// Render element to output buffer (helper for static content)
-    fn render_element_to_output(&self, element: &Element, engine: &LayoutEngine, output: &mut Output, offset_x: f32, offset_y: f32) {
+    fn render_element_to_output(
+        &self,
+        element: &Element,
+        engine: &LayoutEngine,
+        output: &mut Output,
+        offset_x: f32,
+        offset_y: f32,
+    ) {
         // Skip elements with display: none
         if element.style.display == crate::core::Display::None {
             return;
@@ -420,9 +731,11 @@ where
         }
 
         if let Some(text) = &element.text_content {
-            let text_x = x + if element.style.has_border() { 1 } else { 0 }
+            let text_x = x
+                + if element.style.has_border() { 1 } else { 0 }
                 + element.style.padding.left as u16;
-            let text_y = y + if element.style.has_border() { 1 } else { 0 }
+            let text_y = y
+                + if element.style.has_border() { 1 } else { 0 }
                 + element.style.padding.top as u16;
             output.write(text_x, text_y, text, &element.style);
         }
@@ -442,7 +755,10 @@ where
         }
 
         // Get layout for this element
-        let layout = self.layout_engine.get_layout(element.id).unwrap_or_default();
+        let layout = self
+            .layout_engine
+            .get_layout(element.id)
+            .unwrap_or_default();
 
         let x = (offset_x + layout.x) as u16;
         let y = (offset_y + layout.y) as u16;
@@ -460,10 +776,10 @@ where
         }
 
         // Render text content (simple or rich text with spans)
-        let text_x = x + if element.style.has_border() { 1 } else { 0 }
-            + element.style.padding.left as u16;
-        let text_y = y + if element.style.has_border() { 1 } else { 0 }
-            + element.style.padding.top as u16;
+        let text_x =
+            x + if element.style.has_border() { 1 } else { 0 } + element.style.padding.left as u16;
+        let text_y =
+            y + if element.style.has_border() { 1 } else { 0 } + element.style.padding.top as u16;
 
         if let Some(spans) = &element.spans {
             // Rich text with multiple spans
@@ -482,7 +798,15 @@ where
         }
     }
 
-    fn render_border(&self, element: &Element, output: &mut Output, x: u16, y: u16, width: u16, height: u16) {
+    fn render_border(
+        &self,
+        element: &Element,
+        output: &mut Output,
+        x: u16,
+        y: u16,
+        width: u16,
+        height: u16,
+    ) {
         let (tl, tr, bl, br, h, v) = element.style.border_style.chars();
 
         // Create base style for borders
@@ -523,7 +847,12 @@ where
                 output.write_char(col, bottom_y, h.chars().next().unwrap(), &bottom_style);
             }
             if width > 1 {
-                output.write_char(x + width - 1, bottom_y, br.chars().next().unwrap(), &bottom_style);
+                output.write_char(
+                    x + width - 1,
+                    bottom_y,
+                    br.chars().next().unwrap(),
+                    &bottom_style,
+                );
             }
         }
 
@@ -543,7 +872,13 @@ where
     }
 
     /// Render rich text spans
-    fn render_spans(&self, lines: &[crate::components::text::Line], output: &mut Output, start_x: u16, start_y: u16) {
+    fn render_spans(
+        &self,
+        lines: &[crate::components::text::Line],
+        output: &mut Output,
+        start_x: u16,
+        start_y: u16,
+    ) {
         for (line_idx, line) in lines.iter().enumerate() {
             let y = start_y + line_idx as u16;
             let mut x = start_x;
@@ -561,12 +896,63 @@ where
     }
 }
 
-/// Render a component to the terminal
-pub fn render<F>(component: F) -> std::io::Result<()>
+// === Public API Functions ===
+
+/// Create an app builder for configuring and running a component.
+///
+/// This is the main entry point for running an rnk application.
+/// Returns an `AppBuilder` that allows fluent configuration.
+///
+/// # Default Behavior
+///
+/// By default, the app runs in **inline mode** (like Ink and Bubbletea):
+/// - Output appears at the current cursor position
+/// - Content persists in terminal history after exit
+/// - Supports `println()` for persistent messages
+///
+/// # Examples
+///
+/// ```ignore
+/// use rnk::prelude::*;
+///
+/// // Inline mode (default)
+/// render(my_app).run()?;
+///
+/// // Fullscreen mode
+/// render(my_app).fullscreen().run()?;
+///
+/// // Custom configuration
+/// render(my_app)
+///     .fullscreen()
+///     .fps(30)
+///     .exit_on_ctrl_c(false)
+///     .run()?;
+/// ```
+pub fn render<F>(component: F) -> AppBuilder<F>
 where
     F: Fn() -> Element,
 {
-    App::new(component).run()
+    AppBuilder::new(component)
+}
+
+/// Run a component in inline mode (convenience function).
+///
+/// This is equivalent to `render(component).run()`.
+pub fn render_inline<F>(component: F) -> std::io::Result<()>
+where
+    F: Fn() -> Element,
+{
+    render(component).inline().run()
+}
+
+/// Run a component in fullscreen mode (convenience function).
+///
+/// This is equivalent to `render(component).fullscreen().run()`.
+pub fn render_fullscreen<F>(component: F) -> std::io::Result<()>
+where
+    F: Fn() -> Element,
+{
+    render(component).fullscreen().run()
 }
 
 #[cfg(test)]
@@ -576,8 +962,51 @@ mod tests {
     #[test]
     fn test_app_options_default() {
         let options = AppOptions::default();
-        assert_eq!(options.fps, 30);
+        assert_eq!(options.fps, 60); // Changed from 30 to 60 (Bubbletea default)
         assert!(options.exit_on_ctrl_c);
-        assert!(options.alternate_screen);
+        assert!(!options.alternate_screen); // Changed: inline mode by default
+    }
+
+    #[test]
+    fn test_app_builder_defaults() {
+        fn dummy() -> Element {
+            crate::components::Text::new("test").into_element()
+        }
+        let builder = AppBuilder::new(dummy);
+        assert!(!builder.options().alternate_screen);
+        assert_eq!(builder.options().fps, 60);
+    }
+
+    #[test]
+    fn test_app_builder_fullscreen() {
+        fn dummy() -> Element {
+            crate::components::Text::new("test").into_element()
+        }
+        let builder = AppBuilder::new(dummy).fullscreen();
+        assert!(builder.options().alternate_screen);
+    }
+
+    #[test]
+    fn test_app_builder_inline() {
+        fn dummy() -> Element {
+            crate::components::Text::new("test").into_element()
+        }
+        let builder = AppBuilder::new(dummy).fullscreen().inline();
+        assert!(!builder.options().alternate_screen);
+    }
+
+    #[test]
+    fn test_app_builder_fps() {
+        fn dummy() -> Element {
+            crate::components::Text::new("test").into_element()
+        }
+        let builder = AppBuilder::new(dummy).fps(30);
+        assert_eq!(builder.options().fps, 30);
+    }
+
+    #[test]
+    fn test_mode_switch_enum() {
+        assert_eq!(ModeSwitch::EnterAltScreen, ModeSwitch::EnterAltScreen);
+        assert_ne!(ModeSwitch::EnterAltScreen, ModeSwitch::ExitAltScreen);
     }
 }

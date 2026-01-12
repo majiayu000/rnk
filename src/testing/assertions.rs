@@ -3,9 +3,9 @@
 //! Provides convenient assertion macros and functions for verifying
 //! layout and rendering correctness.
 
+use super::renderer::{TestRenderer, display_width};
 use crate::core::Element;
 use crate::layout::Layout;
-use super::renderer::{TestRenderer, display_width};
 
 /// Assert that an element renders to the expected plain text
 pub fn assert_renders_to(element: &Element, expected: &str) {
@@ -28,7 +28,8 @@ pub fn assert_renders_containing(element: &Element, expected: &str) {
     assert!(
         output.contains(expected),
         "\nExpected output to contain:\n{}\n\nActual output:\n{}\n",
-        expected, output
+        expected,
+        output
     );
 }
 
@@ -118,7 +119,9 @@ impl ElementAssertions for Element {
 
     fn assert_dimensions(&self, width: f32, height: f32) {
         let renderer = TestRenderer::standard();
-        let layout = renderer.get_layout(self).expect("Element should have layout");
+        let layout = renderer
+            .get_layout(self)
+            .expect("Element should have layout");
         assert_layout_dimensions(&layout, width, height);
     }
 }

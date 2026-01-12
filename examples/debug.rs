@@ -1,7 +1,7 @@
 //! Debug example - prints layout info without terminal features
 
-use rnk::prelude::*;
 use rnk::layout::LayoutEngine;
+use rnk::prelude::*;
 use rnk::renderer::Output;
 
 fn main() {
@@ -12,7 +12,7 @@ fn main() {
             Text::new("Hello, Tink!")
                 .color(Color::Green)
                 .bold()
-                .into_element()
+                .into_element(),
         )
         .into_element();
 
@@ -33,7 +33,13 @@ fn main() {
     println!("{}", output.render());
 }
 
-fn render_element(element: &Element, engine: &LayoutEngine, output: &mut Output, offset_x: f32, offset_y: f32) {
+fn render_element(
+    element: &Element,
+    engine: &LayoutEngine,
+    output: &mut Output,
+    offset_x: f32,
+    offset_y: f32,
+) {
     use rnk::layout::Layout;
 
     let layout = engine.get_layout(element.id).unwrap_or(Layout::default());
@@ -71,7 +77,12 @@ fn render_element(element: &Element, engine: &LayoutEngine, output: &mut Output,
                 output.write_char(col, bottom_y, h.chars().next().unwrap(), &border_style);
             }
             if width > 1 {
-                output.write_char(x + width - 1, bottom_y, br.chars().next().unwrap(), &border_style);
+                output.write_char(
+                    x + width - 1,
+                    bottom_y,
+                    br.chars().next().unwrap(),
+                    &border_style,
+                );
             }
         }
 
@@ -86,10 +97,10 @@ fn render_element(element: &Element, engine: &LayoutEngine, output: &mut Output,
 
     // Render text content
     if let Some(text) = &element.text_content {
-        let text_x = x + if element.style.has_border() { 1 } else { 0 }
-            + element.style.padding.left as u16;
-        let text_y = y + if element.style.has_border() { 1 } else { 0 }
-            + element.style.padding.top as u16;
+        let text_x =
+            x + if element.style.has_border() { 1 } else { 0 } + element.style.padding.left as u16;
+        let text_y =
+            y + if element.style.has_border() { 1 } else { 0 } + element.style.padding.top as u16;
         output.write(text_x, text_y, text, &element.style);
     }
 
@@ -106,10 +117,7 @@ fn print_element(element: &Element, indent: usize) {
     let spaces = " ".repeat(indent * 2);
     println!(
         "{}Element id={:?} type={:?} text={:?}",
-        spaces,
-        element.id,
-        element.element_type,
-        element.text_content
+        spaces, element.id, element.element_type, element.text_content
     );
     println!(
         "{}  border_style={:?} has_border={}",

@@ -8,22 +8,20 @@ use crossterm::{
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::watch;
 use unicode_width::UnicodeWidthChar;
 
-use rnk::layout::LayoutEngine;
-use rnk::prelude::{
-    Color, Display, Element, FlexDirection, Text,
-};
 use rnk::core::Style;
+use rnk::layout::LayoutEngine;
+use rnk::prelude::{Color, Display, Element, FlexDirection, Text};
 use rnk::renderer::Output;
 
 // Alias tink's Box to avoid conflict with std::boxed::Box
@@ -401,12 +399,12 @@ fn render_element_recursive(
     }
 
     // Calculate available width for text
-    let inner_x = x + if element.style.has_border() { 1 } else { 0 } + element.style.padding.left as u16;
-    let inner_y = y + if element.style.has_border() { 1 } else { 0 } + element.style.padding.top as u16;
+    let inner_x =
+        x + if element.style.has_border() { 1 } else { 0 } + element.style.padding.left as u16;
+    let inner_y =
+        y + if element.style.has_border() { 1 } else { 0 } + element.style.padding.top as u16;
     let padding_h = (element.style.padding.left + element.style.padding.right) as u16;
-    let inner_width = w.saturating_sub(
-        if element.style.has_border() { 2 } else { 0 } + padding_h
-    );
+    let inner_width = w.saturating_sub(if element.style.has_border() { 2 } else { 0 } + padding_h);
 
     // Render text content with wrapping
     if let Some(text) = &element.text_content {
@@ -448,7 +446,12 @@ fn render_element_recursive(
                     element.style.clone()
                 };
 
-                output.write(inner_x, inner_y + line_offset + wrapped_idx as u16, wrapped_line, &span_style);
+                output.write(
+                    inner_x,
+                    inner_y + line_offset + wrapped_idx as u16,
+                    wrapped_line,
+                    &span_style,
+                );
             }
             line_offset += wrapped.len() as u16;
         }
@@ -483,17 +486,8 @@ fn render_banner() -> Element {
 fn render_user_message(text: &str) -> Element {
     TinkBox::new()
         .flex_direction(FlexDirection::Row)
-        .child(
-            Text::new("> ")
-                .color(Color::Yellow)
-                .bold()
-                .into_element(),
-        )
-        .child(
-            Text::new(text)
-                .color(Color::BrightWhite)
-                .into_element(),
-        )
+        .child(Text::new("> ").color(Color::Yellow).bold().into_element())
+        .child(Text::new(text).color(Color::BrightWhite).into_element())
         .into_element()
 }
 
@@ -501,17 +495,8 @@ fn render_user_message(text: &str) -> Element {
 fn render_tool_call(name: &str, args: &str) -> Element {
     TinkBox::new()
         .flex_direction(FlexDirection::Row)
-        .child(
-            Text::new("● ")
-                .color(Color::Magenta)
-                .into_element(),
-        )
-        .child(
-            Text::new(name)
-                .color(Color::Magenta)
-                .bold()
-                .into_element(),
-        )
+        .child(Text::new("● ").color(Color::Magenta).into_element())
+        .child(Text::new(name).color(Color::Magenta).bold().into_element())
         .child(
             Text::new(format!("(\"{}\")", args))
                 .color(Color::Magenta)
@@ -524,16 +509,8 @@ fn render_tool_call(name: &str, args: &str) -> Element {
 fn render_tool_result(result: &str) -> Element {
     TinkBox::new()
         .flex_direction(FlexDirection::Row)
-        .child(
-            Text::new("  ⎿ ")
-                .color(Color::Ansi256(245))
-                .into_element(),
-        )
-        .child(
-            Text::new(result)
-                .color(Color::Ansi256(245))
-                .into_element(),
-        )
+        .child(Text::new("  ⎿ ").color(Color::Ansi256(245)).into_element())
+        .child(Text::new(result).color(Color::Ansi256(245)).into_element())
         .into_element()
 }
 
@@ -542,25 +519,18 @@ fn render_thinking(text: &str) -> Element {
     let lines: Vec<&str> = text.lines().take(5).collect();
     let has_more = text.lines().count() > 5;
 
-    let mut container = TinkBox::new()
-        .flex_direction(FlexDirection::Column)
-        .child(
-            Text::new("● Thinking...")
-                .color(Color::Magenta)  // Pink/Magenta color
-                .into_element(),
-        );
+    let mut container = TinkBox::new().flex_direction(FlexDirection::Column).child(
+        Text::new("● Thinking...")
+            .color(Color::Magenta) // Pink/Magenta color
+            .into_element(),
+    );
 
     for line in lines {
         container = container.child(
             TinkBox::new()
                 .flex_direction(FlexDirection::Row)
                 .child(Text::new("  ").into_element())
-                .child(
-                    Text::new(line)
-                        .color(Color::Magenta)
-                        .dim()
-                        .into_element(),
-                )
+                .child(Text::new(line).color(Color::Magenta).dim().into_element())
                 .into_element(),
         );
     }
@@ -580,45 +550,26 @@ fn render_thinking(text: &str) -> Element {
 fn render_error(message: &str) -> Element {
     TinkBox::new()
         .flex_direction(FlexDirection::Row)
-        .child(
-            Text::new("● ")
-                .color(Color::Red)
-                .into_element(),
-        )
-        .child(
-            Text::new(message)
-                .color(Color::Red)
-                .into_element(),
-        )
+        .child(Text::new("● ").color(Color::Red).into_element())
+        .child(Text::new(message).color(Color::Red).into_element())
         .into_element()
 }
 
 fn render_prompt() -> Element {
     TinkBox::new()
         .flex_direction(FlexDirection::Row)
-        .child(
-            Text::new("> ")
-                .color(Color::Yellow)
-                .bold()
-                .into_element(),
-        )
+        .child(Text::new("> ").color(Color::Yellow).bold().into_element())
         .into_element()
 }
 
 fn render_goodbye() -> Element {
-    Text::new("Goodbye!")
-        .dim()
-        .into_element()
+    Text::new("Goodbye!").dim().into_element()
 }
 
 fn render_cancelled() -> Element {
     TinkBox::new()
         .flex_direction(FlexDirection::Row)
-        .child(
-            Text::new("● ")
-                .color(Color::Yellow)
-                .into_element(),
-        )
+        .child(Text::new("● ").color(Color::Yellow).into_element())
         .child(
             Text::new("Cancelled")
                 .color(Color::Yellow)
@@ -659,7 +610,10 @@ fn read_line_with_cjk() -> io::Result<String> {
 
     loop {
         if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
+            if let Event::Key(KeyEvent {
+                code, modifiers, ..
+            }) = event::read()?
+            {
                 match code {
                     KeyCode::Enter => {
                         // Print newline and exit
@@ -691,7 +645,8 @@ fn read_line_with_cjk() -> io::Result<String> {
                     }
                     KeyCode::Esc => {
                         // Clear input on Escape
-                        let total_width: usize = input.chars().map(|c| c.width().unwrap_or(1)).sum();
+                        let total_width: usize =
+                            input.chars().map(|c| c.width().unwrap_or(1)).sum();
                         for _ in 0..total_width {
                             print!("\x08 \x08");
                         }
@@ -733,7 +688,10 @@ impl Spinner {
             while running_clone.load(Ordering::Relaxed) {
                 // Check for ESC key
                 if event::poll(Duration::from_millis(80)).unwrap_or(false) {
-                    if let Ok(Event::Key(KeyEvent { code: KeyCode::Esc, .. })) = event::read() {
+                    if let Ok(Event::Key(KeyEvent {
+                        code: KeyCode::Esc, ..
+                    })) = event::read()
+                    {
                         let _ = cancel_tx_clone.send(true);
                         running_clone.store(false, Ordering::Relaxed);
                         break;
@@ -741,7 +699,10 @@ impl Spinner {
                 }
 
                 // Use ANSI codes for spinner
-                print!("\x1b[2K\r\x1b[33m{} {} \x1b[2m(ESC to cancel)\x1b[0m", frames[i], message);
+                print!(
+                    "\x1b[2K\r\x1b[33m{} {} \x1b[2m(ESC to cancel)\x1b[0m",
+                    frames[i], message
+                );
                 io::stdout().flush().unwrap();
                 i = (i + 1) % frames.len();
             }
@@ -908,7 +869,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         loop {
             let spinner = Spinner::new("Thinking...");
             let cancel_rx = spinner.get_cancel_receiver();
-            let result = send_request_cancellable(&client, &messages, &tools, &api_key, cancel_rx).await;
+            let result =
+                send_request_cancellable(&client, &messages, &tools, &api_key, cancel_rx).await;
             let was_cancelled = spinner.stop();
 
             // Handle cancellation

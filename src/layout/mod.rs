@@ -3,5 +3,5 @@
 mod engine;
 pub mod measure;
 
-pub use engine::{LayoutEngine, Layout};
-pub use measure::{measure_text, measure_text_width, wrap_text, truncate_text, TextAlign};
+pub use engine::{Layout, LayoutEngine};
+pub use measure::{TextAlign, measure_text, measure_text_width, truncate_text, wrap_text};

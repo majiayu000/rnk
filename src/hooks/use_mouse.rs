@@ -1,6 +1,6 @@
 //! Mouse input handling hook
 
-use crossterm::event::{MouseEvent, MouseEventKind, MouseButton as CrosstermMouseButton};
+use crossterm::event::{MouseButton as CrosstermMouseButton, MouseEvent, MouseEventKind};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -78,9 +78,15 @@ impl Mouse {
             x: event.column,
             y: event.row,
             action,
-            ctrl: event.modifiers.contains(crossterm::event::KeyModifiers::CONTROL),
-            shift: event.modifiers.contains(crossterm::event::KeyModifiers::SHIFT),
-            alt: event.modifiers.contains(crossterm::event::KeyModifiers::ALT),
+            ctrl: event
+                .modifiers
+                .contains(crossterm::event::KeyModifiers::CONTROL),
+            shift: event
+                .modifiers
+                .contains(crossterm::event::KeyModifiers::SHIFT),
+            alt: event
+                .modifiers
+                .contains(crossterm::event::KeyModifiers::ALT),
         }
     }
 

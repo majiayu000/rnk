@@ -329,7 +329,8 @@ pub fn use_scroll() -> ScrollHandle {
 
     // Use the hook API to get or create scroll state
     let storage = ctx_ref.use_hook(|| std::rc::Rc::new(RefCell::new(ScrollState::new())));
-    let state = storage.get::<std::rc::Rc<RefCell<ScrollState>>>()
+    let state = storage
+        .get::<std::rc::Rc<RefCell<ScrollState>>>()
         .expect("scroll state should be the correct type")
         .clone();
 
