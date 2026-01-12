@@ -19,10 +19,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 use unicode_width::UnicodeWidthChar;
 
-use rnk::core::Style;
-use rnk::layout::LayoutEngine;
-use rnk::prelude::{Color, Display, Element, FlexDirection, Text};
-use rnk::renderer::Output;
+use rnk::prelude::{Color, Element, FlexDirection, Text};
 
 // Alias tink's Box to avoid conflict with std::boxed::Box
 use rnk::prelude::Box as TinkBox;
@@ -216,253 +213,6 @@ fn search_recursive(
     }
 }
 
-// ===== Text Wrapping Helpers =====
-
-/// Wrap text to fit within max_width columns
-fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
-    if max_width == 0 {
-        return vec![text.to_string()];
-    }
-
-    let mut result = Vec::new();
-    let mut current_line = String::new();
-    let mut current_width = 0usize;
-
-    for ch in text.chars() {
-        let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
-
-        if ch == '\n' {
-            // Explicit newline - flush current line
-            result.push(current_line.clone());
-            current_line = String::new();
-            current_width = 0;
-        } else if current_width + ch_width > max_width {
-            // Need to wrap - first try to find a break point
-            if current_line.is_empty() {
-                // Character is too wide for a single line, just add it
-                current_line.push(ch);
-                current_width = ch_width;
-            } else {
-                // Push current line and start new one
-                result.push(current_line.clone());
-                current_line = ch.to_string();
-                current_width = ch_width;
-            }
-        } else {
-            current_line.push(ch);
-            current_width += ch_width;
-        }
-    }
-
-    if !current_line.is_empty() {
-        result.push(current_line);
-    }
-
-    if result.is_empty() {
-        result.push(String::new());
-    }
-
-    result
-}
-
-// ===== Rendering =====
-
-/// Calculate the actual height needed for an element, considering text wrapping
-fn calculate_element_height(element: &Element, max_width: u16) -> u16 {
-    let mut height = 1u16;
-    let available_width = if element.style.has_border() {
-        max_width.saturating_sub(2)
-    } else {
-        max_width
-    };
-    let padding_h = (element.style.padding.left + element.style.padding.right) as u16;
-    let available_width = available_width.saturating_sub(padding_h);
-
-    // Check for multiline spans with wrapping
-    if let Some(lines) = &element.spans {
-        let mut total_lines = 0usize;
-        for line in lines {
-            // Reconstruct the full line text and calculate wrapped height
-            let line_text: String = line.spans.iter().map(|s| s.content.as_str()).collect();
-            let wrapped = wrap_text(&line_text, available_width as usize);
-            total_lines += wrapped.len();
-        }
-        height = height.max(total_lines as u16);
-    }
-
-    // Check text_content with wrapping
-    if let Some(text) = &element.text_content {
-        let wrapped = wrap_text(text, available_width as usize);
-        height = height.max(wrapped.len() as u16);
-    }
-
-    // Recursively check children and accumulate height for column layout
-    let mut child_height_sum = 0u16;
-    for child in &element.children {
-        let child_height = calculate_element_height(child, max_width);
-        child_height_sum += child_height;
-    }
-
-    // Use child height sum if we have children
-    if !element.children.is_empty() {
-        height = height.max(child_height_sum);
-    }
-
-    height
-}
-
-/// Render a single text span at position, handling wrapping
-fn render_text_span(
-    output: &mut Output,
-    text: &str,
-    x: u16,
-    y: u16,
-    max_width: u16,
-    style: &Style,
-) {
-    let wrapped_lines = wrap_text(text, max_width as usize);
-    for (i, line) in wrapped_lines.iter().enumerate() {
-        output.write(x, y + i as u16, line, style);
-    }
-}
-
-/// Main render-to-string function
-fn render_to_string(element: &Element, width: u16) -> String {
-    let mut engine = LayoutEngine::new();
-    engine.compute(element, width, 100);
-
-    // Calculate actual height considering text wrapping
-    let height = calculate_element_height(element, width);
-
-    let mut output = Output::new(width, height);
-    render_element_recursive(element, &engine, &mut output, 0.0, 0.0, width);
-    output.render()
-}
-
-/// Recursively render element tree
-fn render_element_recursive(
-    element: &Element,
-    engine: &LayoutEngine,
-    output: &mut Output,
-    offset_x: f32,
-    offset_y: f32,
-    container_width: u16,
-) {
-    if element.style.display == Display::None {
-        return;
-    }
-
-    let layout = match engine.get_layout(element.id) {
-        Some(l) => l,
-        None => return,
-    };
-
-    let x = (offset_x + layout.x) as u16;
-    let y = (offset_y + layout.y) as u16;
-    let w = layout.width as u16;
-    let h = layout.height as u16;
-
-    // Background
-    if element.style.background_color.is_some() {
-        for row in 0..h {
-            output.write(x, y + row, &" ".repeat(w as usize), &element.style);
-        }
-    }
-
-    // Border
-    if element.style.has_border() {
-        let (tl, tr, bl, br, hz, vt) = element.style.border_style.chars();
-        let mut style = element.style.clone();
-
-        style.color = element.style.get_border_top_color();
-        output.write(
-            x,
-            y,
-            &format!("{}{}{}", tl, hz.repeat((w as usize).saturating_sub(2)), tr),
-            &style,
-        );
-
-        style.color = element.style.get_border_bottom_color();
-        output.write(
-            x,
-            y + h.saturating_sub(1),
-            &format!("{}{}{}", bl, hz.repeat((w as usize).saturating_sub(2)), br),
-            &style,
-        );
-
-        for row in 1..h.saturating_sub(1) {
-            style.color = element.style.get_border_left_color();
-            output.write(x, y + row, vt, &style);
-            style.color = element.style.get_border_right_color();
-            output.write(x + w.saturating_sub(1), y + row, vt, &style);
-        }
-    }
-
-    // Calculate available width for text
-    let inner_x =
-        x + if element.style.has_border() { 1 } else { 0 } + element.style.padding.left as u16;
-    let inner_y =
-        y + if element.style.has_border() { 1 } else { 0 } + element.style.padding.top as u16;
-    let padding_h = (element.style.padding.left + element.style.padding.right) as u16;
-    let inner_width = w.saturating_sub(if element.style.has_border() { 2 } else { 0 } + padding_h);
-
-    // Render text content with wrapping
-    if let Some(text) = &element.text_content {
-        render_text_span(output, text, inner_x, inner_y, inner_width, &element.style);
-    } else if let Some(lines) = &element.spans {
-        // Render rich text with spans and wrapping
-        let mut line_offset = 0u16;
-        for line in lines {
-            // Combine spans into a single line for wrapping calculation
-            let line_text: String = line.spans.iter().map(|s| s.content.as_str()).collect();
-            let wrapped = wrap_text(&line_text, inner_width as usize);
-
-            for (wrapped_idx, wrapped_line) in wrapped.iter().enumerate() {
-                // For simplicity, render the whole wrapped line with the first span's style
-                // (proper implementation would track character positions across spans)
-                let span_style = if !line.spans.is_empty() {
-                    let span = &line.spans[0];
-                    let mut style = element.style.clone();
-                    if span.style.color.is_some() {
-                        style.color = span.style.color;
-                    }
-                    if span.style.background_color.is_some() {
-                        style.background_color = span.style.background_color;
-                    }
-                    if span.style.bold {
-                        style.bold = true;
-                    }
-                    if span.style.italic {
-                        style.italic = true;
-                    }
-                    if span.style.dim {
-                        style.dim = true;
-                    }
-                    if span.style.underline {
-                        style.underline = true;
-                    }
-                    style
-                } else {
-                    element.style.clone()
-                };
-
-                output.write(
-                    inner_x,
-                    inner_y + line_offset + wrapped_idx as u16,
-                    wrapped_line,
-                    &span_style,
-                );
-            }
-            line_offset += wrapped.len() as u16;
-        }
-    }
-
-    // Recursively render children
-    for child in element.children.iter() {
-        render_element_recursive(child, engine, output, x as f32, y as f32, container_width);
-    }
-}
-
 // ===== Claude Code Style UI Components =====
 
 fn render_banner() -> Element {
@@ -581,15 +331,13 @@ fn render_cancelled() -> Element {
 
 // Print tink element to stdout (with newline)
 fn print_element(element: &Element) {
-    let (width, _) = crossterm::terminal::size().unwrap_or((80, 24));
-    let output = render_to_string(element, width);
+    let output = rnk::render_to_string_auto(element);
     println!("{}", output);
 }
 
 // Print tink element to stdout (without newline, for inline prompts)
 fn print_element_inline(element: &Element) {
-    let (width, _) = crossterm::terminal::size().unwrap_or((80, 24));
-    let output = render_to_string(element, width);
+    let output = rnk::render_to_string_auto(element);
     print!("{}", output);
 }
 
