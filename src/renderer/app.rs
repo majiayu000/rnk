@@ -15,6 +15,91 @@ use crate::hooks::use_mouse::{dispatch_mouse_event, is_mouse_enabled, clear_mous
 use crate::layout::LayoutEngine;
 use crate::renderer::{Output, Terminal};
 
+// === Global render trigger for cross-thread render requests ===
+
+/// Global render flag storage
+static GLOBAL_RENDER_FLAG: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
+
+/// Request a re-render from any thread.
+///
+/// This is useful when state is updated from a background thread
+/// and you need to notify the UI to refresh.
+///
+/// # Example
+///
+/// ```ignore
+/// use std::thread;
+/// use rnk::request_render;
+///
+/// // In a background thread
+/// thread::spawn(|| {
+///     // ... update some shared state ...
+///     request_render(); // Notify rnk to re-render
+/// });
+/// ```
+pub fn request_render() {
+    if let Some(flag) = GLOBAL_RENDER_FLAG.get() {
+        flag.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Check if a render has been requested and reset the flag.
+///
+/// This is called by the main event loop to check for external render requests.
+pub fn take_render_request() -> bool {
+    if let Some(flag) = GLOBAL_RENDER_FLAG.get() {
+        flag.swap(false, Ordering::SeqCst)
+    } else {
+        false
+    }
+}
+
+/// Initialize the global render flag (called by App::run)
+fn init_global_render_flag(flag: Arc<AtomicBool>) {
+    let _ = GLOBAL_RENDER_FLAG.set(flag);
+}
+
+/// A handle for requesting renders from any thread.
+///
+/// This is a cloneable, thread-safe handle that can be used to trigger
+/// re-renders from background threads or async tasks.
+///
+/// # Example
+///
+/// ```ignore
+/// use std::thread;
+/// use rnk::render_handle;
+///
+/// let handle = render_handle().expect("App must be running");
+///
+/// thread::spawn(move || {
+///     // ... do some work ...
+///     handle.request_render();
+/// });
+/// ```
+#[derive(Clone)]
+pub struct RenderHandle {
+    flag: Arc<AtomicBool>,
+}
+
+impl RenderHandle {
+    /// Request a re-render
+    pub fn request_render(&self) {
+        self.flag.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Get a render handle for cross-thread render requests.
+///
+/// Returns `None` if no app is currently running.
+pub fn render_handle() -> Option<RenderHandle> {
+    GLOBAL_RENDER_FLAG.get().map(|flag| RenderHandle {
+        flag: Arc::clone(flag),
+    })
+}
+
+// === End of global render trigger ===
+
 /// Application options
 #[derive(Debug, Clone)]
 pub struct AppOptions {
@@ -97,6 +182,9 @@ where
     pub fn run(&mut self) -> std::io::Result<()> {
         use std::time::Instant;
 
+        // Initialize global render flag for cross-thread render requests
+        init_global_render_flag(Arc::clone(&self.needs_render));
+
         // Enter terminal mode
         if self.options.alternate_screen {
             self.terminal.enter()?;
@@ -118,6 +206,11 @@ where
 
             if self.should_exit.load(Ordering::SeqCst) {
                 break;
+            }
+
+            // Check for external render requests (from other threads)
+            if take_render_request() {
+                self.needs_render.store(true, Ordering::SeqCst);
             }
 
             // Throttle rendering - only render if needed or time elapsed

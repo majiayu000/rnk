@@ -1,6 +1,6 @@
 [package]
 name = "rnk"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 description = "A React-like declarative terminal UI framework for Rust, inspired by Ink"
 license = "MIT"

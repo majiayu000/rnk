@@ -45,7 +45,7 @@ pub use crate::components::{
     Bar,
 };
 
-pub use crate::renderer::render;
+pub use crate::renderer::{render, request_render, render_handle, RenderHandle};
 
 pub use crate::hooks::{
     use_signal,

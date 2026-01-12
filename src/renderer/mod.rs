@@ -6,4 +6,4 @@ mod app;
 
 pub use output::Output;
 pub use terminal::Terminal;
-pub use app::{render, App, AppOptions};
+pub use app::{render, App, AppOptions, request_render, render_handle, RenderHandle};
