@@ -600,18 +600,83 @@ where
     fn render_element_to_string(&self, element: &Element, width: u16) -> String {
         // Create a temporary layout engine
         let mut engine = LayoutEngine::new();
-        engine.compute(element, width, 1000); // Use large height for static content
+
+        // Calculate actual height considering text wrapping
+        let height = self.calculate_element_height(element, width, &mut engine);
+
+        // Compute layout
+        engine.compute(element, width, height.max(1000));
 
         // Get layout dimensions
         let layout = engine.get_layout(element.id).unwrap_or_default();
         let content_width = (layout.width as u16).max(1).min(width);
-        let content_height = (layout.height as u16).max(1);
+        let content_height = height.max(1);
 
         // Render to output buffer
         let mut output = Output::new(content_width, content_height);
         self.render_element_to_output(element, &engine, &mut output, 0.0, 0.0);
 
         output.render()
+    }
+
+    /// Calculate the actual height needed for an element, considering text wrapping
+    fn calculate_element_height(
+        &self,
+        element: &Element,
+        max_width: u16,
+        _engine: &mut LayoutEngine,
+    ) -> u16 {
+        use crate::layout::measure::wrap_text;
+
+        let mut height = 1u16;
+
+        // Calculate available width for text
+        let available_width = if element.style.has_border() {
+            max_width.saturating_sub(2)
+        } else {
+            max_width
+        };
+        let padding_h = (element.style.padding.left + element.style.padding.right) as u16;
+        let available_width = available_width.saturating_sub(padding_h).max(1);
+
+        // Check for multiline spans with wrapping
+        if let Some(lines) = &element.spans {
+            let mut total_lines = 0usize;
+            for line in lines {
+                // Reconstruct the full line text and calculate wrapped height
+                let line_text: String = line.spans.iter().map(|s| s.content.as_str()).collect();
+                let wrapped = wrap_text(&line_text, available_width as usize);
+                total_lines += wrapped.len();
+            }
+            height = height.max(total_lines as u16);
+        }
+
+        // Check text_content with wrapping
+        if let Some(text) = &element.text_content {
+            let wrapped = wrap_text(text, available_width as usize);
+            height = height.max(wrapped.len() as u16);
+        }
+
+        // Add border height
+        if element.style.has_border() {
+            height = height.saturating_add(2);
+        }
+
+        // Add padding height
+        let padding_v = (element.style.padding.top + element.style.padding.bottom) as u16;
+        height = height.saturating_add(padding_v);
+
+        // Recursively check children and accumulate height for column layout
+        if !element.children.is_empty() {
+            let mut child_height_sum = 0u16;
+            for child in &element.children {
+                let child_height = self.calculate_element_height(child, max_width, _engine);
+                child_height_sum = child_height_sum.saturating_add(child_height);
+            }
+            height = height.max(child_height_sum);
+        }
+
+        height
     }
 
     fn handle_event(&mut self, event: Event) {

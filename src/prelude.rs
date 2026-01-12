@@ -13,9 +13,10 @@ pub use crate::core::{
 };
 
 pub use crate::components::{
-    Bar, BarChart, Box, Cell, Constraint, Gauge, Line, List, ListItem, ListState, Newline,
-    Progress, ProgressSymbols, Row, Scrollbar, ScrollbarSymbols, Spacer, Span, Sparkline, Static,
-    Tab, Table, TableState, Tabs, Text, Transform, static_output,
+    Bar, BarChart, Box, Cell, Constraint, Gauge, Line, List, ListItem, ListState, Message,
+    MessageRole, Newline, Progress, ProgressSymbols, Row, Scrollbar, ScrollbarSymbols, Spacer,
+    Span, Sparkline, Spinner, SpinnerBuilder, Static, Tab, Table, TableState, Tabs, Text,
+    ThinkingBlock, ToolCall, Transform, static_output,
 };
 
 // Rendering APIs
