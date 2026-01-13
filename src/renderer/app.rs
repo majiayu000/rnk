@@ -647,16 +647,22 @@ where
 
     /// Handle terminal resize events
     ///
-    /// When terminal width decreases, clears the screen to prevent rendering artifacts.
-    /// This follows the same pattern as Ink and Bubbletea.
+    /// Clears the screen on any resize to prevent rendering artifacts.
+    /// This is necessary because:
+    /// - Width decrease: old content from wider lines remains visible
+    /// - Height decrease: old content from taller layouts remains visible
+    /// - Height increase: old separator lines at fixed positions remain visible
     fn handle_resize(&mut self, new_width: u16, new_height: u16) {
         use crossterm::execute;
+        use crossterm::cursor::MoveTo;
         use crossterm::terminal::{Clear, ClearType};
         use std::io::stdout;
 
-        // If width decreased, clear the screen to prevent artifacts
-        if new_width < self.last_width {
-            let _ = execute!(stdout(), Clear(ClearType::All));
+        // Always clear on resize to prevent artifacts
+        // This is the safest approach and matches Ink/Bubbletea behavior
+        if new_width != self.last_width || new_height != self.last_height {
+            // Move to top and clear entire screen
+            let _ = execute!(stdout(), MoveTo(0, 0), Clear(ClearType::All));
             self.terminal.repaint();
         }
 
@@ -707,10 +713,20 @@ where
             .get_layout(dynamic_root.id)
             .unwrap_or_default();
         let content_width = (root_layout.width as u16).max(1).min(width);
-        let content_height = (root_layout.height as u16).max(1).min(height);
 
-        // Render to output buffer sized to content
-        let mut output = Output::new(content_width, content_height);
+        // In inline mode, always use full terminal height to enable fixed-bottom layouts
+        // This makes bottom-positioned elements stay at the bottom of the screen
+        // In fullscreen mode, use content height (already full-screen by nature)
+        let render_height = if self.terminal.is_alt_screen() {
+            // Fullscreen mode: use actual content height
+            (root_layout.height as u16).max(1).min(height)
+        } else {
+            // Inline mode: always use full terminal height for fixed-bottom layouts
+            height
+        };
+
+        // Render to output buffer
+        let mut output = Output::new(content_width, render_height);
         self.render_element(&dynamic_root, &mut output, 0.0, 0.0);
 
         // Write to terminal
