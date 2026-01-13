@@ -1,6 +1,7 @@
 //! Interactive Demo - Full working demo with keyboard input
 //!
 //! This demonstrates the complete tink feature set with real interactivity.
+//! Uses rnk's built-in render API for simplicity.
 //!
 //! Run with: cargo run --example interactive_demo
 
@@ -15,9 +16,7 @@ use crossterm::{
 };
 
 use rnk::core::Dimension;
-use rnk::layout::LayoutEngine;
 use rnk::prelude::*;
-use rnk::renderer::Output;
 
 /// Demo state
 struct DemoState {
@@ -245,100 +244,6 @@ fn render_help_popup(show: bool) -> Element {
         .into_element()
 }
 
-fn render_to_string(element: &Element, width: u16, height: u16) -> String {
-    let mut engine = LayoutEngine::new();
-    engine.compute(element, width, height);
-
-    let mut output = Output::new(width, height);
-    render_element(&element, &engine, &mut output, 0.0, 0.0);
-    output.render()
-}
-
-fn render_element(
-    element: &Element,
-    engine: &LayoutEngine,
-    output: &mut Output,
-    offset_x: f32,
-    offset_y: f32,
-) {
-    if element.style.display == Display::None {
-        return;
-    }
-
-    let layout = match engine.get_layout(element.id) {
-        Some(l) => l,
-        None => return,
-    };
-
-    let x = (offset_x + layout.x) as u16;
-    let y = (offset_y + layout.y) as u16;
-    let w = layout.width as u16;
-    let h = layout.height as u16;
-
-    // Background
-    if element.style.background_color.is_some() {
-        for row in 0..h {
-            output.write(x, y + row, &" ".repeat(w as usize), &element.style);
-        }
-    }
-
-    // Border
-    if element.style.has_border() {
-        let (tl, tr, bl, br, hz, vt) = element.style.border_style.chars();
-        let mut style = element.style.clone();
-
-        style.color = element.style.get_border_top_color();
-        output.write(
-            x,
-            y,
-            &format!("{}{}{}", tl, hz.repeat((w as usize).saturating_sub(2)), tr),
-            &style,
-        );
-
-        style.color = element.style.get_border_bottom_color();
-        output.write(
-            x,
-            y + h.saturating_sub(1),
-            &format!("{}{}{}", bl, hz.repeat((w as usize).saturating_sub(2)), br),
-            &style,
-        );
-
-        for row in 1..h.saturating_sub(1) {
-            style.color = element.style.get_border_left_color();
-            output.write(x, y + row, vt, &style);
-            style.color = element.style.get_border_right_color();
-            output.write(x + w.saturating_sub(1), y + row, vt, &style);
-        }
-    }
-
-    // Text - must account for border and padding
-    if let Some(text) = &element.text_content {
-        let text_x =
-            x + if element.style.has_border() { 1 } else { 0 } + element.style.padding.left as u16;
-        let text_y =
-            y + if element.style.has_border() { 1 } else { 0 } + element.style.padding.top as u16;
-        output.write(text_x, text_y, text, &element.style);
-    }
-
-    // Children - taffy already accounts for padding and border in child positions
-    let cx = offset_x + layout.x;
-    let cy = offset_y + layout.y;
-
-    for child in element.children.iter() {
-        if child.style.position == Position::Absolute {
-            render_element(
-                child,
-                engine,
-                output,
-                child.style.left.unwrap_or(0.0),
-                child.style.top.unwrap_or(0.0),
-            );
-        } else {
-            render_element(child, engine, output, cx, cy);
-        }
-    }
-}
-
 fn main() -> std::io::Result<()> {
     // Setup terminal
     terminal::enable_raw_mode()?;
@@ -350,11 +255,11 @@ fn main() -> std::io::Result<()> {
     // Main loop
     loop {
         // Get current terminal size (in case it changed)
-        let (width, height) = terminal::size()?;
+        let (width, _) = terminal::size()?;
 
-        // Render
+        // Render using rnk's built-in API
         let element = render_ui(&state);
-        let output = render_to_string(&element, width, height);
+        let output = rnk::render_to_string(&element, width);
 
         execute!(
             stdout,

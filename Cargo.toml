@@ -1,6 +1,6 @@
 [package]
 name = "rnk"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 rust-version = "1.85"
 description = "A React-like declarative terminal UI framework for Rust, inspired by Ink"
@@ -76,3 +76,7 @@ path = "examples/glm_chat_old.rs"
 [[example]]
 name = "render_api_demo"
 path = "examples/render_api_demo.rs"
+
+[[example]]
+name = "streaming_demo"
+path = "examples/streaming_demo.rs"

@@ -1,10 +1,9 @@
 //! Static demo - shows rendered output without terminal interaction
 //!
+//! This example uses rnk's built-in render API for simplicity.
 //! Run with: cargo run --example static_demo
 
-use rnk::layout::LayoutEngine;
 use rnk::prelude::*;
-use rnk::renderer::Output;
 
 fn main() {
     println!("=== Tink Static Demo ===\n");
@@ -36,7 +35,9 @@ fn demo_hello() {
         )
         .into_element();
 
-    render_static(&root, 20, 6);
+    // Use rnk's render API with specific width
+    let output = rnk::render_to_string(&root, 20);
+    println!("{}", output);
 }
 
 fn demo_styled_text() {
@@ -53,7 +54,8 @@ fn demo_styled_text() {
         .child(Text::new("Dimmed text").dim().into_element())
         .into_element();
 
-    render_static(&root, 20, 8);
+    let output = rnk::render_to_string(&root, 20);
+    println!("{}", output);
 }
 
 fn demo_nested() {
@@ -78,7 +80,8 @@ fn demo_nested() {
         .child(inner2)
         .into_element();
 
-    render_static(&root, 30, 8);
+    let output = rnk::render_to_string(&root, 30);
+    println!("{}", output);
 }
 
 fn demo_counter() {
@@ -104,97 +107,6 @@ fn demo_counter() {
         .child(Text::new("Press q to quit").dim().into_element())
         .into_element();
 
-    render_static(&root, 25, 10);
-}
-
-fn render_static(root: &Element, width: u16, height: u16) {
-    let mut engine = LayoutEngine::new();
-    engine.compute(root, width, height);
-
-    let mut output = Output::new(width, height);
-    render_element(root, &engine, &mut output, 0.0, 0.0);
-
-    println!("{}", output.render());
-}
-
-fn render_element(
-    element: &Element,
-    engine: &LayoutEngine,
-    output: &mut Output,
-    offset_x: f32,
-    offset_y: f32,
-) {
-    use rnk::layout::Layout;
-
-    let layout = engine.get_layout(element.id).unwrap_or(Layout::default());
-
-    let x = (offset_x + layout.x) as u16;
-    let y = (offset_y + layout.y) as u16;
-    let width = layout.width as u16;
-    let height = layout.height as u16;
-
-    // Render background
-    if element.style.background_color.is_some() {
-        output.fill_rect(x, y, width, height, ' ', &element.style);
-    }
-
-    // Render border
-    if element.style.has_border() {
-        let (tl, tr, bl, br, h, v) = element.style.border_style.chars();
-
-        let mut border_style = element.style.clone();
-        if let Some(border_color) = element.style.border_color {
-            border_style.color = Some(border_color);
-        }
-
-        if height > 0 {
-            output.write_char(x, y, tl.chars().next().unwrap(), &border_style);
-            for col in (x + 1)..(x + width.saturating_sub(1)) {
-                output.write_char(col, y, h.chars().next().unwrap(), &border_style);
-            }
-            if width > 1 {
-                output.write_char(x + width - 1, y, tr.chars().next().unwrap(), &border_style);
-            }
-        }
-
-        if height > 1 {
-            let bottom_y = y + height - 1;
-            output.write_char(x, bottom_y, bl.chars().next().unwrap(), &border_style);
-            for col in (x + 1)..(x + width.saturating_sub(1)) {
-                output.write_char(col, bottom_y, h.chars().next().unwrap(), &border_style);
-            }
-            if width > 1 {
-                output.write_char(
-                    x + width - 1,
-                    bottom_y,
-                    br.chars().next().unwrap(),
-                    &border_style,
-                );
-            }
-        }
-
-        for row in (y + 1)..(y + height.saturating_sub(1)) {
-            output.write_char(x, row, v.chars().next().unwrap(), &border_style);
-            if width > 1 {
-                output.write_char(x + width - 1, row, v.chars().next().unwrap(), &border_style);
-            }
-        }
-    }
-
-    // Render text
-    if let Some(text) = &element.text_content {
-        let text_x =
-            x + if element.style.has_border() { 1 } else { 0 } + element.style.padding.left as u16;
-        let text_y =
-            y + if element.style.has_border() { 1 } else { 0 } + element.style.padding.top as u16;
-        output.write(text_x, text_y, text, &element.style);
-    }
-
-    // Render children
-    let child_offset_x = offset_x + layout.x;
-    let child_offset_y = offset_y + layout.y;
-
-    for child in &element.children {
-        render_element(child, engine, output, child_offset_x, child_offset_y);
-    }
+    let output = rnk::render_to_string(&root, 25);
+    println!("{}", output);
 }

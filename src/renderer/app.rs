@@ -121,6 +121,9 @@ fn take_render_request() -> bool {
 ///
 /// In fullscreen mode, this is a no-op (messages are ignored, like Bubbletea).
 ///
+/// **Fallback behavior**: If no rnk app is running, the message is printed
+/// directly to stdout (using `render_to_string_auto` for Elements).
+///
 /// Supports both plain text and rendered elements:
 ///
 /// # Examples
@@ -142,11 +145,20 @@ fn take_render_request() -> bool {
 /// ```
 pub fn println(message: impl IntoPrintable) {
     if let Some(queue) = PRINTLN_QUEUE.get() {
+        // App is running, queue the message for the render loop
         if let Ok(mut q) = queue.lock() {
             q.push(message.into_printable());
         }
+        request_render();
+    } else {
+        // No app running, print directly as fallback
+        let printable = message.into_printable();
+        let output = match printable {
+            Printable::Text(text) => text,
+            Printable::Element(element) => render_to_string_auto(&element),
+        };
+        std::println!("{}", output);
     }
-    request_render();
 }
 
 /// Take all queued println messages
@@ -706,25 +718,39 @@ where
     }
 
     /// Extract static content from the element tree
+    ///
+    /// Only extracts content from Static elements that have actual children
+    /// (new items to render). Empty Static elements are skipped.
     fn extract_static_content(&self, element: &Element, width: u16) -> Vec<String> {
         let mut lines = Vec::new();
 
         if element.style.is_static {
-            // Render static element to get its content
-            let mut engine = LayoutEngine::new();
-            engine.compute(element, width, 100); // Use large height for static content
+            // Only render if the static element has children (new items)
+            // Empty Static elements mean all items have already been rendered
+            if !element.children.is_empty() {
+                // Render static element to get its content
+                let mut engine = LayoutEngine::new();
+                engine.compute(element, width, 100); // Use large height for static content
 
-            let layout = engine.get_layout(element.id).unwrap_or_default();
-            let mut output = Output::new(layout.width as u16, layout.height as u16);
-            self.render_element_to_output(element, &engine, &mut output, 0.0, 0.0);
+                let layout = engine.get_layout(element.id).unwrap_or_default();
+                // Ensure we have valid dimensions
+                let render_width = (layout.width as u16).max(1);
+                let render_height = (layout.height as u16).max(1);
+                let mut output = Output::new(render_width, render_height);
+                self.render_element_to_output(element, &engine, &mut output, 0.0, 0.0);
 
-            let rendered = output.render();
-            for line in rendered.lines() {
-                lines.push(line.to_string());
+                let rendered = output.render();
+                for line in rendered.lines() {
+                    // Skip empty lines to avoid clutter
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        lines.push(line.to_string());
+                    }
+                }
             }
         }
 
-        // Check children for static content
+        // Check children for static content (non-static elements might contain static children)
         for child in &element.children {
             lines.extend(self.extract_static_content(child, width));
         }
@@ -733,16 +759,32 @@ where
     }
 
     /// Commit static content to the terminal (write permanently)
+    ///
+    /// This follows the Ink/Bubbletea pattern:
+    /// 1. Clear the current dynamic UI
+    /// 2. Write the static content (which will persist)
+    /// 3. The dynamic UI will be re-rendered below
     fn commit_static_content(&mut self, new_lines: &[String]) -> std::io::Result<()> {
         use std::io::{Write, stdout};
 
+        // Skip if no lines to commit
+        if new_lines.is_empty() {
+            return Ok(());
+        }
+
+        // Clear current dynamic UI first (like Ink's log.clear())
+        self.terminal.clear()?;
+
         let mut stdout = stdout();
         for line in new_lines {
-            // Write the line and move to next line
-            writeln!(stdout, "{}", line)?;
+            // Write the line with erase-to-end-of-line to ensure clean output
+            writeln!(stdout, "{}\x1b[K", line)?;
             self.static_lines.push(line.clone());
         }
         stdout.flush()?;
+
+        // Force a full repaint of the dynamic UI
+        self.terminal.repaint();
 
         Ok(())
     }

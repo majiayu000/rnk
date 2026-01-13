@@ -1,5 +1,7 @@
 //! Complex Todo App Example - Demonstrates all tink features
 //!
+//! This example uses rnk's built-in render API for simplicity.
+//!
 //! Features demonstrated:
 //! - Box layout with flexbox (flexDirection, justifyContent, alignItems)
 //! - Text styling (colors, bold, italic, underline)
@@ -22,9 +24,7 @@ use std::rc::Rc;
 
 use rnk::core::Dimension;
 use rnk::hooks::{HookContext, with_hooks};
-use rnk::layout::LayoutEngine;
 use rnk::prelude::*;
-use rnk::renderer::Output;
 
 /// A single todo item
 #[derive(Clone, Debug)]
@@ -539,17 +539,9 @@ fn main() {
             .into_element()
     });
 
-    // Compute layout
-    let (width, height) = crossterm::terminal::size().unwrap_or((80, 24));
-    let mut engine = LayoutEngine::new();
-    engine.compute(&element, width, height);
-
-    // Render to output buffer
-    let mut output = Output::new(width, height);
-    render_element_recursive(&element, &engine, &mut output, 0.0, 0.0);
-
-    // Print the rendered output
-    print!("{}", output.render());
+    // Use rnk's built-in render API
+    let output = rnk::render_to_string_auto(&element);
+    print!("{}", output);
 
     println!("\n\n--- Demo Complete ---");
     println!("This example demonstrates ALL tink features:");
@@ -564,108 +556,4 @@ fn main() {
     println!("  - Spacer and Newline components");
     println!("  - Background colors");
     println!("  - Dimension::Percent for responsive sizing");
-}
-
-/// Recursively render elements to output
-fn render_element_recursive(
-    element: &Element,
-    engine: &LayoutEngine,
-    output: &mut Output,
-    offset_x: f32,
-    offset_y: f32,
-) {
-    // Skip hidden elements
-    if element.style.display == Display::None {
-        return;
-    }
-
-    let layout = match engine.get_layout(element.id) {
-        Some(l) => l,
-        None => return,
-    };
-
-    let x = (offset_x + layout.x) as u16;
-    let y = (offset_y + layout.y) as u16;
-    let w = layout.width as u16;
-    let h = layout.height as u16;
-
-    // Render background if set
-    if element.style.background_color.is_some() {
-        for row in 0..h {
-            let blank = " ".repeat(w as usize);
-            output.write(x, y + row, &blank, &element.style);
-        }
-    }
-
-    // Render border if set
-    if element.style.has_border() {
-        render_border(element, output, x, y, w, h);
-    }
-
-    // Render text content - must account for border and padding
-    if let Some(text) = &element.text_content {
-        let text_x =
-            x + if element.style.has_border() { 1 } else { 0 } + element.style.padding.left as u16;
-        let text_y =
-            y + if element.style.has_border() { 1 } else { 0 } + element.style.padding.top as u16;
-        output.write(text_x, text_y, text, &element.style);
-    }
-
-    // Calculate child offset - taffy already accounts for padding and border in child positions
-    let child_offset_x = offset_x + layout.x;
-    let child_offset_y = offset_y + layout.y;
-
-    // Render children
-    for child in element.children.iter() {
-        // Handle absolute positioning
-        if child.style.position == Position::Absolute {
-            let abs_x = child.style.left.unwrap_or(0.0);
-            let abs_y = child.style.top.unwrap_or(0.0);
-            render_element_recursive(child, engine, output, abs_x, abs_y);
-        } else {
-            render_element_recursive(child, engine, output, child_offset_x, child_offset_y);
-        }
-    }
-}
-
-/// Render element border
-fn render_border(element: &Element, output: &mut Output, x: u16, y: u16, w: u16, h: u16) {
-    if w < 2 || h < 2 {
-        return;
-    }
-
-    // BorderStyle::chars() returns (top_left, top_right, bottom_left, bottom_right, horizontal, vertical)
-    let chars = element.style.border_style.chars();
-    let (top_left, top_right, bottom_left, bottom_right, horizontal, vertical) = chars;
-
-    let mut style = element.style.clone();
-
-    // Top border
-    style.color = element.style.get_border_top_color();
-    let top = format!(
-        "{}{}{}",
-        top_left,
-        horizontal.repeat((w as usize).saturating_sub(2)),
-        top_right
-    );
-    output.write(x, y, &top, &style);
-
-    // Bottom border
-    style.color = element.style.get_border_bottom_color();
-    let bottom = format!(
-        "{}{}{}",
-        bottom_left,
-        horizontal.repeat((w as usize).saturating_sub(2)),
-        bottom_right
-    );
-    output.write(x, y + h - 1, &bottom, &style);
-
-    // Side borders
-    for row in 1..h.saturating_sub(1) {
-        style.color = element.style.get_border_left_color();
-        output.write(x, y + row, vertical, &style);
-
-        style.color = element.style.get_border_right_color();
-        output.write(x + w - 1, y + row, vertical, &style);
-    }
 }
