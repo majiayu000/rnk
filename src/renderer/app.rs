@@ -892,12 +892,43 @@ where
             output.write(text_x, text_y, text, &element.style);
         }
 
+        // Check if overflow clipping is needed for children
+        let needs_clip = element.style.overflow_x == crate::core::Overflow::Hidden
+            || element.style.overflow_x == crate::core::Overflow::Scroll
+            || element.style.overflow_y == crate::core::Overflow::Hidden
+            || element.style.overflow_y == crate::core::Overflow::Scroll;
+
+        // Calculate content area for clipping (inside border and padding)
+        let clip_x = x + if element.style.has_border() { 1 } else { 0 };
+        let clip_y = y + if element.style.has_border() { 1 } else { 0 };
+        let clip_width = width.saturating_sub(if element.style.has_border() { 2 } else { 0 });
+        let clip_height = height.saturating_sub(if element.style.has_border() { 2 } else { 0 });
+
+        // Apply clip region if overflow is hidden or scroll
+        if needs_clip && clip_width > 0 && clip_height > 0 {
+            output.clip(crate::renderer::output::ClipRegion {
+                x1: clip_x,
+                y1: clip_y,
+                x2: clip_x + clip_width,
+                y2: clip_y + clip_height,
+            });
+        }
+
         // Render children - Taffy already includes border/padding in child positions
-        let child_offset_x = offset_x + layout.x;
-        let child_offset_y = offset_y + layout.y;
+        // Apply scroll offset if element has scroll_offset set
+        let scroll_offset_x = element.scroll_offset_x.unwrap_or(0) as f32;
+        let scroll_offset_y = element.scroll_offset_y.unwrap_or(0) as f32;
+
+        let child_offset_x = offset_x + layout.x - scroll_offset_x;
+        let child_offset_y = offset_y + layout.y - scroll_offset_y;
 
         for child in &element.children {
             self.render_element(child, output, child_offset_x, child_offset_y);
+        }
+
+        // Remove clip region
+        if needs_clip && clip_width > 0 && clip_height > 0 {
+            output.unclip();
         }
     }
 

@@ -133,6 +133,10 @@ pub struct Element {
     pub spans: Option<Vec<Line>>,
     /// Key for reconciliation
     pub key: Option<String>,
+    /// Horizontal scroll offset (for overflow: scroll/hidden)
+    pub scroll_offset_x: Option<u16>,
+    /// Vertical scroll offset (for overflow: scroll/hidden)
+    pub scroll_offset_y: Option<u16>,
 }
 
 impl Clone for Element {
@@ -145,6 +149,8 @@ impl Clone for Element {
             text_content: self.text_content.clone(),
             spans: self.spans.clone(),
             key: self.key.clone(),
+            scroll_offset_x: self.scroll_offset_x,
+            scroll_offset_y: self.scroll_offset_y,
         }
     }
 }
@@ -160,6 +166,8 @@ impl Element {
             text_content: None,
             spans: None,
             key: None,
+            scroll_offset_x: None,
+            scroll_offset_y: None,
         }
     }
 
@@ -173,6 +181,8 @@ impl Element {
             text_content: None,
             spans: None,
             key: None,
+            scroll_offset_x: None,
+            scroll_offset_y: None,
         }
     }
 

@@ -11,6 +11,8 @@ pub struct Box {
     style: Style,
     children: Vec<Element>,
     key: Option<String>,
+    scroll_offset_x: Option<u16>,
+    scroll_offset_y: Option<u16>,
 }
 
 impl Box {
@@ -20,6 +22,8 @@ impl Box {
             style: Style::new(),
             children: Vec::new(),
             key: None,
+            scroll_offset_x: None,
+            scroll_offset_y: None,
         }
     }
 
@@ -339,6 +343,27 @@ impl Box {
         self
     }
 
+    // === Scroll Offset ===
+
+    /// Set horizontal scroll offset (for scrollable content)
+    pub fn scroll_offset_x(mut self, offset: u16) -> Self {
+        self.scroll_offset_x = Some(offset);
+        self
+    }
+
+    /// Set vertical scroll offset (for scrollable content)
+    pub fn scroll_offset_y(mut self, offset: u16) -> Self {
+        self.scroll_offset_y = Some(offset);
+        self
+    }
+
+    /// Set both scroll offsets
+    pub fn scroll_offset(mut self, x: u16, y: u16) -> Self {
+        self.scroll_offset_x = Some(x);
+        self.scroll_offset_y = Some(y);
+        self
+    }
+
     // === Positioning ===
 
     /// Set position type
@@ -396,6 +421,8 @@ impl Box {
         let mut element = Element::new(ElementType::Box);
         element.style = self.style;
         element.key = self.key;
+        element.scroll_offset_x = self.scroll_offset_x;
+        element.scroll_offset_y = self.scroll_offset_y;
         for child in self.children {
             element.add_child(child);
         }

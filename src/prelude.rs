@@ -14,9 +14,10 @@ pub use crate::core::{
 
 pub use crate::components::{
     Bar, BarChart, Box, Cell, Constraint, Gauge, Line, List, ListItem, ListState, Message,
-    MessageRole, Newline, Progress, ProgressSymbols, Row, Scrollbar, ScrollbarSymbols, Spacer,
-    Span, Sparkline, Spinner, SpinnerBuilder, Static, Tab, Table, TableState, Tabs, Text,
-    ThinkingBlock, ToolCall, Transform, static_output,
+    MessageRole, Newline, Progress, ProgressSymbols, Row, ScrollableBox, Scrollbar,
+    ScrollbarSymbols, Spacer, Span, Sparkline, Spinner, SpinnerBuilder, Static, Tab, Table,
+    TableState, Tabs, Text, ThinkingBlock, ToolCall, Transform, fixed_bottom_layout, static_output,
+    virtual_scroll_view,
 };
 
 // Rendering APIs
