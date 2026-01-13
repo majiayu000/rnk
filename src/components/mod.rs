@@ -15,6 +15,7 @@ mod static_output;
 mod table;
 mod tabs;
 pub mod text;
+mod text_input;
 mod transform;
 
 pub use barchart::{Bar, BarChart, BarChartOrientation};
@@ -32,4 +33,5 @@ pub use static_output::{Static, static_output};
 pub use table::{Cell, Constraint, Row, Table, TableState};
 pub use tabs::{Tab, Tabs};
 pub use text::{Line, Span, Text};
+pub use text_input::{TextInputHandle, TextInputOptions, TextInputState, use_text_input};
 pub use transform::Transform;
