@@ -1,6 +1,6 @@
-# Tink - Terminal Ink for Rust
+# rnk - React-like Terminal UI for Rust
 
-A terminal UI framework inspired by [ink](https://github.com/vadimdemedes/ink).
+A terminal UI framework inspired by [Ink](https://github.com/vadimdemedes/ink) and [Bubbletea](https://github.com/charmbracelet/bubbletea).
 
 ## Development Guidelines
 
@@ -17,7 +17,7 @@ cargo test --all-targets
 cargo test --test property_tests
 
 # Run a specific example
-cargo run --example interactive_demo
+cargo run --example counter
 ```
 
 ### Module Testing
@@ -88,7 +88,7 @@ src/
 ### Testing Infrastructure
 
 ```rust
-use tink::testing::{TestRenderer, assert_layout_valid, GoldenTest};
+use rnk::testing::{TestRenderer, assert_layout_valid, GoldenTest};
 
 // Layout validation
 let renderer = TestRenderer::new(80, 24);

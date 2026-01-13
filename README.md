@@ -59,15 +59,16 @@ fn main() -> std::io::Result<()> {
 }
 
 fn app() -> Element {
-    let count = use_signal(|| 0);
+    let count = use_signal(|| 0i32);
     let app = use_app();
 
-    use_input(move |event| {
-        match event.code {
-            KeyCode::Up => count.set(count.get() + 1),
-            KeyCode::Down => count.set(count.get() - 1),
-            KeyCode::Char('q') => app.exit(),
-            _ => {}
+    use_input(move |input, key| {
+        if input == "q" {
+            app.exit();
+        } else if key.up_arrow {
+            count.update(|c| *c += 1);
+        } else if key.down_arrow {
+            count.update(|c| *c -= 1);
         }
     });
 
@@ -151,8 +152,8 @@ Switch between modes at runtime:
 ```rust
 let app = use_app();
 
-use_input(move |event| {
-    if event.code == KeyCode::Char(' ') {
+use_input(move |input, _key| {
+    if input == " " {
         if rnk::is_alt_screen().unwrap_or(false) {
             rnk::exit_alt_screen();  // Switch to inline
         } else {
@@ -416,7 +417,7 @@ let value = count.get();
 count.set(value + 1);
 
 // Update with function
-count.update(|v| v + 1);
+count.update(|v| *v += 1);
 ```
 
 ### use_effect
@@ -445,28 +446,38 @@ use_effect(
 Keyboard input handling.
 
 ```rust
-use_input(move |event| {
-    match event.code {
-        KeyCode::Char('q') => { /* quit */ }
-        KeyCode::Enter => { /* submit */ }
-        KeyCode::Up => { /* move up */ }
-        KeyCode::Down => { /* move down */ }
-        _ => {}
+use_input(move |input, key| {
+    if input == "q" {
+        // quit
+    } else if key.return_key {
+        // submit
+    } else if key.up_arrow {
+        // move up
+    } else if key.down_arrow {
+        // move down
     }
 });
 ```
+
+**Key struct fields**:
+- `up_arrow`, `down_arrow`, `left_arrow`, `right_arrow`
+- `page_up`, `page_down`, `home`, `end`
+- `return_key`, `escape`, `tab`, `backspace`, `delete`
+- `ctrl`, `shift`, `alt` (modifier keys)
 
 ### use_mouse
 
 Mouse event handling.
 
 ```rust
-use_mouse(move |event| {
-    match event.kind {
-        MouseEventKind::Down(MouseButton::Left) => {
-            println!("Clicked at ({}, {})", event.column, event.row);
+use_mouse(move |mouse| {
+    match mouse.action {
+        MouseAction::Press(MouseButton::Left) => {
+            println!("Clicked at ({}, {})", mouse.x, mouse.y);
         }
-        MouseEventKind::Moved => { /* handle hover */ }
+        MouseAction::Move => { /* handle hover */ }
+        MouseAction::ScrollUp => { /* scroll up */ }
+        MouseAction::ScrollDown => { /* scroll down */ }
         _ => {}
     }
 });
@@ -477,13 +488,15 @@ use_mouse(move |event| {
 Focus management for form inputs.
 
 ```rust
-let (focused, set_focused) = use_focus(false);
-
-use_input(move |event| {
-    if event.code == KeyCode::Tab {
-        set_focused(!focused);
-    }
+let focus_state = use_focus(UseFocusOptions {
+    auto_focus: true,
+    is_active: true,
+    id: None,
 });
+
+if focus_state.is_focused {
+    // Component is focused
+}
 ```
 
 ### use_scroll
@@ -491,17 +504,26 @@ use_input(move |event| {
 Scroll state management.
 
 ```rust
-let scroll = use_scroll(items.len(), visible_height);
+let scroll = use_scroll();
 
-use_input(move |event| {
-    match event.code {
-        KeyCode::Up => scroll.scroll_up(),
-        KeyCode::Down => scroll.scroll_down(),
-        KeyCode::PageUp => scroll.page_up(),
-        KeyCode::PageDown => scroll.page_down(),
-        _ => {}
+// Configure content and viewport sizes
+scroll.set_content_size(100, 500);
+scroll.set_viewport_size(80, 20);
+
+use_input(move |_input, key| {
+    if key.up_arrow {
+        scroll.scroll_up(1);
+    } else if key.down_arrow {
+        scroll.scroll_down(1);
+    } else if key.page_up {
+        scroll.page_up();
+    } else if key.page_down {
+        scroll.page_down();
     }
 });
+
+// Get current scroll position
+let offset_y = scroll.offset_y();
 ```
 
 ### use_app
@@ -511,8 +533,8 @@ Application control.
 ```rust
 let app = use_app();
 
-use_input(move |event| {
-    if event.code == KeyCode::Char('q') {
+use_input(move |input, _key| {
+    if input == "q" {
         app.exit();  // Exit the application
     }
 });
@@ -612,29 +634,26 @@ fn test_component() {
 ## Running Examples
 
 ```bash
-# Interactive demo with keyboard input
-cargo run --example interactive_demo
+# Hello world
+cargo run --example hello
+
+# Interactive counter
+cargo run --example counter
 
 # Streaming output demo
 cargo run --example streaming_demo
 
-# Counter example
-cargo run --example counter
+# Static rendering API demo
+cargo run --example render_api_demo
 
-# Hello world
-cargo run --example hello
-
-# Static rendering demo
-cargo run --example static_demo
-
-# Todo app (comprehensive demo)
-cargo run --example todo_app
+# GLM chat demo
+cargo run --example glm_chat
 ```
 
 ## Architecture
 
 ```
-rnk/
+src/
 ├── components/     # UI components (Box, Text, List, etc.)
 ├── core/           # Element, Style, Color primitives
 ├── hooks/          # React-like hooks (use_signal, use_effect, etc.)
@@ -651,9 +670,9 @@ rnk/
 | Rendering | Line-level diff | Line-level diff | Line-level diff |
 | Layout | Flexbox (Taffy) | Flexbox (Yoga) | Manual |
 | State | Hooks | React hooks | Model-Update |
-| Inline mode | ✅ | ✅ | ✅ |
-| Fullscreen | ✅ | ✅ | ✅ |
-| Println | ✅ | Static component | tea.Println |
+| Inline mode | ✓ | ✓ | ✓ |
+| Fullscreen | ✓ | ✓ | ✓ |
+| Println | ✓ | Static component | tea.Println |
 | Cross-thread | request_render() | - | tea.Program.Send |
 
 ## License
