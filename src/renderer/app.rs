@@ -730,7 +730,13 @@ where
         self.render_element(&dynamic_root, &mut output, 0.0, 0.0);
 
         // Write to terminal
-        self.terminal.render(&output.render())
+        // Use render_fixed_height for inline mode to preserve line count consistency
+        let rendered = if self.terminal.is_alt_screen() {
+            output.render()
+        } else {
+            output.render_fixed_height()
+        };
+        self.terminal.render(&rendered)
     }
 
     /// Extract static content from the element tree
@@ -1179,18 +1185,22 @@ impl RenderHelper {
     fn render_element_to_string_impl(&self, element: &Element, width: u16, trim: bool) -> String {
         let mut engine = LayoutEngine::new();
 
-        // Calculate actual content width
-        let content_width = self.calculate_content_width(element).min(width);
+        // Use the passed width directly for layout computation
+        // This respects the caller's intended width (e.g., terminal width)
+        let layout_width = width;
 
         // Calculate actual height considering text wrapping
-        let height = self.calculate_element_height(element, content_width, &mut engine);
+        let height = self.calculate_element_height(element, layout_width, &mut engine);
 
-        // Compute layout with content width
-        engine.compute(element, content_width, height.max(1000));
+        // Compute layout with the specified width
+        engine.compute(element, layout_width, height.max(1000));
 
-        // Get layout dimensions
-        let layout = engine.get_layout(element.id).unwrap_or_default();
-        let render_width = (layout.width as u16).max(1).min(content_width);
+        // Get layout dimensions (layout is used to confirm computation completed)
+        let _layout = engine.get_layout(element.id).unwrap_or_default();
+        // IMPORTANT: Use the full layout_width for the output buffer, not the computed root width.
+        // Taffy computes child positions relative to the container width (layout_width),
+        // so we need the output buffer to match this width for correct positioning.
+        let render_width = layout_width;
         let content_height = height.max(1);
 
         // Render to output buffer
@@ -1213,6 +1223,11 @@ impl RenderHelper {
 
     fn calculate_content_width(&self, element: &Element) -> u16 {
         use unicode_width::UnicodeWidthStr;
+
+        // If element has explicit width set, use it
+        if let crate::core::Dimension::Points(w) = element.style.width {
+            return w as u16;
+        }
 
         let mut width = 0u16;
 

@@ -305,6 +305,63 @@ impl Output {
         lines.join("\r\n")
     }
 
+    /// Convert the buffer to a string, preserving all lines (including empty trailing lines)
+    ///
+    /// This is useful for inline mode rendering where cursor positioning depends on
+    /// consistent line counts between frames. Use `render()` for normal rendering
+    /// that strips trailing empty lines.
+    pub fn render_fixed_height(&self) -> String {
+        let mut lines: Vec<String> = Vec::new();
+
+        for row in self.grid.iter() {
+            let mut last_content_idx = 0;
+            for (i, cell) in row.iter().enumerate() {
+                if cell.ch != '\0' && (cell.ch != ' ' || cell.has_style()) {
+                    last_content_idx = i + 1;
+                }
+            }
+
+            let mut line = String::new();
+            let mut current_style: Option<StyledChar> = None;
+
+            for (i, cell) in row.iter().enumerate() {
+                if i >= last_content_idx {
+                    break;
+                }
+
+                if cell.ch == '\0' {
+                    continue;
+                }
+
+                let need_style_change = match &current_style {
+                    None => cell.has_style(),
+                    Some(prev) => !cell.same_style(prev),
+                };
+
+                if need_style_change {
+                    if current_style.is_some() {
+                        line.push_str("\x1b[0m");
+                    }
+                    self.apply_style(&mut line, cell);
+                    current_style = Some(cell.clone());
+                }
+
+                line.push(cell.ch);
+            }
+
+            if current_style.is_some() {
+                line.push_str("\x1b[0m");
+            }
+
+            lines.push(line);
+        }
+
+        // NOTE: Unlike render(), we do NOT strip trailing empty lines here
+        // This preserves the exact line count for fixed-height layouts
+
+        lines.join("\r\n")
+    }
+
     fn apply_style(&self, result: &mut String, cell: &StyledChar) {
         let mut codes: Vec<u8> = Vec::new();
 
