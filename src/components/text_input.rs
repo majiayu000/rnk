@@ -2,7 +2,7 @@
 
 use crate::components::{Box, Text};
 use crate::core::{Color, Element, FlexDirection};
-use crate::hooks::{use_focus, use_input, use_signal, FocusState, UseFocusOptions};
+use crate::hooks::{FocusState, UseFocusOptions, use_focus, use_input, use_signal};
 
 /// A single-line text input component
 ///
@@ -46,7 +46,7 @@ impl TextInputState {
     /// Set the value
     pub fn set_value(&mut self, value: impl Into<String>) {
         self.value = value.into();
-        self.cursor = self.value.len();
+        self.cursor = self.value.chars().count();
     }
 
     /// Clear the input
@@ -268,7 +268,10 @@ impl TextInputHandle {
             String::new()
         } else if options.mask {
             // Mask the input
-            options.mask_char.to_string().repeat(state.value.len())
+            options
+                .mask_char
+                .to_string()
+                .repeat(state.value.chars().count())
         } else {
             state.value.clone()
         };
@@ -280,7 +283,11 @@ impl TextInputHandle {
             let before: String = before.iter().collect();
             let after: String = after.iter().collect();
 
-            let cursor_char = if after.is_empty() { ' ' } else { after.chars().next().unwrap_or(' ') };
+            let cursor_char = if after.is_empty() {
+                ' '
+            } else {
+                after.chars().next().unwrap_or(' ')
+            };
             let after_cursor: String = after.chars().skip(1).collect();
 
             let cursor_color = options.cursor_color.unwrap_or(Color::Yellow);
@@ -399,7 +406,7 @@ pub fn use_text_input(options: TextInputOptions) -> TextInputHandle {
             // Insert regular characters
             if !input.is_empty() {
                 state.update(|s| {
-                    if max_length == 0 || s.value.len() < max_length {
+                    if max_length == 0 || s.value.chars().count() < max_length {
                         s.insert_str(input);
                     }
                 });

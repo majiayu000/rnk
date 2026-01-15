@@ -139,6 +139,15 @@ pub struct Element {
     pub scroll_offset_y: Option<u16>,
 }
 
+/// Clone implementation for Element.
+///
+/// **Important**: Cloning an Element creates a new unique ID for the clone.
+/// This is intentional because each element in the UI tree must have a unique
+/// identity for proper reconciliation and layout tracking.
+///
+/// If you need to compare elements by content rather than identity, compare
+/// their individual fields (text_content, children, style, etc.) instead of
+/// using the id field.
 impl Clone for Element {
     fn clone(&self) -> Self {
         Self {
@@ -290,5 +299,18 @@ mod tests {
             .filter_map(|e| e.get_text())
             .collect();
         assert_eq!(texts, vec!["A", "B"]);
+    }
+
+    #[test]
+    fn test_clone_creates_new_id() {
+        let original = Element::text("Hello");
+        let cloned = original.clone();
+
+        // Clone should have different ID
+        assert_ne!(original.id, cloned.id);
+
+        // But same content
+        assert_eq!(original.get_text(), cloned.get_text());
+        assert_eq!(original.element_type, cloned.element_type);
     }
 }
