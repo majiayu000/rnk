@@ -368,6 +368,9 @@ impl Terminal {
 
         stdout.flush()?;
 
+        // Mark for repaint to ensure clean render after println
+        self.repaint();
+
         Ok(())
     }
 
@@ -475,12 +478,7 @@ impl Terminal {
 
                 // Always clear and rewrite (more robust, slight perf cost)
                 if old_line != Some(new_line) {
-                    write!(
-                        stdout,
-                        "{}{}",
-                        ansi::erase_line(),
-                        new_line
-                    )?;
+                    write!(stdout, "{}{}", ansi::erase_line(), new_line)?;
                 }
             } else {
                 // Clear extra lines from previous render

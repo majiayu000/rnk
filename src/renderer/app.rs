@@ -9,9 +9,10 @@
 
 use crossterm::event::Event;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::core::Element;
 use crate::hooks::context::{HookContext, with_hooks};
@@ -21,10 +22,26 @@ use crate::hooks::use_mouse::{clear_mouse_handlers, dispatch_mouse_event, is_mou
 use crate::layout::LayoutEngine;
 use crate::renderer::{Output, Terminal};
 
-// === Global state for cross-thread communication ===
+// === App runtime + registry ===
 
-/// Global render flag storage for cross-thread render requests
-static GLOBAL_RENDER_FLAG: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct AppId(u64);
+
+impl AppId {
+    fn new() -> Self {
+        Self(APP_ID_COUNTER.fetch_add(1, Ordering::SeqCst))
+    }
+
+    fn from_raw(raw: u64) -> Option<Self> {
+        if raw == 0 { None } else { Some(Self(raw)) }
+    }
+
+    fn raw(self) -> u64 {
+        self.0
+    }
+}
+
+static APP_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Printable content that can be sent to println
 #[derive(Clone)]
@@ -59,12 +76,13 @@ impl IntoPrintable for Element {
     }
 }
 
-/// Global println message queue
-static PRINTLN_QUEUE: std::sync::OnceLock<Mutex<Vec<Printable>>> = std::sync::OnceLock::new();
-
-/// Global mode switch request
-static MODE_SWITCH_REQUEST: std::sync::OnceLock<Mutex<Option<ModeSwitch>>> =
-    std::sync::OnceLock::new();
+pub trait AppSink: Send + Sync {
+    fn request_render(&self);
+    fn println(&self, message: Printable);
+    fn enter_alt_screen(&self);
+    fn exit_alt_screen(&self);
+    fn is_alt_screen(&self) -> bool;
+}
 
 /// Mode switch direction
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,11 +93,143 @@ pub enum ModeSwitch {
     ExitAltScreen,
 }
 
-/// Initialize global state (called by App::run)
-fn init_global_state(render_flag: Arc<AtomicBool>) {
-    let _ = GLOBAL_RENDER_FLAG.set(render_flag);
-    let _ = PRINTLN_QUEUE.set(Mutex::new(Vec::new()));
-    let _ = MODE_SWITCH_REQUEST.set(Mutex::new(None));
+struct AppRuntime {
+    id: AppId,
+    render_flag: Arc<AtomicBool>,
+    println_queue: Mutex<Vec<Printable>>,
+    mode_switch_request: Mutex<Option<ModeSwitch>>,
+    alt_screen_state: Arc<AtomicBool>,
+}
+
+impl AppRuntime {
+    fn new(alternate_screen: bool) -> Arc<Self> {
+        Arc::new(Self {
+            id: AppId::new(),
+            render_flag: Arc::new(AtomicBool::new(true)),
+            println_queue: Mutex::new(Vec::new()),
+            mode_switch_request: Mutex::new(None),
+            alt_screen_state: Arc::new(AtomicBool::new(alternate_screen)),
+        })
+    }
+
+    fn id(&self) -> AppId {
+        self.id
+    }
+
+    fn set_alt_screen_state(&self, value: bool) {
+        self.alt_screen_state.store(value, Ordering::SeqCst);
+    }
+
+    fn render_requested(&self) -> bool {
+        self.render_flag.load(Ordering::SeqCst)
+    }
+
+    fn clear_render_request(&self) {
+        self.render_flag.store(false, Ordering::SeqCst);
+    }
+
+    fn take_mode_switch_request(&self) -> Option<ModeSwitch> {
+        match self.mode_switch_request.lock() {
+            Ok(mut request) => request.take(),
+            Err(poisoned) => {
+                // Recover from poisoned mutex - still try to get the value
+                poisoned.into_inner().take()
+            }
+        }
+    }
+
+    fn take_println_messages(&self) -> Vec<Printable> {
+        match self.println_queue.lock() {
+            Ok(mut queue) => std::mem::take(&mut *queue),
+            Err(poisoned) => {
+                // Recover from poisoned mutex - still try to get the messages
+                std::mem::take(&mut *poisoned.into_inner())
+            }
+        }
+    }
+}
+
+impl AppSink for AppRuntime {
+    fn request_render(&self) {
+        self.render_flag.store(true, Ordering::SeqCst);
+    }
+
+    fn println(&self, message: Printable) {
+        match self.println_queue.lock() {
+            Ok(mut queue) => queue.push(message),
+            Err(poisoned) => poisoned.into_inner().push(message),
+        }
+        self.request_render();
+    }
+
+    fn enter_alt_screen(&self) {
+        match self.mode_switch_request.lock() {
+            Ok(mut request) => *request = Some(ModeSwitch::EnterAltScreen),
+            Err(poisoned) => *poisoned.into_inner() = Some(ModeSwitch::EnterAltScreen),
+        }
+        self.request_render();
+    }
+
+    fn exit_alt_screen(&self) {
+        match self.mode_switch_request.lock() {
+            Ok(mut request) => *request = Some(ModeSwitch::ExitAltScreen),
+            Err(poisoned) => *poisoned.into_inner() = Some(ModeSwitch::ExitAltScreen),
+        }
+        self.request_render();
+    }
+
+    fn is_alt_screen(&self) -> bool {
+        self.alt_screen_state.load(Ordering::SeqCst)
+    }
+}
+
+type AppRegistry = HashMap<AppId, Arc<dyn AppSink>>;
+
+static APP_REGISTRY: OnceLock<Mutex<AppRegistry>> = OnceLock::new();
+static CURRENT_APP: AtomicU64 = AtomicU64::new(0);
+
+fn registry() -> &'static Mutex<AppRegistry> {
+    APP_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn set_current_app(id: Option<AppId>) {
+    let raw = id.map(|value| value.raw()).unwrap_or(0);
+    CURRENT_APP.store(raw, Ordering::SeqCst);
+}
+
+fn current_app_sink() -> Option<Arc<dyn AppSink>> {
+    let id = AppId::from_raw(CURRENT_APP.load(Ordering::SeqCst))?;
+    let registry = registry().lock().ok()?;
+    registry.get(&id).cloned()
+}
+
+struct AppRegistrationGuard {
+    id: AppId,
+}
+
+impl Drop for AppRegistrationGuard {
+    fn drop(&mut self) {
+        unregister_app(self.id);
+    }
+}
+
+fn register_app(runtime: Arc<AppRuntime>) -> AppRegistrationGuard {
+    let id = runtime.id();
+    if let Ok(mut registry) = registry().lock() {
+        let sink: Arc<dyn AppSink> = runtime;
+        registry.insert(id, sink);
+        set_current_app(Some(id));
+    }
+    AppRegistrationGuard { id }
+}
+
+fn unregister_app(id: AppId) {
+    if let Ok(mut registry) = registry().lock() {
+        registry.remove(&id);
+    }
+    if AppId::from_raw(CURRENT_APP.load(Ordering::SeqCst)) == Some(id) {
+        set_current_app(None);
+    }
 }
 
 /// Request a re-render from any thread.
@@ -100,17 +250,8 @@ fn init_global_state(render_flag: Arc<AtomicBool>) {
 /// });
 /// ```
 pub fn request_render() {
-    if let Some(flag) = GLOBAL_RENDER_FLAG.get() {
-        flag.store(true, Ordering::SeqCst);
-    }
-}
-
-/// Check if a render has been requested and reset the flag.
-fn take_render_request() -> bool {
-    if let Some(flag) = GLOBAL_RENDER_FLAG.get() {
-        flag.swap(false, Ordering::SeqCst)
-    } else {
-        false
+    if let Some(sink) = current_app_sink() {
+        sink.request_render();
     }
 }
 
@@ -144,34 +285,18 @@ fn take_render_request() -> bool {
 /// rnk::println(banner);
 /// ```
 pub fn println(message: impl IntoPrintable) {
-    if let Some(queue) = PRINTLN_QUEUE.get() {
-        // App is running, queue the message for the render loop
-        if let Ok(mut q) = queue.lock() {
-            q.push(message.into_printable());
-        }
-        request_render();
-    } else {
-        // No app running, print directly as fallback
-        let printable = message.into_printable();
-        let output = match printable {
-            Printable::Text(text) => text,
-            Printable::Element(element) => render_to_string_auto(&element),
-        };
-        std::println!("{}", output);
+    if let Some(sink) = current_app_sink() {
+        sink.println(message.into_printable());
+        return;
     }
-}
 
-/// Take all queued println messages
-fn take_println_messages() -> Vec<Printable> {
-    if let Some(queue) = PRINTLN_QUEUE.get() {
-        if let Ok(mut q) = queue.lock() {
-            std::mem::take(&mut *q)
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
-    }
+    // No app running, print directly as fallback
+    let printable = message.into_printable();
+    let output = match printable {
+        Printable::Text(text) => text,
+        Printable::Element(element) => render_to_string_auto(&element),
+    };
+    std::println!("{}", output);
 }
 
 /// Request to enter alternate screen mode (fullscreen).
@@ -188,12 +313,9 @@ fn take_println_messages() -> Vec<Printable> {
 /// enter_alt_screen();
 /// ```
 pub fn enter_alt_screen() {
-    if let Some(req) = MODE_SWITCH_REQUEST.get() {
-        if let Ok(mut r) = req.lock() {
-            *r = Some(ModeSwitch::EnterAltScreen);
-        }
+    if let Some(sink) = current_app_sink() {
+        sink.enter_alt_screen();
     }
-    request_render();
 }
 
 /// Request to exit alternate screen mode (return to inline).
@@ -210,24 +332,8 @@ pub fn enter_alt_screen() {
 /// exit_alt_screen();
 /// ```
 pub fn exit_alt_screen() {
-    if let Some(req) = MODE_SWITCH_REQUEST.get() {
-        if let Ok(mut r) = req.lock() {
-            *r = Some(ModeSwitch::ExitAltScreen);
-        }
-    }
-    request_render();
-}
-
-/// Take mode switch request if any
-fn take_mode_switch_request() -> Option<ModeSwitch> {
-    if let Some(req) = MODE_SWITCH_REQUEST.get() {
-        if let Ok(mut r) = req.lock() {
-            r.take()
-        } else {
-            None
-        }
-    } else {
-        None
+    if let Some(sink) = current_app_sink() {
+        sink.exit_alt_screen();
     }
 }
 
@@ -235,14 +341,8 @@ fn take_mode_switch_request() -> Option<ModeSwitch> {
 ///
 /// Returns `None` if no app is running.
 pub fn is_alt_screen() -> Option<bool> {
-    // This is set during render, so we need a global flag
-    ALT_SCREEN_STATE
-        .get()
-        .map(|flag| flag.load(Ordering::SeqCst))
+    current_app_sink().map(|sink| sink.is_alt_screen())
 }
-
-/// Global alt screen state flag
-static ALT_SCREEN_STATE: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
 
 /// A handle for requesting renders from any thread.
 ///
@@ -264,33 +364,37 @@ static ALT_SCREEN_STATE: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceL
 /// ```
 #[derive(Clone)]
 pub struct RenderHandle {
-    flag: Arc<AtomicBool>,
+    sink: Arc<dyn AppSink>,
 }
 
 impl RenderHandle {
+    pub(crate) fn new(sink: Arc<dyn AppSink>) -> Self {
+        Self { sink }
+    }
+
     /// Request a re-render
     pub fn request_render(&self) {
-        self.flag.store(true, Ordering::SeqCst);
+        self.sink.request_render();
     }
 
     /// Print a message that persists above the UI
     pub fn println(&self, message: impl IntoPrintable) {
-        println(message);
+        self.sink.println(message.into_printable());
     }
 
     /// Request to enter fullscreen mode
     pub fn enter_alt_screen(&self) {
-        enter_alt_screen();
+        self.sink.enter_alt_screen();
     }
 
     /// Request to exit fullscreen mode
     pub fn exit_alt_screen(&self) {
-        exit_alt_screen();
+        self.sink.exit_alt_screen();
     }
 
     /// Check if currently in fullscreen mode
     pub fn is_alt_screen(&self) -> bool {
-        is_alt_screen().unwrap_or(false)
+        self.sink.is_alt_screen()
     }
 }
 
@@ -298,9 +402,7 @@ impl RenderHandle {
 ///
 /// Returns `None` if no app is currently running.
 pub fn render_handle() -> Option<RenderHandle> {
-    GLOBAL_RENDER_FLAG.get().map(|flag| RenderHandle {
-        flag: Arc::clone(flag),
-    })
+    current_app_sink().map(RenderHandle::new)
 }
 
 // === Application Options ===
@@ -432,8 +534,8 @@ where
     hook_context: Rc<RefCell<HookContext>>,
     options: AppOptions,
     should_exit: Arc<AtomicBool>,
-    needs_render: Arc<AtomicBool>,
-    alt_screen_state: Arc<AtomicBool>,
+    runtime: Arc<AppRuntime>,
+    render_handle: RenderHandle,
     /// Lines of static content that have been committed
     static_lines: Vec<String>,
     /// Last known terminal width (for detecting width decreases)
@@ -453,16 +555,16 @@ where
 
     /// Create a new app with custom options
     pub fn with_options(component: F, options: AppOptions) -> Self {
-        let needs_render = Arc::new(AtomicBool::new(true));
-        let alt_screen_state = Arc::new(AtomicBool::new(options.alternate_screen));
+        let runtime = AppRuntime::new(options.alternate_screen);
+        let render_handle = RenderHandle::new(runtime.clone());
         let hook_context = Rc::new(RefCell::new(HookContext::new()));
 
         // Set up render callback
-        let needs_render_clone = needs_render.clone();
+        let runtime_clone = runtime.clone();
         hook_context
             .borrow_mut()
             .set_render_callback(Rc::new(move || {
-                needs_render_clone.store(true, Ordering::SeqCst);
+                runtime_clone.request_render();
             }));
 
         // Get initial terminal size
@@ -475,8 +577,8 @@ where
             hook_context,
             options,
             should_exit: Arc::new(AtomicBool::new(false)),
-            needs_render,
-            alt_screen_state,
+            runtime,
+            render_handle,
             static_lines: Vec::new(),
             last_width: initial_width,
             last_height: initial_height,
@@ -487,17 +589,15 @@ where
     pub fn run(&mut self) -> std::io::Result<()> {
         use std::time::{Duration, Instant};
 
-        // Initialize global state for cross-thread communication
-        init_global_state(Arc::clone(&self.needs_render));
-        let _ = ALT_SCREEN_STATE.set(Arc::clone(&self.alt_screen_state));
+        let _app_guard = register_app(self.runtime.clone());
 
         // Enter terminal mode based on options
         if self.options.alternate_screen {
             self.terminal.enter()?;
-            self.alt_screen_state.store(true, Ordering::SeqCst);
+            self.runtime.set_alt_screen_state(true);
         } else {
             self.terminal.enter_inline()?;
-            self.alt_screen_state.store(false, Ordering::SeqCst);
+            self.runtime.set_alt_screen_state(false);
         }
 
         let frame_duration = Duration::from_millis(1000 / self.options.fps as u64);
@@ -516,18 +616,13 @@ where
                 break;
             }
 
-            // Check for external render requests (from other threads)
-            if take_render_request() {
-                self.needs_render.store(true, Ordering::SeqCst);
-            }
-
             // Handle mode switch requests
-            if let Some(mode_switch) = take_mode_switch_request() {
+            if let Some(mode_switch) = self.runtime.take_mode_switch_request() {
                 self.handle_mode_switch(mode_switch)?;
             }
 
             // Handle println messages
-            let messages = take_println_messages();
+            let messages = self.runtime.take_println_messages();
             if !messages.is_empty() {
                 self.handle_println_messages(&messages)?;
             }
@@ -535,10 +630,10 @@ where
             // Throttle rendering - only render if needed and time elapsed
             let now = Instant::now();
             let time_elapsed = now.duration_since(last_render) >= frame_duration;
-            let render_requested = self.needs_render.load(Ordering::SeqCst);
+            let render_requested = self.runtime.render_requested();
 
             if render_requested && time_elapsed {
-                self.needs_render.store(false, Ordering::SeqCst);
+                self.runtime.clear_render_request();
                 self.render_frame()?;
                 last_render = now;
             }
@@ -563,14 +658,14 @@ where
             ModeSwitch::EnterAltScreen => {
                 if !self.terminal.is_alt_screen() {
                     self.terminal.switch_to_alt_screen()?;
-                    self.alt_screen_state.store(true, Ordering::SeqCst);
+                    self.runtime.set_alt_screen_state(true);
                     self.terminal.repaint();
                 }
             }
             ModeSwitch::ExitAltScreen => {
                 if self.terminal.is_alt_screen() {
                     self.terminal.switch_to_inline()?;
-                    self.alt_screen_state.store(false, Ordering::SeqCst);
+                    self.runtime.set_alt_screen_state(false);
                     self.terminal.repaint();
                 }
             }
@@ -626,20 +721,20 @@ where
                 dispatch_key_event(&key_event);
 
                 // Request re-render after input
-                self.needs_render.store(true, Ordering::SeqCst);
+                self.runtime.request_render();
             }
             Event::Mouse(mouse_event) => {
                 // Dispatch to mouse handlers
                 dispatch_mouse_event(&mouse_event);
 
                 // Request re-render after mouse event
-                self.needs_render.store(true, Ordering::SeqCst);
+                self.runtime.request_render();
             }
             Event::Resize(new_width, new_height) => {
                 // Handle resize - clear screen if width decreased to prevent artifacts
                 self.handle_resize(new_width, new_height);
                 // Re-render on resize
-                self.needs_render.store(true, Ordering::SeqCst);
+                self.runtime.request_render();
             }
             _ => {}
         }
@@ -653,8 +748,8 @@ where
     /// - Height decrease: old content from taller layouts remains visible
     /// - Height increase: old separator lines at fixed positions remain visible
     fn handle_resize(&mut self, new_width: u16, new_height: u16) {
-        use crossterm::execute;
         use crossterm::cursor::MoveTo;
+        use crossterm::execute;
         use crossterm::terminal::{Clear, ClearType};
         use std::io::stdout;
 
@@ -680,7 +775,10 @@ where
         let (width, height) = Terminal::size()?;
 
         // Set up app context for use_app hook
-        set_app_context(Some(AppContext::new(self.should_exit.clone())));
+        set_app_context(Some(AppContext::new(
+            self.should_exit.clone(),
+            self.render_handle.clone(),
+        )));
 
         // Build element tree with hooks context
         let root = with_hooks(self.hook_context.clone(), || (self.component)());
@@ -714,28 +812,19 @@ where
             .unwrap_or_default();
         let content_width = (root_layout.width as u16).max(1).min(width);
 
-        // In inline mode, always use full terminal height to enable fixed-bottom layouts
-        // This makes bottom-positioned elements stay at the bottom of the screen
-        // In fullscreen mode, use content height (already full-screen by nature)
-        let render_height = if self.terminal.is_alt_screen() {
-            // Fullscreen mode: use actual content height
-            (root_layout.height as u16).max(1).min(height)
-        } else {
-            // Inline mode: always use full terminal height for fixed-bottom layouts
-            height
-        };
+        // Use actual content height in both modes
+        // In inline mode, using full terminal height causes scroll issues - the empty lines
+        // push the cursor down and scroll the terminal to show empty white space.
+        // In fullscreen mode, content naturally fills the screen.
+        let render_height = (root_layout.height as u16).max(1).min(height);
 
         // Render to output buffer
         let mut output = Output::new(content_width, render_height);
         self.render_element(&dynamic_root, &mut output, 0.0, 0.0);
 
         // Write to terminal
-        // Use render_fixed_height for inline mode to preserve line count consistency
-        let rendered = if self.terminal.is_alt_screen() {
-            output.render()
-        } else {
-            output.render_fixed_height()
-        };
+        // Use regular render() which trims trailing empty lines
+        let rendered = output.render();
         self.terminal.render(&rendered)
     }
 
@@ -1209,15 +1298,19 @@ impl RenderHelper {
 
         let rendered = output.render();
 
+        // Normalize line endings to LF and trim trailing spaces if requested
+        // output.render() uses CRLF for raw mode, but render_to_string should use LF
+        let normalized = rendered.replace("\r\n", "\n");
+
         // Trim trailing spaces from each line if requested
         if trim {
-            rendered
+            normalized
                 .lines()
                 .map(|line| line.trim_end())
                 .collect::<Vec<_>>()
                 .join("\n")
         } else {
-            rendered
+            normalized
         }
     }
 
@@ -1317,14 +1410,21 @@ impl RenderHelper {
         let padding_v = (element.style.padding.top + element.style.padding.bottom) as u16;
         height = height.saturating_add(padding_v);
 
-        // Recursively check children and accumulate height for column layout
+        // Recursively check children and accumulate height based on layout direction
         if !element.children.is_empty() {
             let mut child_height_sum = 0u16;
+            let mut child_height_max = 0u16;
             for child in &element.children {
                 let child_height = self.calculate_element_height(child, max_width, _engine);
                 child_height_sum = child_height_sum.saturating_add(child_height);
+                child_height_max = child_height_max.max(child_height);
             }
-            height = height.max(child_height_sum);
+            // Column layout: sum heights; Row layout: take max height
+            if element.style.flex_direction == crate::core::FlexDirection::Column {
+                height = height.saturating_add(child_height_sum);
+            } else {
+                height = height.max(child_height_max);
+            }
         }
 
         height
@@ -1517,5 +1617,19 @@ mod tests {
     fn test_mode_switch_enum() {
         assert_eq!(ModeSwitch::EnterAltScreen, ModeSwitch::EnterAltScreen);
         assert_ne!(ModeSwitch::EnterAltScreen, ModeSwitch::ExitAltScreen);
+    }
+
+    #[test]
+    fn test_registry_cleanup_on_drop() {
+        let runtime = AppRuntime::new(false);
+
+        {
+            let _guard = register_app(runtime);
+            assert!(render_handle().is_some());
+            assert_eq!(is_alt_screen(), Some(false));
+        }
+
+        assert!(render_handle().is_none());
+        assert_eq!(is_alt_screen(), None);
     }
 }

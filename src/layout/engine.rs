@@ -157,7 +157,25 @@ fn measure_text_node(
 
     // Measure text using unicode-width
     let text_width = measure_text_width(text) as f32;
-    let text_height = text.lines().count().max(1) as f32;
+
+    // Calculate height considering text wrapping
+    let available_width = match available_space.width {
+        AvailableSpace::Definite(w) => Some(w as usize),
+        _ => None,
+    };
+
+    let text_height = if let Some(max_width) = available_width {
+        if max_width > 0 && text_width > max_width as f32 {
+            // Text needs wrapping - calculate wrapped line count
+            use super::measure::wrap_text;
+            let wrapped = wrap_text(text, max_width);
+            wrapped.lines().count().max(1) as f32
+        } else {
+            text.lines().count().max(1) as f32
+        }
+    } else {
+        text.lines().count().max(1) as f32
+    };
 
     let width = known_dimensions
         .width
