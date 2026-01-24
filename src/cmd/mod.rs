@@ -27,8 +27,10 @@
 //! ```
 
 mod executor;
+mod tasks;
 
 pub use executor::{CmdExecutor, RenderHandle};
+pub use tasks::{HttpRequest, HttpResponse, ProcessOutput};
 
 use std::future::Future;
 use std::pin::Pin;
