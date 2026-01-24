@@ -105,6 +105,7 @@
 //! });
 //! ```
 
+pub mod cmd;
 pub mod components;
 pub mod core;
 pub mod hooks;
