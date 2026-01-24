@@ -1,6 +1,6 @@
 //! Test CRLF vs LF line endings
-use rnk::prelude::*;
 use rnk::prelude::Box as RnkBox;
+use rnk::prelude::*;
 
 fn main() {
     let element = RnkBox::new()

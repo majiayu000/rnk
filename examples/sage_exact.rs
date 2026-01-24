@@ -1,10 +1,10 @@
 //! Exact reproduction of sage UI for debugging
-use rnk::prelude::*;
-use rnk::prelude::Box as RnkBox;
 use rnk::layout::LayoutEngine;
+use rnk::prelude::Box as RnkBox;
+use rnk::prelude::*;
 
 fn main() {
-    let term_width = 150u16;  // Wide terminal like in screenshot
+    let term_width = 150u16; // Wide terminal like in screenshot
     let term_height = 30u16;
 
     // Welcome message - exactly as in rnk_app.rs render_welcome()
@@ -83,9 +83,15 @@ fn main() {
                 format!("Box({:?})", element.style.flex_direction)
             };
             // CRITICAL: Check if x != 0
-            let marker = if layout.x > 0.1 { " <-- NON-ZERO X!" } else { "" };
-            println!("{}{}: x={:.1}, y={:.1}, w={:.1}, h={:.1}{}", 
-                indent, name, layout.x, layout.y, layout.width, layout.height, marker);
+            let marker = if layout.x > 0.1 {
+                " <-- NON-ZERO X!"
+            } else {
+                ""
+            };
+            println!(
+                "{}{}: x={:.1}, y={:.1}, w={:.1}, h={:.1}{}",
+                indent, name, layout.x, layout.y, layout.width, layout.height, marker
+            );
         }
         for child in &element.children {
             print_layout(child, engine, depth + 1);

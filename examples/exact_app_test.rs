@@ -1,6 +1,6 @@
 //! Exact reproduction of sage-cli UI layout
-use rnk::prelude::*;
 use rnk::prelude::Box as RnkBox;
+use rnk::prelude::*;
 
 fn main() {
     let term_width = 120u16;
@@ -57,7 +57,7 @@ fn main() {
         .child(
             RnkBox::new()
                 .flex_direction(FlexDirection::Column)
-                .flex_grow(1.0)  // This might be the problem!
+                .flex_grow(1.0) // This might be the problem!
                 .child(welcome)
                 .into_element(),
         )

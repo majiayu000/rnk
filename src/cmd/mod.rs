@@ -7,17 +7,28 @@
 //! # Example
 //!
 //! ```rust
-//! use rnk::cmd::Cmd;
+//! use rnk::cmd::{Cmd, CmdExecutor};
 //! use std::time::Duration;
+//! use tokio::sync::mpsc;
 //!
-//! // Create commands
+//! // Create executor
+//! let (tx, mut rx) = mpsc::unbounded_channel();
+//! let executor = CmdExecutor::new(tx);
+//!
+//! // Create and execute commands
 //! let cmd = Cmd::batch(vec![
 //!     Cmd::sleep(Duration::from_secs(1)),
-//!     Cmd::perform(async {
+//!     Cmd::perform(|| async {
 //!         println!("Task completed!");
 //!     }),
 //! ]);
+//!
+//! executor.execute(cmd);
 //! ```
+
+mod executor;
+
+pub use executor::{CmdExecutor, RenderHandle};
 
 use std::future::Future;
 use std::pin::Pin;

@@ -44,12 +44,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[derive(Clone)]
 pub struct AppContext {
     exit_flag: Arc<AtomicBool>,
+    render_handle: crate::renderer::RenderHandle,
 }
 
 impl AppContext {
     /// Create a new app context
-    pub fn new(exit_flag: Arc<AtomicBool>) -> Self {
-        Self { exit_flag }
+    pub fn new(exit_flag: Arc<AtomicBool>, render_handle: crate::renderer::RenderHandle) -> Self {
+        Self {
+            exit_flag,
+            render_handle,
+        }
     }
 
     /// Exit the application
@@ -78,7 +82,7 @@ impl AppContext {
     /// app.println(banner);
     /// ```
     pub fn println(&self, message: impl crate::renderer::IntoPrintable) {
-        crate::renderer::println(message);
+        self.render_handle.println(message);
     }
 
     /// Request to enter fullscreen mode (alternate screen).
@@ -91,7 +95,7 @@ impl AppContext {
     /// - Content is cleared on exit
     /// - `println()` is a no-op
     pub fn enter_alt_screen(&self) {
-        crate::renderer::enter_alt_screen();
+        self.render_handle.enter_alt_screen();
     }
 
     /// Request to exit fullscreen mode (return to inline).
@@ -104,14 +108,14 @@ impl AppContext {
     /// - Content persists in terminal history
     /// - `println()` works for persistent messages
     pub fn exit_alt_screen(&self) {
-        crate::renderer::exit_alt_screen();
+        self.render_handle.exit_alt_screen();
     }
 
     /// Check if currently in fullscreen mode (alternate screen).
     ///
     /// Returns `true` if in fullscreen mode, `false` if in inline mode.
     pub fn is_alt_screen(&self) -> bool {
-        crate::renderer::is_alt_screen().unwrap_or(false)
+        self.render_handle.is_alt_screen()
     }
 
     /// Request a re-render.
@@ -119,7 +123,7 @@ impl AppContext {
     /// This is useful after updating shared state to ensure the UI reflects
     /// the new state.
     pub fn request_render(&self) {
-        crate::renderer::request_render();
+        self.render_handle.request_render();
     }
 }
 
@@ -160,11 +164,12 @@ pub fn use_app() -> AppContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::renderer::{AppSink, RenderHandle};
 
     #[test]
     fn test_app_context_exit() {
         let exit_flag = Arc::new(AtomicBool::new(false));
-        let ctx = AppContext::new(exit_flag.clone());
+        let ctx = AppContext::new(exit_flag.clone(), test_render_handle());
 
         assert!(!exit_flag.load(Ordering::SeqCst));
         ctx.exit();
@@ -174,7 +179,7 @@ mod tests {
     #[test]
     fn test_set_get_app_context() {
         let exit_flag = Arc::new(AtomicBool::new(false));
-        let ctx = AppContext::new(exit_flag.clone());
+        let ctx = AppContext::new(exit_flag.clone(), test_render_handle());
 
         set_app_context(Some(ctx));
 
@@ -186,5 +191,25 @@ mod tests {
 
         // Clean up
         set_app_context(None);
+    }
+
+    fn test_render_handle() -> RenderHandle {
+        struct NoopSink;
+
+        impl AppSink for NoopSink {
+            fn request_render(&self) {}
+
+            fn println(&self, _message: crate::renderer::Printable) {}
+
+            fn enter_alt_screen(&self) {}
+
+            fn exit_alt_screen(&self) {}
+
+            fn is_alt_screen(&self) -> bool {
+                false
+            }
+        }
+
+        RenderHandle::new(Arc::new(NoopSink))
     }
 }

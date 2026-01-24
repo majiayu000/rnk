@@ -2,8 +2,8 @@
 //!
 //! These tests verify that elements are positioned correctly in the rendered output.
 
-use rnk::prelude::*;
 use rnk::prelude::Box as RnkBox;
+use rnk::prelude::*;
 
 /// Strip ANSI escape codes from a string
 fn strip_ansi(s: &str) -> String {
@@ -68,7 +68,11 @@ fn test_simple_column_layout_left_aligned() {
 
     // All lines should start at column 0
     for (i, &start) in starts.iter().enumerate() {
-        assert_eq!(start, 0, "Line {} should start at column 0, but starts at {}", i, start);
+        assert_eq!(
+            start, 0,
+            "Line {} should start at column 0, but starts at {}",
+            i, start
+        );
     }
 }
 
@@ -97,7 +101,11 @@ fn test_nested_column_layout_left_aligned() {
 
     // All lines should start at column 0
     for (i, &start) in starts.iter().enumerate() {
-        assert_eq!(start, 0, "Line {} should start at column 0, but starts at {}", i, start);
+        assert_eq!(
+            start, 0,
+            "Line {} should start at column 0, but starts at {}",
+            i, start
+        );
     }
 }
 
@@ -117,7 +125,12 @@ fn test_row_layout_on_same_line() {
     println!("Number of lines: {}", lines.len());
 
     // Row layout should produce a single line
-    assert_eq!(lines.len(), 1, "Row layout should produce 1 line, got {}", lines.len());
+    assert_eq!(
+        lines.len(),
+        1,
+        "Row layout should produce 1 line, got {}",
+        lines.len()
+    );
 
     let stripped = strip_ansi(lines[0]);
     assert!(stripped.contains("Left"), "Should contain 'Left'");
@@ -141,7 +154,11 @@ fn test_explicit_width_respected() {
     let first_line = stripped.lines().next().unwrap_or("");
     let leading_spaces = first_line.len() - first_line.trim_start().len();
 
-    assert_eq!(leading_spaces, 0, "Text should start at column 0, but has {} leading spaces", leading_spaces);
+    assert_eq!(
+        leading_spaces, 0,
+        "Text should start at column 0, but has {} leading spaces",
+        leading_spaces
+    );
 }
 
 #[test]
@@ -165,7 +182,11 @@ fn test_full_width_separator() {
 
     // All lines should start at column 0
     for (i, &start) in starts.iter().enumerate() {
-        assert_eq!(start, 0, "Line {} should start at column 0, but starts at {}", i, start);
+        assert_eq!(
+            start, 0,
+            "Line {} should start at column 0, but starts at {}",
+            i, start
+        );
     }
 }
 
@@ -177,7 +198,12 @@ fn test_sage_like_layout() {
 
     let welcome = RnkBox::new()
         .flex_direction(FlexDirection::Column)
-        .child(Text::new("Sage Agent").color(Color::Cyan).bold().into_element())
+        .child(
+            Text::new("Sage Agent")
+                .color(Color::Cyan)
+                .bold()
+                .into_element(),
+        )
         .child(Text::new("Rust-based LLM Agent").dim().into_element())
         .into_element();
 
@@ -221,12 +247,21 @@ fn test_sage_like_layout() {
     println!("=== Sage-like Layout Test ===");
     for (i, line) in output.lines().enumerate() {
         let stripped = strip_ansi(line);
-        println!("{:2}: [{}] starts at col {}", i, stripped, starts.get(i).unwrap_or(&999));
+        println!(
+            "{:2}: [{}] starts at col {}",
+            i,
+            stripped,
+            starts.get(i).unwrap_or(&999)
+        );
     }
     println!("=== End ===");
 
     // Critical: All lines must start at column 0
     for (i, &start) in starts.iter().enumerate() {
-        assert_eq!(start, 0, "Line {} should start at column 0, but starts at column {}", i, start);
+        assert_eq!(
+            start, 0,
+            "Line {} should start at column 0, but starts at column {}",
+            i, start
+        );
     }
 }

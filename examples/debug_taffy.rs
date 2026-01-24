@@ -1,7 +1,7 @@
 //! Debug Taffy layout computation
-use rnk::prelude::*;
-use rnk::prelude::Box as RnkBox;
 use rnk::layout::LayoutEngine;
+use rnk::prelude::Box as RnkBox;
+use rnk::prelude::*;
 
 fn main() {
     let term_width = 120u16;
@@ -35,7 +35,7 @@ fn main() {
     // Print all layouts
     println!("=== Taffy Layout Results ===");
     println!("Container: {}x{}", term_width, term_height);
-    
+
     fn print_element_layout(element: &Element, engine: &LayoutEngine, depth: usize) {
         let indent = "  ".repeat(depth);
         if let Some(layout) = engine.get_layout(element.id) {
@@ -44,8 +44,10 @@ fn main() {
             } else {
                 format!("Box({:?})", element.style.flex_direction)
             };
-            println!("{}{}: x={:.1}, y={:.1}, w={:.1}, h={:.1}", 
-                indent, name, layout.x, layout.y, layout.width, layout.height);
+            println!(
+                "{}{}: x={:.1}, y={:.1}, w={:.1}, h={:.1}",
+                indent, name, layout.x, layout.y, layout.width, layout.height
+            );
         }
         for child in &element.children {
             print_element_layout(child, engine, depth + 1);

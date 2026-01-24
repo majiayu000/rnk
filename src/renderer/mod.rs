@@ -38,6 +38,7 @@ pub use app::{
     App,
     AppBuilder,
     AppOptions,
+    AppSink,
     IntoPrintable,
     ModeSwitch,
     Printable,

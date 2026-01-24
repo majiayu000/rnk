@@ -49,6 +49,9 @@ thiserror = "2.0"
 # Signal handling
 ctrlc = { version = "3.4", features = ["termination"] }
 
+# Async runtime for Command system
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
+
 [dev-dependencies]
 env_logger = "0.11"
 tokio = { version = "1", features = ["full"] }

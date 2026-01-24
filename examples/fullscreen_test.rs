@@ -1,11 +1,12 @@
 //! Fullscreen test - mimics sage CLI exactly
-use rnk::prelude::*;
-use rnk::prelude::Box as RnkBox;
 use crossterm::{
-    terminal::{self, ClearType},
-    cursor, execute,
+    cursor,
     event::{self, Event, KeyCode},
+    execute,
+    terminal::{self, ClearType},
 };
+use rnk::prelude::Box as RnkBox;
+use rnk::prelude::*;
 use std::io::{self, Write};
 use std::time::Duration;
 
@@ -19,15 +20,28 @@ fn main() -> io::Result<()> {
     let (term_width, term_height) = terminal::size().unwrap_or((80, 24));
 
     // Clear screen and move to top
-    execute!(stdout, terminal::Clear(ClearType::All), cursor::MoveTo(0, 0))?;
+    execute!(
+        stdout,
+        terminal::Clear(ClearType::All),
+        cursor::MoveTo(0, 0)
+    )?;
 
     // Build UI exactly like sage
     let welcome = RnkBox::new()
         .flex_direction(FlexDirection::Column)
-        .child(Text::new("Sage Agent").color(Color::Cyan).bold().into_element())
+        .child(
+            Text::new("Sage Agent")
+                .color(Color::Cyan)
+                .bold()
+                .into_element(),
+        )
         .child(Text::new("Rust-based LLM Agent").dim().into_element())
         .child(Newline::new().into_element())
-        .child(Text::new("Type a message to get started, or use /help for commands").dim().into_element())
+        .child(
+            Text::new("Type a message to get started, or use /help for commands")
+                .dim()
+                .into_element(),
+        )
         .into_element();
 
     let separator = "─".repeat(term_width as usize);

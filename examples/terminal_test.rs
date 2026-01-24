@@ -1,7 +1,7 @@
 //! Test rendering directly to terminal
-use rnk::prelude::*;
+use crossterm::{cursor, execute, terminal};
 use rnk::prelude::Box as RnkBox;
-use crossterm::{terminal, cursor, execute};
+use rnk::prelude::*;
 use std::io::{self, Write};
 
 fn main() -> io::Result<()> {
@@ -11,10 +11,19 @@ fn main() -> io::Result<()> {
     // Welcome message
     let welcome = RnkBox::new()
         .flex_direction(FlexDirection::Column)
-        .child(Text::new("Sage Agent").color(Color::Cyan).bold().into_element())
+        .child(
+            Text::new("Sage Agent")
+                .color(Color::Cyan)
+                .bold()
+                .into_element(),
+        )
         .child(Text::new("Rust-based LLM Agent").dim().into_element())
         .child(Newline::new().into_element())
-        .child(Text::new("Type a message to get started").dim().into_element())
+        .child(
+            Text::new("Type a message to get started")
+                .dim()
+                .into_element(),
+        )
         .into_element();
 
     // Bottom
@@ -50,14 +59,14 @@ fn main() -> io::Result<()> {
 
     // Print output WITH visible markers to see exact positions
     println!("\n=== Rendering with column markers ===");
-    
+
     // Print column ruler
     print!("     ");
     for i in 0..term_width.min(100) {
         print!("{}", i % 10);
     }
     println!();
-    
+
     for (i, line) in output.lines().take(10).enumerate() {
         println!("{:4}|{}", i, line);
     }

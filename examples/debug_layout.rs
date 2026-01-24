@@ -1,8 +1,8 @@
-use rnk::prelude::*;
 use rnk::prelude::Box as RnkBox;
+use rnk::prelude::*;
 
 fn main() {
-    let term_width = 120u16;  // Approximate terminal width
+    let term_width = 120u16; // Approximate terminal width
     let term_height = 30u16;
 
     // Render welcome message exactly as in rnk_app.rs
@@ -76,8 +76,16 @@ fn main() {
     println!("\n=== First 5 lines character analysis ===");
     for (i, line) in output.lines().take(5).enumerate() {
         let stripped = strip_ansi(line);
-        let first_non_space = stripped.chars().position(|c| c != ' ').unwrap_or(stripped.len());
-        println!("Line {}: first non-space at column {}, content: '{}'", i, first_non_space, stripped.trim());
+        let first_non_space = stripped
+            .chars()
+            .position(|c| c != ' ')
+            .unwrap_or(stripped.len());
+        println!(
+            "Line {}: first non-space at column {}, content: '{}'",
+            i,
+            first_non_space,
+            stripped.trim()
+        );
     }
 }
 
