@@ -32,6 +32,7 @@
 mod app;
 mod output;
 pub(crate) mod registry;
+pub(crate) mod runtime;
 mod terminal;
 
 pub use app::{

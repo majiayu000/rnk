@@ -7,7 +7,6 @@
 //! - Println for persistent output
 //! - Cross-thread render requests
 
-use crossterm::event::Event;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,13 +15,14 @@ use std::sync::Arc;
 use crate::core::Element;
 use crate::hooks::context::{HookContext, with_hooks};
 use crate::hooks::use_app::{AppContext, set_app_context};
-use crate::hooks::use_input::{clear_input_handlers, dispatch_key_event};
-use crate::hooks::use_mouse::{clear_mouse_handlers, dispatch_mouse_event, is_mouse_enabled};
+use crate::hooks::use_input::clear_input_handlers;
+use crate::hooks::use_mouse::{clear_mouse_handlers, is_mouse_enabled};
 use crate::layout::LayoutEngine;
 use crate::renderer::{Output, Terminal};
 
-// Import from registry module
+// Import from registry and runtime modules
 use super::registry::{AppRuntime, AppSink, register_app};
+use super::runtime::EventLoop;
 
 // Re-export public APIs
 pub use super::registry::{
@@ -212,8 +212,6 @@ where
 
     /// Run the application
     pub fn run(&mut self) -> std::io::Result<()> {
-        use std::time::{Duration, Instant};
-
         let _app_guard = register_app(self.runtime.clone());
 
         // Enter terminal mode based on options
@@ -225,47 +223,36 @@ where
             self.runtime.set_alt_screen_state(false);
         }
 
-        let frame_duration = Duration::from_millis(1000 / self.options.fps as u64);
-        let mut last_render = Instant::now();
+        // Create event loop
+        let mut event_loop = EventLoop::new(
+            self.runtime.clone(),
+            self.should_exit.clone(),
+            self.options.fps,
+            self.options.exit_on_ctrl_c,
+        );
 
-        // Initial render
-        self.render_frame()?;
-
-        loop {
-            // Handle input
-            if let Some(event) = Terminal::poll_event(Duration::from_millis(10))? {
-                self.handle_event(event);
-            }
-
-            if self.should_exit.load(Ordering::SeqCst) {
-                break;
-            }
-
-            // Handle mode switch requests
+        // Run event loop with render callback
+        event_loop.run(|| {
+            // Handle mode switch requests (access runtime directly)
             if let Some(mode_switch) = self.runtime.take_mode_switch_request() {
                 self.handle_mode_switch(mode_switch)?;
             }
 
-            // Handle println messages
+            // Handle println messages (access runtime directly)
             let messages = self.runtime.take_println_messages();
             if !messages.is_empty() {
                 self.handle_println_messages(&messages)?;
             }
 
-            // Throttle rendering - only render if needed and time elapsed
-            let now = Instant::now();
-            let time_elapsed = now.duration_since(last_render) >= frame_duration;
-            let render_requested = self.runtime.render_requested();
-
-            if render_requested && time_elapsed {
-                self.runtime.clear_render_request();
-                self.render_frame()?;
-                last_render = now;
+            // Handle resize
+            let (width, height) = Terminal::size()?;
+            if width != self.last_width || height != self.last_height {
+                self.handle_resize(width, height);
             }
-        }
 
-        // Clean up input handlers
-        clear_input_handlers();
+            // Render frame
+            self.render_frame()
+        })?;
 
         // Exit terminal mode
         if self.terminal.is_alt_screen() {
@@ -333,37 +320,6 @@ where
         render_to_string(element, width)
     }
 
-    fn handle_event(&mut self, event: Event) {
-        match event {
-            Event::Key(key_event) => {
-                // Handle Ctrl+C
-                if self.options.exit_on_ctrl_c && Terminal::is_ctrl_c(&Event::Key(key_event)) {
-                    self.should_exit.store(true, Ordering::SeqCst);
-                    return;
-                }
-
-                // Dispatch to input handlers
-                dispatch_key_event(&key_event);
-
-                // Request re-render after input
-                self.runtime.request_render();
-            }
-            Event::Mouse(mouse_event) => {
-                // Dispatch to mouse handlers
-                dispatch_mouse_event(&mouse_event);
-
-                // Request re-render after mouse event
-                self.runtime.request_render();
-            }
-            Event::Resize(new_width, new_height) => {
-                // Handle resize - clear screen if width decreased to prevent artifacts
-                self.handle_resize(new_width, new_height);
-                // Re-render on resize
-                self.runtime.request_render();
-            }
-            _ => {}
-        }
-    }
 
     /// Handle terminal resize events
     ///
