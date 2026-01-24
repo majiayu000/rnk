@@ -3,6 +3,7 @@
 pub mod context;
 mod use_accessibility;
 pub(crate) mod use_app;
+mod use_cmd;
 mod use_effect;
 mod use_focus;
 pub mod use_input;
@@ -18,6 +19,7 @@ pub use use_accessibility::{
     clear_screen_reader_cache, set_screen_reader_enabled, use_is_screen_reader_enabled,
 };
 pub use use_app::{AppContext, get_app_context, set_app_context, use_app};
+pub use use_cmd::{use_cmd, use_cmd_once, Deps};
 pub use use_effect::{use_effect, use_effect_once};
 pub use use_focus::{
     FocusManagerHandle, FocusState, UseFocusOptions, use_focus, use_focus_manager,

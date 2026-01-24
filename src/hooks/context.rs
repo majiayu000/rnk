@@ -4,6 +4,9 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+// Import Cmd type for command queue
+use crate::cmd::Cmd;
+
 /// Callback type for triggering re-renders
 pub type RenderCallback = Rc<dyn Fn()>;
 
@@ -53,6 +56,8 @@ pub struct HookContext {
     render_callback: Option<RenderCallback>,
     /// Flag indicating if context is being rendered
     is_rendering: bool,
+    /// Commands to execute after render
+    cmd_queue: Vec<Cmd>,
 }
 
 impl HookContext {
@@ -65,6 +70,7 @@ impl HookContext {
             cleanups: Vec::new(),
             render_callback: None,
             is_rendering: false,
+            cmd_queue: Vec::new(),
         }
     }
 
@@ -131,6 +137,16 @@ impl HookContext {
         if let Some(callback) = &self.render_callback {
             callback();
         }
+    }
+
+    /// Queue a command to execute after render
+    pub fn queue_cmd(&mut self, cmd: Cmd) {
+        self.cmd_queue.push(cmd);
+    }
+
+    /// Take all queued commands
+    pub fn take_cmds(&mut self) -> Vec<Cmd> {
+        std::mem::take(&mut self.cmd_queue)
     }
 }
 
