@@ -31,6 +31,7 @@
 
 mod app;
 mod output;
+pub(crate) mod registry;
 mod terminal;
 
 pub use app::{
@@ -38,7 +39,6 @@ pub use app::{
     App,
     AppBuilder,
     AppOptions,
-    AppSink,
     IntoPrintable,
     ModeSwitch,
     Printable,
@@ -60,5 +60,8 @@ pub use app::{
     // Cross-thread APIs
     request_render,
 };
+
+// Re-export AppSink from registry (internal use only)
+pub use registry::AppSink;
 pub use output::Output;
 pub use terminal::Terminal;
