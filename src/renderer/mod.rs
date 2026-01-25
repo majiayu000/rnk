@@ -30,6 +30,7 @@
 //! ```
 
 mod app;
+mod builder;
 pub(crate) mod element_renderer;
 mod output;
 pub(crate) mod registry;
@@ -38,33 +39,21 @@ pub(crate) mod runtime;
 pub(crate) mod static_content;
 mod terminal;
 
-pub use app::{
-    // Core types
-    App,
-    AppBuilder,
-    AppOptions,
-    IntoPrintable,
-    ModeSwitch,
-    Printable,
-    RenderHandle,
-    enter_alt_screen,
-    exit_alt_screen,
-    is_alt_screen,
-    println,
-    println_trimmed,
-    // Main entry point
-    render,
-    render_fullscreen,
-    render_handle,
-    render_inline,
-    // Cross-thread APIs
-    request_render,
+// Core App type
+pub use app::App;
+
+// Builder and options
+pub use builder::{AppBuilder, AppOptions, render, render_fullscreen, render_inline};
+
+// Registry APIs
+pub use registry::{
+    AppSink, IntoPrintable, ModeSwitch, Printable, RenderHandle, enter_alt_screen, exit_alt_screen,
+    is_alt_screen, println, println_trimmed, render_handle, request_render,
 };
 
-// Element rendering APIs (from render_to_string module)
+// Element rendering APIs
 pub use render_to_string::{render_to_string, render_to_string_auto, render_to_string_no_trim};
 
-// Re-export AppSink from registry (internal use only)
+// Terminal and output
 pub use output::Output;
-pub use registry::AppSink;
 pub use terminal::Terminal;

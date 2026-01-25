@@ -1,11 +1,6 @@
 //! Application runner
 //!
-//! This module provides the main application runner with support for:
-//! - Inline mode (default, like Ink/Bubbletea)
-//! - Fullscreen mode (alternate screen, like vim)
-//! - Runtime mode switching
-//! - Println for persistent output
-//! - Cross-thread render requests
+//! This module provides the main application runner.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -20,136 +15,12 @@ use crate::hooks::use_mouse::{clear_mouse_handlers, is_mouse_enabled};
 use crate::layout::LayoutEngine;
 use crate::renderer::{Output, Terminal};
 
-// Import from registry, runtime, and static_content modules
+use super::builder::AppOptions;
 use super::element_renderer::render_element;
-use super::registry::{AppRuntime, AppSink, register_app};
+use super::registry::{AppRuntime, AppSink, ModeSwitch, Printable, RenderHandle, register_app};
 use super::render_to_string::render_to_string;
 use super::runtime::EventLoop;
 use super::static_content::StaticRenderer;
-
-// Re-export public APIs
-pub use super::registry::{
-    IntoPrintable, ModeSwitch, Printable, RenderHandle, enter_alt_screen, exit_alt_screen,
-    is_alt_screen, println, println_trimmed, render_handle, request_render,
-};
-
-// === Application Options ===
-
-/// Application options for configuring the renderer
-#[derive(Debug, Clone)]
-pub struct AppOptions {
-    /// Target frames per second (default: 60)
-    pub fps: u32,
-    /// Exit on Ctrl+C (default: true)
-    pub exit_on_ctrl_c: bool,
-    /// Use alternate screen / fullscreen mode (default: false = inline mode)
-    ///
-    /// - `false` (default): Inline mode, like Ink and Bubbletea's default.
-    ///   Output appears at current cursor position and persists in terminal history.
-    ///
-    /// - `true`: Fullscreen mode, like vim or Bubbletea's `WithAltScreen()`.
-    ///   Uses alternate screen buffer, content is cleared on exit.
-    pub alternate_screen: bool,
-}
-
-impl Default for AppOptions {
-    fn default() -> Self {
-        Self {
-            fps: 60, // Bubbletea default
-            exit_on_ctrl_c: true,
-            alternate_screen: false, // Inline mode by default (like Ink/Bubbletea)
-        }
-    }
-}
-
-// === App Builder ===
-
-/// Builder for configuring and running an application.
-///
-/// This provides a fluent API similar to Bubbletea's `WithXxx()` options.
-///
-/// # Example
-///
-/// ```ignore
-/// use rnk::prelude::*;
-///
-/// // Inline mode (default)
-/// render(my_app).run()?;
-///
-/// // Fullscreen mode
-/// render(my_app).fullscreen().run()?;
-///
-/// // Custom configuration
-/// render(my_app)
-///     .fullscreen()
-///     .fps(30)
-///     .exit_on_ctrl_c(false)
-///     .run()?;
-/// ```
-pub struct AppBuilder<F>
-where
-    F: Fn() -> Element,
-{
-    component: F,
-    options: AppOptions,
-}
-
-impl<F> AppBuilder<F>
-where
-    F: Fn() -> Element,
-{
-    /// Create a new app builder with default options (inline mode)
-    pub fn new(component: F) -> Self {
-        Self {
-            component,
-            options: AppOptions::default(),
-        }
-    }
-
-    /// Use fullscreen mode (alternate screen buffer).
-    ///
-    /// Like Bubbletea's `WithAltScreen()`.
-    pub fn fullscreen(mut self) -> Self {
-        self.options.alternate_screen = true;
-        self
-    }
-
-    /// Use inline mode (default).
-    ///
-    /// Output appears at current cursor position and persists in terminal history.
-    pub fn inline(mut self) -> Self {
-        self.options.alternate_screen = false;
-        self
-    }
-
-    /// Set the target frames per second.
-    ///
-    /// Default is 60 FPS.
-    pub fn fps(mut self, fps: u32) -> Self {
-        self.options.fps = fps;
-        self
-    }
-
-    /// Set whether to exit on Ctrl+C.
-    ///
-    /// Default is `true`.
-    pub fn exit_on_ctrl_c(mut self, exit: bool) -> Self {
-        self.options.exit_on_ctrl_c = exit;
-        self
-    }
-
-    /// Get the current options
-    pub fn options(&self) -> &AppOptions {
-        &self.options
-    }
-
-    /// Run the application
-    pub fn run(self) -> std::io::Result<()> {
-        App::with_options(self.component, self.options).run()
-    }
-}
-
-// === Application State ===
 
 /// Application state
 pub struct App<F>
@@ -319,12 +190,6 @@ where
     }
 
     /// Handle terminal resize events
-    ///
-    /// Clears the screen on any resize to prevent rendering artifacts.
-    /// This is necessary because:
-    /// - Width decrease: old content from wider lines remains visible
-    /// - Height decrease: old content from taller layouts remains visible
-    /// - Height increase: old separator lines at fixed positions remain visible
     fn handle_resize(&mut self, new_width: u16, new_height: u16) {
         use crossterm::cursor::MoveTo;
         use crossterm::execute;
@@ -332,14 +197,11 @@ where
         use std::io::stdout;
 
         // Always clear on resize to prevent artifacts
-        // This is the safest approach and matches Ink/Bubbletea behavior
         if new_width != self.last_width || new_height != self.last_height {
-            // Move to top and clear entire screen
             let _ = execute!(stdout(), MoveTo(0, 0), Clear(ClearType::All));
             self.terminal.repaint();
         }
 
-        // Update tracked size
         self.last_width = new_width;
         self.last_height = new_height;
     }
@@ -390,11 +252,6 @@ where
             .get_layout(dynamic_root.id)
             .unwrap_or_default();
         let content_width = (root_layout.width as u16).max(1).min(width);
-
-        // Use actual content height in both modes
-        // In inline mode, using full terminal height causes scroll issues - the empty lines
-        // push the cursor down and scroll the terminal to show empty white space.
-        // In fullscreen mode, content naturally fills the screen.
         let render_height = (root_layout.height as u16).max(1).min(height);
 
         // Render to output buffer
@@ -402,7 +259,6 @@ where
         render_element(&dynamic_root, &self.layout_engine, &mut output, 0.0, 0.0);
 
         // Write to terminal
-        // Use regular render() which trims trailing empty lines
         let rendered = output.render();
         self.terminal.render(&rendered)
     }
@@ -413,119 +269,10 @@ where
     }
 }
 
-// === Public API Functions ===
-
-/// Create an app builder for configuring and running a component.
-///
-/// This is the main entry point for running an rnk application.
-/// Returns an `AppBuilder` that allows fluent configuration.
-///
-/// # Default Behavior
-///
-/// By default, the app runs in **inline mode** (like Ink and Bubbletea):
-/// - Output appears at the current cursor position
-/// - Content persists in terminal history after exit
-/// - Supports `println()` for persistent messages
-///
-/// # Examples
-///
-/// ```ignore
-/// use rnk::prelude::*;
-///
-/// // Inline mode (default)
-/// render(my_app).run()?;
-///
-/// // Fullscreen mode
-/// render(my_app).fullscreen().run()?;
-///
-/// // Custom configuration
-/// render(my_app)
-///     .fullscreen()
-///     .fps(30)
-///     .exit_on_ctrl_c(false)
-///     .run()?;
-/// ```
-pub fn render<F>(component: F) -> AppBuilder<F>
-where
-    F: Fn() -> Element,
-{
-    AppBuilder::new(component)
-}
-
-/// Run a component in inline mode (convenience function).
-///
-/// This is equivalent to `render(component).run()`.
-pub fn render_inline<F>(component: F) -> std::io::Result<()>
-where
-    F: Fn() -> Element,
-{
-    render(component).inline().run()
-}
-
-/// Run a component in fullscreen mode (convenience function).
-///
-/// This is equivalent to `render(component).fullscreen().run()`.
-pub fn render_fullscreen<F>(component: F) -> std::io::Result<()>
-where
-    F: Fn() -> Element,
-{
-    render(component).fullscreen().run()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_app_options_default() {
-        let options = AppOptions::default();
-        assert_eq!(options.fps, 60); // Changed from 30 to 60 (Bubbletea default)
-        assert!(options.exit_on_ctrl_c);
-        assert!(!options.alternate_screen); // Changed: inline mode by default
-    }
-
-    #[test]
-    fn test_app_builder_defaults() {
-        fn dummy() -> Element {
-            crate::components::Text::new("test").into_element()
-        }
-        let builder = AppBuilder::new(dummy);
-        assert!(!builder.options().alternate_screen);
-        assert_eq!(builder.options().fps, 60);
-    }
-
-    #[test]
-    fn test_app_builder_fullscreen() {
-        fn dummy() -> Element {
-            crate::components::Text::new("test").into_element()
-        }
-        let builder = AppBuilder::new(dummy).fullscreen();
-        assert!(builder.options().alternate_screen);
-    }
-
-    #[test]
-    fn test_app_builder_inline() {
-        fn dummy() -> Element {
-            crate::components::Text::new("test").into_element()
-        }
-        let builder = AppBuilder::new(dummy).fullscreen().inline();
-        assert!(!builder.options().alternate_screen);
-    }
-
-    #[test]
-    fn test_app_builder_fps() {
-        fn dummy() -> Element {
-            crate::components::Text::new("test").into_element()
-        }
-        let builder = AppBuilder::new(dummy).fps(30);
-        assert_eq!(builder.options().fps, 30);
-    }
-
-    #[test]
-    fn test_mode_switch_enum() {
-        assert_eq!(ModeSwitch::EnterAltScreen, ModeSwitch::EnterAltScreen);
-        assert_ne!(ModeSwitch::EnterAltScreen, ModeSwitch::ExitAltScreen);
-    }
+    use crate::renderer::registry::{is_alt_screen, render_handle};
 
     #[test]
     fn test_registry_cleanup_on_drop() {
