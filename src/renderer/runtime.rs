@@ -4,11 +4,11 @@
 //! integration with the Command system (CmdExecutor).
 
 use crossterm::event::Event;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::hooks::use_input::{dispatch_key_event, clear_input_handlers};
+use crate::hooks::use_input::{clear_input_handlers, dispatch_key_event};
 use crate::hooks::use_mouse::dispatch_mouse_event;
 use crate::renderer::Terminal;
 
@@ -78,7 +78,6 @@ impl EventLoop {
 
         Ok(())
     }
-
 
     /// Handle terminal event
     fn handle_event(&mut self, event: Event) {

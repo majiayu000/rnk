@@ -30,8 +30,10 @@
 //! ```
 
 mod app;
+pub(crate) mod element_renderer;
 mod output;
 pub(crate) mod registry;
+pub(crate) mod render_to_string;
 pub(crate) mod runtime;
 pub(crate) mod static_content;
 mod terminal;
@@ -55,13 +57,12 @@ pub use app::{
     render_fullscreen,
     render_handle,
     render_inline,
-    // Element rendering APIs
-    render_to_string,
-    render_to_string_auto,
-    render_to_string_no_trim,
     // Cross-thread APIs
     request_render,
 };
+
+// Element rendering APIs (from render_to_string module)
+pub use render_to_string::{render_to_string, render_to_string_auto, render_to_string_no_trim};
 
 // Re-export AppSink from registry (internal use only)
 pub use output::Output;
