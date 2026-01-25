@@ -8,7 +8,8 @@ A React-like declarative terminal UI framework for Rust, inspired by [Ink](https
 
 ## Features
 
-- **React-like API**: Familiar component model with hooks (`use_signal`, `use_effect`, `use_input`)
+- **React-like API**: Familiar component model with hooks (`use_signal`, `use_effect`, `use_input`, `use_cmd`)
+- **Command System**: Elm-inspired side effect management for async tasks, timers, file I/O
 - **Declarative UI**: Build TUIs with composable components
 - **Flexbox Layout**: Powered by [Taffy](https://github.com/DioxusLabs/taffy) for flexible layouts
 - **Inline Mode** (default): Output persists in terminal history (like Ink/Bubbletea)
@@ -538,6 +539,70 @@ use_input(move |input, _key| {
         app.exit();  // Exit the application
     }
 });
+```
+
+### use_cmd
+
+Elm-inspired command system for side effects (async tasks, timers, file I/O).
+
+```rust
+use rnk::prelude::*;
+use rnk::cmd::Cmd;
+use std::time::Duration;
+
+fn app() -> Element {
+    let status = use_signal(|| "Ready".to_string());
+    let data = use_signal(|| None::<String>);
+
+    // Run command when status changes
+    use_cmd(status.get(), move |_| {
+        Cmd::batch(vec![
+            // Delay for 1 second
+            Cmd::sleep(Duration::from_secs(1)),
+            // Then perform async task
+            Cmd::perform(
+                async {
+                    // Simulate async work
+                    "Data loaded!".to_string()
+                },
+                move |result| {
+                    data.set(Some(result));
+                },
+            ),
+        ])
+    });
+
+    Box::new()
+        .child(Text::new(format!("Status: {}", status.get())).into_element())
+        .child(Text::new(format!("Data: {:?}", data.get())).into_element())
+        .into_element()
+}
+```
+
+**Available Commands**:
+
+```rust
+// No-op command
+Cmd::none()
+
+// Batch multiple commands
+Cmd::batch(vec![cmd1, cmd2, cmd3])
+
+// Delay execution
+Cmd::sleep(Duration::from_secs(1))
+
+// Async task with callback
+Cmd::perform(async { /* work */ }, |result| { /* handle result */ })
+
+// Chain commands
+cmd.and_then(|| another_cmd)
+
+// File operations
+Cmd::read_file("path.txt", |content| { /* handle content */ })
+Cmd::write_file("path.txt", "content", |success| { /* handle result */ })
+
+// Spawn process
+Cmd::spawn("ls", vec!["-la"], |output| { /* handle output */ })
 ```
 
 ### use_window_title
