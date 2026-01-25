@@ -221,8 +221,8 @@ impl Drop for CmdExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::time::Duration;
 
     #[tokio::test]
@@ -294,11 +294,10 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(false));
         let flag_clone = Arc::clone(&flag);
 
-        let cmd = Cmd::sleep(Duration::from_millis(100)).and_then(Cmd::perform(
-            move || async move {
+        let cmd =
+            Cmd::sleep(Duration::from_millis(100)).and_then(Cmd::perform(move || async move {
                 flag_clone.store(true, Ordering::SeqCst);
-            },
-        ));
+            }));
 
         executor.execute(cmd);
 
@@ -363,11 +362,9 @@ mod tests {
         let f2 = Arc::clone(&flag2);
 
         let cmd = Cmd::batch(vec![
-            Cmd::sleep(Duration::from_millis(50)).and_then(Cmd::perform(
-                move || async move {
-                    f1.store(true, Ordering::SeqCst);
-                },
-            )),
+            Cmd::sleep(Duration::from_millis(50)).and_then(Cmd::perform(move || async move {
+                f1.store(true, Ordering::SeqCst);
+            })),
             Cmd::perform(move || async move {
                 f2.store(true, Ordering::SeqCst);
             }),

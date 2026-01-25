@@ -16,7 +16,10 @@ fn test_virtual_screen_buffer_exists() {
     // From terminal.rs line 135: previous_lines: Vec<String>
     // This is the virtual screen buffer that stores the last frame
 
-    assert!(true, "Virtual screen buffer (previous_lines) exists in Terminal struct");
+    assert!(
+        true,
+        "Virtual screen buffer (previous_lines) exists in Terminal struct"
+    );
 }
 
 /// Test that diff algorithm compares old and new lines
@@ -30,7 +33,10 @@ fn test_diff_algorithm_implementation() {
     // 2. Compare: `if old_line != Some(new_line)`
     // 3. Update only if different: write new content
 
-    assert!(true, "Diff algorithm correctly compares and updates only changed lines");
+    assert!(
+        true,
+        "Diff algorithm correctly compares and updates only changed lines"
+    );
 }
 
 /// Test that exit_inline preserves output
@@ -148,5 +154,8 @@ fn test_no_alternate_screen_in_inline_mode() {
     // Only uses: DisableMouseCapture, show_cursor, disable_raw_mode
     // Does NOT use: LeaveAlternateScreen
 
-    assert!(true, "Inline mode correctly avoids alternate screen escape sequences");
+    assert!(
+        true,
+        "Inline mode correctly avoids alternate screen escape sequences"
+    );
 }

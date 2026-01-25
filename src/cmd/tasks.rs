@@ -143,7 +143,7 @@ impl Cmd {
             {
                 let _ = request;
                 on_response(Err(
-                    "HTTP support not enabled. Enable 'http' feature.".to_string(),
+                    "HTTP support not enabled. Enable 'http' feature.".to_string()
                 ));
             }
         })

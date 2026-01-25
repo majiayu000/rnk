@@ -237,7 +237,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hooks::context::{with_hooks, HookContext};
+    use crate::hooks::context::{HookContext, with_hooks};
     use std::cell::RefCell;
     use std::rc::Rc;
 

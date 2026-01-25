@@ -7,7 +7,7 @@
 //! - Predefined tasks (file I/O, process spawning)
 
 use rnk::cmd::{Cmd, CmdExecutor, HttpRequest};
-use rnk::hooks::{use_cmd, with_hooks, HookContext};
+use rnk::hooks::{HookContext, use_cmd, with_hooks};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -196,9 +196,13 @@ async fn test_process_spawn_integration() {
     let result = Arc::new(Mutex::new(None));
     let r = Arc::clone(&result);
 
-    let cmd = Cmd::spawn("echo", vec!["integration".to_string(), "test".to_string()], move |res| {
-        *r.lock().unwrap() = Some(res);
-    });
+    let cmd = Cmd::spawn(
+        "echo",
+        vec!["integration".to_string(), "test".to_string()],
+        move |res| {
+            *r.lock().unwrap() = Some(res);
+        },
+    );
 
     executor.execute(cmd);
 
@@ -426,8 +430,14 @@ fn test_http_request_builder_integration() {
     assert_eq!(request.url, "https://api.github.com/users/octocat");
     assert_eq!(request.method, "GET");
     assert_eq!(request.headers.len(), 2);
-    assert_eq!(request.headers[0], ("Authorization".to_string(), "Bearer token123".to_string()));
-    assert_eq!(request.headers[1], ("Content-Type".to_string(), "application/json".to_string()));
+    assert_eq!(
+        request.headers[0],
+        ("Authorization".to_string(), "Bearer token123".to_string())
+    );
+    assert_eq!(
+        request.headers[1],
+        ("Content-Type".to_string(), "application/json".to_string())
+    );
     assert!(request.body.is_none());
 
     let post_request = HttpRequest::post("https://api.example.com/data")

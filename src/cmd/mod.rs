@@ -318,8 +318,7 @@ mod tests {
 
     #[test]
     fn test_cmd_and_then_sleep() {
-        let cmd = Cmd::sleep(Duration::from_secs(1))
-            .and_then(Cmd::sleep(Duration::from_secs(2)));
+        let cmd = Cmd::sleep(Duration::from_secs(1)).and_then(Cmd::sleep(Duration::from_secs(2)));
 
         assert!(matches!(cmd, Cmd::Sleep { .. }));
 
@@ -335,8 +334,7 @@ mod tests {
 
     #[test]
     fn test_cmd_and_then_perform() {
-        let cmd =
-            Cmd::perform(|| async {}).and_then(Cmd::perform(|| async {}));
+        let cmd = Cmd::perform(|| async {}).and_then(Cmd::perform(|| async {}));
 
         assert!(matches!(cmd, Cmd::Batch(_)));
 
@@ -365,9 +363,13 @@ mod tests {
     fn test_cmd_map_wrap() {
         let cmd = Cmd::perform(|| async {}).map(|c| {
             Cmd::batch(vec![
-                Cmd::perform(|| async { println!("before"); }),
+                Cmd::perform(|| async {
+                    println!("before");
+                }),
                 c,
-                Cmd::perform(|| async { println!("after"); }),
+                Cmd::perform(|| async {
+                    println!("after");
+                }),
             ])
         });
 
@@ -411,8 +413,7 @@ mod tests {
     #[test]
     fn test_cmd_complex_composition() {
         let cmd = Cmd::batch(vec![
-            Cmd::sleep(Duration::from_secs(1))
-                .and_then(Cmd::perform(|| async {})),
+            Cmd::sleep(Duration::from_secs(1)).and_then(Cmd::perform(|| async {})),
             Cmd::perform(|| async {}).and_then(Cmd::sleep(Duration::from_secs(2))),
             Cmd::none(),
         ]);
