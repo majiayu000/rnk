@@ -9,8 +9,8 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::Element;
 use crate::hooks::context::{HookContext, with_hooks};
@@ -20,9 +20,10 @@ use crate::hooks::use_mouse::{clear_mouse_handlers, is_mouse_enabled};
 use crate::layout::LayoutEngine;
 use crate::renderer::{Output, Terminal};
 
-// Import from registry and runtime modules
+// Import from registry, runtime, and static_content modules
 use super::registry::{AppRuntime, AppSink, register_app};
 use super::runtime::EventLoop;
+use super::static_content::StaticRenderer;
 
 // Re-export public APIs
 pub use super::registry::{
@@ -161,8 +162,8 @@ where
     should_exit: Arc<AtomicBool>,
     runtime: Arc<AppRuntime>,
     render_handle: RenderHandle,
-    /// Lines of static content that have been committed
-    static_lines: Vec<String>,
+    /// Static content renderer for inline mode
+    static_renderer: StaticRenderer,
     /// Last known terminal width (for detecting width decreases)
     last_width: u16,
     /// Last known terminal height
@@ -204,7 +205,7 @@ where
             should_exit: Arc::new(AtomicBool::new(false)),
             runtime,
             render_handle,
-            static_lines: Vec::new(),
+            static_renderer: StaticRenderer::new(),
             last_width: initial_width,
             last_height: initial_height,
         }
@@ -303,7 +304,7 @@ where
                 }
                 Printable::Element(element) => {
                     // Render element to string first
-                    let rendered = self.render_element_to_string(element, width);
+                    let rendered = render_to_string(element, width);
                     self.terminal.println(&rendered)?;
                 }
             }
@@ -314,12 +315,6 @@ where
 
         Ok(())
     }
-
-    /// Render an element to a string (for println)
-    fn render_element_to_string(&self, element: &Element, width: u16) -> String {
-        render_to_string(element, width)
-    }
-
 
     /// Handle terminal resize events
     ///
@@ -375,13 +370,14 @@ where
         }
 
         // Extract and commit static content
-        let new_static_lines = self.extract_static_content(&root, width);
+        let new_static_lines = self.static_renderer.extract_static_content(&root, width);
         if !new_static_lines.is_empty() {
-            self.commit_static_content(&new_static_lines)?;
+            self.static_renderer
+                .commit_static_content(&new_static_lines, &mut self.terminal)?;
         }
 
         // Filter out static elements from the tree for dynamic rendering
-        let dynamic_root = self.filter_static_elements(&root);
+        let dynamic_root = self.static_renderer.filter_static_elements(&root);
 
         // Compute layout for dynamic content
         self.layout_engine.compute(&dynamic_root, width, height);
@@ -407,140 +403,6 @@ where
         // Use regular render() which trims trailing empty lines
         let rendered = output.render();
         self.terminal.render(&rendered)
-    }
-
-    /// Extract static content from the element tree
-    ///
-    /// Only extracts content from Static elements that have actual children
-    /// (new items to render). Empty Static elements are skipped.
-    fn extract_static_content(&self, element: &Element, width: u16) -> Vec<String> {
-        let mut lines = Vec::new();
-
-        if element.style.is_static {
-            // Only render if the static element has children (new items)
-            // Empty Static elements mean all items have already been rendered
-            if !element.children.is_empty() {
-                // Render static element to get its content
-                let mut engine = LayoutEngine::new();
-                engine.compute(element, width, 100); // Use large height for static content
-
-                let layout = engine.get_layout(element.id).unwrap_or_default();
-                // Ensure we have valid dimensions
-                let render_width = (layout.width as u16).max(1);
-                let render_height = (layout.height as u16).max(1);
-                let mut output = Output::new(render_width, render_height);
-                self.render_element_to_output(element, &engine, &mut output, 0.0, 0.0);
-
-                let rendered = output.render();
-                for line in rendered.lines() {
-                    // Skip empty lines to avoid clutter
-                    let trimmed = line.trim();
-                    if !trimmed.is_empty() {
-                        lines.push(line.to_string());
-                    }
-                }
-            }
-        }
-
-        // Check children for static content (non-static elements might contain static children)
-        for child in &element.children {
-            lines.extend(self.extract_static_content(child, width));
-        }
-
-        lines
-    }
-
-    /// Commit static content to the terminal (write permanently)
-    ///
-    /// This follows the Ink/Bubbletea pattern:
-    /// 1. Clear the current dynamic UI
-    /// 2. Write the static content (which will persist)
-    /// 3. The dynamic UI will be re-rendered below
-    fn commit_static_content(&mut self, new_lines: &[String]) -> std::io::Result<()> {
-        use std::io::{Write, stdout};
-
-        // Skip if no lines to commit
-        if new_lines.is_empty() {
-            return Ok(());
-        }
-
-        // Clear current dynamic UI first (like Ink's log.clear())
-        self.terminal.clear()?;
-
-        let mut stdout = stdout();
-        for line in new_lines {
-            // Write the line with erase-to-end-of-line to ensure clean output
-            writeln!(stdout, "{}\x1b[K", line)?;
-            self.static_lines.push(line.clone());
-        }
-        stdout.flush()?;
-
-        // Force a full repaint of the dynamic UI
-        self.terminal.repaint();
-
-        Ok(())
-    }
-
-    /// Filter out static elements from the tree
-    fn filter_static_elements(&self, element: &Element) -> Element {
-        let mut new_element = element.clone();
-
-        // Remove static children
-        new_element.children = element
-            .children
-            .iter()
-            .filter(|child| !child.style.is_static)
-            .map(|child| self.filter_static_elements(child))
-            .collect();
-
-        new_element
-    }
-
-    /// Render element to output buffer (helper for static content)
-    fn render_element_to_output(
-        &self,
-        element: &Element,
-        engine: &LayoutEngine,
-        output: &mut Output,
-        offset_x: f32,
-        offset_y: f32,
-    ) {
-        // Skip elements with display: none
-        if element.style.display == crate::core::Display::None {
-            return;
-        }
-
-        let layout = engine.get_layout(element.id).unwrap_or_default();
-
-        let x = (offset_x + layout.x) as u16;
-        let y = (offset_y + layout.y) as u16;
-        let width = layout.width as u16;
-        let height = layout.height as u16;
-
-        if element.style.background_color.is_some() {
-            output.fill_rect(x, y, width, height, ' ', &element.style);
-        }
-
-        if element.style.has_border() {
-            self.render_border(element, output, x, y, width, height);
-        }
-
-        if let Some(text) = &element.text_content {
-            let text_x = x
-                + if element.style.has_border() { 1 } else { 0 }
-                + element.style.padding.left as u16;
-            let text_y = y
-                + if element.style.has_border() { 1 } else { 0 }
-                + element.style.padding.top as u16;
-            output.write(text_x, text_y, text, &element.style);
-        }
-
-        let child_offset_x = offset_x + layout.x;
-        let child_offset_y = offset_y + layout.y;
-
-        for child in &element.children {
-            self.render_element_to_output(child, engine, output, child_offset_x, child_offset_y);
-        }
     }
 
     fn render_element(&self, element: &Element, output: &mut Output, offset_x: f32, offset_y: f32) {
@@ -1128,7 +990,6 @@ impl RenderHelper {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

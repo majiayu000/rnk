@@ -33,6 +33,7 @@ mod app;
 mod output;
 pub(crate) mod registry;
 pub(crate) mod runtime;
+pub(crate) mod static_content;
 mod terminal;
 
 pub use app::{
@@ -63,6 +64,6 @@ pub use app::{
 };
 
 // Re-export AppSink from registry (internal use only)
-pub use registry::AppSink;
 pub use output::Output;
+pub use registry::AppSink;
 pub use terminal::Terminal;
