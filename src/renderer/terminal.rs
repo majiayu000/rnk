@@ -432,51 +432,38 @@ impl Terminal {
     ///
     /// This renders at the current cursor position, using cursor movement
     /// to update in place. Content persists in terminal history.
+    ///
+    /// Key insight from Ink/Bubbletea: use `inline_lines_rendered` to track
+    /// how many lines are actually on screen, separate from `previous_lines`
+    /// which is used for diff optimization. After repaint(), previous_lines
+    /// is cleared but inline_lines_rendered still reflects screen state.
     fn render_inline(&mut self, output: &str) -> std::io::Result<()> {
         let mut stdout = stdout();
         let new_lines: Vec<&str> = output.lines().collect();
-        let prev_count = self.previous_lines.len();
         let new_count = new_lines.len();
 
-        // If this is the first render, just write the output
-        if prev_count == 0 {
-            for (i, line) in new_lines.iter().enumerate() {
-                // Move to column 0 and write line
-                write!(
-                    stdout,
-                    "{}{}{}",
-                    ansi::cursor_to_column(0),
-                    ansi::erase_line(),
-                    line
-                )?;
-                if i < new_count - 1 {
-                    write!(stdout, "\r\n")?; // Use \r\n for raw mode
-                }
+        // Use inline_lines_rendered to know how many lines are on screen
+        // This is separate from previous_lines which may be cleared by repaint()
+        let lines_on_screen = self.inline_lines_rendered;
+
+        // Move cursor to the start of our output area if we have content on screen
+        if lines_on_screen > 0 {
+            if lines_on_screen > 1 {
+                write!(stdout, "{}", ansi::cursor_up(lines_on_screen as u16 - 1))?;
             }
-            stdout.flush()?;
-            self.previous_lines = new_lines.iter().map(|s| s.to_string()).collect();
-            self.inline_lines_rendered = new_count;
-            return Ok(());
+            write!(stdout, "{}", ansi::cursor_to_column(0))?;
         }
 
-        // Move cursor to the start of our output area
-        // We need to go back to line 0 of our rendered content
-        if prev_count > 1 {
-            write!(stdout, "{}", ansi::cursor_up(prev_count as u16 - 1))?;
-        }
-        write!(stdout, "{}", ansi::cursor_to_column(0))?;
+        // Calculate max lines to handle (max of screen content and new content)
+        let max_lines = lines_on_screen.max(new_count);
 
-        // Calculate max lines to handle (max of prev and new)
-        let max_lines = prev_count.max(new_count);
-
-        // Render each line, clearing and rewriting
+        // Render each line
         for i in 0..max_lines {
             if i < new_count {
-                // Write the new line
                 let new_line = new_lines[i];
                 let old_line = self.previous_lines.get(i).map(|s| s.as_str());
 
-                // Always clear and rewrite (more robust, slight perf cost)
+                // Only rewrite if content changed or we don't have previous content
                 if old_line != Some(new_line) {
                     write!(stdout, "{}{}", ansi::erase_line(), new_line)?;
                 }
@@ -493,8 +480,8 @@ impl Terminal {
 
         // Position cursor correctly at the end
         // If new content is shorter, we need to move cursor back up
-        if new_count < prev_count {
-            let lines_to_go_up = prev_count - new_count;
+        if new_count < lines_on_screen {
+            let lines_to_go_up = lines_on_screen - new_count;
             write!(stdout, "{}", ansi::cursor_up(lines_to_go_up as u16))?;
         }
         write!(stdout, "{}", ansi::cursor_to_column(0))?;

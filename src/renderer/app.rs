@@ -196,9 +196,13 @@ where
         use crossterm::terminal::{Clear, ClearType};
         use std::io::stdout;
 
-        // Always clear on resize to prevent artifacts
         if new_width != self.last_width || new_height != self.last_height {
-            let _ = execute!(stdout(), MoveTo(0, 0), Clear(ClearType::All));
+            if self.terminal.is_alt_screen() {
+                // Fullscreen mode: clear entire screen
+                let _ = execute!(stdout(), MoveTo(0, 0), Clear(ClearType::All));
+            }
+            // Inline mode: just repaint (clear_inline_content will handle cleanup)
+            // Don't use Clear(ClearType::All) as it destroys scrollback content
             self.terminal.repaint();
         }
 
