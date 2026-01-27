@@ -12,7 +12,7 @@ use crate::hooks::use_input::{clear_input_handlers, dispatch_key_event};
 use crate::hooks::use_mouse::dispatch_mouse_event;
 use crate::renderer::Terminal;
 
-use super::registry::{AppRuntime, AppSink, ModeSwitch, Printable};
+use super::registry::{AppRuntime, AppSink};
 
 /// Event loop state and execution
 pub(crate) struct EventLoop {
@@ -115,7 +115,7 @@ impl EventLoop {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::renderer::registry::{AppRuntime, AppSink};
+    use crate::renderer::registry::{AppRuntime, AppSink, ModeSwitch, Printable};
 
     #[test]
     fn test_event_loop_creation() {

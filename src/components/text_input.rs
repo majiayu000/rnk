@@ -20,21 +20,12 @@ use crate::hooks::{FocusState, UseFocusOptions, use_focus, use_input, use_signal
 ///         .into_element()
 /// }
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct TextInputState {
     /// Current text value
     value: String,
     /// Cursor position (character index)
     cursor: usize,
-}
-
-impl Default for TextInputState {
-    fn default() -> Self {
-        Self {
-            value: String::new(),
-            cursor: 0,
-        }
-    }
 }
 
 impl TextInputState {

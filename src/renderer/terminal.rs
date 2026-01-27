@@ -458,19 +458,23 @@ impl Terminal {
         let max_lines = lines_on_screen.max(new_count);
 
         // Render each line
-        for i in 0..max_lines {
-            if i < new_count {
-                let new_line = new_lines[i];
-                let old_line = self.previous_lines.get(i).map(|s| s.as_str());
+        for (i, new_line) in new_lines.iter().enumerate() {
+            let old_line = self.previous_lines.get(i).map(|s| s.as_str());
 
-                // Only rewrite if content changed or we don't have previous content
-                if old_line != Some(new_line) {
-                    write!(stdout, "{}{}", ansi::erase_line(), new_line)?;
-                }
-            } else {
-                // Clear extra lines from previous render
-                write!(stdout, "{}", ansi::erase_line())?;
+            // Only rewrite if content changed or we don't have previous content
+            if old_line != Some(*new_line) {
+                write!(stdout, "{}{}", ansi::erase_line(), new_line)?;
             }
+
+            // Move to next line if not the last
+            if i < max_lines - 1 {
+                write!(stdout, "\r\n")?;
+            }
+        }
+
+        // Clear extra lines from previous render
+        for i in new_count..max_lines {
+            write!(stdout, "{}", ansi::erase_line())?;
 
             // Move to next line if not the last
             if i < max_lines - 1 {
