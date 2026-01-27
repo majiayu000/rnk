@@ -8,6 +8,7 @@ mod use_effect;
 pub mod use_focus;
 pub mod use_input;
 mod use_measure;
+mod use_memo;
 pub mod use_mouse;
 mod use_scroll;
 mod use_signal;
@@ -29,6 +30,7 @@ pub use use_measure::{
     Dimensions, MeasureContext, MeasureRef, get_measure_context, measure_element,
     set_measure_context, use_measure,
 };
+pub use use_memo::{MemoizedCallback, use_callback, use_memo};
 pub use use_mouse::{
     Mouse, MouseAction, MouseButton, clear_mouse_handlers, dispatch_mouse_event, is_mouse_enabled,
     set_mouse_enabled, use_mouse,
