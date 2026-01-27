@@ -2,12 +2,13 @@
 //!
 //! The executor is responsible for:
 //! - Managing a Tokio runtime for async tasks
-//! - Executing commands (Perform, Sleep, Batch)
+//! - Executing commands (Perform, Sleep, Batch, Sequence, Tick, Every)
 //! - Notifying the render loop when tasks complete
 //! - Supporting graceful shutdown
 
 use super::Cmd;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc;
 
 /// Handle for requesting renders from background tasks
@@ -126,7 +127,7 @@ impl CmdExecutor {
             }
 
             Cmd::Batch(cmds) => {
-                // Execute all commands in parallel
+                // Execute all commands in parallel (no ordering guarantees)
                 for cmd in cmds {
                     self.execute_internal(cmd, false);
                 }
@@ -134,6 +135,44 @@ impl CmdExecutor {
                 if notify_render {
                     render_handle.request();
                 }
+            }
+
+            Cmd::Sequence(cmds) => {
+                // Execute commands sequentially (in order)
+                if cmds.is_empty() {
+                    if notify_render {
+                        render_handle.request();
+                    }
+                    return;
+                }
+
+                let runtime_clone = Arc::clone(runtime);
+                let render_handle_clone = render_handle.clone();
+
+                runtime.spawn(async move {
+                    for cmd in cmds {
+                        // Create a temporary executor for each command
+                        let temp_executor = CmdExecutor {
+                            runtime: Some(Arc::clone(&runtime_clone)),
+                            render_handle: render_handle_clone.clone(),
+                        };
+
+                        // Execute and wait for completion using a oneshot channel
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        temp_executor.execute_with_completion(cmd, tx);
+
+                        // Prevent shutdown on drop
+                        std::mem::forget(temp_executor);
+
+                        // Wait for this command to complete before starting next
+                        let _ = rx.await;
+                    }
+
+                    // Notify render after all commands complete
+                    if notify_render {
+                        render_handle_clone.request();
+                    }
+                });
             }
 
             Cmd::Perform { future } => {
@@ -174,6 +213,183 @@ impl CmdExecutor {
                             std::mem::forget(temp_executor);
                         }
                     }
+                });
+            }
+
+            Cmd::Tick { duration, callback } => {
+                runtime.spawn(async move {
+                    tokio::time::sleep(duration).await;
+                    let timestamp = Instant::now();
+                    callback(timestamp);
+                    if notify_render {
+                        render_handle.request();
+                    }
+                });
+            }
+
+            Cmd::Every { duration, callback } => {
+                runtime.spawn(async move {
+                    // Calculate time until next aligned boundary
+                    // For example, if duration is 1 second and current time is 12:34:56.789,
+                    // we want to wait until 12:34:57.000
+                    let now = std::time::SystemTime::now();
+                    let since_epoch = now
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default();
+
+                    let duration_nanos = duration.as_nanos() as u64;
+                    let since_epoch_nanos = since_epoch.as_nanos() as u64;
+
+                    // Calculate how far we are into the current interval
+                    let remainder = since_epoch_nanos % duration_nanos;
+
+                    // Calculate time until next boundary
+                    let wait_nanos = if remainder == 0 {
+                        duration_nanos
+                    } else {
+                        duration_nanos - remainder
+                    };
+
+                    let wait_duration = std::time::Duration::from_nanos(wait_nanos);
+                    tokio::time::sleep(wait_duration).await;
+
+                    let timestamp = Instant::now();
+                    callback(timestamp);
+                    if notify_render {
+                        render_handle.request();
+                    }
+                });
+            }
+        }
+    }
+
+    /// Execute a command and signal completion via a oneshot channel
+    fn execute_with_completion(&self, cmd: Cmd, completion: tokio::sync::oneshot::Sender<()>) {
+        let runtime = self.runtime.as_ref().expect("executor was shutdown");
+        let render_handle = self.render_handle.clone();
+
+        match cmd {
+            Cmd::None => {
+                let _ = completion.send(());
+            }
+
+            Cmd::Batch(cmds) => {
+                // Execute all commands in parallel and wait for all to complete
+                let runtime_clone = Arc::clone(runtime);
+                let render_handle_clone = render_handle.clone();
+
+                runtime.spawn(async move {
+                    let mut handles = Vec::with_capacity(cmds.len());
+
+                    for cmd in cmds {
+                        let rt = Arc::clone(&runtime_clone);
+                        let rh = render_handle_clone.clone();
+
+                        let handle = tokio::spawn(async move {
+                            let temp_executor = CmdExecutor {
+                                runtime: Some(rt),
+                                render_handle: rh,
+                            };
+                            let (tx, rx) = tokio::sync::oneshot::channel();
+                            temp_executor.execute_with_completion(cmd, tx);
+                            std::mem::forget(temp_executor);
+                            let _ = rx.await;
+                        });
+                        handles.push(handle);
+                    }
+
+                    // Wait for all to complete
+                    for handle in handles {
+                        let _ = handle.await;
+                    }
+
+                    let _ = completion.send(());
+                });
+            }
+
+            Cmd::Sequence(cmds) => {
+                let runtime_clone = Arc::clone(runtime);
+                let render_handle_clone = render_handle.clone();
+
+                runtime.spawn(async move {
+                    for cmd in cmds {
+                        let temp_executor = CmdExecutor {
+                            runtime: Some(Arc::clone(&runtime_clone)),
+                            render_handle: render_handle_clone.clone(),
+                        };
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        temp_executor.execute_with_completion(cmd, tx);
+                        std::mem::forget(temp_executor);
+                        let _ = rx.await;
+                    }
+                    let _ = completion.send(());
+                });
+            }
+
+            Cmd::Perform { future } => {
+                runtime.spawn(async move {
+                    future.await;
+                    let _ = completion.send(());
+                });
+            }
+
+            Cmd::Sleep { duration, then } => {
+                let runtime_clone = Arc::clone(runtime);
+                let render_handle_clone = render_handle.clone();
+
+                runtime.spawn(async move {
+                    tokio::time::sleep(duration).await;
+
+                    match *then {
+                        Cmd::None => {
+                            let _ = completion.send(());
+                        }
+                        other => {
+                            let temp_executor = CmdExecutor {
+                                runtime: Some(runtime_clone),
+                                render_handle: render_handle_clone,
+                            };
+                            let (tx, rx) = tokio::sync::oneshot::channel();
+                            temp_executor.execute_with_completion(other, tx);
+                            std::mem::forget(temp_executor);
+                            let _ = rx.await;
+                            let _ = completion.send(());
+                        }
+                    }
+                });
+            }
+
+            Cmd::Tick { duration, callback } => {
+                runtime.spawn(async move {
+                    tokio::time::sleep(duration).await;
+                    let timestamp = Instant::now();
+                    callback(timestamp);
+                    let _ = completion.send(());
+                });
+            }
+
+            Cmd::Every { duration, callback } => {
+                runtime.spawn(async move {
+                    let now = std::time::SystemTime::now();
+                    let since_epoch = now
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default();
+
+                    let duration_nanos = duration.as_nanos() as u64;
+                    let since_epoch_nanos = since_epoch.as_nanos() as u64;
+                    let remainder = since_epoch_nanos % duration_nanos;
+                    let wait_nanos = if remainder == 0 {
+                        duration_nanos
+                    } else {
+                        duration_nanos - remainder
+                    };
+
+                    let wait_duration = std::time::Duration::from_nanos(wait_nanos);
+                    tokio::time::sleep(wait_duration).await;
+
+                    let timestamp = Instant::now();
+                    callback(timestamp);
+                    let _ = completion.send(());
                 });
             }
         }
@@ -500,5 +716,411 @@ mod tests {
         // Should not hang, but also should not notify (empty batch becomes None)
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(rx.try_recv().is_err());
+    }
+
+    // ==================== Sequence Tests ====================
+
+    #[tokio::test]
+    async fn test_execute_sequence() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let executor = CmdExecutor::new(tx);
+
+        let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let o1 = Arc::clone(&order);
+        let o2 = Arc::clone(&order);
+        let o3 = Arc::clone(&order);
+
+        let cmd = Cmd::sequence(vec![
+            Cmd::perform(move || async move {
+                o1.lock().unwrap().push(1);
+            }),
+            Cmd::perform(move || async move {
+                o2.lock().unwrap().push(2);
+            }),
+            Cmd::perform(move || async move {
+                o3.lock().unwrap().push(3);
+            }),
+        ]);
+
+        executor.execute(cmd);
+
+        // Wait for notification
+        tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+
+        // Give tasks time to complete
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Commands should have executed in order
+        let result = order.lock().unwrap().clone();
+        assert_eq!(result, vec![1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn test_sequence_with_sleep() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let executor = CmdExecutor::new(tx);
+
+        let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let o1 = Arc::clone(&order);
+        let o2 = Arc::clone(&order);
+
+        let cmd = Cmd::sequence(vec![
+            Cmd::sleep(Duration::from_millis(50)).and_then(Cmd::perform(move || async move {
+                o1.lock().unwrap().push(1);
+            })),
+            Cmd::perform(move || async move {
+                o2.lock().unwrap().push(2);
+            }),
+        ]);
+
+        let start = std::time::Instant::now();
+        executor.execute(cmd);
+
+        // Wait for notification
+        tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+
+        // Give tasks time to complete
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let elapsed = start.elapsed();
+        // Should take at least 50ms (the sleep)
+        assert!(elapsed >= Duration::from_millis(50));
+
+        // Commands should have executed in order (1 before 2)
+        let result = order.lock().unwrap().clone();
+        assert_eq!(result, vec![1, 2]);
+    }
+
+    #[tokio::test]
+    async fn test_sequence_timing() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let executor = CmdExecutor::new(tx);
+
+        let cmd = Cmd::sequence(vec![
+            Cmd::sleep(Duration::from_millis(50)),
+            Cmd::sleep(Duration::from_millis(50)),
+            Cmd::sleep(Duration::from_millis(50)),
+        ]);
+
+        let start = std::time::Instant::now();
+        executor.execute(cmd);
+
+        // Wait for notification
+        tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+
+        let elapsed = start.elapsed();
+        // Should take at least 150ms (3 x 50ms sequentially)
+        assert!(elapsed >= Duration::from_millis(150));
+        // But not too long
+        assert!(elapsed < Duration::from_millis(500));
+    }
+
+    #[tokio::test]
+    async fn test_empty_sequence() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let executor = CmdExecutor::new(tx);
+
+        executor.execute(Cmd::sequence(vec![]));
+
+        // Should not hang, but also should not notify (empty sequence becomes None)
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_sequence_vs_batch_timing() {
+        // Batch should be faster than sequence for parallel tasks
+        let (tx1, mut rx1) = mpsc::unbounded_channel();
+        let executor1 = CmdExecutor::new(tx1);
+
+        let (tx2, mut rx2) = mpsc::unbounded_channel();
+        let executor2 = CmdExecutor::new(tx2);
+
+        // Batch: parallel execution
+        let batch_cmd = Cmd::batch(vec![
+            Cmd::sleep(Duration::from_millis(50)),
+            Cmd::sleep(Duration::from_millis(50)),
+        ]);
+
+        // Sequence: sequential execution
+        let seq_cmd = Cmd::sequence(vec![
+            Cmd::sleep(Duration::from_millis(50)),
+            Cmd::sleep(Duration::from_millis(50)),
+        ]);
+
+        let batch_start = std::time::Instant::now();
+        executor1.execute(batch_cmd);
+        tokio::time::timeout(Duration::from_secs(2), rx1.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+        let batch_elapsed = batch_start.elapsed();
+
+        let seq_start = std::time::Instant::now();
+        executor2.execute(seq_cmd);
+        tokio::time::timeout(Duration::from_secs(2), rx2.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+        let seq_elapsed = seq_start.elapsed();
+
+        // Sequence should take roughly twice as long as batch
+        // (100ms vs 50ms, with some tolerance)
+        assert!(seq_elapsed >= Duration::from_millis(100));
+        assert!(batch_elapsed < Duration::from_millis(100));
+    }
+
+    #[tokio::test]
+    async fn test_nested_sequence_in_batch() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let executor = CmdExecutor::new(tx);
+
+        let counter = Arc::new(AtomicU32::new(0));
+        let c1 = Arc::clone(&counter);
+        let c2 = Arc::clone(&counter);
+        let c3 = Arc::clone(&counter);
+
+        let cmd = Cmd::batch(vec![
+            Cmd::sequence(vec![Cmd::perform(move || async move {
+                c1.fetch_add(1, Ordering::SeqCst);
+            })]),
+            Cmd::sequence(vec![
+                Cmd::perform(move || async move {
+                    c2.fetch_add(1, Ordering::SeqCst);
+                }),
+                Cmd::perform(move || async move {
+                    c3.fetch_add(1, Ordering::SeqCst);
+                }),
+            ]),
+        ]);
+
+        executor.execute(cmd);
+
+        // Wait for notification
+        tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+
+        // Give tasks time to complete
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        assert_eq!(counter.load(Ordering::SeqCst), 3);
+    }
+
+    // ==================== Tick Tests ====================
+
+    #[tokio::test]
+    async fn test_execute_tick() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let executor = CmdExecutor::new(tx);
+
+        let flag = Arc::new(AtomicBool::new(false));
+        let flag_clone = Arc::clone(&flag);
+        let timestamp_received = Arc::new(std::sync::Mutex::new(None));
+        let ts_clone = Arc::clone(&timestamp_received);
+
+        let cmd = Cmd::tick(Duration::from_millis(50), move |ts| {
+            flag_clone.store(true, Ordering::SeqCst);
+            *ts_clone.lock().unwrap() = Some(ts);
+        });
+
+        let start = std::time::Instant::now();
+        executor.execute(cmd);
+
+        // Wait for notification
+        tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+
+        let elapsed = start.elapsed();
+        assert!(elapsed >= Duration::from_millis(50));
+        assert!(flag.load(Ordering::SeqCst));
+        assert!(timestamp_received.lock().unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_tick_timing() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let executor = CmdExecutor::new(tx);
+
+        let cmd = Cmd::tick(Duration::from_millis(100), |_| {});
+
+        let start = std::time::Instant::now();
+        executor.execute(cmd);
+
+        // Wait for notification
+        tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+
+        let elapsed = start.elapsed();
+        assert!(elapsed >= Duration::from_millis(100));
+        assert!(elapsed < Duration::from_millis(200));
+    }
+
+    #[tokio::test]
+    async fn test_multiple_ticks() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let executor = CmdExecutor::new(tx);
+
+        let counter = Arc::new(AtomicU32::new(0));
+        let c1 = Arc::clone(&counter);
+        let c2 = Arc::clone(&counter);
+
+        let cmd = Cmd::batch(vec![
+            Cmd::tick(Duration::from_millis(50), move |_| {
+                c1.fetch_add(1, Ordering::SeqCst);
+            }),
+            Cmd::tick(Duration::from_millis(100), move |_| {
+                c2.fetch_add(1, Ordering::SeqCst);
+            }),
+        ]);
+
+        executor.execute(cmd);
+
+        // Wait for notification
+        tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+
+        // Give tasks time to complete
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
+    }
+
+    // ==================== Every Tests ====================
+
+    #[tokio::test]
+    async fn test_execute_every() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let executor = CmdExecutor::new(tx);
+
+        let flag = Arc::new(AtomicBool::new(false));
+        let flag_clone = Arc::clone(&flag);
+
+        // Use a short duration for testing
+        let cmd = Cmd::every(Duration::from_millis(100), move |_| {
+            flag_clone.store(true, Ordering::SeqCst);
+        });
+
+        executor.execute(cmd);
+
+        // Wait for notification (may take up to 100ms to align)
+        tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+
+        assert!(flag.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn test_every_receives_timestamp() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let executor = CmdExecutor::new(tx);
+
+        let timestamp_received = Arc::new(std::sync::Mutex::new(None));
+        let ts_clone = Arc::clone(&timestamp_received);
+
+        let cmd = Cmd::every(Duration::from_millis(50), move |ts| {
+            *ts_clone.lock().unwrap() = Some(ts);
+        });
+
+        executor.execute(cmd);
+
+        // Wait for notification
+        tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+
+        assert!(timestamp_received.lock().unwrap().is_some());
+    }
+
+    // ==================== Mixed Composition Tests ====================
+
+    #[tokio::test]
+    async fn test_sequence_with_tick() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let executor = CmdExecutor::new(tx);
+
+        let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let o1 = Arc::clone(&order);
+        let o2 = Arc::clone(&order);
+
+        let cmd = Cmd::sequence(vec![
+            Cmd::tick(Duration::from_millis(50), move |_| {
+                o1.lock().unwrap().push(1);
+            }),
+            Cmd::perform(move || async move {
+                o2.lock().unwrap().push(2);
+            }),
+        ]);
+
+        executor.execute(cmd);
+
+        // Wait for notification
+        tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+
+        // Give tasks time to complete
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let result = order.lock().unwrap().clone();
+        assert_eq!(result, vec![1, 2]);
+    }
+
+    #[tokio::test]
+    async fn test_batch_with_sequence_and_tick() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let executor = CmdExecutor::new(tx);
+
+        let counter = Arc::new(AtomicU32::new(0));
+        let c1 = Arc::clone(&counter);
+        let c2 = Arc::clone(&counter);
+        let c3 = Arc::clone(&counter);
+
+        let cmd = Cmd::batch(vec![
+            Cmd::sequence(vec![
+                Cmd::tick(Duration::from_millis(25), move |_| {
+                    c1.fetch_add(1, Ordering::SeqCst);
+                }),
+                Cmd::perform(move || async move {
+                    c2.fetch_add(1, Ordering::SeqCst);
+                }),
+            ]),
+            Cmd::tick(Duration::from_millis(50), move |_| {
+                c3.fetch_add(1, Ordering::SeqCst);
+            }),
+        ]);
+
+        executor.execute(cmd);
+
+        // Wait for notification
+        tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+
+        // Give tasks time to complete
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        assert_eq!(counter.load(Ordering::SeqCst), 3);
     }
 }
