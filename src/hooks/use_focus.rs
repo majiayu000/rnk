@@ -191,14 +191,13 @@ impl FocusManager {
     }
 
     /// Clear focus state for next render
-    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.elements.clear();
         // Keep focused_index for persistence across renders
     }
 }
 
-// Thread-local storage for focus manager
+// Thread-local storage for focus manager (legacy fallback)
 thread_local! {
     static FOCUS_MANAGER: RefCell<FocusManager> = RefCell::new(FocusManager::new());
 }
@@ -232,18 +231,30 @@ where
 pub fn use_focus(options: UseFocusOptions) -> FocusState {
     use crate::hooks::use_signal;
 
-    // Register this component as focusable
-    let focus_id = use_signal(|| {
-        FOCUS_MANAGER.with(|fm| {
-            fm.borrow_mut()
-                .register(options.id.clone(), options.is_active, options.auto_focus)
-        })
-    });
+    // Try to use RuntimeContext first, fall back to thread-local
+    if let Some(ctx) = crate::runtime::current_runtime() {
+        let focus_id = use_signal(|| {
+            ctx.borrow_mut().focus_manager_mut().register(
+                options.id.clone(),
+                options.is_active,
+                options.auto_focus,
+            )
+        });
 
-    // Get current focus state
-    let is_focused = FOCUS_MANAGER.with(|fm| fm.borrow().is_focused(focus_id.get()));
+        let is_focused = ctx.borrow().focus_manager().is_focused(focus_id.get());
+        FocusState { is_focused }
+    } else {
+        // Legacy thread-local fallback
+        let focus_id = use_signal(|| {
+            FOCUS_MANAGER.with(|fm| {
+                fm.borrow_mut()
+                    .register(options.id.clone(), options.is_active, options.auto_focus)
+            })
+        });
 
-    FocusState { is_focused }
+        let is_focused = FOCUS_MANAGER.with(|fm| fm.borrow().is_focused(focus_id.get()));
+        FocusState { is_focused }
+    }
 }
 
 /// Hook to access the focus manager
@@ -270,22 +281,40 @@ pub struct FocusManagerHandle;
 impl FocusManagerHandle {
     /// Focus the next focusable element
     pub fn focus_next(&self) {
-        FOCUS_MANAGER.with(|fm| fm.borrow_mut().focus_next());
+        if let Some(ctx) = crate::runtime::current_runtime() {
+            ctx.borrow_mut().focus_manager_mut().focus_next();
+        } else {
+            FOCUS_MANAGER.with(|fm| fm.borrow_mut().focus_next());
+        }
     }
 
     /// Focus the previous focusable element
     pub fn focus_previous(&self) {
-        FOCUS_MANAGER.with(|fm| fm.borrow_mut().focus_previous());
+        if let Some(ctx) = crate::runtime::current_runtime() {
+            ctx.borrow_mut().focus_manager_mut().focus_previous();
+        } else {
+            FOCUS_MANAGER.with(|fm| fm.borrow_mut().focus_previous());
+        }
     }
 
     /// Focus a specific element by ID
     pub fn focus(&self, id: &str) {
-        FOCUS_MANAGER.with(|fm| fm.borrow_mut().focus(id));
+        if let Some(ctx) = crate::runtime::current_runtime() {
+            ctx.borrow_mut().focus_manager_mut().focus(id);
+        } else {
+            FOCUS_MANAGER.with(|fm| fm.borrow_mut().focus(id));
+        }
     }
 
     /// Enable/disable focus for the current component
     pub fn enable_focus(&self, id: usize, enabled: bool) {
-        FOCUS_MANAGER.with(|fm| fm.borrow_mut().enable_focus(id, enabled));
+        if let Some(ctx) = crate::runtime::current_runtime() {
+            ctx.borrow_mut()
+                .focus_manager_mut()
+                .enable_focus(id, enabled);
+        } else {
+            FOCUS_MANAGER.with(|fm| fm.borrow_mut().enable_focus(id, enabled));
+        }
     }
 }
 
@@ -360,5 +389,33 @@ mod tests {
 
         fm.focus_next();
         assert!(fm.is_focused(id3)); // Skips inactive element
+    }
+
+    #[test]
+    fn test_focus_with_runtime() {
+        use crate::runtime::{RuntimeContext, with_runtime};
+        use std::rc::Rc;
+
+        let ctx = Rc::new(RefCell::new(RuntimeContext::new()));
+
+        // Register elements within runtime context
+        with_runtime(ctx.clone(), || {
+            let fm_handle = use_focus_manager();
+
+            // Register some elements directly on the context
+            let id1 = ctx
+                .borrow_mut()
+                .focus_manager_mut()
+                .register(None, true, true);
+            let id2 = ctx
+                .borrow_mut()
+                .focus_manager_mut()
+                .register(None, true, false);
+
+            assert!(ctx.borrow().focus_manager().is_focused(id1));
+
+            fm_handle.focus_next();
+            assert!(ctx.borrow().focus_manager().is_focused(id2));
+        });
     }
 }

@@ -127,7 +127,7 @@ impl AppContext {
     }
 }
 
-// Thread-local storage for the current app context
+// Thread-local storage for the current app context (legacy fallback)
 thread_local! {
     static APP_CONTEXT: std::cell::RefCell<Option<AppContext>> = const { std::cell::RefCell::new(None) };
 }
@@ -141,6 +141,14 @@ pub fn set_app_context(ctx: Option<AppContext>) {
 
 /// Get the current app context
 pub fn get_app_context() -> Option<AppContext> {
+    // Try RuntimeContext first, fall back to thread-local
+    if let Some(ctx) = crate::runtime::current_runtime() {
+        let borrowed = ctx.borrow();
+        if let Some(handle) = borrowed.render_handle() {
+            return Some(AppContext::new(borrowed.exit_flag(), handle.clone()));
+        }
+    }
+
     APP_CONTEXT.with(|c| c.borrow().clone())
 }
 
@@ -177,13 +185,16 @@ mod tests {
     }
 
     #[test]
-    fn test_set_get_app_context() {
+    fn test_set_get_app_context_legacy() {
         let exit_flag = Arc::new(AtomicBool::new(false));
         let ctx = AppContext::new(exit_flag.clone(), test_render_handle());
 
         set_app_context(Some(ctx));
 
-        let retrieved = get_app_context();
+        // Clear any runtime context to test legacy path
+        crate::runtime::set_current_runtime(None);
+
+        let retrieved = APP_CONTEXT.with(|c| c.borrow().clone());
         assert!(retrieved.is_some());
 
         retrieved.unwrap().exit();
@@ -191,6 +202,28 @@ mod tests {
 
         // Clean up
         set_app_context(None);
+    }
+
+    #[test]
+    fn test_app_context_with_runtime() {
+        use crate::runtime::{RuntimeContext, with_runtime};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let exit_flag = Arc::new(AtomicBool::new(false));
+        let render_handle = test_render_handle();
+
+        let ctx = Rc::new(RefCell::new(RuntimeContext::with_app_control(
+            exit_flag.clone(),
+            render_handle,
+        )));
+
+        with_runtime(ctx.clone(), || {
+            let app = get_app_context().expect("Should get app context");
+            assert!(!exit_flag.load(Ordering::SeqCst));
+            app.exit();
+            assert!(exit_flag.load(Ordering::SeqCst));
+        });
     }
 
     fn test_render_handle() -> RenderHandle {

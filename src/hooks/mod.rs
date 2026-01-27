@@ -5,7 +5,7 @@ mod use_accessibility;
 pub(crate) mod use_app;
 mod use_cmd;
 mod use_effect;
-mod use_focus;
+pub mod use_focus;
 pub mod use_input;
 mod use_measure;
 pub mod use_mouse;

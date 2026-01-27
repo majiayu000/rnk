@@ -144,9 +144,15 @@ pub fn register_mouse_handler<F>(handler: F)
 where
     F: Fn(&Mouse) + 'static,
 {
-    MOUSE_HANDLERS.with(|handlers| {
-        handlers.borrow_mut().push(Rc::new(handler));
-    });
+    // Try to use RuntimeContext first, fall back to thread-local
+    if let Some(ctx) = crate::runtime::current_runtime() {
+        ctx.borrow_mut().register_mouse_handler(handler);
+    } else {
+        MOUSE_HANDLERS.with(|handlers| {
+            handlers.borrow_mut().push(Rc::new(handler));
+        });
+        set_mouse_enabled(true);
+    }
 }
 
 /// Clear all mouse handlers
@@ -159,21 +165,37 @@ pub fn clear_mouse_handlers() {
 /// Dispatch mouse event to all handlers
 pub fn dispatch_mouse_event(event: &MouseEvent) {
     let mouse = Mouse::from_event(event);
-    MOUSE_HANDLERS.with(|handlers| {
-        for handler in handlers.borrow().iter() {
-            handler(&mouse);
-        }
-    });
+
+    // Try RuntimeContext first, fall back to thread-local
+    if let Some(ctx) = crate::runtime::current_runtime() {
+        ctx.borrow().dispatch_mouse(&mouse);
+    } else {
+        MOUSE_HANDLERS.with(|handlers| {
+            for handler in handlers.borrow().iter() {
+                handler(&mouse);
+            }
+        });
+    }
 }
 
 /// Check if mouse mode should be enabled
 pub fn is_mouse_enabled() -> bool {
-    MOUSE_ENABLED.with(|enabled| *enabled.borrow())
+    // Try RuntimeContext first, fall back to thread-local
+    if let Some(ctx) = crate::runtime::current_runtime() {
+        ctx.borrow().is_mouse_enabled()
+    } else {
+        MOUSE_ENABLED.with(|enabled| *enabled.borrow())
+    }
 }
 
 /// Set mouse enabled state
 pub fn set_mouse_enabled(enabled: bool) {
-    MOUSE_ENABLED.with(|e| *e.borrow_mut() = enabled);
+    // Try RuntimeContext first, fall back to thread-local
+    if let Some(ctx) = crate::runtime::current_runtime() {
+        ctx.borrow_mut().set_mouse_enabled(enabled);
+    } else {
+        MOUSE_ENABLED.with(|e| *e.borrow_mut() = enabled);
+    }
 }
 
 /// Hook to handle mouse events
@@ -195,8 +217,6 @@ pub fn use_mouse<F>(handler: F)
 where
     F: Fn(&Mouse) + 'static,
 {
-    // Enable mouse mode when use_mouse is called
-    set_mouse_enabled(true);
     register_mouse_handler(handler);
 }
 
@@ -251,11 +271,43 @@ mod tests {
     }
 
     #[test]
-    fn test_mouse_enabled() {
-        set_mouse_enabled(false);
-        assert!(!is_mouse_enabled());
-        set_mouse_enabled(true);
-        assert!(is_mouse_enabled());
-        set_mouse_enabled(false); // Reset
+    fn test_mouse_enabled_legacy() {
+        // Test thread-local fallback
+        MOUSE_ENABLED.with(|e| *e.borrow_mut() = false);
+        assert!(!MOUSE_ENABLED.with(|e| *e.borrow()));
+        MOUSE_ENABLED.with(|e| *e.borrow_mut() = true);
+        assert!(MOUSE_ENABLED.with(|e| *e.borrow()));
+        MOUSE_ENABLED.with(|e| *e.borrow_mut() = false); // Reset
+    }
+
+    #[test]
+    fn test_mouse_with_runtime() {
+        use crate::runtime::{RuntimeContext, with_runtime};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let ctx = Rc::new(RefCell::new(RuntimeContext::new()));
+        let clicked = Rc::new(RefCell::new(false));
+        let clicked_clone = clicked.clone();
+
+        with_runtime(ctx.clone(), || {
+            use_mouse(move |mouse| {
+                if mouse.is_left_click() {
+                    *clicked_clone.borrow_mut() = true;
+                }
+            });
+        });
+
+        // Dispatch within the context
+        let mouse = Mouse {
+            x: 10,
+            y: 5,
+            action: MouseAction::Press(MouseButton::Left),
+            ctrl: false,
+            shift: false,
+            alt: false,
+        };
+        ctx.borrow().dispatch_mouse(&mouse);
+        assert!(*clicked.borrow());
     }
 }
