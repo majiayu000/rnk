@@ -2,9 +2,67 @@
 //!
 //! This module provides configuration types for the application runner.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::core::Element;
 
 use super::app::App;
+use super::filter::{EventFilter, FilterChain, FilterResult};
+use super::frame_rate::FrameRateConfig;
+
+/// A token for cancelling the application from external code.
+///
+/// This allows external code (e.g., another thread, signal handler, or
+/// async task) to request that the application exit gracefully.
+///
+/// # Example
+///
+/// ```rust
+/// use rnk::renderer::CancelToken;
+/// use std::thread;
+/// use std::time::Duration;
+///
+/// let token = CancelToken::new();
+/// let token_clone = token.clone();
+///
+/// // Spawn a thread that will cancel after 5 seconds
+/// thread::spawn(move || {
+///     thread::sleep(Duration::from_secs(5));
+///     token_clone.cancel();
+/// });
+///
+/// // The app will exit when token.cancel() is called
+/// // render(my_app).with_cancel_token(token).run()?;
+/// ```
+#[derive(Clone, Default)]
+pub struct CancelToken {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl CancelToken {
+    /// Create a new cancel token
+    pub fn new() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Cancel the application
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+
+    /// Check if cancellation was requested
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Get the internal flag (for integration with App)
+    pub(crate) fn flag(&self) -> Arc<AtomicBool> {
+        self.cancelled.clone()
+    }
+}
 
 /// Application options for configuring the renderer
 #[derive(Debug, Clone)]
@@ -21,6 +79,14 @@ pub struct AppOptions {
     /// - `true`: Fullscreen mode, like vim or Bubbletea's `WithAltScreen()`.
     ///   Uses alternate screen buffer, content is cleared on exit.
     pub alternate_screen: bool,
+    /// Enable adaptive frame rate (default: false)
+    pub adaptive_fps: bool,
+    /// Minimum FPS when adaptive is enabled (default: 10)
+    pub min_fps: u32,
+    /// Maximum FPS when adaptive is enabled (default: 120)
+    pub max_fps: u32,
+    /// Collect frame rate statistics (default: false)
+    pub collect_frame_stats: bool,
 }
 
 impl Default for AppOptions {
@@ -29,7 +95,25 @@ impl Default for AppOptions {
             fps: 60, // Bubbletea default
             exit_on_ctrl_c: true,
             alternate_screen: false, // Inline mode by default (like Ink/Bubbletea)
+            adaptive_fps: false,
+            min_fps: 10,
+            max_fps: 120,
+            collect_frame_stats: false,
         }
+    }
+}
+
+impl AppOptions {
+    /// Convert to FrameRateConfig
+    pub fn to_frame_rate_config(&self) -> FrameRateConfig {
+        let mut config = FrameRateConfig::new(self.fps);
+        if self.adaptive_fps {
+            config = config.adaptive(self.min_fps, self.max_fps);
+        }
+        if self.collect_frame_stats {
+            config = config.with_stats();
+        }
+        config
     }
 }
 
@@ -61,6 +145,8 @@ where
 {
     component: F,
     options: AppOptions,
+    filter_chain: FilterChain,
+    cancel_token: Option<CancelToken>,
 }
 
 impl<F> AppBuilder<F>
@@ -72,6 +158,8 @@ where
         Self {
             component,
             options: AppOptions::default(),
+            filter_chain: FilterChain::new(),
+            cancel_token: None,
         }
     }
 
@@ -107,6 +195,138 @@ where
         self
     }
 
+    /// Enable adaptive frame rate.
+    ///
+    /// When enabled, the frame rate will automatically adjust based on
+    /// render performance. If rendering takes too long, FPS will decrease.
+    /// If rendering is fast, FPS will increase back toward the target.
+    ///
+    /// # Arguments
+    ///
+    /// * `min_fps` - Minimum FPS (default: 10)
+    /// * `max_fps` - Maximum FPS (default: 120)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// render(my_app)
+    ///     .fps(60)
+    ///     .adaptive_fps(15, 90)
+    ///     .run()?;
+    /// ```
+    pub fn adaptive_fps(mut self, min_fps: u32, max_fps: u32) -> Self {
+        self.options.adaptive_fps = true;
+        self.options.min_fps = min_fps.clamp(1, 120);
+        self.options.max_fps = max_fps.clamp(self.options.min_fps, 120);
+        self
+    }
+
+    /// Enable frame rate statistics collection.
+    ///
+    /// When enabled, frame rate statistics can be accessed via the
+    /// `use_frame_rate()` hook.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// render(my_app)
+    ///     .collect_frame_stats()
+    ///     .run()?;
+    /// ```
+    pub fn collect_frame_stats(mut self) -> Self {
+        self.options.collect_frame_stats = true;
+        self
+    }
+
+    /// Add an event filter to the filter chain.
+    ///
+    /// Filters are applied in priority order (higher priority first).
+    /// Each filter can pass, replace, or block events.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use rnk::prelude::*;
+    /// use rnk::renderer::FilterResult;
+    /// use crossterm::event::{Event, KeyCode};
+    ///
+    /// render(my_app)
+    ///     .with_filter("block-escape", |event| {
+    ///         // Block Escape key
+    ///         if let Event::Key(key) = &event {
+    ///             if key.code == KeyCode::Esc {
+    ///                 return FilterResult::Block;
+    ///             }
+    ///         }
+    ///         FilterResult::Pass(event)
+    ///     })
+    ///     .run()?;
+    /// ```
+    pub fn with_filter<G>(mut self, name: &str, filter: G) -> Self
+    where
+        G: Fn(crossterm::event::Event) -> FilterResult + Send + Sync + 'static,
+    {
+        self.filter_chain.add(EventFilter::new(name, filter));
+        self
+    }
+
+    /// Add an event filter with priority.
+    ///
+    /// Higher priority filters run first.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// render(my_app)
+    ///     .with_filter_priority("high-priority", 100, |event| {
+    ///         FilterResult::Pass(event)
+    ///     })
+    ///     .with_filter_priority("low-priority", 0, |event| {
+    ///         FilterResult::Pass(event)
+    ///     })
+    ///     .run()?;
+    /// ```
+    pub fn with_filter_priority<G>(mut self, name: &str, priority: i32, filter: G) -> Self
+    where
+        G: Fn(crossterm::event::Event) -> FilterResult + Send + Sync + 'static,
+    {
+        self.filter_chain
+            .add(EventFilter::with_priority(name, priority, filter));
+        self
+    }
+
+    /// Set a cancel token for external cancellation.
+    ///
+    /// This allows external code to cancel the application by calling
+    /// `token.cancel()`. The application will exit gracefully on the
+    /// next event loop iteration.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use rnk::prelude::*;
+    /// use rnk::renderer::CancelToken;
+    /// use std::thread;
+    /// use std::time::Duration;
+    ///
+    /// let token = CancelToken::new();
+    /// let token_clone = token.clone();
+    ///
+    /// // Cancel after 10 seconds
+    /// thread::spawn(move || {
+    ///     thread::sleep(Duration::from_secs(10));
+    ///     token_clone.cancel();
+    /// });
+    ///
+    /// render(my_app)
+    ///     .with_cancel_token(token)
+    ///     .run()?;
+    /// ```
+    pub fn with_cancel_token(mut self, token: CancelToken) -> Self {
+        self.cancel_token = Some(token);
+        self
+    }
+
     /// Get the current options
     pub fn options(&self) -> &AppOptions {
         &self.options
@@ -114,7 +334,13 @@ where
 
     /// Run the application
     pub fn run(self) -> std::io::Result<()> {
-        App::with_options(self.component, self.options).run()
+        App::with_full_config(
+            self.component,
+            self.options,
+            self.filter_chain,
+            self.cancel_token,
+        )
+        .run()
     }
 }
 
@@ -223,5 +449,39 @@ mod tests {
         }
         let builder = AppBuilder::new(dummy).fps(30);
         assert_eq!(builder.options().fps, 30);
+    }
+
+    #[test]
+    fn test_cancel_token_creation() {
+        let token = CancelToken::new();
+        assert!(!token.is_cancelled());
+    }
+
+    #[test]
+    fn test_cancel_token_cancel() {
+        let token = CancelToken::new();
+        assert!(!token.is_cancelled());
+        token.cancel();
+        assert!(token.is_cancelled());
+    }
+
+    #[test]
+    fn test_cancel_token_clone() {
+        let token = CancelToken::new();
+        let token2 = token.clone();
+
+        assert!(!token.is_cancelled());
+        assert!(!token2.is_cancelled());
+
+        token.cancel();
+
+        assert!(token.is_cancelled());
+        assert!(token2.is_cancelled());
+    }
+
+    #[test]
+    fn test_cancel_token_default() {
+        let token = CancelToken::default();
+        assert!(!token.is_cancelled());
     }
 }

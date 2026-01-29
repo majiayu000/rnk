@@ -13,6 +13,7 @@
 //! - [`Cmd::sleep()`] - Sleep for a duration
 //! - [`Cmd::tick()`] - Execute callback after a duration
 //! - [`Cmd::every()`] - Execute callback aligned to system clock
+//! - [`Cmd::exec()`] - Execute external interactive process (suspends TUI)
 //!
 //! # Example
 //!
@@ -44,11 +45,15 @@
 //! executor.execute(cmd);
 //! ```
 
+mod exec;
 mod executor;
 mod tasks;
 
-pub use executor::{CmdExecutor, RenderHandle};
+pub use exec::{ExecConfig, ExecResult};
+pub use executor::{CmdExecutor, RenderHandle, run_exec_process};
 pub use tasks::{HttpRequest, HttpResponse, ProcessOutput};
+
+pub(crate) use exec::ExecRequest;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -98,6 +103,18 @@ pub enum Cmd {
         duration: Duration,
         /// Callback that receives the tick timestamp
         callback: Box<dyn FnOnce(Instant) + Send + 'static>,
+    },
+
+    /// Execute an external interactive process (suspends TUI)
+    ///
+    /// This command suspends the TUI, executes an external process
+    /// (like vim, less, etc.) with full terminal control, and then
+    /// resumes the TUI when the process exits.
+    Exec {
+        /// Configuration for the external process
+        config: ExecConfig,
+        /// Callback that receives the result when the process exits
+        callback: Box<dyn FnOnce(ExecResult) + Send + 'static>,
     },
 }
 
@@ -291,6 +308,62 @@ impl Cmd {
         }
     }
 
+    /// Execute an external interactive process (suspends TUI)
+    ///
+    /// This command suspends the TUI, executes an external process
+    /// (like vim, less, etc.) with full terminal control, and then
+    /// resumes the TUI when the process exits.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rnk::cmd::{Cmd, ExecConfig};
+    ///
+    /// // Open a file in vim
+    /// let cmd = Cmd::exec(
+    ///     ExecConfig::new("vim").arg("file.txt"),
+    ///     |result| {
+    ///         if result.success {
+    ///             println!("Editor closed successfully");
+    ///         }
+    ///     }
+    /// );
+    /// ```
+    pub fn exec<F>(config: ExecConfig, callback: F) -> Self
+    where
+        F: FnOnce(ExecResult) + Send + 'static,
+    {
+        Cmd::Exec {
+            config,
+            callback: Box::new(callback),
+        }
+    }
+
+    /// Execute an external command with simple arguments (convenience method)
+    ///
+    /// This is a shorthand for `Cmd::exec(ExecConfig::new(program).args(args), callback)`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rnk::cmd::Cmd;
+    ///
+    /// // Open a file in vim
+    /// let cmd = Cmd::exec_cmd("vim", &["file.txt"], |result| {
+    ///     println!("Exit code: {:?}", result.exit_code);
+    /// });
+    ///
+    /// // View a file with less
+    /// let cmd = Cmd::exec_cmd("less", &["README.md"], |_| {});
+    /// ```
+    pub fn exec_cmd<F>(program: &str, args: &[&str], callback: F) -> Self
+    where
+        F: FnOnce(ExecResult) + Send + 'static,
+    {
+        let config = ExecConfig::new(program).args(args.iter().map(|s| s.to_string()));
+        Cmd::exec(config, callback)
+    }
+
     /// Chain this command with another command
     ///
     /// The next command will execute after this one completes.
@@ -379,6 +452,9 @@ impl std::fmt::Debug for Cmd {
                 .debug_struct("Cmd::Every")
                 .field("duration", duration)
                 .finish(),
+            Cmd::Exec { config, .. } => {
+                f.debug_struct("Cmd::Exec").field("config", config).finish()
+            }
         }
     }
 }
@@ -815,6 +891,62 @@ mod tests {
             assert!(matches!(cmds[0], Cmd::Batch(_)));
             assert!(matches!(cmds[1], Cmd::Sleep { .. }));
             assert!(matches!(cmds[2], Cmd::Every { .. }));
+        }
+    }
+
+    // ==================== Exec Tests ====================
+
+    #[test]
+    fn test_cmd_exec() {
+        let cmd = Cmd::exec(ExecConfig::new("vim").arg("file.txt"), |_| {});
+
+        assert!(matches!(cmd, Cmd::Exec { .. }));
+
+        if let Cmd::Exec { config, .. } = cmd {
+            assert_eq!(config.command, "vim");
+            assert_eq!(config.args, vec!["file.txt"]);
+        }
+    }
+
+    #[test]
+    fn test_cmd_exec_cmd() {
+        let cmd = Cmd::exec_cmd("less", &["README.md", "-N"], |_| {});
+
+        assert!(matches!(cmd, Cmd::Exec { .. }));
+
+        if let Cmd::Exec { config, .. } = cmd {
+            assert_eq!(config.command, "less");
+            assert_eq!(config.args, vec!["README.md", "-N"]);
+        }
+    }
+
+    #[test]
+    fn test_cmd_exec_debug() {
+        let cmd = Cmd::exec(ExecConfig::new("vim"), |_| {});
+        let debug_str = format!("{:?}", cmd);
+        assert!(debug_str.contains("Cmd::Exec"));
+        assert!(debug_str.contains("vim"));
+    }
+
+    #[test]
+    fn test_cmd_exec_is_not_none() {
+        let cmd = Cmd::exec(ExecConfig::new("echo"), |_| {});
+        assert!(!cmd.is_none());
+    }
+
+    #[test]
+    fn test_cmd_exec_in_sequence() {
+        let cmd = Cmd::sequence(vec![
+            Cmd::exec(ExecConfig::new("vim"), |_| {}),
+            Cmd::perform(|| async {}),
+        ]);
+
+        assert!(matches!(cmd, Cmd::Sequence(_)));
+
+        if let Cmd::Sequence(cmds) = cmd {
+            assert_eq!(cmds.len(), 2);
+            assert!(matches!(cmds[0], Cmd::Exec { .. }));
+            assert!(matches!(cmds[1], Cmd::Perform { .. }));
         }
     }
 }

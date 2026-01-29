@@ -6,6 +6,7 @@ pub(crate) mod use_app;
 mod use_cmd;
 mod use_effect;
 pub mod use_focus;
+mod use_frame_rate;
 pub mod use_input;
 mod use_measure;
 mod use_memo;
@@ -25,6 +26,7 @@ pub use use_effect::{use_effect, use_effect_once};
 pub use use_focus::{
     FocusManagerHandle, FocusState, UseFocusOptions, use_focus, use_focus_manager,
 };
+pub use use_frame_rate::use_frame_rate;
 pub use use_input::{Key, use_input};
 pub use use_measure::{
     Dimensions, MeasureContext, MeasureRef, get_measure_context, measure_element,

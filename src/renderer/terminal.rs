@@ -600,6 +600,77 @@ impl Terminal {
     pub fn is_mouse_enabled(&self) -> bool {
         self.mouse_enabled
     }
+
+    /// Suspend the terminal for external process execution
+    ///
+    /// This restores the terminal to a normal state so that an external
+    /// interactive process (like vim, less, etc.) can take over.
+    ///
+    /// Call `resume()` after the external process exits to restore TUI state.
+    pub fn suspend(&mut self) -> std::io::Result<()> {
+        let mut stdout = stdout();
+
+        // Disable mouse capture
+        if self.mouse_enabled {
+            execute!(stdout, DisableMouseCapture)?;
+            // Note: we keep mouse_enabled = true so resume() knows to re-enable it
+        }
+
+        // Show cursor
+        if self.cursor_hidden {
+            write!(stdout, "{}", ansi::show_cursor())?;
+        }
+
+        // Leave alternate screen if in fullscreen mode
+        if self.alternate_screen {
+            write!(stdout, "{}", ansi::leave_alt_screen())?;
+        }
+
+        // Disable raw mode
+        if self.raw_mode {
+            disable_raw_mode()?;
+        }
+
+        stdout.flush()?;
+        Ok(())
+    }
+
+    /// Resume the terminal after external process execution
+    ///
+    /// This restores the TUI state after an external process has finished.
+    /// Should be called after `suspend()` and the external process has exited.
+    pub fn resume(&mut self) -> std::io::Result<()> {
+        let mut stdout = stdout();
+
+        // Re-enable raw mode
+        if self.raw_mode {
+            enable_raw_mode()?;
+        }
+
+        // Re-enter alternate screen if we were in fullscreen mode
+        if self.alternate_screen {
+            write!(stdout, "{}", ansi::enter_alt_screen())?;
+            write!(stdout, "{}", ansi::erase_screen())?;
+            write!(stdout, "{}", ansi::cursor_home())?;
+        }
+
+        // Hide cursor again
+        if self.cursor_hidden {
+            write!(stdout, "{}", ansi::hide_cursor())?;
+        }
+
+        // Re-enable mouse capture if it was enabled
+        if self.mouse_enabled {
+            execute!(stdout, EnableMouseCapture)?;
+        }
+
+        stdout.flush()?;
+
+        // Force full repaint
+        self.repaint();
+
+        Ok(())
+    }
 }
 
 impl Default for Terminal {

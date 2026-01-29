@@ -3,6 +3,7 @@
 //! This module provides a global registry that allows multiple apps to run
 //! and enables cross-thread render requests via the AppSink trait.
 
+use crate::cmd::ExecRequest;
 use crate::core::Element;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -66,12 +67,13 @@ impl IntoPrintable for Element {
 
 // === App Sink ===
 
-pub trait AppSink: Send + Sync {
+pub(crate) trait AppSink: Send + Sync {
     fn request_render(&self);
     fn println(&self, message: Printable);
     fn enter_alt_screen(&self);
     fn exit_alt_screen(&self);
     fn is_alt_screen(&self) -> bool;
+    fn queue_exec(&self, request: ExecRequest);
 }
 
 // === Mode Switch ===
@@ -93,6 +95,7 @@ pub(crate) struct AppRuntime {
     println_queue: Mutex<Vec<Printable>>,
     mode_switch_request: Mutex<Option<ModeSwitch>>,
     alt_screen_state: Arc<AtomicBool>,
+    exec_queue: Mutex<Vec<ExecRequest>>,
 }
 
 impl AppRuntime {
@@ -103,6 +106,7 @@ impl AppRuntime {
             println_queue: Mutex::new(Vec::new()),
             mode_switch_request: Mutex::new(None),
             alt_screen_state: Arc::new(AtomicBool::new(alternate_screen)),
+            exec_queue: Mutex::new(Vec::new()),
         })
     }
 
@@ -141,6 +145,21 @@ impl AppRuntime {
             }
         }
     }
+
+    pub(crate) fn queue_exec(&self, request: ExecRequest) {
+        match self.exec_queue.lock() {
+            Ok(mut queue) => queue.push(request),
+            Err(poisoned) => poisoned.into_inner().push(request),
+        }
+        self.request_render();
+    }
+
+    pub(crate) fn take_exec_requests(&self) -> Vec<ExecRequest> {
+        match self.exec_queue.lock() {
+            Ok(mut queue) => std::mem::take(&mut *queue),
+            Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
+        }
+    }
 }
 
 impl AppSink for AppRuntime {
@@ -174,6 +193,10 @@ impl AppSink for AppRuntime {
 
     fn is_alt_screen(&self) -> bool {
         self.alt_screen_state.load(Ordering::SeqCst)
+    }
+
+    fn queue_exec(&self, request: ExecRequest) {
+        AppRuntime::queue_exec(self, request);
     }
 }
 
@@ -361,6 +384,17 @@ pub fn exit_alt_screen() {
 /// Returns `None` if no app is running.
 pub fn is_alt_screen() -> Option<bool> {
     current_app_sink().map(|sink| sink.is_alt_screen())
+}
+
+/// Queue an exec request to run an external process.
+///
+/// This is used internally by the Cmd system to queue exec requests.
+/// The request will be processed by the event loop, which will suspend
+/// the terminal, run the process, and resume the terminal.
+pub(crate) fn queue_exec_request(request: ExecRequest) {
+    if let Some(sink) = current_app_sink() {
+        sink.queue_exec(request);
+    }
 }
 
 // === Render Handle ===
