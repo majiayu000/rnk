@@ -32,6 +32,8 @@
 mod app;
 mod builder;
 pub(crate) mod element_renderer;
+mod filter;
+mod frame_rate;
 mod output;
 pub(crate) mod registry;
 pub(crate) mod render_to_string;
@@ -43,16 +45,22 @@ mod terminal;
 pub use app::App;
 
 // Builder and options
-pub use builder::{AppBuilder, AppOptions, render, render_fullscreen, render_inline};
+pub use builder::{AppBuilder, AppOptions, CancelToken, render, render_fullscreen, render_inline};
 
 // Registry APIs
 pub use registry::{
-    AppSink, IntoPrintable, ModeSwitch, Printable, RenderHandle, enter_alt_screen, exit_alt_screen,
+    IntoPrintable, ModeSwitch, Printable, RenderHandle, enter_alt_screen, exit_alt_screen,
     is_alt_screen, println, println_trimmed, render_handle, request_render,
 };
 
 // Element rendering APIs
 pub use render_to_string::{render_to_string, render_to_string_auto, render_to_string_no_trim};
+
+// Frame rate control
+pub use frame_rate::{FrameRateConfig, FrameRateController, FrameRateStats, SharedFrameRateStats};
+
+// Event filtering
+pub use filter::{EventFilter, FilterChain, FilterResult};
 
 // Terminal and output
 pub use output::Output;

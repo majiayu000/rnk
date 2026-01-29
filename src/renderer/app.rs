@@ -7,6 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::cmd::{ExecRequest, run_exec_process};
 use crate::core::Element;
 use crate::hooks::context::{HookContext, with_hooks};
 use crate::hooks::use_app::{AppContext, set_app_context};
@@ -15,8 +16,9 @@ use crate::hooks::use_mouse::{clear_mouse_handlers, is_mouse_enabled};
 use crate::layout::LayoutEngine;
 use crate::renderer::{Output, Terminal};
 
-use super::builder::AppOptions;
+use super::builder::{AppOptions, CancelToken};
 use super::element_renderer::render_element;
+use super::filter::FilterChain;
 use super::registry::{AppRuntime, AppSink, ModeSwitch, Printable, RenderHandle, register_app};
 use super::render_to_string::render_to_string;
 use super::runtime::EventLoop;
@@ -41,6 +43,10 @@ where
     last_width: u16,
     /// Last known terminal height
     last_height: u16,
+    /// Event filter chain
+    filter_chain: FilterChain,
+    /// External cancel token
+    cancel_token: Option<CancelToken>,
 }
 
 impl<F> App<F>
@@ -54,6 +60,25 @@ where
 
     /// Create a new app with custom options
     pub fn with_options(component: F, options: AppOptions) -> Self {
+        Self::with_options_and_filters(component, options, FilterChain::new())
+    }
+
+    /// Create a new app with custom options and event filters
+    pub fn with_options_and_filters(
+        component: F,
+        options: AppOptions,
+        filter_chain: FilterChain,
+    ) -> Self {
+        Self::with_full_config(component, options, filter_chain, None)
+    }
+
+    /// Create a new app with full configuration
+    pub fn with_full_config(
+        component: F,
+        options: AppOptions,
+        filter_chain: FilterChain,
+        cancel_token: Option<CancelToken>,
+    ) -> Self {
         let runtime = AppRuntime::new(options.alternate_screen);
         let render_handle = RenderHandle::new(runtime.clone());
         let hook_context = Rc::new(RefCell::new(HookContext::new()));
@@ -81,11 +106,13 @@ where
             static_renderer: StaticRenderer::new(),
             last_width: initial_width,
             last_height: initial_height,
+            filter_chain,
+            cancel_token,
         }
     }
 
     /// Run the application
-    pub fn run(&mut self) -> std::io::Result<()> {
+    pub fn run(mut self) -> std::io::Result<()> {
         let _app_guard = register_app(self.runtime.clone());
 
         // Enter terminal mode based on options
@@ -97,16 +124,31 @@ where
             self.runtime.set_alt_screen_state(false);
         }
 
-        // Create event loop
-        let mut event_loop = EventLoop::new(
+        // Take ownership of filter chain for the event loop
+        let filter_chain = std::mem::take(&mut self.filter_chain);
+
+        // Create event loop with filters
+        let mut event_loop = EventLoop::with_filters(
             self.runtime.clone(),
             self.should_exit.clone(),
             self.options.fps,
             self.options.exit_on_ctrl_c,
+            filter_chain,
         );
+
+        // Add cancel token if present
+        if let Some(ref token) = self.cancel_token {
+            event_loop = event_loop.with_cancel_flag(token.flag());
+        }
 
         // Run event loop with render callback
         event_loop.run(|| {
+            // Handle exec requests first (they suspend the terminal)
+            let exec_requests = self.runtime.take_exec_requests();
+            for request in exec_requests {
+                self.handle_exec_request(request)?;
+            }
+
             // Handle mode switch requests (access runtime directly)
             if let Some(mode_switch) = self.runtime.take_mode_switch_request() {
                 self.handle_mode_switch(mode_switch)?;
@@ -156,6 +198,26 @@ where
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Handle exec request - suspend TUI, run external process, resume TUI
+    fn handle_exec_request(&mut self, request: ExecRequest) -> std::io::Result<()> {
+        // Suspend the terminal
+        self.terminal.suspend()?;
+
+        // Execute the external process
+        let result = run_exec_process(&request.config);
+
+        // Resume the terminal
+        self.terminal.resume()?;
+
+        // Call the callback with the result
+        (request.callback)(result);
+
+        // Request re-render
+        self.runtime.request_render();
+
         Ok(())
     }
 

@@ -2,11 +2,13 @@
 //!
 //! The executor is responsible for:
 //! - Managing a Tokio runtime for async tasks
-//! - Executing commands (Perform, Sleep, Batch, Sequence, Tick, Every)
+//! - Executing commands (Perform, Sleep, Batch, Sequence, Tick, Every, Exec)
 //! - Notifying the render loop when tasks complete
 //! - Supporting graceful shutdown
+//! - Queueing Exec requests for the event loop to handle
 
-use super::Cmd;
+use super::{Cmd, ExecRequest};
+use crate::renderer::registry::queue_exec_request;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -260,6 +262,14 @@ impl CmdExecutor {
                     }
                 });
             }
+
+            Cmd::Exec { config, callback } => {
+                // Queue the exec request for the event loop to handle
+                // The event loop will suspend the terminal, run the process,
+                // and resume the terminal when done
+                queue_exec_request(ExecRequest { config, callback });
+                // Note: render notification will happen after the process completes
+            }
         }
     }
 
@@ -392,6 +402,14 @@ impl CmdExecutor {
                     let _ = completion.send(());
                 });
             }
+
+            Cmd::Exec { config, callback } => {
+                // For execute_with_completion, we execute synchronously
+                // since we need to wait for the result anyway
+                let result = execute_process_sync(&config);
+                callback(result);
+                let _ = completion.send(());
+            }
         }
     }
 
@@ -432,6 +450,45 @@ impl Drop for CmdExecutor {
             }
         }
     }
+}
+
+/// Execute a process synchronously (used as fallback when no exec queue is configured)
+fn execute_process_sync(config: &super::ExecConfig) -> super::ExecResult {
+    use std::process::{Command, Stdio};
+
+    let mut cmd = Command::new(&config.command);
+    cmd.args(&config.args);
+
+    // Set environment variables
+    for (key, value) in &config.env {
+        cmd.env(key, value);
+    }
+
+    // Set working directory if specified
+    if let Some(ref dir) = config.current_dir {
+        cmd.current_dir(dir);
+    }
+
+    // Inherit stdio for interactive processes
+    cmd.stdin(Stdio::inherit());
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::inherit());
+
+    match cmd.status() {
+        Ok(status) => {
+            if let Some(code) = status.code() {
+                super::ExecResult::success(code)
+            } else {
+                super::ExecResult::terminated_by_signal()
+            }
+        }
+        Err(e) => super::ExecResult::error(e.to_string()),
+    }
+}
+
+/// Execute a process synchronously (public for use by App)
+pub fn run_exec_process(config: &super::ExecConfig) -> super::ExecResult {
+    execute_process_sync(config)
 }
 
 #[cfg(test)]

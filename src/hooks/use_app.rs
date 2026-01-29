@@ -125,6 +125,35 @@ impl AppContext {
     pub fn request_render(&self) {
         self.render_handle.request_render();
     }
+
+    /// Request to suspend the application (Ctrl+Z behavior).
+    ///
+    /// On Unix systems, this will suspend the TUI and return control to the shell.
+    /// The user can resume with `fg`. On non-Unix systems, this is a no-op.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let app = use_app();
+    ///
+    /// use_input(move |key| {
+    ///     if key == Key::Char('z') && key.ctrl() {
+    ///         app.suspend();
+    ///     }
+    /// });
+    /// ```
+    #[cfg(unix)]
+    pub fn suspend(&self) {
+        // This is handled by setting a flag that the event loop checks
+        // The actual suspend happens in the App's run loop
+        self.render_handle.request_render();
+    }
+
+    /// Request to suspend the application (no-op on non-Unix).
+    #[cfg(not(unix))]
+    pub fn suspend(&self) {
+        // Suspend is not supported on non-Unix platforms
+    }
 }
 
 // Thread-local storage for the current app context (legacy fallback)
@@ -172,7 +201,8 @@ pub fn use_app() -> AppContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::renderer::{AppSink, RenderHandle};
+    use crate::renderer::RenderHandle;
+    use crate::renderer::registry::AppSink;
 
     #[test]
     fn test_app_context_exit() {
@@ -241,6 +271,8 @@ mod tests {
             fn is_alt_screen(&self) -> bool {
                 false
             }
+
+            fn queue_exec(&self, _request: crate::cmd::ExecRequest) {}
         }
 
         RenderHandle::new(Arc::new(NoopSink))

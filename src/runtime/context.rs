@@ -28,7 +28,7 @@ use crate::hooks::context::{HookContext, HookStorage};
 use crate::hooks::use_focus::FocusManager;
 use crate::hooks::use_input::Key;
 use crate::hooks::use_mouse::Mouse;
-use crate::renderer::{IntoPrintable, RenderHandle};
+use crate::renderer::{IntoPrintable, RenderHandle, SharedFrameRateStats};
 
 /// Input handler function type
 pub type InputHandlerFn = Rc<dyn Fn(&str, &Key)>;
@@ -67,6 +67,9 @@ pub struct RuntimeContext {
 
     /// Measured element dimensions (element_id -> (width, height))
     measurements: std::collections::HashMap<u64, (u16, u16)>,
+
+    /// Shared frame rate statistics
+    frame_rate_stats: Option<Arc<SharedFrameRateStats>>,
 }
 
 impl RuntimeContext {
@@ -82,6 +85,7 @@ impl RuntimeContext {
             render_handle: None,
             screen_reader_enabled: false,
             measurements: std::collections::HashMap::new(),
+            frame_rate_stats: None,
         }
     }
 
@@ -97,6 +101,7 @@ impl RuntimeContext {
             render_handle: Some(render_handle),
             screen_reader_enabled: false,
             measurements: std::collections::HashMap::new(),
+            frame_rate_stats: None,
         }
     }
 
@@ -284,6 +289,18 @@ impl RuntimeContext {
     /// Get a measurement for an element
     pub fn get_measurement(&self, element_id: u64) -> Option<(u16, u16)> {
         self.measurements.get(&element_id).copied()
+    }
+
+    // === Frame Rate Stats Methods ===
+
+    /// Set the shared frame rate stats
+    pub fn set_frame_rate_stats(&mut self, stats: Option<Arc<SharedFrameRateStats>>) {
+        self.frame_rate_stats = stats;
+    }
+
+    /// Get the shared frame rate stats
+    pub fn frame_rate_stats(&self) -> Option<&Arc<SharedFrameRateStats>> {
+        self.frame_rate_stats.as_ref()
     }
 }
 

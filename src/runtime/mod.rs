@@ -4,12 +4,14 @@
 //! - Unified runtime context for app state
 //! - Panic hook for terminal restoration
 //! - Signal handling (SIGINT, SIGTERM, SIGHUP)
+//! - Suspend/resume support (Ctrl+Z / fg)
 //! - Environment detection (CI, TTY)
 
 mod context;
 mod environment;
 mod panic_handler;
 mod signal_handler;
+mod suspend;
 
 pub use context::{
     RuntimeContext, current_runtime, set_current_runtime, with_current_runtime, with_runtime,
@@ -17,3 +19,4 @@ pub use context::{
 pub use environment::{Environment, is_ci, is_tty};
 pub use panic_handler::{install_panic_hook, restore_terminal};
 pub use signal_handler::{SignalHandler, install_signal_handler};
+pub use suspend::{SuspendHandler, install_suspend_handlers, suspend_self};

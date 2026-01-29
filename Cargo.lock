@@ -1139,11 +1139,12 @@ dependencies = [
 
 [[package]]
 name = "rnk"
-version = "0.6.19"
+version = "0.6.25"
 dependencies = [
  "crossterm",
  "ctrlc",
  "env_logger",
+ "libc",
  "log",
  "proptest",
  "reqwest",
