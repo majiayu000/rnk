@@ -1,6 +1,60 @@
 //! Color types for terminal styling
 
 use crossterm::style::Color as CrosstermColor;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Global flag for dark background detection
+static DARK_BACKGROUND: AtomicBool = AtomicBool::new(true);
+
+/// Set whether the terminal has a dark background
+///
+/// This affects how `AdaptiveColor` resolves its colors.
+pub fn set_dark_background(dark: bool) {
+    DARK_BACKGROUND.store(dark, Ordering::SeqCst);
+}
+
+/// Check if the terminal has a dark background
+pub fn is_dark_background() -> bool {
+    DARK_BACKGROUND.load(Ordering::SeqCst)
+}
+
+/// Detect terminal background from environment
+///
+/// Checks common environment variables to determine if the terminal
+/// has a dark or light background. Returns `None` if detection fails.
+pub fn detect_background() -> Option<bool> {
+    // Check COLORFGBG (format: "fg;bg" where bg < 7 is dark)
+    if let Ok(colorfgbg) = std::env::var("COLORFGBG") {
+        if let Some(bg) = colorfgbg.split(';').last() {
+            if let Ok(bg_num) = bg.parse::<u8>() {
+                return Some(bg_num < 7);
+            }
+        }
+    }
+
+    // Check terminal-specific variables
+    if let Ok(term_program) = std::env::var("TERM_PROGRAM") {
+        // Most modern terminals default to dark
+        if term_program.contains("iTerm")
+            || term_program.contains("Alacritty")
+            || term_program.contains("kitty")
+        {
+            return Some(true);
+        }
+    }
+
+    // Default assumption: dark background
+    None
+}
+
+/// Initialize background detection
+///
+/// Call this at application startup to auto-detect terminal background.
+pub fn init_background_detection() {
+    if let Some(dark) = detect_background() {
+        set_dark_background(dark);
+    }
+}
 
 /// Color type supporting various color formats
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -94,6 +148,126 @@ impl Color {
     }
 }
 
+/// Adaptive color that changes based on terminal background
+///
+/// This allows specifying different colors for light and dark backgrounds,
+/// automatically selecting the appropriate one at runtime.
+///
+/// # Example
+///
+/// ```
+/// use rnk::core::{AdaptiveColor, Color};
+///
+/// let color = AdaptiveColor::new(Color::Black, Color::White);
+/// // On dark background: returns White
+/// // On light background: returns Black
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AdaptiveColor {
+    /// Color to use on light backgrounds
+    pub light: Color,
+    /// Color to use on dark backgrounds
+    pub dark: Color,
+}
+
+impl AdaptiveColor {
+    /// Create a new adaptive color
+    pub fn new(light: Color, dark: Color) -> Self {
+        Self { light, dark }
+    }
+
+    /// Create an adaptive color from hex strings
+    pub fn from_hex(light: &str, dark: &str) -> Self {
+        Self {
+            light: Color::hex(light),
+            dark: Color::hex(dark),
+        }
+    }
+
+    /// Resolve to the appropriate color based on current background
+    pub fn resolve(&self) -> Color {
+        if is_dark_background() {
+            self.dark
+        } else {
+            self.light
+        }
+    }
+
+    /// Create a color that's visible on both backgrounds
+    pub fn universal(color: Color) -> Self {
+        Self {
+            light: color,
+            dark: color,
+        }
+    }
+}
+
+impl Default for AdaptiveColor {
+    fn default() -> Self {
+        Self {
+            light: Color::Black,
+            dark: Color::White,
+        }
+    }
+}
+
+impl From<AdaptiveColor> for Color {
+    fn from(adaptive: AdaptiveColor) -> Self {
+        adaptive.resolve()
+    }
+}
+
+impl From<Color> for AdaptiveColor {
+    fn from(color: Color) -> Self {
+        AdaptiveColor::universal(color)
+    }
+}
+
+/// Predefined adaptive color schemes
+pub mod adaptive_colors {
+    use super::{AdaptiveColor, Color};
+
+    /// Primary text color (black on light, white on dark)
+    pub fn text() -> AdaptiveColor {
+        AdaptiveColor::new(Color::Black, Color::White)
+    }
+
+    /// Secondary/muted text color
+    pub fn muted() -> AdaptiveColor {
+        AdaptiveColor::new(Color::BrightBlack, Color::BrightBlack)
+    }
+
+    /// Success color (green)
+    pub fn success() -> AdaptiveColor {
+        AdaptiveColor::new(Color::Green, Color::BrightGreen)
+    }
+
+    /// Error color (red)
+    pub fn error() -> AdaptiveColor {
+        AdaptiveColor::new(Color::Red, Color::BrightRed)
+    }
+
+    /// Warning color (yellow)
+    pub fn warning() -> AdaptiveColor {
+        AdaptiveColor::new(Color::Yellow, Color::BrightYellow)
+    }
+
+    /// Info color (blue)
+    pub fn info() -> AdaptiveColor {
+        AdaptiveColor::new(Color::Blue, Color::BrightBlue)
+    }
+
+    /// Accent color (cyan)
+    pub fn accent() -> AdaptiveColor {
+        AdaptiveColor::new(Color::Cyan, Color::BrightCyan)
+    }
+
+    /// Highlight color (magenta)
+    pub fn highlight() -> AdaptiveColor {
+        AdaptiveColor::new(Color::Magenta, Color::BrightMagenta)
+    }
+}
+
 impl From<Color> for CrosstermColor {
     fn from(color: Color) -> Self {
         match color {
@@ -168,5 +342,85 @@ mod tests {
         let color = Color::Green;
         let ct_color: CrosstermColor = color.into();
         assert_eq!(ct_color, CrosstermColor::DarkGreen);
+    }
+
+    #[test]
+    fn test_adaptive_color_creation() {
+        let adaptive = AdaptiveColor::new(Color::Black, Color::White);
+        assert_eq!(adaptive.light, Color::Black);
+        assert_eq!(adaptive.dark, Color::White);
+    }
+
+    #[test]
+    fn test_adaptive_color_from_hex() {
+        let adaptive = AdaptiveColor::from_hex("#000000", "#ffffff");
+        assert_eq!(adaptive.light, Color::Rgb(0, 0, 0));
+        assert_eq!(adaptive.dark, Color::Rgb(255, 255, 255));
+    }
+
+    #[test]
+    fn test_adaptive_color_resolve_dark() {
+        set_dark_background(true);
+        let adaptive = AdaptiveColor::new(Color::Black, Color::White);
+        assert_eq!(adaptive.resolve(), Color::White);
+    }
+
+    #[test]
+    fn test_adaptive_color_resolve_light() {
+        set_dark_background(false);
+        let adaptive = AdaptiveColor::new(Color::Black, Color::White);
+        assert_eq!(adaptive.resolve(), Color::Black);
+        // Reset to default
+        set_dark_background(true);
+    }
+
+    #[test]
+    fn test_adaptive_color_universal() {
+        let adaptive = AdaptiveColor::universal(Color::Cyan);
+        assert_eq!(adaptive.light, Color::Cyan);
+        assert_eq!(adaptive.dark, Color::Cyan);
+    }
+
+    #[test]
+    fn test_adaptive_color_into_color() {
+        set_dark_background(true);
+        let adaptive = AdaptiveColor::new(Color::Black, Color::White);
+        let color: Color = adaptive.into();
+        assert_eq!(color, Color::White);
+    }
+
+    #[test]
+    fn test_color_into_adaptive() {
+        let color = Color::Cyan;
+        let adaptive: AdaptiveColor = color.into();
+        assert_eq!(adaptive.light, Color::Cyan);
+        assert_eq!(adaptive.dark, Color::Cyan);
+    }
+
+    #[test]
+    fn test_is_dark_background() {
+        set_dark_background(true);
+        assert!(is_dark_background());
+
+        set_dark_background(false);
+        assert!(!is_dark_background());
+
+        // Reset to default
+        set_dark_background(true);
+    }
+
+    #[test]
+    fn test_adaptive_colors_presets() {
+        let text = adaptive_colors::text();
+        assert_eq!(text.light, Color::Black);
+        assert_eq!(text.dark, Color::White);
+
+        let success = adaptive_colors::success();
+        assert_eq!(success.light, Color::Green);
+        assert_eq!(success.dark, Color::BrightGreen);
+
+        let error = adaptive_colors::error();
+        assert_eq!(error.light, Color::Red);
+        assert_eq!(error.dark, Color::BrightRed);
     }
 }

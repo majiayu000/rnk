@@ -1,0 +1,278 @@
+//! Bracketed paste support
+//!
+//! Provides support for bracketed paste mode in terminals.
+//! When enabled, pasted text is wrapped in escape sequences,
+//! allowing the application to distinguish between typed and pasted input.
+
+use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Global flag for bracketed paste mode
+static BRACKETED_PASTE_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Check if bracketed paste mode is currently enabled
+pub fn is_bracketed_paste_enabled() -> bool {
+    BRACKETED_PASTE_ENABLED.load(Ordering::SeqCst)
+}
+
+/// Enable bracketed paste mode
+///
+/// When enabled, pasted text will be wrapped in escape sequences:
+/// - Start: ESC [200~
+/// - End: ESC [201~
+///
+/// This allows the application to handle pasted text differently
+/// from typed input (e.g., not triggering shortcuts).
+pub fn enable_bracketed_paste() -> io::Result<()> {
+    let mut stdout = io::stdout();
+    stdout.write_all(b"\x1b[?2004h")?;
+    stdout.flush()?;
+    BRACKETED_PASTE_ENABLED.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Disable bracketed paste mode
+pub fn disable_bracketed_paste() -> io::Result<()> {
+    let mut stdout = io::stdout();
+    stdout.write_all(b"\x1b[?2004l")?;
+    stdout.flush()?;
+    BRACKETED_PASTE_ENABLED.store(false, Ordering::SeqCst);
+    Ok(())
+}
+
+/// RAII guard for bracketed paste mode
+///
+/// Enables bracketed paste on creation and disables it on drop.
+///
+/// # Example
+///
+/// ```ignore
+/// {
+///     let _guard = BracketedPasteGuard::new()?;
+///     // Bracketed paste is enabled here
+/// }
+/// // Bracketed paste is disabled when guard is dropped
+/// ```
+pub struct BracketedPasteGuard {
+    was_enabled: bool,
+}
+
+impl BracketedPasteGuard {
+    /// Create a new guard, enabling bracketed paste
+    pub fn new() -> io::Result<Self> {
+        let was_enabled = is_bracketed_paste_enabled();
+        if !was_enabled {
+            enable_bracketed_paste()?;
+        }
+        Ok(Self { was_enabled })
+    }
+}
+
+impl Drop for BracketedPasteGuard {
+    fn drop(&mut self) {
+        if !self.was_enabled {
+            let _ = disable_bracketed_paste();
+        }
+    }
+}
+
+/// Paste event containing the pasted text
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasteEvent {
+    /// The pasted text content
+    pub content: String,
+}
+
+impl PasteEvent {
+    /// Create a new paste event
+    pub fn new(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+        }
+    }
+
+    /// Get the pasted content
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+
+    /// Get the number of characters in the paste
+    pub fn len(&self) -> usize {
+        self.content.len()
+    }
+
+    /// Check if the paste is empty
+    pub fn is_empty(&self) -> bool {
+        self.content.is_empty()
+    }
+
+    /// Get the number of lines in the paste
+    pub fn line_count(&self) -> usize {
+        self.content.lines().count().max(1)
+    }
+
+    /// Check if the paste contains multiple lines
+    pub fn is_multiline(&self) -> bool {
+        self.content.contains('\n')
+    }
+
+    /// Get the lines of the paste
+    pub fn lines(&self) -> impl Iterator<Item = &str> {
+        self.content.lines()
+    }
+}
+
+/// Paste handler type
+pub type PasteHandler = Box<dyn Fn(&PasteEvent)>;
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+/// Internal paste handler type
+type PasteHandlerRc = Rc<dyn Fn(&PasteEvent)>;
+
+thread_local! {
+    static PASTE_HANDLERS: RefCell<Vec<PasteHandlerRc>> = RefCell::new(Vec::new());
+}
+
+/// Register a paste handler
+pub fn register_paste_handler<F>(handler: F)
+where
+    F: Fn(&PasteEvent) + 'static,
+{
+    PASTE_HANDLERS.with(|handlers| {
+        handlers.borrow_mut().push(Rc::new(handler));
+    });
+}
+
+/// Clear all paste handlers
+pub fn clear_paste_handlers() {
+    PASTE_HANDLERS.with(|handlers| {
+        handlers.borrow_mut().clear();
+    });
+}
+
+/// Dispatch a paste event to all handlers
+pub fn dispatch_paste(content: &str) {
+    let event = PasteEvent::new(content);
+    PASTE_HANDLERS.with(|handlers| {
+        for handler in handlers.borrow().iter() {
+            handler(&event);
+        }
+    });
+}
+
+/// Hook to handle paste events
+///
+/// # Example
+///
+/// ```ignore
+/// use_paste(|event| {
+///     println!("Pasted {} characters", event.len());
+///     if event.is_multiline() {
+///         println!("Multi-line paste with {} lines", event.line_count());
+///     }
+/// });
+/// ```
+pub fn use_paste<F>(handler: F)
+where
+    F: Fn(&PasteEvent) + 'static,
+{
+    register_paste_handler(handler);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_paste_event_creation() {
+        let event = PasteEvent::new("Hello, World!");
+        assert_eq!(event.content(), "Hello, World!");
+        assert_eq!(event.len(), 13);
+        assert!(!event.is_empty());
+    }
+
+    #[test]
+    fn test_paste_event_empty() {
+        let event = PasteEvent::new("");
+        assert!(event.is_empty());
+        assert_eq!(event.len(), 0);
+    }
+
+    #[test]
+    fn test_paste_event_multiline() {
+        let event = PasteEvent::new("Line 1\nLine 2\nLine 3");
+        assert!(event.is_multiline());
+        assert_eq!(event.line_count(), 3);
+    }
+
+    #[test]
+    fn test_paste_event_single_line() {
+        let event = PasteEvent::new("Single line");
+        assert!(!event.is_multiline());
+        assert_eq!(event.line_count(), 1);
+    }
+
+    #[test]
+    fn test_paste_event_lines() {
+        let event = PasteEvent::new("A\nB\nC");
+        let lines: Vec<&str> = event.lines().collect();
+        assert_eq!(lines, vec!["A", "B", "C"]);
+    }
+
+    #[test]
+    fn test_bracketed_paste_flag() {
+        // Initially should be false
+        BRACKETED_PASTE_ENABLED.store(false, Ordering::SeqCst);
+        assert!(!is_bracketed_paste_enabled());
+
+        // Set to true
+        BRACKETED_PASTE_ENABLED.store(true, Ordering::SeqCst);
+        assert!(is_bracketed_paste_enabled());
+
+        // Reset
+        BRACKETED_PASTE_ENABLED.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_paste_handler_dispatch() {
+        clear_paste_handlers();
+
+        let received = Rc::new(RefCell::new(String::new()));
+        let received_clone = received.clone();
+
+        register_paste_handler(move |event| {
+            *received_clone.borrow_mut() = event.content().to_string();
+        });
+
+        dispatch_paste("test paste");
+
+        assert_eq!(*received.borrow(), "test paste");
+
+        clear_paste_handlers();
+    }
+
+    #[test]
+    fn test_multiple_paste_handlers() {
+        clear_paste_handlers();
+
+        let count = Rc::new(RefCell::new(0));
+        let count1 = count.clone();
+        let count2 = count.clone();
+
+        register_paste_handler(move |_| {
+            *count1.borrow_mut() += 1;
+        });
+
+        register_paste_handler(move |_| {
+            *count2.borrow_mut() += 1;
+        });
+
+        dispatch_paste("test");
+
+        assert_eq!(*count.borrow(), 2);
+
+        clear_paste_handlers();
+    }
+}
