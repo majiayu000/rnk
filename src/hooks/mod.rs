@@ -1,6 +1,7 @@
 //! Hooks system for reactive state management
 
 pub mod context;
+mod paste;
 mod use_accessibility;
 pub(crate) mod use_app;
 mod use_cmd;
@@ -17,6 +18,11 @@ mod use_stdio;
 mod use_window_title;
 
 pub use context::{HookContext, current_context, with_hooks};
+pub use paste::{
+    BracketedPasteGuard, PasteEvent, PasteHandler, clear_paste_handlers, disable_bracketed_paste,
+    dispatch_paste, enable_bracketed_paste, is_bracketed_paste_enabled, register_paste_handler,
+    use_paste,
+};
 pub use use_accessibility::{
     clear_screen_reader_cache, set_screen_reader_enabled, use_is_screen_reader_enabled,
 };

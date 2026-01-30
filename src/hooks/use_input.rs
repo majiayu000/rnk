@@ -5,22 +5,57 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 /// Key information for input handlers
 #[derive(Debug, Clone, Default)]
 pub struct Key {
+    // Arrow keys
     pub up_arrow: bool,
     pub down_arrow: bool,
     pub left_arrow: bool,
     pub right_arrow: bool,
+
+    // Navigation keys
     pub page_up: bool,
     pub page_down: bool,
     pub home: bool,
     pub end: bool,
+    pub insert: bool,
+
+    // Action keys
     pub return_key: bool,
     pub escape: bool,
     pub tab: bool,
     pub backspace: bool,
     pub delete: bool,
+    pub space: bool,
+
+    // Function keys (F1-F12)
+    pub f1: bool,
+    pub f2: bool,
+    pub f3: bool,
+    pub f4: bool,
+    pub f5: bool,
+    pub f6: bool,
+    pub f7: bool,
+    pub f8: bool,
+    pub f9: bool,
+    pub f10: bool,
+    pub f11: bool,
+    pub f12: bool,
+
+    // Modifiers
     pub ctrl: bool,
     pub shift: bool,
     pub alt: bool,
+    pub meta: bool,
+
+    // Media keys
+    pub media_play: bool,
+    pub media_pause: bool,
+    pub media_play_pause: bool,
+    pub media_stop: bool,
+    pub media_next: bool,
+    pub media_previous: bool,
+    pub volume_up: bool,
+    pub volume_down: bool,
+    pub volume_mute: bool,
 }
 
 impl Key {
@@ -29,22 +64,63 @@ impl Key {
         let modifiers = event.modifiers;
 
         Self {
+            // Arrow keys
             up_arrow: event.code == KeyCode::Up,
             down_arrow: event.code == KeyCode::Down,
             left_arrow: event.code == KeyCode::Left,
             right_arrow: event.code == KeyCode::Right,
+
+            // Navigation keys
             page_up: event.code == KeyCode::PageUp,
             page_down: event.code == KeyCode::PageDown,
             home: event.code == KeyCode::Home,
             end: event.code == KeyCode::End,
+            insert: event.code == KeyCode::Insert,
+
+            // Action keys
             return_key: event.code == KeyCode::Enter,
             escape: event.code == KeyCode::Esc,
             tab: event.code == KeyCode::Tab,
             backspace: event.code == KeyCode::Backspace,
             delete: event.code == KeyCode::Delete,
+            space: event.code == KeyCode::Char(' '),
+
+            // Function keys
+            f1: event.code == KeyCode::F(1),
+            f2: event.code == KeyCode::F(2),
+            f3: event.code == KeyCode::F(3),
+            f4: event.code == KeyCode::F(4),
+            f5: event.code == KeyCode::F(5),
+            f6: event.code == KeyCode::F(6),
+            f7: event.code == KeyCode::F(7),
+            f8: event.code == KeyCode::F(8),
+            f9: event.code == KeyCode::F(9),
+            f10: event.code == KeyCode::F(10),
+            f11: event.code == KeyCode::F(11),
+            f12: event.code == KeyCode::F(12),
+
+            // Modifiers
             ctrl: modifiers.contains(KeyModifiers::CONTROL),
             shift: modifiers.contains(KeyModifiers::SHIFT),
             alt: modifiers.contains(KeyModifiers::ALT),
+            meta: modifiers.contains(KeyModifiers::SUPER),
+
+            // Media keys
+            media_play: event.code == KeyCode::Media(crossterm::event::MediaKeyCode::Play),
+            media_pause: event.code == KeyCode::Media(crossterm::event::MediaKeyCode::Pause),
+            media_play_pause: event.code
+                == KeyCode::Media(crossterm::event::MediaKeyCode::PlayPause),
+            media_stop: event.code == KeyCode::Media(crossterm::event::MediaKeyCode::Stop),
+            media_next: event.code
+                == KeyCode::Media(crossterm::event::MediaKeyCode::TrackNext),
+            media_previous: event.code
+                == KeyCode::Media(crossterm::event::MediaKeyCode::TrackPrevious),
+            volume_up: event.code
+                == KeyCode::Media(crossterm::event::MediaKeyCode::RaiseVolume),
+            volume_down: event.code
+                == KeyCode::Media(crossterm::event::MediaKeyCode::LowerVolume),
+            volume_mute: event.code
+                == KeyCode::Media(crossterm::event::MediaKeyCode::MuteVolume),
         }
     }
 
@@ -179,6 +255,53 @@ mod tests {
         let event = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         let input = Key::char_from_event(&event);
         assert_eq!(input, "");
+    }
+
+    #[test]
+    fn test_function_keys() {
+        let event = KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE);
+        let key = Key::from_event(&event);
+        assert!(key.f1);
+        assert!(!key.f2);
+
+        let event = KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE);
+        let key = Key::from_event(&event);
+        assert!(key.f12);
+        assert!(!key.f11);
+    }
+
+    #[test]
+    fn test_insert_key() {
+        let event = KeyEvent::new(KeyCode::Insert, KeyModifiers::NONE);
+        let key = Key::from_event(&event);
+        assert!(key.insert);
+    }
+
+    #[test]
+    fn test_space_key() {
+        let event = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+        let key = Key::from_event(&event);
+        assert!(key.space);
+    }
+
+    #[test]
+    fn test_meta_modifier() {
+        let event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SUPER);
+        let key = Key::from_event(&event);
+        assert!(key.meta);
+        assert!(!key.ctrl);
+    }
+
+    #[test]
+    fn test_combined_modifiers() {
+        let event = KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        let key = Key::from_event(&event);
+        assert!(key.ctrl);
+        assert!(key.shift);
+        assert!(!key.alt);
     }
 
     #[test]

@@ -63,5 +63,5 @@ pub use frame_rate::{FrameRateConfig, FrameRateController, FrameRateStats, Share
 pub use filter::{EventFilter, FilterChain, FilterResult};
 
 // Terminal and output
-pub use output::Output;
+pub use output::{ClipRegion, Output};
 pub use terminal::Terminal;

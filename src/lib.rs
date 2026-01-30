@@ -105,6 +105,7 @@
 //! });
 //! ```
 
+pub mod animation;
 pub mod cmd;
 pub mod components;
 pub mod core;
