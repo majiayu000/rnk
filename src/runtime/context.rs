@@ -127,7 +127,10 @@ impl RuntimeContext {
     }
 
     /// Get or create a hook at the current index
-    pub fn use_hook<T: Clone + 'static, F: FnOnce() -> T>(&mut self, init: F) -> HookStorage {
+    pub fn use_hook<T: Clone + Send + Sync + 'static, F: FnOnce() -> T>(
+        &mut self,
+        init: F,
+    ) -> HookStorage {
         self.hook_context.use_hook(init)
     }
 

@@ -6,8 +6,8 @@
 //! # Example
 //!
 //! ```rust
-//! use tink::testing::TestRenderer;
-//! use tink::prelude::*;
+//! use rnk::testing::TestRenderer;
+//! use rnk::prelude::*;
 //!
 //! let renderer = TestRenderer::new(80, 24);
 //! let element = Text::new("Hello").into_element();

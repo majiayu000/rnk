@@ -4,9 +4,8 @@
 //! of callbacks by caching values based on dependencies.
 
 use crate::hooks::context::current_context;
-use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
+use std::sync::{Arc, RwLock};
 
 /// Compute a hash for dependency tracking
 fn compute_deps_hash<D: Hash>(deps: &D) -> u64 {
@@ -18,7 +17,7 @@ fn compute_deps_hash<D: Hash>(deps: &D) -> u64 {
 /// Internal storage for memoized values
 #[derive(Clone)]
 struct MemoStorage<T> {
-    value: Rc<RefCell<T>>,
+    value: Arc<RwLock<T>>,
 }
 
 /// Memoize an expensive computation
@@ -51,12 +50,12 @@ struct MemoStorage<T> {
 /// ```
 pub fn use_memo<T, D, F>(compute: F, deps: D) -> T
 where
-    T: Clone + 'static,
+    T: Clone + Send + Sync + 'static,
     D: Hash,
     F: FnOnce() -> T,
 {
     let ctx = current_context().expect("use_memo must be called within a component");
-    let mut ctx_ref = ctx.borrow_mut();
+    let mut ctx_ref = ctx.write().unwrap();
 
     let new_hash = compute_deps_hash(&deps);
 
@@ -68,7 +67,7 @@ where
     let storage = ctx_ref.use_hook(|| {
         let value = compute();
         MemoStorage {
-            value: Rc::new(RefCell::new(value)),
+            value: Arc::new(RwLock::new(value)),
         }
     });
 
@@ -79,7 +78,7 @@ where
         if stored_hash != new_hash {
             hash_storage.set(new_hash);
         }
-        memo.value.borrow().clone()
+        memo.value.read().unwrap().clone()
     } else {
         panic!("use_memo: storage type mismatch")
     }
@@ -88,14 +87,14 @@ where
 /// A memoized callback that only changes when dependencies change
 #[derive(Clone)]
 pub struct MemoizedCallback<F> {
-    callback: Rc<F>,
+    callback: Arc<F>,
 }
 
 impl<F> MemoizedCallback<F> {
     /// Create a new memoized callback
     fn new(callback: F) -> Self {
         Self {
-            callback: Rc::new(callback),
+            callback: Arc::new(callback),
         }
     }
 
@@ -144,11 +143,11 @@ struct CallbackStorage<F> {
 /// that provides a `.get()` method to access the underlying function.
 pub fn use_callback<F, D>(callback: F, deps: D) -> MemoizedCallback<F>
 where
-    F: Clone + 'static,
+    F: Clone + Send + Sync + 'static,
     D: Hash,
 {
     let ctx = current_context().expect("use_callback must be called within a component");
-    let mut ctx_ref = ctx.borrow_mut();
+    let mut ctx_ref = ctx.write().unwrap();
 
     let new_hash = compute_deps_hash(&deps);
 
@@ -193,7 +192,7 @@ mod tests {
 
     #[test]
     fn test_use_memo_basic() {
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
 
         // First render
         let result = with_hooks(ctx.clone(), || use_memo(|| 42, "deps1"));
@@ -208,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_use_memo_with_tuple_deps() {
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
 
         let result = with_hooks(ctx.clone(), || use_memo(|| vec![1, 2, 3], (1, "a", true)));
 
@@ -223,7 +222,7 @@ mod tests {
     #[test]
     fn test_use_callback_basic() {
         // Use a fresh context for this test
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
 
         // Define a reusable callback type
         let multiply_by_2 = |x: i32| x * 2;
@@ -242,7 +241,7 @@ mod tests {
     #[test]
     fn test_use_callback_deps_change() {
         // Use a fresh context for this test
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
 
         let multiply_by_2 = |x: i32| x * 2;
         let multiply_by_3 = |x: i32| x * 3;
@@ -259,7 +258,7 @@ mod tests {
 
     #[test]
     fn test_use_callback_with_closure() {
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
         let multiplier = 10;
 
         let cb = with_hooks(ctx.clone(), || {
@@ -273,7 +272,7 @@ mod tests {
     fn test_use_callback_same_fn_type() {
         // This test demonstrates that use_callback works correctly
         // when the same function type is used across renders
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
 
         // Use a named function instead of closures
         fn double(x: i32) -> i32 {

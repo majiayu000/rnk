@@ -1,13 +1,12 @@
 //! Signal hook for reactive state management
 
 use crate::hooks::context::{RenderCallback, current_context};
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, RwLock};
 
 /// A reactive signal that triggers re-renders when updated
 #[derive(Clone)]
 pub struct Signal<T> {
-    value: Rc<RefCell<T>>,
+    value: Arc<RwLock<T>>,
     render_callback: Option<RenderCallback>,
 }
 
@@ -15,7 +14,7 @@ impl<T> Signal<T> {
     /// Create a new signal with an initial value
     fn new(value: T, render_callback: Option<RenderCallback>) -> Self {
         Self {
-            value: Rc::new(RefCell::new(value)),
+            value: Arc::new(RwLock::new(value)),
             render_callback,
         }
     }
@@ -25,29 +24,29 @@ impl<T> Signal<T> {
     where
         T: Clone,
     {
-        self.value.borrow().clone()
+        self.value.read().unwrap().clone()
     }
 
     /// Get a reference to the current value
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        f(&self.value.borrow())
+        f(&self.value.read().unwrap())
     }
 
     /// Set a new value and trigger re-render
     pub fn set(&self, value: T) {
-        *self.value.borrow_mut() = value;
+        *self.value.write().unwrap() = value;
         self.trigger_render();
     }
 
     /// Update the value using a function and trigger re-render
     pub fn update(&self, f: impl FnOnce(&mut T)) {
-        f(&mut self.value.borrow_mut());
+        f(&mut self.value.write().unwrap());
         self.trigger_render();
     }
 
     /// Modify the value without triggering re-render
     pub fn set_silent(&self, value: T) {
-        *self.value.borrow_mut() = value;
+        *self.value.write().unwrap() = value;
     }
 
     fn trigger_render(&self) {
@@ -59,13 +58,13 @@ impl<T> Signal<T> {
 
 impl<T: std::fmt::Display> std::fmt::Display for Signal<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.value.borrow())
+        write!(f, "{}", self.value.read().unwrap())
     }
 }
 
 impl<T: std::fmt::Debug> std::fmt::Debug for Signal<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Signal({:?})", self.value.borrow())
+        write!(f, "Signal({:?})", self.value.read().unwrap())
     }
 }
 
@@ -83,9 +82,9 @@ struct SignalStorage<T> {
 /// let count = use_signal(|| 0);
 /// count.set(count.get() + 1);
 /// ```
-pub fn use_signal<T: Clone + 'static>(init: impl FnOnce() -> T) -> Signal<T> {
+pub fn use_signal<T: Clone + Send + Sync + 'static>(init: impl FnOnce() -> T) -> Signal<T> {
     let ctx = current_context().expect("use_signal must be called within a component");
-    let mut ctx_ref = ctx.borrow_mut();
+    let mut ctx_ref = ctx.write().unwrap();
 
     let render_callback = ctx_ref.get_render_callback();
 
@@ -144,7 +143,7 @@ mod tests {
 
     #[test]
     fn test_use_signal_in_context() {
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
 
         // First render
         let signal1 = with_hooks(ctx.clone(), || use_signal(|| 0i32));
@@ -162,7 +161,7 @@ mod tests {
 
     #[test]
     fn test_multiple_signals() {
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
 
         with_hooks(ctx.clone(), || {
             let count = use_signal(|| 0i32);
@@ -183,5 +182,26 @@ mod tests {
             assert_eq!(count.get(), 10);
             assert_eq!(name.get(), "Bob");
         });
+    }
+
+    #[test]
+    fn test_signal_thread_safety() {
+        use std::thread;
+
+        let signal: Signal<i32> = Signal::new(0, None);
+        let signal_clone = signal.clone();
+
+        let handle = thread::spawn(move || {
+            for _ in 0..100 {
+                signal_clone.update(|v| *v += 1);
+            }
+        });
+
+        for _ in 0..100 {
+            signal.update(|v| *v += 1);
+        }
+
+        handle.join().unwrap();
+        assert_eq!(signal.get(), 200);
     }
 }

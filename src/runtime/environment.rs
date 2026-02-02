@@ -74,7 +74,7 @@ impl Default for Environment {
 /// # Example
 ///
 /// ```
-/// use tink::runtime::is_ci;
+/// use rnk::runtime::is_ci;
 ///
 /// if is_ci() {
 ///     println!("Running in CI, disabling interactive features");
@@ -117,7 +117,7 @@ pub fn is_ci() -> bool {
 /// # Example
 ///
 /// ```
-/// use tink::runtime::is_tty;
+/// use rnk::runtime::is_tty;
 ///
 /// if !is_tty() {
 ///     println!("Output is being redirected, using plain text");

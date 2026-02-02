@@ -3,6 +3,9 @@
 //! A multi-selection component similar to Ink's ink-multi-select that handles
 //! keyboard navigation and selection internally.
 
+use crate::components::navigation::{
+    NavigationConfig, calculate_visible_range, handle_list_navigation,
+};
 use crate::components::{Box as TinkBox, Text};
 use crate::core::{Color, Element, FlexDirection};
 use crate::hooks::{use_input, use_signal};
@@ -167,6 +170,8 @@ pub struct MultiSelect<T: Clone + 'static> {
     is_focused: bool,
     /// Whether to enable vim-style navigation (j/k)
     vim_navigation: bool,
+    /// Whether to enable number key shortcuts (1-9)
+    number_shortcuts: bool,
 }
 
 impl<T: Clone + 'static> MultiSelect<T> {
@@ -179,11 +184,12 @@ impl<T: Clone + 'static> MultiSelect<T> {
             style: MultiSelectStyle::default(),
             is_focused: true,
             vim_navigation: true,
+            number_shortcuts: false,
         }
     }
 
     /// Create from an iterator of items
-    pub fn from_iter<I>(iter: I) -> Self
+    pub fn from_items<I>(iter: I) -> Self
     where
         I: IntoIterator<Item = MultiSelectItem<T>>,
     {
@@ -217,6 +223,12 @@ impl<T: Clone + 'static> MultiSelect<T> {
     /// Enable or disable vim-style navigation (j/k keys)
     pub fn vim_navigation(mut self, enabled: bool) -> Self {
         self.vim_navigation = enabled;
+        self
+    }
+
+    /// Enable or disable number key shortcuts (1-9)
+    pub fn number_shortcuts(mut self, enabled: bool) -> Self {
+        self.number_shortcuts = enabled;
         self
     }
 
@@ -269,6 +281,7 @@ impl<T: Clone + 'static> MultiSelect<T> {
         let style = self.style.clone();
         let is_focused = self.is_focused;
         let vim_navigation = self.vim_navigation;
+        let number_shortcuts = self.number_shortcuts;
 
         // Create signals for state
         let highlighted_signal = use_signal(|| initial_highlighted);
@@ -282,40 +295,17 @@ impl<T: Clone + 'static> MultiSelect<T> {
 
             use_input(move |input, key| {
                 let current = highlighted_for_input.get();
-                let mut new_highlighted = current;
 
-                // Arrow key navigation
-                if key.up_arrow {
-                    new_highlighted = current.saturating_sub(1);
-                } else if key.down_arrow {
-                    new_highlighted = (current + 1).min(items_len.saturating_sub(1));
-                }
-                // Vim-style navigation
-                else if vim_navigation {
-                    if input == "k" {
-                        new_highlighted = current.saturating_sub(1);
-                    } else if input == "j" {
-                        new_highlighted = (current + 1).min(items_len.saturating_sub(1));
+                // Handle navigation
+                let config = NavigationConfig::new()
+                    .vim_navigation(vim_navigation)
+                    .number_shortcuts(number_shortcuts);
+                let result = handle_list_navigation(current, items_len, input, *key, &config);
+                if result.is_moved() {
+                    let new_pos = result.unwrap_or(current);
+                    if new_pos != current {
+                        highlighted_for_input.set(new_pos);
                     }
-                }
-
-                // Home/End navigation
-                if key.home {
-                    new_highlighted = 0;
-                } else if key.end {
-                    new_highlighted = items_len.saturating_sub(1);
-                }
-
-                // Page up/down
-                if key.page_up {
-                    new_highlighted = current.saturating_sub(5);
-                } else if key.page_down {
-                    new_highlighted = (current + 5).min(items_len.saturating_sub(1));
-                }
-
-                // Update highlighted if changed
-                if new_highlighted != current {
-                    highlighted_for_input.set(new_highlighted);
                 }
 
                 // Toggle selection with Space
@@ -365,20 +355,7 @@ fn render_multi_select_list<T: Clone + 'static>(
     let total_items = items.len();
 
     // Calculate visible range
-    let (start, end) = if let Some(limit) = limit {
-        let half = limit / 2;
-        let start = if highlighted <= half {
-            0
-        } else if highlighted >= total_items.saturating_sub(half) {
-            total_items.saturating_sub(limit)
-        } else {
-            highlighted.saturating_sub(half)
-        };
-        let end = (start + limit).min(total_items);
-        (start, end)
-    } else {
-        (0, total_items)
-    };
+    let (start, end) = calculate_visible_range(highlighted, total_items, limit);
 
     let mut container = TinkBox::new().flex_direction(FlexDirection::Column);
 
@@ -507,12 +484,12 @@ mod tests {
     }
 
     #[test]
-    fn test_multi_select_from_iter() {
+    fn test_multi_select_from_items() {
         let items = vec![
             MultiSelectItem::new("A", 'a'),
             MultiSelectItem::new("B", 'b'),
         ];
-        let select = MultiSelect::from_iter(items);
+        let select = MultiSelect::from_items(items);
         assert_eq!(select.len(), 2);
     }
 }

@@ -1,48 +1,52 @@
 //! Hook context management
 
 use std::any::Any;
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, RwLock};
 
 // Import Cmd type for command queue
 use crate::cmd::Cmd;
 
-/// Callback type for triggering re-renders
-pub type RenderCallback = Rc<dyn Fn()>;
+/// Callback type for triggering re-renders (thread-safe)
+pub type RenderCallback = Arc<dyn Fn() + Send + Sync>;
 
 /// Effect callback type that returns an optional cleanup function
-pub type EffectCallback = Box<dyn FnOnce() -> Option<Box<dyn FnOnce()>>>;
+pub type EffectCallback = Box<dyn FnOnce() -> Option<Box<dyn FnOnce() + Send>> + Send>;
 
-/// Hook storage for a single hook
+/// Hook storage for a single hook (thread-safe)
 #[derive(Clone)]
 pub struct HookStorage {
-    pub value: Rc<RefCell<Box<dyn Any>>>,
+    pub value: Arc<RwLock<Box<dyn Any + Send + Sync>>>,
 }
 
 impl HookStorage {
-    pub fn new<T: 'static>(value: T) -> Self {
+    pub fn new<T: Send + Sync + 'static>(value: T) -> Self {
         Self {
-            value: Rc::new(RefCell::new(Box::new(value))),
+            value: Arc::new(RwLock::new(Box::new(value))),
         }
     }
 
-    pub fn get<T: Clone + 'static>(&self) -> Option<T> {
-        self.value.borrow().downcast_ref::<T>().cloned()
+    pub fn get<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
+        self.value.read().ok()?.downcast_ref::<T>().cloned()
     }
 
-    pub fn set<T: 'static>(&self, value: T) {
-        *self.value.borrow_mut() = Box::new(value);
+    pub fn set<T: Send + Sync + 'static>(&self, value: T) {
+        if let Ok(mut guard) = self.value.write() {
+            *guard = Box::new(value);
+        }
     }
 }
 
-/// Effect to be run after render
+/// Effect to be run after render (thread-safe)
 pub struct Effect {
     pub callback: EffectCallback,
-    pub cleanup: Option<Box<dyn FnOnce()>>,
+    pub cleanup: Option<Box<dyn FnOnce() + Send>>,
     pub deps: Option<Vec<u64>>, // Hash of dependencies
 }
 
-/// Hook context for a component
+// Safety: Effect is Send because all its fields are Send
+unsafe impl Send for Effect {}
+
+/// Hook context for a component (thread-safe)
 pub struct HookContext {
     /// Hook values storage
     hooks: Vec<HookStorage>,
@@ -51,7 +55,7 @@ pub struct HookContext {
     /// Effects to run after render
     effects: Vec<Effect>,
     /// Cleanup functions from previous effects
-    cleanups: Vec<Option<Box<dyn FnOnce()>>>,
+    cleanups: Vec<Option<Box<dyn FnOnce() + Send>>>,
     /// Callback to trigger re-render
     render_callback: Option<RenderCallback>,
     /// Flag indicating if context is being rendered
@@ -59,6 +63,10 @@ pub struct HookContext {
     /// Commands to execute after render
     cmd_queue: Vec<Cmd>,
 }
+
+// Safety: HookContext is Send + Sync because all fields are thread-safe
+unsafe impl Send for HookContext {}
+unsafe impl Sync for HookContext {}
 
 impl HookContext {
     /// Create a new hook context
@@ -97,7 +105,10 @@ impl HookContext {
     }
 
     /// Get or create a hook at the current index
-    pub fn use_hook<T: Clone + 'static, F: FnOnce() -> T>(&mut self, init: F) -> HookStorage {
+    pub fn use_hook<T: Clone + Send + Sync + 'static, F: FnOnce() -> T>(
+        &mut self,
+        init: F,
+    ) -> HookStorage {
         let index = self.hook_index;
         self.hook_index += 1;
 
@@ -158,16 +169,16 @@ impl Default for HookContext {
 
 // Thread-local storage for the current hook context
 thread_local! {
-    static CURRENT_CONTEXT: RefCell<Option<Rc<RefCell<HookContext>>>> = const { RefCell::new(None) };
+    static CURRENT_CONTEXT: std::cell::RefCell<Option<Arc<RwLock<HookContext>>>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Get the current hook context
-pub fn current_context() -> Option<Rc<RefCell<HookContext>>> {
+pub fn current_context() -> Option<Arc<RwLock<HookContext>>> {
     CURRENT_CONTEXT.with(|ctx| ctx.borrow().clone())
 }
 
 /// Run a function with a hook context
-pub fn with_hooks<F, R>(ctx: Rc<RefCell<HookContext>>, f: F) -> R
+pub fn with_hooks<F, R>(ctx: Arc<RwLock<HookContext>>, f: F) -> R
 where
     F: FnOnce() -> R,
 {
@@ -177,16 +188,18 @@ where
     });
 
     // Begin render
-    ctx.borrow_mut().begin_render();
+    if let Ok(mut guard) = ctx.write() {
+        guard.begin_render();
+    }
 
     // Run the function
     let result = f();
 
-    // End render
-    ctx.borrow_mut().end_render();
-
-    // Run effects
-    ctx.borrow_mut().run_effects();
+    // End render and run effects
+    if let Ok(mut guard) = ctx.write() {
+        guard.end_render();
+        guard.run_effects();
+    }
 
     // Clear the current context
     CURRENT_CONTEXT.with(|current| {
@@ -240,11 +253,11 @@ mod tests {
 
     #[test]
     fn test_with_hooks() {
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
 
         let result = with_hooks(ctx.clone(), || {
             let ctx = current_context().unwrap();
-            let hook = ctx.borrow_mut().use_hook(|| 42i32);
+            let hook = ctx.write().unwrap().use_hook(|| 42i32);
             hook.get::<i32>().unwrap()
         });
 

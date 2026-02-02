@@ -3,7 +3,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Key information for input handlers
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Key {
     // Arrow keys
     pub up_arrow: bool,
@@ -111,16 +111,12 @@ impl Key {
             media_play_pause: event.code
                 == KeyCode::Media(crossterm::event::MediaKeyCode::PlayPause),
             media_stop: event.code == KeyCode::Media(crossterm::event::MediaKeyCode::Stop),
-            media_next: event.code
-                == KeyCode::Media(crossterm::event::MediaKeyCode::TrackNext),
+            media_next: event.code == KeyCode::Media(crossterm::event::MediaKeyCode::TrackNext),
             media_previous: event.code
                 == KeyCode::Media(crossterm::event::MediaKeyCode::TrackPrevious),
-            volume_up: event.code
-                == KeyCode::Media(crossterm::event::MediaKeyCode::RaiseVolume),
-            volume_down: event.code
-                == KeyCode::Media(crossterm::event::MediaKeyCode::LowerVolume),
-            volume_mute: event.code
-                == KeyCode::Media(crossterm::event::MediaKeyCode::MuteVolume),
+            volume_up: event.code == KeyCode::Media(crossterm::event::MediaKeyCode::RaiseVolume),
+            volume_down: event.code == KeyCode::Media(crossterm::event::MediaKeyCode::LowerVolume),
+            volume_mute: event.code == KeyCode::Media(crossterm::event::MediaKeyCode::MuteVolume),
         }
     }
 

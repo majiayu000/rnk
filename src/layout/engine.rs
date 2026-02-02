@@ -1,7 +1,8 @@
 //! Layout engine using Taffy
 
-use crate::core::{Element, ElementId, ElementType};
+use crate::core::{Element, ElementId, ElementType, NodeKey, Props, VNode, VNodeType};
 use crate::layout::measure::measure_text_width;
+use crate::reconciler::{Patch, PatchType};
 use std::collections::HashMap;
 use taffy::{AvailableSpace, NodeId, TaffyTree};
 
@@ -18,7 +19,9 @@ pub struct Layout {
 #[derive(Clone)]
 struct NodeContext {
     #[allow(dead_code)]
-    element_id: ElementId,
+    element_id: Option<ElementId>,
+    #[allow(dead_code)]
+    node_key: Option<NodeKey>,
     text_content: Option<String>,
 }
 
@@ -26,6 +29,14 @@ struct NodeContext {
 pub struct LayoutEngine {
     taffy: TaffyTree<NodeContext>,
     node_map: HashMap<ElementId, NodeId>,
+    /// Map from NodeKey to Taffy NodeId (for VNode-based layout)
+    vnode_map: HashMap<NodeKey, NodeId>,
+    /// Root node ID for incremental updates
+    root_node: Option<NodeId>,
+    /// Last computed width
+    last_width: u16,
+    /// Last computed height
+    last_height: u16,
 }
 
 impl LayoutEngine {
@@ -33,6 +44,10 @@ impl LayoutEngine {
         Self {
             taffy: TaffyTree::new(),
             node_map: HashMap::new(),
+            vnode_map: HashMap::new(),
+            root_node: None,
+            last_width: 0,
+            last_height: 0,
         }
     }
 
@@ -40,6 +55,8 @@ impl LayoutEngine {
     pub fn build_tree(&mut self, element: &Element) -> Option<NodeId> {
         self.taffy.clear();
         self.node_map.clear();
+        self.vnode_map.clear();
+        self.root_node = None;
         self.build_node(element)
     }
 
@@ -59,7 +76,8 @@ impl LayoutEngine {
             .collect();
 
         let context = NodeContext {
-            element_id: element.id,
+            element_id: Some(element.id),
+            node_key: None,
             text_content: element.text_content.clone(),
         };
 
@@ -85,6 +103,9 @@ impl LayoutEngine {
     /// Compute layout for the tree
     pub fn compute(&mut self, root: &Element, width: u16, height: u16) {
         if let Some(root_node) = self.build_tree(root) {
+            self.root_node = Some(root_node);
+            self.last_width = width;
+            self.last_height = height;
             let _ = self.taffy.compute_layout_with_measure(
                 root_node,
                 taffy::Size {
@@ -98,9 +119,253 @@ impl LayoutEngine {
         }
     }
 
+    // ==================== VNode-based Layout ====================
+
+    /// Build layout tree from VNode tree
+    pub fn build_vnode_tree(&mut self, vnode: &VNode) -> Option<NodeId> {
+        self.taffy.clear();
+        self.node_map.clear();
+        self.vnode_map.clear();
+        self.root_node = self.build_vnode(vnode);
+        self.root_node
+    }
+
+    fn build_vnode(&mut self, vnode: &VNode) -> Option<NodeId> {
+        let taffy_style = vnode.props.to_taffy();
+
+        // Build children first
+        let child_nodes: Vec<NodeId> = vnode
+            .children
+            .iter()
+            .filter_map(|child| self.build_vnode(child))
+            .collect();
+
+        let text_content = match &vnode.node_type {
+            VNodeType::Text(s) => Some(s.clone()),
+            _ => None,
+        };
+
+        let context = NodeContext {
+            element_id: None,
+            node_key: Some(vnode.key),
+            text_content,
+        };
+
+        // Create node
+        let node_id = if vnode.is_text() {
+            self.taffy
+                .new_leaf_with_context(taffy_style, context)
+                .ok()?
+        } else {
+            let node = self
+                .taffy
+                .new_with_children(taffy_style, &child_nodes)
+                .ok()?;
+            let _ = self.taffy.set_node_context(node, Some(context));
+            node
+        };
+
+        self.vnode_map.insert(vnode.key, node_id);
+        Some(node_id)
+    }
+
+    /// Compute layout for VNode tree
+    pub fn compute_vnode(&mut self, root: &VNode, width: u16, height: u16) {
+        if let Some(root_node) = self.build_vnode_tree(root) {
+            self.last_width = width;
+            self.last_height = height;
+            let _ = self.taffy.compute_layout_with_measure(
+                root_node,
+                taffy::Size {
+                    width: AvailableSpace::Definite(width as f32),
+                    height: AvailableSpace::Definite(height as f32),
+                },
+                |known_dimensions, available_space, _node_id, node_context, _style| {
+                    measure_text_node(known_dimensions, available_space, node_context)
+                },
+            );
+        }
+    }
+
+    /// Apply patches incrementally instead of rebuilding the entire tree
+    ///
+    /// This is the key optimization for the reconciliation system.
+    /// Instead of rebuilding the entire Taffy tree on every render,
+    /// we apply only the changes detected by the diff algorithm.
+    pub fn apply_patches(&mut self, patches: &[Patch]) -> bool {
+        if patches.is_empty() {
+            return false;
+        }
+
+        let mut needs_recompute = false;
+
+        for patch in patches {
+            match patch.patch_type {
+                PatchType::Create => {
+                    if let (Some(new_node), Some(parent_key)) = (&patch.new_node, patch.parent) {
+                        if self.create_vnode(new_node, parent_key).is_some() {
+                            needs_recompute = true;
+                        }
+                    }
+                }
+                PatchType::Update => {
+                    if let Some(new_props) = &patch.new_props {
+                        if self.update_node_props(patch.key, new_props) {
+                            needs_recompute = true;
+                        }
+                    }
+                }
+                PatchType::Remove => {
+                    if self.remove_node(patch.key) {
+                        needs_recompute = true;
+                    }
+                }
+                PatchType::Replace => {
+                    if let Some(new_node) = &patch.new_node {
+                        if self.replace_node(patch.key, new_node) {
+                            needs_recompute = true;
+                        }
+                    }
+                }
+                PatchType::Reorder => {
+                    if self.reorder_children(patch.key, &patch.moves) {
+                        needs_recompute = true;
+                    }
+                }
+            }
+        }
+
+        // Recompute layout if any changes were made
+        if needs_recompute {
+            self.recompute_layout();
+        }
+
+        needs_recompute
+    }
+
+    /// Create a new node and add it to a parent
+    fn create_vnode(&mut self, vnode: &VNode, parent_key: NodeKey) -> Option<NodeId> {
+        // Get parent node ID first (copy it to avoid borrow issues)
+        let parent_node = *self.vnode_map.get(&parent_key)?;
+
+        // Build the new subtree
+        let new_node_id = self.build_vnode(vnode)?;
+
+        // Add to parent
+        let _ = self.taffy.add_child(parent_node, new_node_id);
+
+        Some(new_node_id)
+    }
+
+    /// Update a node's props/style
+    fn update_node_props(&mut self, key: NodeKey, props: &Props) -> bool {
+        if let Some(&node_id) = self.vnode_map.get(&key) {
+            let new_style = props.to_taffy();
+            if self.taffy.set_style(node_id, new_style).is_ok() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Remove a node from the tree
+    fn remove_node(&mut self, key: NodeKey) -> bool {
+        if let Some(node_id) = self.vnode_map.remove(&key) {
+            // Remove from Taffy tree
+            if self.taffy.remove(node_id).is_ok() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Replace a node with a new one
+    fn replace_node(&mut self, old_key: NodeKey, new_node: &VNode) -> bool {
+        if let Some(&old_node_id) = self.vnode_map.get(&old_key) {
+            // Get parent before removing
+            if let Some(parent_id) = self.taffy.parent(old_node_id) {
+                // Find the index of the old node in parent's children
+                let children: Vec<_> = self.taffy.children(parent_id).unwrap_or_default();
+                let index = children.iter().position(|&id| id == old_node_id);
+
+                // Remove old node
+                let _ = self.taffy.remove(old_node_id);
+                self.vnode_map.remove(&old_key);
+
+                // Build new subtree
+                if let Some(new_node_id) = self.build_vnode(new_node) {
+                    // Insert at same position if possible
+                    if let Some(idx) = index {
+                        let _ = self
+                            .taffy
+                            .insert_child_at_index(parent_id, idx, new_node_id);
+                    } else {
+                        let _ = self.taffy.add_child(parent_id, new_node_id);
+                    }
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Reorder children of a node
+    fn reorder_children(&mut self, parent_key: NodeKey, moves: &[(usize, usize)]) -> bool {
+        if moves.is_empty() {
+            return false;
+        }
+
+        if let Some(&parent_id) = self.vnode_map.get(&parent_key) {
+            let mut children: Vec<_> = self.taffy.children(parent_id).unwrap_or_default();
+
+            // Apply moves
+            for &(from, to) in moves {
+                if from < children.len() && to < children.len() {
+                    let child = children.remove(from);
+                    children.insert(to, child);
+                }
+            }
+
+            // Set new children order
+            if self.taffy.set_children(parent_id, &children).is_ok() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Recompute layout after patches
+    fn recompute_layout(&mut self) {
+        if let Some(root_node) = self.root_node {
+            let _ = self.taffy.compute_layout_with_measure(
+                root_node,
+                taffy::Size {
+                    width: AvailableSpace::Definite(self.last_width as f32),
+                    height: AvailableSpace::Definite(self.last_height as f32),
+                },
+                |known_dimensions, available_space, _node_id, node_context, _style| {
+                    measure_text_node(known_dimensions, available_space, node_context)
+                },
+            );
+        }
+    }
+
     /// Get computed layout for an element
     pub fn get_layout(&self, element_id: ElementId) -> Option<Layout> {
         let node_id = self.node_map.get(&element_id)?;
+        let layout = self.taffy.layout(*node_id).ok()?;
+
+        Some(Layout {
+            x: layout.location.x,
+            y: layout.location.y,
+            width: layout.size.width,
+            height: layout.size.height,
+        })
+    }
+
+    /// Get computed layout for a VNode by key
+    pub fn get_vnode_layout(&self, key: NodeKey) -> Option<Layout> {
+        let node_id = self.vnode_map.get(&key)?;
         let layout = self.taffy.layout(*node_id).ok()?;
 
         Some(Layout {
@@ -128,6 +393,35 @@ impl LayoutEngine {
                 ))
             })
             .collect()
+    }
+
+    /// Get all VNode layouts
+    pub fn get_all_vnode_layouts(&self) -> HashMap<NodeKey, Layout> {
+        self.vnode_map
+            .iter()
+            .filter_map(|(key, node_id)| {
+                let layout = self.taffy.layout(*node_id).ok()?;
+                Some((
+                    *key,
+                    Layout {
+                        x: layout.location.x,
+                        y: layout.location.y,
+                        width: layout.size.width,
+                        height: layout.size.height,
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    /// Check if the engine has a valid tree
+    pub fn has_tree(&self) -> bool {
+        self.root_node.is_some()
+    }
+
+    /// Get the number of nodes in the tree
+    pub fn node_count(&self) -> usize {
+        self.node_map.len() + self.vnode_map.len()
     }
 }
 
@@ -193,12 +487,15 @@ fn measure_text_node(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Element;
+    use crate::core::{Element, Props, Style, VNode};
+    use crate::reconciler::Patch;
 
     #[test]
     fn test_layout_engine_creation() {
         let engine = LayoutEngine::new();
         assert!(engine.node_map.is_empty());
+        assert!(engine.vnode_map.is_empty());
+        assert!(!engine.has_tree());
     }
 
     #[test]
@@ -227,5 +524,124 @@ mod tests {
         let layout = layout.unwrap();
         // "Hello World" is 11 characters wide
         assert!(layout.width >= 11.0);
+    }
+
+    // ==================== VNode Layout Tests ====================
+
+    #[test]
+    fn test_vnode_layout() {
+        let mut engine = LayoutEngine::new();
+
+        let root = VNode::box_node()
+            .child(VNode::text("Hello"))
+            .child(VNode::text("World"));
+
+        engine.compute_vnode(&root, 80, 24);
+
+        assert!(engine.has_tree());
+        let layout = engine.get_vnode_layout(root.key);
+        assert!(layout.is_some());
+    }
+
+    #[test]
+    fn test_vnode_text_measurement() {
+        let mut engine = LayoutEngine::new();
+
+        let root = VNode::text("Hello World");
+        engine.compute_vnode(&root, 80, 24);
+
+        let layout = engine.get_vnode_layout(root.key);
+        assert!(layout.is_some());
+
+        let layout = layout.unwrap();
+        assert!(layout.width >= 11.0);
+    }
+
+    #[test]
+    fn test_apply_patches_update() {
+        let mut engine = LayoutEngine::new();
+
+        let root = VNode::box_node().child(VNode::text("Hello"));
+        engine.compute_vnode(&root, 80, 24);
+
+        // Create an update patch
+        let mut new_style = Style::new();
+        new_style.padding.top = 5.0;
+        let new_props = Props::with_style(new_style);
+
+        let patches = vec![Patch::update(root.key, Props::new(), new_props)];
+
+        let changed = engine.apply_patches(&patches);
+        assert!(changed);
+    }
+
+    #[test]
+    fn test_apply_patches_empty() {
+        let mut engine = LayoutEngine::new();
+
+        let root = VNode::box_node();
+        engine.compute_vnode(&root, 80, 24);
+
+        let changed = engine.apply_patches(&[]);
+        assert!(!changed);
+    }
+
+    #[test]
+    fn test_apply_patches_create() {
+        let mut engine = LayoutEngine::new();
+
+        let root = VNode::box_node();
+        engine.compute_vnode(&root, 80, 24);
+
+        let new_child = VNode::text("New child");
+        let patches = vec![Patch::create(new_child, root.key)];
+
+        let changed = engine.apply_patches(&patches);
+        assert!(changed);
+    }
+
+    #[test]
+    fn test_apply_patches_remove() {
+        let mut engine = LayoutEngine::new();
+
+        let child = VNode::text("Child");
+        let child_key = child.key;
+        let root = VNode::box_node().child(child);
+        engine.compute_vnode(&root, 80, 24);
+
+        let patches = vec![Patch::remove(child_key)];
+
+        let changed = engine.apply_patches(&patches);
+        assert!(changed);
+        assert!(engine.get_vnode_layout(child_key).is_none());
+    }
+
+    #[test]
+    fn test_get_all_vnode_layouts() {
+        let mut engine = LayoutEngine::new();
+
+        let root = VNode::box_node()
+            .child(VNode::text("A"))
+            .child(VNode::text("B"));
+
+        engine.compute_vnode(&root, 80, 24);
+
+        let layouts = engine.get_all_vnode_layouts();
+        assert_eq!(layouts.len(), 3); // root + 2 children
+    }
+
+    #[test]
+    fn test_node_count() {
+        let mut engine = LayoutEngine::new();
+
+        // Use unique keys to avoid collision
+        let root = VNode::box_node()
+            .child(VNode::text("A").with_key("a"))
+            .child(VNode::box_node().child(VNode::text("B").with_key("b")));
+
+        engine.compute_vnode(&root, 80, 24);
+
+        // root + text "A" + inner box + text "B" = 4 nodes
+        assert_eq!(engine.node_count(), 4);
     }
 }

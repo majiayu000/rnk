@@ -183,7 +183,7 @@ where
     let new_hash = deps.deps_hash();
 
     // Get or create hook state
-    let hook = ctx.borrow_mut().use_hook(|| CmdHookState {
+    let hook = ctx.write().unwrap().use_hook(|| CmdHookState {
         deps_hash: 0,
         is_first_render: true,
     });
@@ -203,7 +203,7 @@ where
         let cmd = f(deps.output());
 
         // Queue command for execution
-        ctx.borrow_mut().queue_cmd(cmd);
+        ctx.write().unwrap().queue_cmd(cmd);
     }
 }
 
@@ -238,8 +238,7 @@ where
 mod tests {
     use super::*;
     use crate::hooks::context::{HookContext, with_hooks};
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::sync::{Arc, RwLock};
 
     #[test]
     fn test_deps_unit() {
@@ -282,184 +281,184 @@ mod tests {
 
     #[test]
     fn test_use_cmd_executes_on_first_render() {
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
-        let cmd_executed = Rc::new(RefCell::new(false));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let cmd_executed = Arc::new(RwLock::new(false));
 
         {
-            let flag = Rc::clone(&cmd_executed);
+            let flag = Arc::clone(&cmd_executed);
             with_hooks(ctx.clone(), move || {
                 use_cmd((), move |_| {
-                    *flag.borrow_mut() = true;
+                    *flag.write().unwrap() = true;
                     Cmd::none()
                 });
             });
         }
 
         // The command function was executed
-        assert!(*cmd_executed.borrow());
+        assert!(*cmd_executed.read().unwrap());
         // And a command was queued
-        assert_eq!(ctx.borrow_mut().take_cmds().len(), 1);
+        assert_eq!(ctx.write().unwrap().take_cmds().len(), 1);
     }
 
     #[test]
     fn test_use_cmd_executes_on_deps_change() {
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
-        let execution_count = Rc::new(RefCell::new(0));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let execution_count = Arc::new(RwLock::new(0));
 
         // First render
         {
-            let count = Rc::clone(&execution_count);
+            let count = Arc::clone(&execution_count);
             with_hooks(ctx.clone(), move || {
                 use_cmd(1, move |_| {
-                    *count.borrow_mut() += 1;
+                    *count.write().unwrap() += 1;
                     Cmd::none()
                 });
             });
         }
 
-        assert_eq!(*execution_count.borrow(), 1);
-        ctx.borrow_mut().take_cmds(); // Clear commands
+        assert_eq!(*execution_count.read().unwrap(), 1);
+        ctx.write().unwrap().take_cmds(); // Clear commands
 
         // Second render - same deps
         {
-            let count = Rc::clone(&execution_count);
+            let count = Arc::clone(&execution_count);
             with_hooks(ctx.clone(), move || {
                 use_cmd(1, move |_| {
-                    *count.borrow_mut() += 1;
+                    *count.write().unwrap() += 1;
                     Cmd::none()
                 });
             });
         }
 
-        assert_eq!(*execution_count.borrow(), 1); // Should not execute again
+        assert_eq!(*execution_count.read().unwrap(), 1); // Should not execute again
 
         // Third render - different deps
         {
-            let count = Rc::clone(&execution_count);
+            let count = Arc::clone(&execution_count);
             with_hooks(ctx.clone(), move || {
                 use_cmd(2, move |_| {
-                    *count.borrow_mut() += 1;
+                    *count.write().unwrap() += 1;
                     Cmd::none()
                 });
             });
         }
 
-        assert_eq!(*execution_count.borrow(), 2); // Should execute again
+        assert_eq!(*execution_count.read().unwrap(), 2); // Should execute again
     }
 
     #[test]
     fn test_use_cmd_receives_correct_value() {
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
-        let received_value = Rc::new(RefCell::new(0));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let received_value = Arc::new(RwLock::new(0));
 
         {
-            let value = Rc::clone(&received_value);
+            let value = Arc::clone(&received_value);
             with_hooks(ctx.clone(), move || {
                 use_cmd(42, move |val| {
-                    *value.borrow_mut() = val;
+                    *value.write().unwrap() = val;
                     Cmd::none()
                 });
             });
         }
 
-        assert_eq!(*received_value.borrow(), 42);
+        assert_eq!(*received_value.read().unwrap(), 42);
     }
 
     #[test]
     fn test_use_cmd_queues_command() {
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
 
         with_hooks(ctx.clone(), || {
             use_cmd((), |_| Cmd::perform(|| async {}));
         });
 
-        let cmds = ctx.borrow_mut().take_cmds();
+        let cmds = ctx.write().unwrap().take_cmds();
         assert_eq!(cmds.len(), 1);
         assert!(matches!(cmds[0], Cmd::Perform { .. }));
     }
 
     #[test]
     fn test_use_cmd_once() {
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
-        let execution_count = Rc::new(RefCell::new(0));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let execution_count = Arc::new(RwLock::new(0));
 
         // First render
         {
-            let count = Rc::clone(&execution_count);
+            let count = Arc::clone(&execution_count);
             with_hooks(ctx.clone(), move || {
                 use_cmd_once(move |_| {
-                    *count.borrow_mut() += 1;
+                    *count.write().unwrap() += 1;
                     Cmd::none()
                 });
             });
         }
 
-        assert_eq!(*execution_count.borrow(), 1);
-        ctx.borrow_mut().take_cmds();
+        assert_eq!(*execution_count.read().unwrap(), 1);
+        ctx.write().unwrap().take_cmds();
 
         // Second render - should not execute
         {
-            let count = Rc::clone(&execution_count);
+            let count = Arc::clone(&execution_count);
             with_hooks(ctx.clone(), move || {
                 use_cmd_once(move |_| {
-                    *count.borrow_mut() += 1;
+                    *count.write().unwrap() += 1;
                     Cmd::none()
                 });
             });
         }
 
-        assert_eq!(*execution_count.borrow(), 1); // Still 1
+        assert_eq!(*execution_count.read().unwrap(), 1); // Still 1
     }
 
     #[test]
     fn test_use_cmd_with_tuple_deps() {
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
-        let execution_count = Rc::new(RefCell::new(0));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let execution_count = Arc::new(RwLock::new(0));
 
         // First render
         {
-            let count = Rc::clone(&execution_count);
+            let count = Arc::clone(&execution_count);
             with_hooks(ctx.clone(), move || {
                 use_cmd((1, 2), move |_| {
-                    *count.borrow_mut() += 1;
+                    *count.write().unwrap() += 1;
                     Cmd::none()
                 });
             });
         }
 
-        assert_eq!(*execution_count.borrow(), 1);
-        ctx.borrow_mut().take_cmds();
+        assert_eq!(*execution_count.read().unwrap(), 1);
+        ctx.write().unwrap().take_cmds();
 
         // Same deps
         {
-            let count = Rc::clone(&execution_count);
+            let count = Arc::clone(&execution_count);
             with_hooks(ctx.clone(), move || {
                 use_cmd((1, 2), move |_| {
-                    *count.borrow_mut() += 1;
+                    *count.write().unwrap() += 1;
                     Cmd::none()
                 });
             });
         }
 
-        assert_eq!(*execution_count.borrow(), 1);
+        assert_eq!(*execution_count.read().unwrap(), 1);
 
         // Different deps
         {
-            let count = Rc::clone(&execution_count);
+            let count = Arc::clone(&execution_count);
             with_hooks(ctx.clone(), move || {
                 use_cmd((1, 3), move |_| {
-                    *count.borrow_mut() += 1;
+                    *count.write().unwrap() += 1;
                     Cmd::none()
                 });
             });
         }
 
-        assert_eq!(*execution_count.borrow(), 2);
+        assert_eq!(*execution_count.read().unwrap(), 2);
     }
 
     #[test]
     fn test_use_cmd_multiple_in_same_render() {
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
 
         with_hooks(ctx.clone(), || {
             use_cmd(1, |_| Cmd::perform(|| async {}));
@@ -467,7 +466,7 @@ mod tests {
             use_cmd(3, |_| Cmd::none());
         });
 
-        let cmds = ctx.borrow_mut().take_cmds();
+        let cmds = ctx.write().unwrap().take_cmds();
         assert_eq!(cmds.len(), 3);
     }
 

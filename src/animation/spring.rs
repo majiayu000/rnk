@@ -186,7 +186,9 @@ impl SpringValue {
     /// Update the animation (call each frame)
     pub fn tick(&mut self) {
         if !self.is_settled() {
-            let (pos, vel) = self.spring.update(self.position, self.velocity, self.target);
+            let (pos, vel) = self
+                .spring
+                .update(self.position, self.velocity, self.target);
             self.position = pos;
             self.velocity = vel;
         }

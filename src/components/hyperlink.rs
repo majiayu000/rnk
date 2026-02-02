@@ -254,7 +254,7 @@ impl HyperlinkBuilder {
             result.push_str("\x1b[4m");
         }
         if let Some(color) = &self.color {
-            result.push_str(&color_to_ansi(color));
+            result.push_str(&color.to_ansi_fg());
         }
 
         // Add the hyperlink
@@ -264,31 +264,6 @@ impl HyperlinkBuilder {
         result.push_str("\x1b[0m");
 
         result
-    }
-}
-
-fn color_to_ansi(color: &crate::core::Color) -> String {
-    use crate::core::Color;
-    match color {
-        Color::Rgb(r, g, b) => format!("\x1b[38;2;{};{};{}m", r, g, b),
-        Color::Ansi256(code) => format!("\x1b[38;5;{}m", code),
-        Color::Reset => String::new(),
-        Color::Black => "\x1b[30m".to_string(),
-        Color::Red => "\x1b[31m".to_string(),
-        Color::Green => "\x1b[32m".to_string(),
-        Color::Yellow => "\x1b[33m".to_string(),
-        Color::Blue => "\x1b[34m".to_string(),
-        Color::Magenta => "\x1b[35m".to_string(),
-        Color::Cyan => "\x1b[36m".to_string(),
-        Color::White => "\x1b[37m".to_string(),
-        Color::BrightBlack => "\x1b[90m".to_string(),
-        Color::BrightRed => "\x1b[91m".to_string(),
-        Color::BrightGreen => "\x1b[92m".to_string(),
-        Color::BrightYellow => "\x1b[93m".to_string(),
-        Color::BrightBlue => "\x1b[94m".to_string(),
-        Color::BrightMagenta => "\x1b[95m".to_string(),
-        Color::BrightCyan => "\x1b[96m".to_string(),
-        Color::BrightWhite => "\x1b[97m".to_string(),
     }
 }
 

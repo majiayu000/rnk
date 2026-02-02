@@ -157,7 +157,7 @@ impl SpinnerBuilder {
                     "\x1b[2K\r\x1b[33m{} {}{}\x1b[0m",
                     self.frames[i], self.message, cancel_hint
                 );
-                io::stdout().flush().unwrap();
+                let _ = io::stdout().flush();
                 i = (i + 1) % self.frames.len();
             }
 
@@ -167,7 +167,7 @@ impl SpinnerBuilder {
 
             // Clear the line
             print!("\x1b[2K\r");
-            io::stdout().flush().unwrap();
+            let _ = io::stdout().flush();
         });
 
         Spinner {

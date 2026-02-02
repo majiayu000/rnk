@@ -89,8 +89,8 @@ impl Gradient {
     pub fn ocean() -> Self {
         Self {
             colors: vec![
-                Color::Rgb(0, 105, 148),  // Deep blue
-                Color::Rgb(0, 168, 198),  // Teal
+                Color::Rgb(0, 105, 148),   // Deep blue
+                Color::Rgb(0, 168, 198),   // Teal
                 Color::Rgb(127, 219, 255), // Light blue
             ],
         }
@@ -100,8 +100,8 @@ impl Gradient {
     pub fn forest() -> Self {
         Self {
             colors: vec![
-                Color::Rgb(34, 139, 34),  // Forest green
-                Color::Rgb(50, 205, 50),  // Lime green
+                Color::Rgb(34, 139, 34),   // Forest green
+                Color::Rgb(50, 205, 50),   // Lime green
                 Color::Rgb(144, 238, 144), // Light green
             ],
         }
@@ -160,8 +160,9 @@ impl Gradient {
         let mut result = String::new();
 
         for (c, color) in colored_chars {
-            let ansi_color = color_to_ansi_fg(&color);
-            write!(result, "{}{}", ansi_color, c).unwrap();
+            let ansi_color = color.to_ansi_fg();
+            // Writing to String never fails, but we handle it properly
+            let _ = write!(result, "{}{}", ansi_color, c);
         }
 
         // Reset at the end
@@ -279,31 +280,6 @@ fn ansi256_to_rgb(code: u8) -> (u8, u8, u8) {
             let gray = 8 + (code - 232) * 10;
             (gray, gray, gray)
         }
-    }
-}
-
-/// Convert Color to ANSI foreground escape sequence
-fn color_to_ansi_fg(color: &Color) -> String {
-    match color {
-        Color::Rgb(r, g, b) => format!("\x1b[38;2;{};{};{}m", r, g, b),
-        Color::Ansi256(code) => format!("\x1b[38;5;{}m", code),
-        Color::Reset => "\x1b[0m".to_string(),
-        Color::Black => "\x1b[30m".to_string(),
-        Color::Red => "\x1b[31m".to_string(),
-        Color::Green => "\x1b[32m".to_string(),
-        Color::Yellow => "\x1b[33m".to_string(),
-        Color::Blue => "\x1b[34m".to_string(),
-        Color::Magenta => "\x1b[35m".to_string(),
-        Color::Cyan => "\x1b[36m".to_string(),
-        Color::White => "\x1b[37m".to_string(),
-        Color::BrightBlack => "\x1b[90m".to_string(),
-        Color::BrightRed => "\x1b[91m".to_string(),
-        Color::BrightGreen => "\x1b[92m".to_string(),
-        Color::BrightYellow => "\x1b[93m".to_string(),
-        Color::BrightBlue => "\x1b[94m".to_string(),
-        Color::BrightMagenta => "\x1b[95m".to_string(),
-        Color::BrightCyan => "\x1b[96m".to_string(),
-        Color::BrightWhite => "\x1b[97m".to_string(),
     }
 }
 
