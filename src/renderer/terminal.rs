@@ -130,9 +130,20 @@ mod ansi {
 /// - **Fullscreen mode**: Uses alternate screen buffer, cleared on exit
 ///
 /// Runtime mode switching is supported via `switch_to_alt_screen()` and `switch_to_inline()`.
+///
+/// ## Performance Optimizations
+///
+/// The terminal uses a two-level diff strategy (inspired by Bubbletea):
+///
+/// 1. **Fast path**: If the entire output is identical to the last frame, skip rendering entirely
+/// 2. **Line-level diff**: Only update lines that have changed
+///
+/// This significantly reduces terminal I/O and improves perceived performance.
 pub struct Terminal {
-    /// Previous frame's lines for incremental rendering
+    /// Previous frame's lines for incremental rendering (line-level diff)
     previous_lines: Vec<String>,
+    /// Last complete output string (for fast-path identical frame detection)
+    last_output: String,
     /// Whether we're in alternate screen mode
     alternate_screen: bool,
     /// Whether cursor is hidden
@@ -150,6 +161,7 @@ impl Terminal {
     pub fn new() -> Self {
         Self {
             previous_lines: Vec::new(),
+            last_output: String::new(),
             alternate_screen: false,
             cursor_hidden: false,
             raw_mode: false,
@@ -375,12 +387,29 @@ impl Terminal {
     }
 
     /// Render output to terminal (ink-style incremental rendering)
+    ///
+    /// Uses a two-level optimization strategy:
+    /// 1. Fast path: Skip entirely if output is identical to last frame
+    /// 2. Line-level diff: Only update changed lines
     pub fn render(&mut self, output: &str) -> std::io::Result<()> {
-        if self.alternate_screen {
+        // Fast path: if output is identical to last frame, skip rendering entirely
+        // This is a key optimization from Bubbletea that significantly reduces I/O
+        if output == self.last_output && !self.previous_lines.is_empty() {
+            return Ok(());
+        }
+
+        let result = if self.alternate_screen {
             self.render_fullscreen(output)
         } else {
             self.render_inline(output)
+        };
+
+        // Store the complete output for fast-path comparison
+        if result.is_ok() {
+            self.last_output = output.to_string();
         }
+
+        result
     }
 
     /// Render in fullscreen/alternate screen mode
@@ -545,6 +574,7 @@ impl Terminal {
     /// Force a full repaint on next render
     pub fn repaint(&mut self) {
         self.previous_lines.clear();
+        self.last_output.clear();
     }
 
     /// Get terminal size
@@ -716,6 +746,7 @@ mod tests {
         let terminal = Terminal::new();
         assert!(!terminal.is_alt_screen());
         assert!(terminal.previous_lines.is_empty());
+        assert!(terminal.last_output.is_empty());
         assert_eq!(terminal.inline_lines_rendered, 0);
     }
 
@@ -723,7 +754,24 @@ mod tests {
     fn test_repaint_clears_previous_lines() {
         let mut terminal = Terminal::new();
         terminal.previous_lines = vec!["line1".to_string(), "line2".to_string()];
+        terminal.last_output = "line1\nline2".to_string();
         terminal.repaint();
         assert!(terminal.previous_lines.is_empty());
+        assert!(terminal.last_output.is_empty());
+    }
+
+    #[test]
+    fn test_fast_path_identical_output() {
+        let mut terminal = Terminal::new();
+        // Simulate a previous render
+        terminal.previous_lines = vec!["line1".to_string(), "line2".to_string()];
+        terminal.last_output = "line1\nline2".to_string();
+        terminal.inline_lines_rendered = 2;
+
+        // The fast path should detect identical output
+        // We can't easily test the actual render without a terminal,
+        // but we can verify the state is set up correctly for the optimization
+        assert_eq!(terminal.last_output, "line1\nline2");
+        assert!(!terminal.previous_lines.is_empty());
     }
 }

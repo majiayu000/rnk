@@ -270,6 +270,27 @@ impl CmdExecutor {
                 queue_exec_request(ExecRequest { config, callback });
                 // Note: render notification will happen after the process completes
             }
+
+            // Terminal control commands - these are handled by the renderer
+            // and just need to trigger a render
+            Cmd::ClearScreen
+            | Cmd::HideCursor
+            | Cmd::ShowCursor
+            | Cmd::SetWindowTitle(_)
+            | Cmd::WindowSize
+            | Cmd::EnterAltScreen
+            | Cmd::ExitAltScreen
+            | Cmd::EnableMouse
+            | Cmd::DisableMouse
+            | Cmd::EnableBracketedPaste
+            | Cmd::DisableBracketedPaste => {
+                // These commands are handled by the renderer event loop
+                // Queue them for processing
+                crate::renderer::registry::queue_terminal_cmd(cmd);
+                if notify_render {
+                    render_handle.request();
+                }
+            }
         }
     }
 
@@ -408,6 +429,22 @@ impl CmdExecutor {
                 // since we need to wait for the result anyway
                 let result = execute_process_sync(&config);
                 callback(result);
+                let _ = completion.send(());
+            }
+
+            // Terminal control commands - these are handled immediately
+            Cmd::ClearScreen
+            | Cmd::HideCursor
+            | Cmd::ShowCursor
+            | Cmd::SetWindowTitle(_)
+            | Cmd::WindowSize
+            | Cmd::EnterAltScreen
+            | Cmd::ExitAltScreen
+            | Cmd::EnableMouse
+            | Cmd::DisableMouse
+            | Cmd::EnableBracketedPaste
+            | Cmd::DisableBracketedPaste => {
+                crate::renderer::registry::queue_terminal_cmd(cmd);
                 let _ = completion.send(());
             }
         }

@@ -2,9 +2,8 @@
 //!
 //! This module provides the main application runner.
 
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::cmd::{ExecRequest, run_exec_process};
@@ -32,7 +31,7 @@ where
     component: F,
     terminal: Terminal,
     layout_engine: LayoutEngine,
-    hook_context: Rc<RefCell<HookContext>>,
+    hook_context: Arc<RwLock<HookContext>>,
     options: AppOptions,
     should_exit: Arc<AtomicBool>,
     runtime: Arc<AppRuntime>,
@@ -81,13 +80,14 @@ where
     ) -> Self {
         let runtime = AppRuntime::new(options.alternate_screen);
         let render_handle = RenderHandle::new(runtime.clone());
-        let hook_context = Rc::new(RefCell::new(HookContext::new()));
+        let hook_context = Arc::new(RwLock::new(HookContext::new()));
 
         // Set up render callback
         let runtime_clone = runtime.clone();
         hook_context
-            .borrow_mut()
-            .set_render_callback(Rc::new(move || {
+            .write()
+            .unwrap()
+            .set_render_callback(Arc::new(move || {
                 runtime_clone.request_render();
             }));
 
@@ -147,6 +147,12 @@ where
             let exec_requests = self.runtime.take_exec_requests();
             for request in exec_requests {
                 self.handle_exec_request(request)?;
+            }
+
+            // Handle terminal control commands
+            let terminal_cmds = crate::renderer::registry::take_terminal_cmds();
+            for cmd in terminal_cmds {
+                self.handle_terminal_cmd(cmd)?;
             }
 
             // Handle mode switch requests (access runtime directly)
@@ -218,6 +224,72 @@ where
         // Request re-render
         self.runtime.request_render();
 
+        Ok(())
+    }
+
+    /// Handle terminal control commands
+    fn handle_terminal_cmd(&mut self, cmd: crate::cmd::Cmd) -> std::io::Result<()> {
+        use crate::cmd::Cmd;
+        use crossterm::{cursor, execute, terminal as ct};
+        use std::io::stdout;
+
+        match cmd {
+            Cmd::ClearScreen => {
+                if self.terminal.is_alt_screen() {
+                    execute!(
+                        stdout(),
+                        ct::Clear(ct::ClearType::All),
+                        cursor::MoveTo(0, 0)
+                    )?;
+                } else {
+                    self.terminal.clear()?;
+                }
+            }
+            Cmd::HideCursor => {
+                execute!(stdout(), cursor::Hide)?;
+            }
+            Cmd::ShowCursor => {
+                execute!(stdout(), cursor::Show)?;
+            }
+            Cmd::SetWindowTitle(title) => {
+                execute!(stdout(), ct::SetTitle(&title))?;
+            }
+            Cmd::WindowSize => {
+                // This triggers a resize check on next render
+                self.last_width = 0;
+                self.last_height = 0;
+            }
+            Cmd::EnterAltScreen => {
+                if !self.terminal.is_alt_screen() {
+                    self.terminal.switch_to_alt_screen()?;
+                    self.runtime.set_alt_screen_state(true);
+                    self.terminal.repaint();
+                }
+            }
+            Cmd::ExitAltScreen => {
+                if self.terminal.is_alt_screen() {
+                    self.terminal.switch_to_inline()?;
+                    self.runtime.set_alt_screen_state(false);
+                    self.terminal.repaint();
+                }
+            }
+            Cmd::EnableMouse => {
+                crate::hooks::use_mouse::set_mouse_enabled(true);
+                execute!(stdout(), crossterm::event::EnableMouseCapture)?;
+            }
+            Cmd::DisableMouse => {
+                crate::hooks::use_mouse::set_mouse_enabled(false);
+                execute!(stdout(), crossterm::event::DisableMouseCapture)?;
+            }
+            Cmd::EnableBracketedPaste => {
+                execute!(stdout(), crossterm::event::EnableBracketedPaste)?;
+            }
+            Cmd::DisableBracketedPaste => {
+                execute!(stdout(), crossterm::event::DisableBracketedPaste)?;
+            }
+            // Other Cmd variants are handled by the executor
+            _ => {}
+        }
         Ok(())
     }
 

@@ -15,6 +15,26 @@
 //! - [`Cmd::every()`] - Execute callback aligned to system clock
 //! - [`Cmd::exec()`] - Execute external interactive process (suspends TUI)
 //!
+//! # Typed Commands
+//!
+//! For type-safe message passing, use [`TypedCmd<M>`]:
+//!
+//! ```rust,ignore
+//! use rnk::cmd::TypedCmd;
+//!
+//! enum Msg {
+//!     DataLoaded(String),
+//!     Error(String),
+//! }
+//!
+//! let cmd: TypedCmd<Msg> = TypedCmd::perform(|| async {
+//!     match fetch_data().await {
+//!         Ok(data) => Msg::DataLoaded(data),
+//!         Err(e) => Msg::Error(e.to_string()),
+//!     }
+//! });
+//! ```
+//!
 //! # Example
 //!
 //! ```rust
@@ -47,10 +67,12 @@
 
 mod exec;
 mod executor;
+mod msg;
 mod tasks;
 
 pub use exec::{ExecConfig, ExecResult};
 pub use executor::{CmdExecutor, RenderHandle, run_exec_process};
+pub use msg::{AppMsg, BoxedMsg, TypedCmd};
 pub use tasks::{HttpRequest, HttpResponse, ProcessOutput};
 
 pub(crate) use exec::ExecRequest;
@@ -116,6 +138,44 @@ pub enum Cmd {
         /// Callback that receives the result when the process exits
         callback: Box<dyn FnOnce(ExecResult) + Send + 'static>,
     },
+
+    /// Clear the terminal screen
+    ///
+    /// In fullscreen mode, this clears the entire screen.
+    /// In inline mode, this clears the current UI output.
+    ClearScreen,
+
+    /// Hide the terminal cursor
+    HideCursor,
+
+    /// Show the terminal cursor
+    ShowCursor,
+
+    /// Set the terminal window title
+    SetWindowTitle(String),
+
+    /// Request the current window size
+    ///
+    /// This triggers a WindowSizeMsg to be sent to the update function.
+    WindowSize,
+
+    /// Enter alternate screen buffer (fullscreen mode)
+    EnterAltScreen,
+
+    /// Exit alternate screen buffer (return to inline mode)
+    ExitAltScreen,
+
+    /// Enable mouse support
+    EnableMouse,
+
+    /// Disable mouse support
+    DisableMouse,
+
+    /// Enable bracketed paste mode
+    EnableBracketedPaste,
+
+    /// Disable bracketed paste mode
+    DisableBracketedPaste,
 }
 
 impl Cmd {
@@ -204,7 +264,7 @@ impl Cmd {
     /// ```rust
     /// use rnk::cmd::Cmd;
     ///
-    /// let cmd = Cmd::perform(async {
+    /// let cmd = Cmd::perform(|| async {
     ///     println!("Hello from async!");
     /// });
     /// ```
@@ -364,6 +424,166 @@ impl Cmd {
         Cmd::exec(config, callback)
     }
 
+    /// Clear the terminal screen
+    ///
+    /// In fullscreen mode, this clears the entire screen.
+    /// In inline mode, this clears the current UI output.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rnk::cmd::Cmd;
+    ///
+    /// let cmd = Cmd::clear_screen();
+    /// ```
+    pub fn clear_screen() -> Self {
+        Cmd::ClearScreen
+    }
+
+    /// Hide the terminal cursor
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rnk::cmd::Cmd;
+    ///
+    /// let cmd = Cmd::hide_cursor();
+    /// ```
+    pub fn hide_cursor() -> Self {
+        Cmd::HideCursor
+    }
+
+    /// Show the terminal cursor
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rnk::cmd::Cmd;
+    ///
+    /// let cmd = Cmd::show_cursor();
+    /// ```
+    pub fn show_cursor() -> Self {
+        Cmd::ShowCursor
+    }
+
+    /// Set the terminal window title
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rnk::cmd::Cmd;
+    ///
+    /// let cmd = Cmd::set_window_title("My App");
+    /// ```
+    pub fn set_window_title(title: impl Into<String>) -> Self {
+        Cmd::SetWindowTitle(title.into())
+    }
+
+    /// Request the current window size
+    ///
+    /// This triggers a WindowSizeMsg to be sent to the update function.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rnk::cmd::Cmd;
+    ///
+    /// let cmd = Cmd::window_size();
+    /// ```
+    pub fn window_size() -> Self {
+        Cmd::WindowSize
+    }
+
+    /// Enter alternate screen buffer (fullscreen mode)
+    ///
+    /// This switches to the alternate screen buffer, which is typically
+    /// used for fullscreen applications. The previous screen content is
+    /// preserved and restored when exiting.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rnk::cmd::Cmd;
+    ///
+    /// let cmd = Cmd::enter_alt_screen();
+    /// ```
+    pub fn enter_alt_screen() -> Self {
+        Cmd::EnterAltScreen
+    }
+
+    /// Exit alternate screen buffer (return to inline mode)
+    ///
+    /// This exits the alternate screen buffer and restores the previous
+    /// screen content.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rnk::cmd::Cmd;
+    ///
+    /// let cmd = Cmd::exit_alt_screen();
+    /// ```
+    pub fn exit_alt_screen() -> Self {
+        Cmd::ExitAltScreen
+    }
+
+    /// Enable mouse support
+    ///
+    /// Enables mouse click, release, wheel, and motion events.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rnk::cmd::Cmd;
+    ///
+    /// let cmd = Cmd::enable_mouse();
+    /// ```
+    pub fn enable_mouse() -> Self {
+        Cmd::EnableMouse
+    }
+
+    /// Disable mouse support
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rnk::cmd::Cmd;
+    ///
+    /// let cmd = Cmd::disable_mouse();
+    /// ```
+    pub fn disable_mouse() -> Self {
+        Cmd::DisableMouse
+    }
+
+    /// Enable bracketed paste mode
+    ///
+    /// When enabled, pasted text is wrapped in escape sequences,
+    /// allowing the application to distinguish between typed and pasted text.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rnk::cmd::Cmd;
+    ///
+    /// let cmd = Cmd::enable_bracketed_paste();
+    /// ```
+    pub fn enable_bracketed_paste() -> Self {
+        Cmd::EnableBracketedPaste
+    }
+
+    /// Disable bracketed paste mode
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rnk::cmd::Cmd;
+    ///
+    /// let cmd = Cmd::disable_bracketed_paste();
+    /// ```
+    pub fn disable_bracketed_paste() -> Self {
+        Cmd::DisableBracketedPaste
+    }
+
     /// Chain this command with another command
     ///
     /// The next command will execute after this one completes.
@@ -375,7 +595,7 @@ impl Cmd {
     /// use std::time::Duration;
     ///
     /// let cmd = Cmd::sleep(Duration::from_secs(1))
-    ///     .and_then(Cmd::perform(async {
+    ///     .and_then(Cmd::perform(|| async {
     ///         println!("After 1 second");
     ///     }));
     /// ```
@@ -401,7 +621,7 @@ impl Cmd {
     /// use rnk::cmd::Cmd;
     ///
     /// assert!(Cmd::none().is_none());
-    /// assert!(!Cmd::perform(async {}).is_none());
+    /// assert!(!Cmd::perform(|| async {}).is_none());
     /// ```
     pub fn is_none(&self) -> bool {
         matches!(self, Cmd::None)
@@ -418,9 +638,9 @@ impl Cmd {
     ///
     /// let cmd = Cmd::none().map(|c| {
     ///     Cmd::batch(vec![
-    ///         Cmd::perform(async { println!("Before"); }),
+    ///         Cmd::perform(|| async { println!("Before"); }),
     ///         c,
-    ///         Cmd::perform(async { println!("After"); }),
+    ///         Cmd::perform(|| async { println!("After"); }),
     ///     ])
     /// });
     /// ```
@@ -455,6 +675,19 @@ impl std::fmt::Debug for Cmd {
             Cmd::Exec { config, .. } => {
                 f.debug_struct("Cmd::Exec").field("config", config).finish()
             }
+            Cmd::ClearScreen => write!(f, "Cmd::ClearScreen"),
+            Cmd::HideCursor => write!(f, "Cmd::HideCursor"),
+            Cmd::ShowCursor => write!(f, "Cmd::ShowCursor"),
+            Cmd::SetWindowTitle(title) => {
+                f.debug_tuple("Cmd::SetWindowTitle").field(title).finish()
+            }
+            Cmd::WindowSize => write!(f, "Cmd::WindowSize"),
+            Cmd::EnterAltScreen => write!(f, "Cmd::EnterAltScreen"),
+            Cmd::ExitAltScreen => write!(f, "Cmd::ExitAltScreen"),
+            Cmd::EnableMouse => write!(f, "Cmd::EnableMouse"),
+            Cmd::DisableMouse => write!(f, "Cmd::DisableMouse"),
+            Cmd::EnableBracketedPaste => write!(f, "Cmd::EnableBracketedPaste"),
+            Cmd::DisableBracketedPaste => write!(f, "Cmd::DisableBracketedPaste"),
         }
     }
 }

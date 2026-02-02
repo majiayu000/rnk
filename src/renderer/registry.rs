@@ -3,7 +3,7 @@
 //! This module provides a global registry that allows multiple apps to run
 //! and enables cross-thread render requests via the AppSink trait.
 
-use crate::cmd::ExecRequest;
+use crate::cmd::{Cmd, ExecRequest};
 use crate::core::Element;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -394,6 +394,33 @@ pub fn is_alt_screen() -> Option<bool> {
 pub(crate) fn queue_exec_request(request: ExecRequest) {
     if let Some(sink) = current_app_sink() {
         sink.queue_exec(request);
+    }
+}
+
+// Global terminal command queue
+static TERMINAL_CMD_QUEUE: OnceLock<Mutex<Vec<Cmd>>> = OnceLock::new();
+
+fn terminal_cmd_queue() -> &'static Mutex<Vec<Cmd>> {
+    TERMINAL_CMD_QUEUE.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Queue a terminal control command.
+///
+/// This is used internally by the Cmd system to queue terminal commands
+/// like ClearScreen, HideCursor, ShowCursor, etc.
+pub(crate) fn queue_terminal_cmd(cmd: Cmd) {
+    if let Ok(mut queue) = terminal_cmd_queue().lock() {
+        queue.push(cmd);
+    }
+    // Request a render to process the command
+    request_render();
+}
+
+/// Take all queued terminal commands.
+pub(crate) fn take_terminal_cmds() -> Vec<Cmd> {
+    match terminal_cmd_queue().lock() {
+        Ok(mut queue) => std::mem::take(&mut *queue),
+        Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
     }
 }
 
