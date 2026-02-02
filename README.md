@@ -10,6 +10,8 @@ A React-like declarative terminal UI framework for Rust, inspired by [Ink](https
 
 - **React-like API**: Familiar component model with hooks (`use_signal`, `use_effect`, `use_input`, `use_cmd`)
 - **Command System**: Elm-inspired side effect management for async tasks, timers, file I/O
+- **Type-safe Commands**: `TypedCmd<M>` for compile-time message type checking
+- **Declarative Macros**: `row!`, `col!`, `text!` for concise UI building
 - **Declarative UI**: Build TUIs with composable components
 - **Flexbox Layout**: Powered by [Taffy](https://github.com/DioxusLabs/taffy) for flexible layouts
 - **Inline Mode** (default): Output persists in terminal history (like Ink/Bubbletea)
@@ -17,8 +19,10 @@ A React-like declarative terminal UI framework for Rust, inspired by [Ink](https
 - **Line-level Diff Rendering**: Only changed lines are redrawn for efficiency
 - **Persistent Output**: `println()` API for messages that persist above the UI
 - **Cross-thread Rendering**: `request_render()` for async/multi-threaded apps
-- **Rich Components**: Box, Text, List, Table, Tabs, Progress, Sparkline, BarChart, and more
+- **Rich Components**: 40+ components including Box, Text, List, Table, Tree, Modal, Notification, and more
 - **Mouse Support**: Full mouse event handling
+- **Bracketed Paste**: Distinguish between typed and pasted text
+- **Theme System**: Centralized theming with semantic colors
 - **Cross-platform**: Works on Linux, macOS, and Windows
 
 ## Quick Start
@@ -27,7 +31,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rnk = "0.6"
+rnk = "0.10"
 ```
 
 ## Examples
@@ -47,6 +51,25 @@ fn app() -> Element {
         .border_style(BorderStyle::Round)
         .child(Text::new("Hello, rnk!").color(Color::Green).bold().into_element())
         .into_element()
+}
+```
+
+### Using Declarative Macros
+
+```rust
+use rnk::prelude::*;
+use rnk::{col, row, text, spacer};
+
+fn app() -> Element {
+    col! {
+        text!("Header").bold(),
+        row! {
+            text!("Left"),
+            spacer!(),
+            text!("Right"),
+        },
+        text!("Footer").dim(),
+    }
 }
 ```
 
@@ -82,38 +105,48 @@ fn app() -> Element {
 }
 ```
 
-### Streaming Output Demo
+### Type-safe Commands with TypedCmd
 
 ```rust
 use rnk::prelude::*;
+use rnk::cmd::TypedCmd;
 use std::time::Duration;
 
-fn main() -> std::io::Result<()> {
-    // Background thread for periodic updates
-    std::thread::spawn(|| {
-        let mut tick = 0u32;
-        loop {
-            std::thread::sleep(Duration::from_millis(100));
-            tick += 1;
-            rnk::request_render();
-
-            // Print persistent log every 20 ticks
-            if tick % 20 == 0 {
-                rnk::println(format!("[LOG] Tick {} completed", tick));
-            }
-        }
-    });
-
-    render(app).run()
+#[derive(Clone, Debug)]
+enum Msg {
+    DataLoaded(Vec<String>),
+    Error(String),
+    Tick(u64),
 }
 
 fn app() -> Element {
-    let counter = use_signal(|| 0);
-    counter.set(counter.get() + 1);
+    let data = use_signal(|| Vec::new());
+    let tick = use_signal(|| 0u64);
 
-    Box::new()
-        .child(Text::new(format!("Frame: {}", counter.get())).into_element())
-        .into_element()
+    // Type-safe command - compiler ensures callback returns Msg
+    use_cmd_once(move || {
+        TypedCmd::batch(vec![
+            // Async data loading
+            TypedCmd::perform(
+                || async { vec!["Item 1".into(), "Item 2".into()] },
+                Msg::DataLoaded,
+            ),
+            // Periodic tick
+            TypedCmd::tick(Duration::from_secs(1), |_| Msg::Tick(1)),
+        ])
+        .on_msg(move |msg| {
+            match msg {
+                Msg::DataLoaded(items) => data.set(items),
+                Msg::Tick(n) => tick.update(|t| *t += n),
+                Msg::Error(_) => {}
+            }
+        })
+    });
+
+    col! {
+        text!("Data: {:?}", data.get()),
+        text!("Ticks: {}", tick.get()),
+    }
 }
 ```
 
@@ -164,41 +197,77 @@ use_input(move |input, _key| {
 });
 ```
 
-## Render APIs
-
-### Interactive Applications
-
-```rust
-// Run interactive TUI application
-render(app).run()?;
-```
-
-### Static Rendering (Non-interactive)
-
-Render elements to string without running the event loop:
-
-```rust
-use rnk::prelude::*;
-
-let element = Box::new()
-    .border_style(BorderStyle::Round)
-    .child(Text::new("Hello!").into_element())
-    .into_element();
-
-// Render with specific width
-let output = rnk::render_to_string(&element, 80);
-println!("{}", output);
-
-// Render with auto-detected terminal width
-let output = rnk::render_to_string_auto(&element);
-println!("{}", output);
-```
-
 ## Components
 
-### Box
+### Layout Components
 
-Flexbox container with full layout support.
+| Component | Description |
+|-----------|-------------|
+| `Box` | Flexbox container with full layout support |
+| `Spacer` | Flexible space filler |
+| `Newline` | Vertical space |
+| `Transform` | Transform child text content |
+
+### Text & Display
+
+| Component | Description |
+|-----------|-------------|
+| `Text` | Styled text with colors and formatting |
+| `Gradient` | Text with gradient colors |
+| `Hyperlink` | Clickable terminal hyperlinks |
+| `Spinner` | Animated loading indicator |
+| `Cursor` | Blinking cursor component |
+
+### Data Display
+
+| Component | Description |
+|-----------|-------------|
+| `List` | Selectable list with keyboard navigation |
+| `Table` | Data table with headers and styling |
+| `Tree` | Hierarchical tree view |
+| `Progress` / `Gauge` | Progress bars |
+| `Sparkline` | Inline data visualization |
+| `BarChart` | Horizontal/vertical bar charts |
+| `Scrollbar` | Scrollbar indicator |
+
+### Input Components
+
+| Component | Description |
+|-----------|-------------|
+| `TextInput` | Single-line text input |
+| `TextArea` | Multi-line text editor with vim keybindings |
+| `SelectInput` | Dropdown-style selection |
+| `MultiSelect` | Multiple item selection |
+| `Confirm` | Yes/No confirmation dialog |
+| `FilePicker` | File system browser |
+
+### Navigation
+
+| Component | Description |
+|-----------|-------------|
+| `Tabs` | Tab navigation |
+| `Paginator` | Page navigation (dots, numbers, arrows) |
+| `Viewport` | Scrollable content viewport |
+| `Help` | Keyboard shortcut help display |
+
+### Feedback & Overlay
+
+| Component | Description |
+|-----------|-------------|
+| `Modal` | Modal overlay |
+| `Dialog` | Dialog box with buttons |
+| `Notification` / `Toast` | Notification messages |
+| `Message` | Styled message boxes (info, success, warning, error) |
+| `Static` | Permanent output above dynamic UI |
+
+### Theming
+
+| Component | Description |
+|-----------|-------------|
+| `Theme` | Centralized theme configuration |
+| `ThemeBuilder` | Fluent theme construction |
+
+### Example: Box
 
 ```rust
 Box::new()
@@ -216,468 +285,304 @@ Box::new()
     .into_element()
 ```
 
-**Border Styles**: `None`, `Single`, `Double`, `Round`, `Bold`, `Custom(chars)`
-
-**Per-side Border Colors**:
-```rust
-Box::new()
-    .border_style(BorderStyle::Single)
-    .border_top_color(Color::Red)
-    .border_bottom_color(Color::Blue)
-    .border_left_color(Color::Green)
-    .border_right_color(Color::Yellow)
-```
-
-### Text
-
-Styled text with colors and formatting.
+### Example: Tree
 
 ```rust
-Text::new("Hello, World!")
-    .color(Color::Green)
-    .background_color(Color::Black)
-    .bold()
-    .italic()
-    .underline()
-    .strikethrough()
-    .dim()
+let root = TreeNode::new("root", "Root")
+    .child(TreeNode::new("child1", "Child 1")
+        .child(TreeNode::new("grandchild", "Grandchild")))
+    .child(TreeNode::new("child2", "Child 2"));
+
+Tree::new(root)
+    .expanded(&["root", "child1"])
+    .selected("grandchild")
     .into_element()
 ```
 
-**Rich Text with Spans**:
-```rust
-Text::builder()
-    .span("Normal ")
-    .span_styled("bold", |s| s.bold())
-    .span(" and ")
-    .span_styled("colored", |s| s.color(Color::Cyan))
-    .build()
-    .into_element()
-```
-
-### List
-
-Selectable list with keyboard navigation.
+### Example: Modal
 
 ```rust
-List::new()
-    .items(vec!["Item 1", "Item 2", "Item 3"])
-    .selected(current_index)
-    .highlight_style(|s| s.color(Color::Cyan).bold())
-    .on_select(|idx| { /* handle selection */ })
-    .into_element()
-```
-
-### Table
-
-Data table with headers and styling.
-
-```rust
-Table::new()
-    .headers(vec!["Name", "Age", "City"])
-    .rows(vec![
-        vec!["Alice", "30", "NYC"],
-        vec!["Bob", "25", "LA"],
-    ])
-    .column_widths(vec![20, 10, 15])
-    .header_style(|s| s.bold().color(Color::Yellow))
-    .into_element()
-```
-
-### Tabs
-
-Tab navigation component.
-
-```rust
-Tabs::new()
-    .tabs(vec!["Home", "Settings", "About"])
-    .selected(current_tab)
-    .on_change(|idx| { /* handle tab change */ })
-    .into_element()
-```
-
-### Progress / Gauge
-
-Progress bars and gauges.
-
-```rust
-// Simple progress bar
-Progress::new()
-    .progress(0.75)  // 75%
-    .width(30)
-    .filled_char('█')
-    .empty_char('░')
-    .into_element()
-
-// Gauge with label
-Gauge::new()
-    .ratio(0.5)
-    .label("50%")
-    .into_element()
-```
-
-### Sparkline
-
-Inline data visualization.
-
-```rust
-Sparkline::new()
-    .data(&[1, 3, 7, 2, 5, 8, 4])
-    .width(20)
-    .into_element()
-```
-
-### BarChart
-
-Horizontal and vertical bar charts.
-
-```rust
-BarChart::new()
-    .data(&[("A", 10), ("B", 20), ("C", 15)])
-    .bar_width(3)
-    .bar_gap(1)
-    .into_element()
-```
-
-### Static
-
-Permanent output that persists above dynamic UI.
-
-```rust
-Static::new(
-    items.to_vec(),
-    |item, index| {
-        Text::new(format!("[{}] {}", index + 1, item))
-            .color(Color::Gray)
+Modal::new()
+    .visible(show_modal.get())
+    .align(ModalAlign::Center)
+    .child(
+        Dialog::new()
+            .title("Confirm")
+            .message("Are you sure?")
+            .buttons(vec!["Yes", "No"])
+            .on_select(|idx| { /* handle */ })
             .into_element()
-    }
-).into_element()
-```
-
-### Transform
-
-Transform child text content.
-
-```rust
-Transform::new(|s| s.to_uppercase())
-    .child(Text::new("will be uppercase").into_element())
+    )
     .into_element()
 ```
 
-### Spacer / Newline
-
-Layout helpers.
+### Example: Notification
 
 ```rust
-Box::new()
-    .flex_direction(FlexDirection::Row)
-    .child(Text::new("Left").into_element())
-    .child(Spacer::new().into_element())  // Flexible space
-    .child(Text::new("Right").into_element())
+Notification::new()
+    .items(notifications.get())
+    .position(NotificationPosition::TopRight)
+    .max_visible(3)
     .into_element()
-
-// Add vertical space
-Newline::new().into_element()
-```
-
-### Spinner
-
-Animated loading indicator.
-
-```rust
-Spinner::new()
-    .style(SpinnerStyle::Dots)
-    .label("Loading...")
-    .into_element()
-```
-
-### Message
-
-Styled message boxes for info, success, warning, error.
-
-```rust
-Message::info("Information message")
-Message::success("Operation completed!")
-Message::warning("Please be careful")
-Message::error("Something went wrong")
 ```
 
 ## Hooks
 
-### use_signal
+### State Management
 
-Reactive state management.
+| Hook | Description |
+|------|-------------|
+| `use_signal` | Reactive state management |
+| `use_memo` | Memoized computation |
+| `use_callback` | Memoized callback |
+
+### Effects & Commands
+
+| Hook | Description |
+|------|-------------|
+| `use_effect` | Side effects with dependencies |
+| `use_effect_once` | One-time side effect |
+| `use_cmd` | Command execution with dependencies |
+| `use_cmd_once` | One-time command execution |
+
+### Input
+
+| Hook | Description |
+|------|-------------|
+| `use_input` | Keyboard input handling |
+| `use_mouse` | Mouse event handling |
+| `use_paste` | Bracketed paste handling |
+| `use_text_input` | Text input state management |
+
+### Focus & Navigation
+
+| Hook | Description |
+|------|-------------|
+| `use_focus` | Focus state for a component |
+| `use_focus_manager` | Global focus management |
+| `use_scroll` | Scroll state management |
+
+### Application
+
+| Hook | Description |
+|------|-------------|
+| `use_app` | Application control (exit, etc.) |
+| `use_window_title` | Set terminal window title |
+| `use_frame_rate` | Frame rate monitoring |
+| `use_measure` | Measure element dimensions |
+| `use_stdin` / `use_stdout` / `use_stderr` | Stdio access |
+
+### Example: use_paste
 
 ```rust
-let count = use_signal(|| 0);
-
-// Read value
-let value = count.get();
-
-// Update value
-count.set(value + 1);
-
-// Update with function
-count.update(|v| *v += 1);
+use_paste(move |event| {
+    match event {
+        PasteEvent::Start => { /* paste started */ }
+        PasteEvent::Content(text) => {
+            // Handle pasted text
+            input_buffer.update(|b| b.push_str(&text));
+        }
+        PasteEvent::End => { /* paste ended */ }
+    }
+});
 ```
 
-### use_effect
-
-Side effects with dependencies.
+### Example: use_memo
 
 ```rust
-let data = use_signal(|| Vec::new());
+let items = use_signal(|| vec![1, 2, 3, 4, 5]);
 
-use_effect(
-    move || {
-        // Effect runs when dependencies change
-        println!("Data loaded: {:?}", data.get());
-
-        // Optional cleanup
-        Some(Box::new(|| {
-            println!("Cleanup");
-        }))
-    },
-    vec![data.get().len()],  // Dependencies
+// Only recomputes when items change
+let sum = use_memo(
+    move || items.get().iter().sum::<i32>(),
+    vec![items.get().len()],
 );
 ```
 
-### use_input
+## Command System
 
-Keyboard input handling.
-
-```rust
-use_input(move |input, key| {
-    if input == "q" {
-        // quit
-    } else if key.return_key {
-        // submit
-    } else if key.up_arrow {
-        // move up
-    } else if key.down_arrow {
-        // move down
-    }
-});
-```
-
-**Key struct fields**:
-- `up_arrow`, `down_arrow`, `left_arrow`, `right_arrow`
-- `page_up`, `page_down`, `home`, `end`
-- `return_key`, `escape`, `tab`, `backspace`, `delete`
-- `ctrl`, `shift`, `alt` (modifier keys)
-
-### use_mouse
-
-Mouse event handling.
+### Basic Commands
 
 ```rust
-use_mouse(move |mouse| {
-    match mouse.action {
-        MouseAction::Press(MouseButton::Left) => {
-            println!("Clicked at ({}, {})", mouse.x, mouse.y);
-        }
-        MouseAction::Move => { /* handle hover */ }
-        MouseAction::ScrollUp => { /* scroll up */ }
-        MouseAction::ScrollDown => { /* scroll down */ }
-        _ => {}
-    }
-});
-```
-
-### use_focus
-
-Focus management for form inputs.
-
-```rust
-let focus_state = use_focus(UseFocusOptions {
-    auto_focus: true,
-    is_active: true,
-    id: None,
-});
-
-if focus_state.is_focused {
-    // Component is focused
-}
-```
-
-### use_scroll
-
-Scroll state management.
-
-```rust
-let scroll = use_scroll();
-
-// Configure content and viewport sizes
-scroll.set_content_size(100, 500);
-scroll.set_viewport_size(80, 20);
-
-use_input(move |_input, key| {
-    if key.up_arrow {
-        scroll.scroll_up(1);
-    } else if key.down_arrow {
-        scroll.scroll_down(1);
-    } else if key.page_up {
-        scroll.page_up();
-    } else if key.page_down {
-        scroll.page_down();
-    }
-});
-
-// Get current scroll position
-let offset_y = scroll.offset_y();
-```
-
-### use_app
-
-Application control.
-
-```rust
-let app = use_app();
-
-use_input(move |input, _key| {
-    if input == "q" {
-        app.exit();  // Exit the application
-    }
-});
-```
-
-### use_cmd
-
-Elm-inspired command system for side effects (async tasks, timers, file I/O).
-
-```rust
-use rnk::prelude::*;
 use rnk::cmd::Cmd;
-use std::time::Duration;
 
-fn app() -> Element {
-    let status = use_signal(|| "Ready".to_string());
-    let data = use_signal(|| None::<String>);
-
-    // Run command when status changes
-    use_cmd(status.get(), move |_| {
-        Cmd::batch(vec![
-            // Delay for 1 second
-            Cmd::sleep(Duration::from_secs(1)),
-            // Then perform async task
-            Cmd::perform(
-                async {
-                    // Simulate async work
-                    "Data loaded!".to_string()
-                },
-                move |result| {
-                    data.set(Some(result));
-                },
-            ),
-        ])
-    });
-
-    Box::new()
-        .child(Text::new(format!("Status: {}", status.get())).into_element())
-        .child(Text::new(format!("Data: {:?}", data.get())).into_element())
-        .into_element()
-}
-```
-
-**Available Commands**:
-
-```rust
 // No-op command
 Cmd::none()
 
-// Batch multiple commands
+// Execute multiple commands concurrently
 Cmd::batch(vec![cmd1, cmd2, cmd3])
+
+// Execute commands sequentially
+Cmd::sequence(vec![cmd1, cmd2, cmd3])
 
 // Delay execution
 Cmd::sleep(Duration::from_secs(1))
 
-// Async task with callback
-Cmd::perform(async { /* work */ }, |result| { /* handle result */ })
+// Timer tick (single)
+Cmd::tick(Duration::from_secs(1), |timestamp| { /* handle */ })
+
+// System clock aligned tick
+Cmd::every(Duration::from_secs(1), |timestamp| { /* handle */ })
+
+// Async task
+Cmd::perform(|| async { /* work */ })
 
 // Chain commands
-cmd.and_then(|| another_cmd)
-
-// File operations
-Cmd::read_file("path.txt", |content| { /* handle content */ })
-Cmd::write_file("path.txt", "content", |success| { /* handle result */ })
-
-// Spawn process
-Cmd::spawn("ls", vec!["-la"], |output| { /* handle output */ })
+cmd.and_then(another_cmd)
 ```
 
-### use_window_title
-
-Set terminal window title.
+### Terminal Control Commands
 
 ```rust
-use_window_title("My TUI App");
+// Clear screen
+Cmd::clear_screen()
+
+// Cursor control
+Cmd::hide_cursor()
+Cmd::show_cursor()
+
+// Window title
+Cmd::set_window_title("My App")
+
+// Request window size (triggers resize event)
+Cmd::window_size()
+
+// Screen mode
+Cmd::enter_alt_screen()
+Cmd::exit_alt_screen()
+
+// Mouse
+Cmd::enable_mouse()
+Cmd::disable_mouse()
+
+// Bracketed paste
+Cmd::enable_bracketed_paste()
+Cmd::disable_bracketed_paste()
+```
+
+### External Process Execution
+
+```rust
+// Execute external process (suspends TUI)
+Cmd::exec_cmd("vim", &["file.txt"], |result| {
+    match result {
+        ExecResult::Success(code) => { /* process exited */ }
+        ExecResult::Error(err) => { /* error */ }
+    }
+})
+```
+
+### Type-safe Commands (TypedCmd)
+
+```rust
+use rnk::cmd::TypedCmd;
+
+#[derive(Clone)]
+enum Msg {
+    Loaded(String),
+    Error(String),
+}
+
+// Compiler ensures all callbacks return Msg
+let cmd: TypedCmd<Msg> = TypedCmd::perform(
+    || async { "data".to_string() },
+    Msg::Loaded,
+);
+
+// Handle messages
+cmd.on_msg(|msg| {
+    match msg {
+        Msg::Loaded(data) => { /* handle */ }
+        Msg::Error(err) => { /* handle */ }
+    }
+})
+```
+
+## Declarative Macros
+
+```rust
+use rnk::{col, row, text, styled_text, spacer, box_element, when, list};
+
+// Vertical layout
+col! {
+    text!("Line 1"),
+    text!("Line 2"),
+}
+
+// Horizontal layout
+row! {
+    text!("Left"),
+    spacer!(),
+    text!("Right"),
+}
+
+// Formatted text
+text!("Count: {}", count)
+
+// Styled text
+styled_text!("Error!", color: Color::Red)
+
+// Conditional rendering
+when!(show_error => text!("Error occurred!"))
+
+// List from iterator
+list!(items.iter(), |item| text!("{}", item))
+
+// List with index
+list_indexed!(items.iter(), |idx, item| text!("[{}] {}", idx, item))
+```
+
+## Theme System
+
+```rust
+use rnk::components::{Theme, ThemeBuilder, set_theme, get_theme, with_theme};
+
+// Create custom theme
+let theme = ThemeBuilder::new()
+    .primary(Color::Cyan)
+    .secondary(Color::Magenta)
+    .success(Color::Green)
+    .warning(Color::Yellow)
+    .error(Color::Red)
+    .build();
+
+// Set global theme
+set_theme(theme);
+
+// Use theme colors
+let color = get_theme().semantic_color(SemanticColor::Primary);
+
+// Scoped theme
+with_theme(dark_theme, || {
+    // Components here use dark_theme
+});
 ```
 
 ## Cross-thread Rendering
 
-When updating state from background threads:
-
 ```rust
 use std::thread;
-use std::sync::{Arc, RwLock};
 
 fn main() -> std::io::Result<()> {
-    let shared_data = Arc::new(RwLock::new(String::new()));
-    let data_clone = Arc::clone(&shared_data);
-
-    thread::spawn(move || {
+    thread::spawn(|| {
         loop {
-            // Update shared state
-            *data_clone.write().unwrap() = fetch_data();
+            // Update state...
 
             // Notify rnk to re-render
             rnk::request_render();
+
+            // Print persistent message
+            rnk::println("Background task completed");
 
             thread::sleep(Duration::from_secs(1));
         }
     });
 
-    render(move || app(&shared_data)).run()
+    render(app).run()
 }
 ```
 
-## Println API
-
-Print persistent messages above the UI (inline mode only):
-
-```rust
-// Simple text
-rnk::println("Task completed!");
-
-// Formatted text
-rnk::println(format!("Downloaded {} files", count));
-
-// Rich elements
-let banner = Box::new()
-    .border_style(BorderStyle::Round)
-    .child(Text::new("Success!").color(Color::Green).into_element())
-    .into_element();
-rnk::println(banner);
-```
-
-## Colors
-
-```rust
-// Basic colors
-Color::Black, Color::Red, Color::Green, Color::Yellow,
-Color::Blue, Color::Magenta, Color::Cyan, Color::White,
-Color::Gray
-
-// 256 colors
-Color::Ansi256(240)  // 0-255
-
-// RGB colors
-Color::Rgb { r: 255, g: 128, b: 0 }
-```
-
 ## Testing
-
-rnk provides testing utilities for verifying UI components:
 
 ```rust
 use rnk::testing::{TestRenderer, assert_layout_valid};
@@ -699,19 +604,23 @@ fn test_component() {
 ## Running Examples
 
 ```bash
-# Hello world
+# Basic examples
 cargo run --example hello
-
-# Interactive counter
 cargo run --example counter
+cargo run --example todo_app
 
-# Streaming output demo
+# Component demos
+cargo run --example tree_demo
+cargo run --example modal_demo
+cargo run --example notification_demo
+cargo run --example textarea_demo
+cargo run --example file_picker_demo
+cargo run --example theme_demo
+
+# Advanced examples
+cargo run --example typed_cmd_demo
+cargo run --example macros_demo
 cargo run --example streaming_demo
-
-# Static rendering API demo
-cargo run --example render_api_demo
-
-# GLM chat demo
 cargo run --example glm_chat
 ```
 
@@ -719,11 +628,15 @@ cargo run --example glm_chat
 
 ```
 src/
-├── components/     # UI components (Box, Text, List, etc.)
+├── animation/      # Spring animations
+├── cmd/            # Command system (Cmd, TypedCmd, executor)
+├── components/     # 40+ UI components
 ├── core/           # Element, Style, Color primitives
-├── hooks/          # React-like hooks (use_signal, use_effect, etc.)
+├── hooks/          # React-like hooks
 ├── layout/         # Taffy-based flexbox layout engine
+├── macros.rs       # Declarative UI macros
 ├── renderer/       # Terminal rendering, App runner
+├── runtime/        # Signal handling, environment detection
 └── testing/        # Test utilities
 ```
 
@@ -734,11 +647,18 @@ src/
 | Language | Rust | JavaScript | Go |
 | Rendering | Line-level diff | Line-level diff | Line-level diff |
 | Layout | Flexbox (Taffy) | Flexbox (Yoga) | Manual |
-| State | Hooks | React hooks | Model-Update |
+| State | Hooks + Signals | React hooks | Model-Update |
+| Type-safe Cmds | TypedCmd<M> | N/A | N/A |
+| Declarative Macros | row!/col!/text! | JSX | N/A |
+| Components | 40+ | ~10 | Bubbles lib |
 | Inline mode | ✓ | ✓ | ✓ |
 | Fullscreen | ✓ | ✓ | ✓ |
-| Println | ✓ | Static component | tea.Println |
+| Mouse support | ✓ | ✗ | ✓ |
+| Bracketed paste | ✓ | ✗ | ✓ |
+| Theme system | ✓ | ✗ | Lipgloss |
+| Println | ✓ | Static | tea.Println |
 | Cross-thread | request_render() | - | tea.Program.Send |
+| Suspend/Resume | ✓ | ✗ | ✓ |
 
 ## License
 
