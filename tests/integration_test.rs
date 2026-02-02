@@ -1,7 +1,6 @@
 //! Integration tests for tink
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, RwLock};
 
 use rnk::hooks::{HookContext, with_hooks};
 use rnk::layout::LayoutEngine;
@@ -127,7 +126,7 @@ fn test_padding_and_margin() {
 
 #[test]
 fn test_use_signal_in_component() {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     // Simulate a component render
     let element = with_hooks(ctx.clone(), || {
@@ -143,7 +142,7 @@ fn test_use_signal_in_component() {
 
 #[test]
 fn test_signal_state_persistence() {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     // First render
     with_hooks(ctx.clone(), || {
@@ -162,7 +161,7 @@ fn test_signal_state_persistence() {
 
 #[test]
 fn test_multiple_signals_in_component() {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     with_hooks(ctx.clone(), || {
         let name = use_signal(|| "Alice".to_string());
@@ -187,7 +186,7 @@ fn test_multiple_signals_in_component() {
 
 #[test]
 fn test_signal_update_closure() {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     with_hooks(ctx.clone(), || {
         let items = use_signal(|| vec![1, 2, 3]);
@@ -202,7 +201,7 @@ fn test_signal_update_closure() {
 
 #[test]
 fn test_reactive_ui_pattern() {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     // Simulate initial render
     let element1 = with_hooks(ctx.clone(), || {

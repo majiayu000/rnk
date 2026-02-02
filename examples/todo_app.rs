@@ -19,8 +19,7 @@
 //!
 //! Run with: cargo run --example todo_app
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, RwLock};
 
 use rnk::core::Dimension;
 use rnk::hooks::{HookContext, with_hooks};
@@ -523,7 +522,7 @@ fn main() {
     ];
 
     // Create hook context for reactive state
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     // Render with hooks
     let element = with_hooks(ctx.clone(), || {

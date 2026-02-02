@@ -53,7 +53,7 @@ impl Default for SignalHandler {
 /// # Example
 ///
 /// ```no_run
-/// use tink::runtime::install_signal_handler;
+/// use rnk::runtime::install_signal_handler;
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let signal_handler = install_signal_handler()?;

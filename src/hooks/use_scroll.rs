@@ -2,7 +2,7 @@
 //!
 //! Provides scroll state management for scrollable content areas.
 
-use std::cell::RefCell;
+use std::sync::{Arc, RwLock};
 
 /// Scroll state for a scrollable area
 #[derive(Debug, Clone, Default)]
@@ -186,108 +186,108 @@ impl ScrollState {
 /// Scroll handle for managing scroll state
 #[derive(Clone)]
 pub struct ScrollHandle {
-    state: std::rc::Rc<RefCell<ScrollState>>,
+    state: Arc<RwLock<ScrollState>>,
 }
 
 impl ScrollHandle {
     /// Get the current scroll state
     pub fn get(&self) -> ScrollState {
-        self.state.borrow().clone()
+        self.state.read().unwrap().clone()
     }
 
     /// Get the current vertical offset
     pub fn offset_y(&self) -> usize {
-        self.state.borrow().offset_y
+        self.state.read().unwrap().offset_y
     }
 
     /// Get the current horizontal offset
     pub fn offset_x(&self) -> usize {
-        self.state.borrow().offset_x
+        self.state.read().unwrap().offset_x
     }
 
     /// Set content size
     pub fn set_content_size(&self, width: usize, height: usize) {
-        self.state.borrow_mut().set_content_size(width, height);
+        self.state.write().unwrap().set_content_size(width, height);
     }
 
     /// Set viewport size
     pub fn set_viewport_size(&self, width: usize, height: usize) {
-        self.state.borrow_mut().set_viewport_size(width, height);
+        self.state.write().unwrap().set_viewport_size(width, height);
     }
 
     /// Scroll up
     pub fn scroll_up(&self, lines: usize) {
-        self.state.borrow_mut().scroll_up(lines);
+        self.state.write().unwrap().scroll_up(lines);
     }
 
     /// Scroll down
     pub fn scroll_down(&self, lines: usize) {
-        self.state.borrow_mut().scroll_down(lines);
+        self.state.write().unwrap().scroll_down(lines);
     }
 
     /// Scroll left
     pub fn scroll_left(&self, cols: usize) {
-        self.state.borrow_mut().scroll_left(cols);
+        self.state.write().unwrap().scroll_left(cols);
     }
 
     /// Scroll right
     pub fn scroll_right(&self, cols: usize) {
-        self.state.borrow_mut().scroll_right(cols);
+        self.state.write().unwrap().scroll_right(cols);
     }
 
     /// Scroll to specific Y position
     pub fn scroll_to_y(&self, offset: usize) {
-        self.state.borrow_mut().scroll_to_y(offset);
+        self.state.write().unwrap().scroll_to_y(offset);
     }
 
     /// Scroll to specific X position
     pub fn scroll_to_x(&self, offset: usize) {
-        self.state.borrow_mut().scroll_to_x(offset);
+        self.state.write().unwrap().scroll_to_x(offset);
     }
 
     /// Scroll to top
     pub fn scroll_to_top(&self) {
-        self.state.borrow_mut().scroll_to_top();
+        self.state.write().unwrap().scroll_to_top();
     }
 
     /// Scroll to bottom
     pub fn scroll_to_bottom(&self) {
-        self.state.borrow_mut().scroll_to_bottom();
+        self.state.write().unwrap().scroll_to_bottom();
     }
 
     /// Page up
     pub fn page_up(&self) {
-        self.state.borrow_mut().page_up();
+        self.state.write().unwrap().page_up();
     }
 
     /// Page down
     pub fn page_down(&self) {
-        self.state.borrow_mut().page_down();
+        self.state.write().unwrap().page_down();
     }
 
     /// Scroll to make an item visible
     pub fn scroll_to_item(&self, index: usize) {
-        self.state.borrow_mut().scroll_to_item(index);
+        self.state.write().unwrap().scroll_to_item(index);
     }
 
     /// Check if can scroll up
     pub fn can_scroll_up(&self) -> bool {
-        self.state.borrow().can_scroll_up()
+        self.state.read().unwrap().can_scroll_up()
     }
 
     /// Check if can scroll down
     pub fn can_scroll_down(&self) -> bool {
-        self.state.borrow().can_scroll_down()
+        self.state.read().unwrap().can_scroll_down()
     }
 
     /// Get vertical scroll percentage
     pub fn scroll_percent_y(&self) -> f32 {
-        self.state.borrow().scroll_percent_y()
+        self.state.read().unwrap().scroll_percent_y()
     }
 
     /// Get visible range
     pub fn visible_range(&self) -> (usize, usize) {
-        self.state.borrow().visible_range()
+        self.state.read().unwrap().visible_range()
     }
 }
 
@@ -325,12 +325,12 @@ pub fn use_scroll() -> ScrollHandle {
     use crate::hooks::context::current_context;
 
     let ctx = current_context().expect("use_scroll must be called within a render context");
-    let mut ctx_ref = ctx.borrow_mut();
+    let mut ctx_ref = ctx.write().unwrap();
 
     // Use the hook API to get or create scroll state
-    let storage = ctx_ref.use_hook(|| std::rc::Rc::new(RefCell::new(ScrollState::new())));
+    let storage = ctx_ref.use_hook(|| Arc::new(RwLock::new(ScrollState::new())));
     let state = storage
-        .get::<std::rc::Rc<RefCell<ScrollState>>>()
+        .get::<Arc<RwLock<ScrollState>>>()
         .expect("scroll state should be the correct type")
         .clone();
 

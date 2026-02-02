@@ -91,11 +91,11 @@ struct EffectStorage {
 /// ```
 pub fn use_effect<F, D>(effect: F, deps: D)
 where
-    F: FnOnce() -> Option<Box<dyn FnOnce()>> + 'static,
+    F: FnOnce() -> Option<Box<dyn FnOnce() + Send>> + Send + 'static,
     D: Deps + 'static,
 {
     let ctx = current_context().expect("use_effect must be called within a component");
-    let mut ctx_ref = ctx.borrow_mut();
+    let mut ctx_ref = ctx.write().unwrap();
 
     let new_deps_hash = deps.to_hash();
 
@@ -141,10 +141,10 @@ where
 /// ```
 pub fn use_effect_once<F>(effect: F)
 where
-    F: FnOnce() -> Option<Box<dyn FnOnce()>> + 'static,
+    F: FnOnce() -> Option<Box<dyn FnOnce() + Send>> + Send + 'static,
 {
     let ctx = current_context().expect("use_effect_once must be called within a component");
-    let mut ctx_ref = ctx.borrow_mut();
+    let mut ctx_ref = ctx.write().unwrap();
 
     // Use a flag to track if effect has run
     let storage = ctx_ref.use_hook(|| false);
@@ -166,8 +166,7 @@ where
 mod tests {
     use super::*;
     use crate::hooks::context::{HookContext, with_hooks};
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::sync::{Arc, Mutex, RwLock};
 
     #[test]
     fn test_deps_hash() {
@@ -181,72 +180,72 @@ mod tests {
 
     #[test]
     fn test_use_effect_runs() {
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
-        let effect_ran = Rc::new(RefCell::new(false));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let effect_ran = Arc::new(Mutex::new(false));
 
         let effect_ran_clone = effect_ran.clone();
         with_hooks(ctx.clone(), || {
             use_effect(
                 move || {
-                    *effect_ran_clone.borrow_mut() = true;
+                    *effect_ran_clone.lock().unwrap() = true;
                     None
                 },
                 (),
             );
         });
 
-        assert!(*effect_ran.borrow());
+        assert!(*effect_ran.lock().unwrap());
     }
 
     #[test]
     fn test_use_effect_with_deps() {
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
-        let run_count = Rc::new(RefCell::new(0));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let run_count = Arc::new(Mutex::new(0));
 
         // First render with deps = 1
         let run_count_clone = run_count.clone();
         with_hooks(ctx.clone(), || {
             use_effect(
                 move || {
-                    *run_count_clone.borrow_mut() += 1;
+                    *run_count_clone.lock().unwrap() += 1;
                     None
                 },
                 (1i32,),
             );
         });
-        assert_eq!(*run_count.borrow(), 1);
+        assert_eq!(*run_count.lock().unwrap(), 1);
 
         // Second render with same deps = 1 (should not run)
         let run_count_clone = run_count.clone();
         with_hooks(ctx.clone(), || {
             use_effect(
                 move || {
-                    *run_count_clone.borrow_mut() += 1;
+                    *run_count_clone.lock().unwrap() += 1;
                     None
                 },
                 (1i32,),
             );
         });
-        assert_eq!(*run_count.borrow(), 1); // Still 1
+        assert_eq!(*run_count.lock().unwrap(), 1); // Still 1
 
         // Third render with different deps = 2 (should run)
         let run_count_clone = run_count.clone();
         with_hooks(ctx.clone(), || {
             use_effect(
                 move || {
-                    *run_count_clone.borrow_mut() += 1;
+                    *run_count_clone.lock().unwrap() += 1;
                     None
                 },
                 (2i32,),
             );
         });
-        assert_eq!(*run_count.borrow(), 2);
+        assert_eq!(*run_count.lock().unwrap(), 2);
     }
 
     #[test]
     fn test_use_effect_cleanup() {
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
-        let cleanup_ran = Rc::new(RefCell::new(false));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let cleanup_ran = Arc::new(Mutex::new(false));
 
         // First render - effect with cleanup
         let cleanup_ran_clone = cleanup_ran.clone();
@@ -254,15 +253,15 @@ mod tests {
             use_effect(
                 move || {
                     Some(Box::new(move || {
-                        *cleanup_ran_clone.borrow_mut() = true;
-                    }) as Box<dyn FnOnce()>)
+                        *cleanup_ran_clone.lock().unwrap() = true;
+                    }) as Box<dyn FnOnce() + Send>)
                 },
                 (1i32,),
             );
         });
 
         // Cleanup hasn't run yet
-        assert!(!*cleanup_ran.borrow());
+        assert!(!*cleanup_ran.lock().unwrap());
 
         // Second render with different deps - should trigger cleanup
         with_hooks(ctx.clone(), || {
@@ -270,6 +269,6 @@ mod tests {
         });
 
         // Now cleanup should have run
-        assert!(*cleanup_ran.borrow());
+        assert!(*cleanup_ran.lock().unwrap());
     }
 }

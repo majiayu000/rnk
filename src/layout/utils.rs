@@ -3,13 +3,14 @@
 //! Provides helper functions for common layout operations,
 //! inspired by Lip Gloss's layout functions.
 
-use crate::components::{Box as TinkBox, Text};
+use crate::components::Box as TinkBox;
 use crate::core::{AlignItems, Element, FlexDirection, JustifyContent};
 
 /// Position for alignment operations
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Position {
     /// Align to the start (left or top)
+    #[default]
     Start,
     /// Align to the center
     Center,
@@ -28,12 +29,6 @@ impl Position {
             Position::End => 1.0,
             Position::At(v) => v.clamp(0.0, 1.0),
         }
-    }
-}
-
-impl Default for Position {
-    fn default() -> Self {
-        Position::Start
     }
 }
 
@@ -326,6 +321,7 @@ pub fn pad_to_width(text: &str, width: usize, align: Position) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::Text;
 
     #[test]
     fn test_position_as_f32() {

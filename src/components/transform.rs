@@ -96,7 +96,7 @@ mod tests {
             .child(Text::new("hello").into_element())
             .into_element();
 
-        let child = element.children.iter().next().unwrap();
+        let child = element.children.iter().next().expect("should have child");
         assert_eq!(child.text_content, Some("HELLO".to_string()));
     }
 
@@ -106,7 +106,7 @@ mod tests {
             .child(Text::new("HELLO").into_element())
             .into_element();
 
-        let child = element.children.iter().next().unwrap();
+        let child = element.children.iter().next().expect("should have child");
         assert_eq!(child.text_content, Some("hello".to_string()));
     }
 
@@ -116,7 +116,7 @@ mod tests {
             .child(Text::new("test").into_element())
             .into_element();
 
-        let child = element.children.iter().next().unwrap();
+        let child = element.children.iter().next().expect("should have child");
         assert_eq!(child.text_content, Some(">>> test <<<".to_string()));
     }
 }

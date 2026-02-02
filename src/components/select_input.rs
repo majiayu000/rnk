@@ -3,9 +3,12 @@
 //! A selection component similar to Ink's ink-select-input that handles
 //! keyboard navigation internally.
 
+use crate::components::navigation::{
+    NavigationConfig, calculate_visible_range, handle_list_navigation,
+};
 use crate::components::{Box as TinkBox, Text};
 use crate::core::{Color, Element, FlexDirection};
-use crate::hooks::{use_input, use_signal, Signal};
+use crate::hooks::{Signal, use_input, use_signal};
 
 /// A selectable item in the SelectInput
 #[derive(Debug, Clone)]
@@ -152,7 +155,7 @@ impl<T: Clone + 'static> SelectInput<T> {
     }
 
     /// Create from an iterator of items
-    pub fn from_iter<I>(iter: I) -> Self
+    pub fn from_items<I>(iter: I) -> Self
     where
         I: IntoIterator<Item = SelectItem<T>>,
     {
@@ -241,51 +244,16 @@ impl<T: Clone + 'static> SelectInput<T> {
 
             use_input(move |input, key| {
                 let current = highlighted_for_input.get();
-                let mut new_highlighted = current;
 
-                // Arrow key navigation
-                if key.up_arrow {
-                    new_highlighted = current.saturating_sub(1);
-                } else if key.down_arrow {
-                    new_highlighted = (current + 1).min(items_len.saturating_sub(1));
-                }
-                // Vim-style navigation
-                else if vim_navigation {
-                    if input == "k" {
-                        new_highlighted = current.saturating_sub(1);
-                    } else if input == "j" {
-                        new_highlighted = (current + 1).min(items_len.saturating_sub(1));
+                let config = NavigationConfig::new()
+                    .vim_navigation(vim_navigation)
+                    .number_shortcuts(number_shortcuts);
+
+                let result = handle_list_navigation(current, items_len, input, *key, &config);
+                if let Some(new_pos) = result.is_moved().then(|| result.unwrap_or(current)) {
+                    if new_pos != current {
+                        highlighted_for_input.set(new_pos);
                     }
-                }
-                // Number shortcuts (1-9)
-                if number_shortcuts {
-                    if let Some(num) = input.chars().next().and_then(|c| c.to_digit(10)) {
-                        if num >= 1 && num <= 9 {
-                            let index = (num as usize) - 1;
-                            if index < items_len {
-                                new_highlighted = index;
-                            }
-                        }
-                    }
-                }
-
-                // Home/End navigation
-                if key.home {
-                    new_highlighted = 0;
-                } else if key.end {
-                    new_highlighted = items_len.saturating_sub(1);
-                }
-
-                // Page up/down
-                if key.page_up {
-                    new_highlighted = current.saturating_sub(5);
-                } else if key.page_down {
-                    new_highlighted = (current + 5).min(items_len.saturating_sub(1));
-                }
-
-                // Update highlighted if changed
-                if new_highlighted != current {
-                    highlighted_for_input.set(new_highlighted);
                 }
             });
         }
@@ -306,20 +274,7 @@ fn render_select_list<T: Clone + 'static>(
     let total_items = items.len();
 
     // Calculate visible range
-    let (start, end) = if let Some(limit) = limit {
-        let half = limit / 2;
-        let start = if highlighted <= half {
-            0
-        } else if highlighted >= total_items.saturating_sub(half) {
-            total_items.saturating_sub(limit)
-        } else {
-            highlighted.saturating_sub(half)
-        };
-        let end = (start + limit).min(total_items);
-        (start, end)
-    } else {
-        (0, total_items)
-    };
+    let (start, end) = calculate_visible_range(highlighted, total_items, limit);
 
     let mut container = TinkBox::new().flex_direction(FlexDirection::Column);
 
@@ -456,9 +411,9 @@ mod tests {
     }
 
     #[test]
-    fn test_select_input_from_iter() {
+    fn test_select_input_from_items() {
         let items = vec![SelectItem::new("A", 'a'), SelectItem::new("B", 'b')];
-        let select = SelectInput::from_iter(items);
+        let select = SelectInput::from_items(items);
         assert_eq!(select.len(), 2);
     }
 }

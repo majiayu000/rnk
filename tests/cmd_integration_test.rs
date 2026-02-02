@@ -230,7 +230,8 @@ async fn test_process_spawn_integration() {
 /// Verifies: Hook dependency tracking + command queueing
 #[test]
 fn test_use_cmd_hook_integration() {
-    let ctx = std::rc::Rc::new(std::cell::RefCell::new(HookContext::new()));
+    use std::sync::RwLock;
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
     let execution_count = Arc::new(AtomicU32::new(0));
 
     // First render - should execute
@@ -246,7 +247,7 @@ fn test_use_cmd_hook_integration() {
     }
 
     assert_eq!(execution_count.load(Ordering::SeqCst), 1);
-    let cmds = ctx.borrow_mut().take_cmds();
+    let cmds = ctx.write().unwrap().take_cmds();
     assert_eq!(cmds.len(), 1);
 
     // Second render - same deps, should not execute
@@ -261,7 +262,7 @@ fn test_use_cmd_hook_integration() {
     }
 
     assert_eq!(execution_count.load(Ordering::SeqCst), 1); // Still 1
-    let cmds = ctx.borrow_mut().take_cmds();
+    let cmds = ctx.write().unwrap().take_cmds();
     assert_eq!(cmds.len(), 0); // No new commands
 
     // Third render - different deps, should execute
@@ -277,7 +278,7 @@ fn test_use_cmd_hook_integration() {
     }
 
     assert_eq!(execution_count.load(Ordering::SeqCst), 2);
-    let cmds = ctx.borrow_mut().take_cmds();
+    let cmds = ctx.write().unwrap().take_cmds();
     assert_eq!(cmds.len(), 1);
 }
 

@@ -98,12 +98,11 @@ mod tests {
     use super::*;
     use crate::components::Text;
     use crate::hooks::context::{HookContext, with_hooks};
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::sync::{Arc, RwLock};
 
     #[test]
     fn test_static_renders_items() {
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
 
         let element = with_hooks(ctx.clone(), || {
             Static::new(vec!["a", "b", "c"], |item, _| {
@@ -117,7 +116,7 @@ mod tests {
 
     #[test]
     fn test_static_incremental_render() {
-        let ctx = Rc::new(RefCell::new(HookContext::new()));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
 
         // First render with 2 items
         let element1 = with_hooks(ctx.clone(), || {

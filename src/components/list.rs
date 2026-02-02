@@ -2,6 +2,7 @@
 //!
 //! Provides a scrollable, selectable list widget similar to Ratatui's List.
 
+use crate::components::navigation::SelectionState;
 use crate::components::{Box as TinkBox, Line, Span, Text};
 use crate::core::{Color, Element, Style};
 
@@ -74,62 +75,23 @@ impl ListState {
             offset: 0,
         }
     }
+}
 
-    /// Select the next item
-    pub fn select_next(&mut self, len: usize) {
-        if len == 0 {
-            self.selected = None;
-            return;
-        }
-        self.selected = Some(match self.selected {
-            Some(i) => (i + 1).min(len - 1),
-            None => 0,
-        });
+impl SelectionState for ListState {
+    fn selected(&self) -> Option<usize> {
+        self.selected
     }
 
-    /// Select the previous item
-    pub fn select_previous(&mut self, len: usize) {
-        if len == 0 {
-            self.selected = None;
-            return;
-        }
-        self.selected = Some(match self.selected {
-            Some(i) => i.saturating_sub(1),
-            None => 0,
-        });
-    }
-
-    /// Select first item
-    pub fn select_first(&mut self, len: usize) {
-        if len > 0 {
-            self.selected = Some(0);
-        }
-    }
-
-    /// Select last item
-    pub fn select_last(&mut self, len: usize) {
-        if len > 0 {
-            self.selected = Some(len - 1);
-        }
-    }
-
-    /// Select a specific index
-    pub fn select(&mut self, index: Option<usize>) {
+    fn select(&mut self, index: Option<usize>) {
         self.selected = index;
     }
 
-    /// Adjust scroll offset to keep selection visible
-    pub fn scroll_to_selected(&mut self, viewport_height: usize) {
-        if let Some(selected) = self.selected {
-            // If selection is above viewport, scroll up
-            if selected < self.offset {
-                self.offset = selected;
-            }
-            // If selection is below viewport, scroll down
-            else if selected >= self.offset + viewport_height {
-                self.offset = selected.saturating_sub(viewport_height - 1);
-            }
-        }
+    fn offset(&self) -> usize {
+        self.offset
+    }
+
+    fn set_offset(&mut self, offset: usize) {
+        self.offset = offset;
     }
 }
 
