@@ -1,8 +1,8 @@
-//! tink-top: An htop-like system monitor built with rnk
+//! rnk-top: An htop-like system monitor built with rnk
 //!
 //! Demonstrates rnk's capabilities for building complex TUI applications.
 //!
-//! Run with: cargo run --example tink_top
+//! Run with: cargo run --example rnk_top
 
 use rnk::cmd::Cmd;
 use rnk::prelude::*;
@@ -103,7 +103,7 @@ fn header() -> Element {
         .padding_x(1.0)
         .background(Color::Ansi256(236))
         .child(
-            Text::new("tink-top")
+            Text::new("rnk-top")
                 .color(Color::Cyan)
                 .bold()
                 .into_element(),
