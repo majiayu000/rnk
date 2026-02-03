@@ -48,7 +48,7 @@ pub struct CodeEditor {
     /// Comment color
     comment_color: Color,
     /// Number color
-    number_color: Color,
+    _number_color: Color,
     /// Key for reconciliation
     key: Option<String>,
 }
@@ -68,7 +68,7 @@ impl CodeEditor {
             keyword_color: Color::Magenta,
             string_color: Color::Green,
             comment_color: Color::BrightBlack,
-            number_color: Color::Yellow,
+            _number_color: Color::Yellow,
             key: None,
         }
     }
