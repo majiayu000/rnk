@@ -1,4 +1,4 @@
-//! Testing infrastructure for Tink
+//! Testing infrastructure for rnk
 //!
 //! Provides utilities for testing terminal UI components without
 //! actual terminal interaction.
@@ -18,9 +18,11 @@
 mod assertions;
 mod generators;
 mod golden;
+mod harness;
 mod renderer;
 
 pub use assertions::*;
 pub use generators::*;
 pub use golden::*;
+pub use harness::{Snapshot, TestHarness};
 pub use renderer::{LayoutError, TestRenderer, display_width, strip_ansi_codes};

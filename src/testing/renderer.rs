@@ -28,6 +28,16 @@ impl TestRenderer {
         Self::new(80, 24)
     }
 
+    /// Get the width
+    pub fn width(&self) -> u16 {
+        self.width
+    }
+
+    /// Get the height
+    pub fn height(&self) -> u16 {
+        self.height
+    }
+
     /// Render element and return plain text (no ANSI codes)
     pub fn render_to_plain(&self, element: &Element) -> String {
         let ansi = self.render_to_ansi(element);

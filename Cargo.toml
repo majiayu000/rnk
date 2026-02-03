@@ -113,5 +113,5 @@ name = "streaming_demo"
 path = "examples/streaming_demo.rs"
 
 [[example]]
-name = "tink_top"
-path = "examples/tink_top.rs"
+name = "rnk_top"
+path = "examples/rnk_top.rs"
