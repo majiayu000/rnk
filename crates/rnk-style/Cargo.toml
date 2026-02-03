@@ -1,0 +1,19 @@
+[package]
+name = "rnk-style"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Standalone terminal styling library - style text without the full TUI framework"
+license = "MIT"
+repository = "https://github.com/majiayu000/rnk"
+homepage = "https://github.com/majiayu000/rnk"
+documentation = "https://docs.rs/rnk-style"
+readme = "README.md"
+keywords = ["terminal", "style", "color", "ansi", "cli"]
+categories = ["command-line-interface", "text-processing"]
+authors = ["majiayu000 <1835304752@qq.com>"]
+
+[dependencies]
+unicode-width = "0.2"
+
+[dev-dependencies]

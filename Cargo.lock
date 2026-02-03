@@ -1223,6 +1223,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rnk-style"
+version = "0.1.0"
+dependencies = [
+ "unicode-width",
+]
+
+[[package]]
 name = "rustix"
 version = "0.38.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
