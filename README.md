@@ -31,7 +31,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rnk = "0.10"
+rnk = "0.12"
 ```
 
 ## Examples
