@@ -2,13 +2,17 @@
 
 mod barchart;
 mod box_component;
+mod calendar;
+mod code_editor;
 mod confirm;
 mod cursor;
 mod file_picker;
 mod gradient;
 mod help;
 mod hyperlink;
+mod line_chart;
 mod list;
+mod markdown;
 mod message;
 mod modal;
 mod multi_select;
@@ -37,6 +41,8 @@ pub mod viewport;
 
 pub use barchart::{Bar, BarChart, BarChartOrientation};
 pub use box_component::Box;
+pub use calendar::Calendar;
+pub use code_editor::{CodeEditor, Language};
 pub use confirm::{ButtonStyle, Confirm, ConfirmState, ConfirmStyle, handle_confirm_input};
 pub use cursor::{Cursor, CursorShape, CursorState, CursorStyle, cursor};
 pub use file_picker::{
@@ -49,7 +55,9 @@ pub use help::{
 pub use hyperlink::{
     Hyperlink, HyperlinkBuilder, hyperlink, link, set_hyperlinks_supported, supports_hyperlinks,
 };
+pub use line_chart::{LineChart, Series};
 pub use list::{List, ListItem, ListState};
+pub use markdown::Markdown;
 pub use message::{Message, MessageRole, ThinkingBlock, ToolCall};
 pub use modal::{Dialog, DialogState, Modal, ModalAlign};
 pub use multi_select::{MultiSelect, MultiSelectItem, MultiSelectStyle};
