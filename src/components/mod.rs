@@ -1,12 +1,15 @@
 //! UI Components
 
+mod badge;
 mod barchart;
 mod box_component;
+mod breadcrumb;
 mod calendar;
 mod code_editor;
 mod confirm;
 mod cursor;
 mod devtools;
+mod divider;
 mod file_picker;
 mod gradient;
 mod help;
@@ -40,13 +43,16 @@ mod transform;
 mod tree;
 pub mod viewport;
 
+pub use badge::{Badge, BadgeVariant, badge_error, badge_primary, badge_success, badge_warning};
 pub use barchart::{Bar, BarChart, BarChartOrientation};
 pub use box_component::Box;
+pub use breadcrumb::{Breadcrumb, breadcrumb_from_path};
 pub use calendar::Calendar;
 pub use code_editor::{CodeEditor, Language};
 pub use confirm::{ButtonStyle, Confirm, ConfirmState, ConfirmStyle, handle_confirm_input};
 pub use cursor::{Cursor, CursorShape, CursorState, CursorStyle, cursor};
 pub use devtools::{DevTools, DevToolsTab};
+pub use divider::{Divider, DividerOrientation, DividerStyle, hr, hr_dashed, hr_label};
 pub use file_picker::{
     FileEntry, FileFilter, FilePicker, FilePickerState, FilePickerStyle, FileType, file_picker,
 };
