@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://docs.rs/rnk
+    about: Check the API documentation
+  - name: Examples
+    url: https://github.com/majiayu000/rnk/tree/main/examples
+    about: Browse example applications
