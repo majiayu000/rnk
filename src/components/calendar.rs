@@ -367,11 +367,11 @@ fn week_number(year: i32, month: u32, day: u32) -> u32 {
     let first_day = day_of_week(year, 1, 1);
     let offset = (7 - first_day) % 7;
 
-    if day_of_year <= offset as u32 {
+    if day_of_year <= offset {
         // Last week of previous year
         week_number(year - 1, 12, 31)
     } else {
-        ((day_of_year - offset as u32 - 1) / 7 + 1).min(52)
+        ((day_of_year - offset - 1) / 7 + 1).min(52)
     }
 }
 
