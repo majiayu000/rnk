@@ -1223,6 +1223,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rnk-icons"
+version = "0.1.0"
+
+[[package]]
 name = "rnk-style"
 version = "0.1.0"
 dependencies = [

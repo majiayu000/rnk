@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/rnk-style"]
+members = [".", "crates/rnk-style", "crates/rnk-icons"]
 
 [package]
 name = "rnk"
