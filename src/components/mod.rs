@@ -1,5 +1,6 @@
 //! UI Components
 
+mod avatar;
 mod badge;
 mod barchart;
 mod box_component;
@@ -14,6 +15,7 @@ mod file_picker;
 mod gradient;
 mod help;
 mod hyperlink;
+mod key_hint;
 mod line_chart;
 mod list;
 mod markdown;
@@ -34,6 +36,7 @@ mod spinner;
 mod static_output;
 mod table;
 mod tabs;
+mod tag;
 pub mod text;
 mod text_input;
 pub mod textarea;
@@ -43,6 +46,7 @@ mod transform;
 mod tree;
 pub mod viewport;
 
+pub use avatar::{Avatar, AvatarSize, avatar, avatar_initials};
 pub use badge::{Badge, BadgeVariant, badge_error, badge_primary, badge_success, badge_warning};
 pub use barchart::{Bar, BarChart, BarChartOrientation};
 pub use box_component::Box;
@@ -63,6 +67,7 @@ pub use help::{
 pub use hyperlink::{
     Hyperlink, HyperlinkBuilder, hyperlink, link, set_hyperlinks_supported, supports_hyperlinks,
 };
+pub use key_hint::{KeyHint, key_hint, key_hints};
 pub use line_chart::{LineChart, Series};
 pub use list::{List, ListItem, ListState};
 pub use markdown::Markdown;
@@ -91,6 +96,7 @@ pub use spinner::{Spinner, SpinnerBuilder};
 pub use static_output::{Static, static_output};
 pub use table::{Cell, Constraint, Row, Table, TableState};
 pub use tabs::{Tab, Tabs};
+pub use tag::{Tag, tag, tag_colored};
 pub use text::{Line, Span, Text};
 pub use text_input::{TextInputHandle, TextInputOptions, TextInputState, use_text_input};
 pub use theme::{
