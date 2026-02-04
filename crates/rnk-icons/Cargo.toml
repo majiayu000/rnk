@@ -1,0 +1,12 @@
+[package]
+name = "rnk-icons"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Terminal icons library for rnk - Nerd Font icons for TUI applications"
+license = "MIT"
+repository = "https://github.com/majiayu000/rnk"
+keywords = ["icons", "terminal", "tui", "nerd-fonts"]
+categories = ["command-line-interface"]
+
+[dependencies]
