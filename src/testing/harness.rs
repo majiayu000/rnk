@@ -198,6 +198,89 @@ impl Snapshot {
     }
 }
 
+/// Golden file testing for snapshot comparisons
+pub struct GoldenTest {
+    name: String,
+    directory: String,
+}
+
+impl GoldenTest {
+    /// Create a new golden test with default directory
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            directory: "tests/golden".to_string(),
+        }
+    }
+
+    /// Set custom directory for golden files
+    pub fn directory(mut self, dir: impl Into<String>) -> Self {
+        self.directory = dir.into();
+        self
+    }
+
+    /// Get the path to the golden file
+    pub fn path(&self) -> std::path::PathBuf {
+        std::path::PathBuf::from(&self.directory).join(format!("{}.golden", self.name))
+    }
+
+    /// Assert that the actual output matches the golden file
+    /// If UPDATE_GOLDEN=1 env var is set, updates the golden file instead
+    pub fn assert_match(&self, actual: &str) {
+        let path = self.path();
+        let actual = actual.trim();
+
+        // Check if we should update golden files
+        if std::env::var("UPDATE_GOLDEN").is_ok() {
+            // Create directory if needed
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            std::fs::write(&path, actual).expect("Failed to write golden file");
+            return;
+        }
+
+        // Read expected content
+        let expected = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(_) => {
+                panic!(
+                    "Golden file not found: {:?}\nRun with UPDATE_GOLDEN=1 to create it.\nActual output:\n{}",
+                    path, actual
+                );
+            }
+        };
+
+        let expected = expected.trim();
+        assert_eq!(
+            actual, expected,
+            "Golden test '{}' mismatch.\nExpected (from {:?}):\n{}\n\nActual:\n{}\n\nRun with UPDATE_GOLDEN=1 to update.",
+            self.name, path, expected, actual
+        );
+    }
+
+    /// Assert that the element's rendered output matches the golden file
+    pub fn assert_element_match(&self, element: &Element, width: u16) {
+        let renderer = TestRenderer::new(width, 100);
+        let output = renderer.render_to_plain(element);
+        self.assert_match(&output);
+    }
+}
+
+/// Inline snapshot for embedding expected output in tests
+#[macro_export]
+macro_rules! inline_snapshot {
+    ($actual:expr, $expected:expr) => {{
+        let actual = $actual.trim();
+        let expected = $expected.trim();
+        assert_eq!(
+            actual, expected,
+            "Inline snapshot mismatch.\nExpected:\n{}\n\nActual:\n{}",
+            expected, actual
+        );
+    }};
+}
+
 /// Create a snapshot assertion
 #[macro_export]
 macro_rules! assert_snapshot {
