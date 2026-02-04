@@ -6,6 +6,7 @@ mod use_accessibility;
 mod use_animation;
 pub(crate) mod use_app;
 mod use_cmd;
+mod use_debounce;
 mod use_effect;
 pub mod use_focus;
 mod use_frame_rate;
@@ -32,6 +33,7 @@ pub use use_accessibility::{
 pub use use_animation::{AnimationHandle, use_animation, use_animation_auto};
 pub use use_app::{AppContext, get_app_context, set_app_context, use_app};
 pub use use_cmd::{Deps, use_cmd, use_cmd_once};
+pub use use_debounce::{DebounceHandle, use_debounce, use_debounce_handle, use_throttle};
 pub use use_effect::{use_effect, use_effect_once};
 pub use use_focus::{
     FocusManagerHandle, FocusState, UseFocusOptions, use_focus, use_focus_manager,
