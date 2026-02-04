@@ -301,6 +301,7 @@ impl LineChart {
         (min_x, max_x, min_y, max_y)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn plot_series(
         &self,
         grid: &mut [Vec<bool>],
@@ -339,6 +340,7 @@ impl LineChart {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_line(
         &self,
         grid: &mut [Vec<bool>],

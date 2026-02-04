@@ -119,3 +119,7 @@ path = "examples/rnk_top.rs"
 [[example]]
 name = "rnk_git"
 path = "examples/rnk_git.rs"
+
+[[example]]
+name = "rnk_chat"
+path = "examples/rnk_chat.rs"

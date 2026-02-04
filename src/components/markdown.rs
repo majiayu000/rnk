@@ -145,8 +145,8 @@ impl Markdown {
         }
 
         // Blockquote
-        if trimmed.starts_with('>') {
-            return self.render_blockquote(&trimmed[1..].trim_start());
+        if let Some(rest) = trimmed.strip_prefix('>') {
+            return self.render_blockquote(rest.trim_start());
         }
 
         // Unordered list
@@ -185,10 +185,8 @@ impl Markdown {
             }
         }
 
-        if num_len > 0 {
-            if chars.next() == Some('.') && chars.next() == Some(' ') {
-                return Some(&line[num_len + 2..]);
-            }
+        if num_len > 0 && chars.next() == Some('.') && chars.next() == Some(' ') {
+            return Some(&line[num_len + 2..]);
         }
 
         None
