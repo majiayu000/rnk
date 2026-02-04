@@ -3,7 +3,7 @@ members = [".", "crates/rnk-style"]
 
 [package]
 name = "rnk"
-version = "0.13.0"
+version = "0.14.0"
 edition = "2024"
 rust-version = "1.85"
 description = "A React-like declarative terminal UI framework for Rust, inspired by Ink"
@@ -115,3 +115,7 @@ path = "examples/streaming_demo.rs"
 [[example]]
 name = "rnk_top"
 path = "examples/rnk_top.rs"
+
+[[example]]
+name = "rnk_git"
+path = "examples/rnk_git.rs"
