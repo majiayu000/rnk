@@ -6,6 +6,7 @@ mod use_accessibility;
 mod use_animation;
 pub(crate) mod use_app;
 mod use_cmd;
+mod use_counter;
 mod use_debounce;
 mod use_effect;
 pub mod use_focus;
@@ -15,9 +16,11 @@ mod use_interval;
 mod use_measure;
 mod use_memo;
 pub mod use_mouse;
+mod use_previous;
 mod use_scroll;
 mod use_signal;
 mod use_stdio;
+mod use_toggle;
 mod use_transition;
 mod use_window_title;
 
@@ -33,6 +36,7 @@ pub use use_accessibility::{
 pub use use_animation::{AnimationHandle, use_animation, use_animation_auto};
 pub use use_app::{AppContext, get_app_context, set_app_context, use_app};
 pub use use_cmd::{Deps, use_cmd, use_cmd_once};
+pub use use_counter::{CounterHandle, use_counter, use_counter_zero};
 pub use use_debounce::{DebounceHandle, use_debounce, use_debounce_handle, use_throttle};
 pub use use_effect::{use_effect, use_effect_once};
 pub use use_focus::{
@@ -50,9 +54,11 @@ pub use use_mouse::{
     Mouse, MouseAction, MouseButton, clear_mouse_handlers, dispatch_mouse_event, is_mouse_enabled,
     set_mouse_enabled, use_mouse,
 };
+pub use use_previous::{use_changed, use_is_first_render, use_previous};
 pub use use_scroll::{ScrollHandle, ScrollState, use_scroll};
 pub use use_signal::{Signal, use_signal};
 pub use use_stdio::{StderrHandle, StdinHandle, StdoutHandle, use_stderr, use_stdin, use_stdout};
+pub use use_toggle::{ToggleHandle, use_toggle, use_toggle_off, use_toggle_on};
 pub use use_transition::{TransitionHandle, use_transition, use_transition_with_easing};
 pub use use_window_title::{
     WindowTitleGuard, clear_window_title, set_window_title, use_window_title, use_window_title_fn,
