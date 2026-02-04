@@ -6,6 +6,7 @@ mod calendar;
 mod code_editor;
 mod confirm;
 mod cursor;
+mod devtools;
 mod file_picker;
 mod gradient;
 mod help;
@@ -45,6 +46,7 @@ pub use calendar::Calendar;
 pub use code_editor::{CodeEditor, Language};
 pub use confirm::{ButtonStyle, Confirm, ConfirmState, ConfirmStyle, handle_confirm_input};
 pub use cursor::{Cursor, CursorShape, CursorState, CursorStyle, cursor};
+pub use devtools::{DevTools, DevToolsTab};
 pub use file_picker::{
     FileEntry, FileFilter, FilePicker, FilePickerState, FilePickerStyle, FileType, file_picker,
 };
