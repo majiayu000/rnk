@@ -10,6 +10,7 @@ mod use_effect;
 pub mod use_focus;
 mod use_frame_rate;
 pub mod use_input;
+mod use_interval;
 mod use_measure;
 mod use_memo;
 pub mod use_mouse;
@@ -37,6 +38,7 @@ pub use use_focus::{
 };
 pub use use_frame_rate::use_frame_rate;
 pub use use_input::{Key, use_input};
+pub use use_interval::{use_interval, use_interval_when, use_timeout};
 pub use use_measure::{
     Dimensions, MeasureContext, MeasureRef, get_measure_context, measure_element,
     set_measure_context, use_measure,
