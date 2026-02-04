@@ -614,6 +614,7 @@ cargo run --example todo_app
 # Showcase applications
 cargo run --example rnk_top      # htop-like system monitor
 cargo run --example rnk_git      # lazygit-style Git UI
+cargo run --example rnk_chat     # Terminal chat client
 
 # Component demos
 cargo run --example tree_demo
