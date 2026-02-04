@@ -19,7 +19,9 @@ A React-like declarative terminal UI framework for Rust, inspired by [Ink](https
 - **Line-level Diff Rendering**: Only changed lines are redrawn for efficiency
 - **Persistent Output**: `println()` API for messages that persist above the UI
 - **Cross-thread Rendering**: `request_render()` for async/multi-threaded apps
-- **Rich Components**: 40+ components including Box, Text, List, Table, Tree, Modal, Notification, and more
+- **Rich Components**: 45+ components including Box, Text, List, Table, Tree, Modal, LineChart, Calendar, CodeEditor, and more
+- **Animation System**: Keyframe animations with 28 easing functions
+- **Chainable Style API**: CSS-like fluent styling with `.fg()`, `.bg()`, `.bold()`, `.p()`, `.m()`
 - **Mouse Support**: Full mouse event handling
 - **Bracketed Paste**: Distinguish between typed and pasted text
 - **Theme System**: Centralized theming with semantic colors
@@ -31,7 +33,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rnk = "0.12"
+rnk = "0.14"
 ```
 
 ## Examples
@@ -609,6 +611,10 @@ cargo run --example hello
 cargo run --example counter
 cargo run --example todo_app
 
+# Showcase applications
+cargo run --example rnk_top      # htop-like system monitor
+cargo run --example rnk_git      # lazygit-style Git UI
+
 # Component demos
 cargo run --example tree_demo
 cargo run --example modal_demo
@@ -628,16 +634,16 @@ cargo run --example glm_chat
 
 ```
 src/
-├── animation/      # Spring animations
+├── animation/      # Keyframe animations, easing functions, spring physics
 ├── cmd/            # Command system (Cmd, TypedCmd, executor)
-├── components/     # 40+ UI components
+├── components/     # 45+ UI components
 ├── core/           # Element, Style, Color primitives
-├── hooks/          # React-like hooks
+├── hooks/          # React-like hooks (use_signal, use_animation, use_transition)
 ├── layout/         # Taffy-based flexbox layout engine
 ├── macros.rs       # Declarative UI macros
 ├── renderer/       # Terminal rendering, App runner
 ├── runtime/        # Signal handling, environment detection
-└── testing/        # Test utilities
+└── testing/        # TestRenderer, TestHarness, assertions
 ```
 
 ## Comparison with Ink/Bubbletea
