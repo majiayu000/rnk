@@ -11,6 +11,7 @@ mod calendar;
 mod card;
 mod chip;
 mod code_editor;
+mod color_picker;
 mod command_palette;
 mod confirm;
 mod context_menu;
@@ -74,6 +75,10 @@ pub use calendar::Calendar;
 pub use card::{Card, card, card_full};
 pub use chip::{Chip, chip, chip_selected};
 pub use code_editor::{CodeEditor, Language};
+pub use color_picker::{
+    ColorPalette, ColorPicker, ColorPickerState, ColorPickerStyle, color_picker,
+    color_picker_with_palette,
+};
 pub use command_palette::{
     Command, CommandPalette, CommandPaletteState, CommandPaletteStyle, command_palette,
 };
