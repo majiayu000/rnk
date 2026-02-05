@@ -185,40 +185,49 @@ where
             event_loop = event_loop.with_render_rx(rx);
         }
 
-        // Run event loop with render callback
-        event_loop.run(|| {
-            // Handle exec requests first (they suspend the terminal)
-            let exec_requests = self.runtime.take_exec_requests();
-            for request in exec_requests {
-                self.handle_exec_request(request)?;
+        // Run event loop with render callback (handle suspend/resume)
+        loop {
+            event_loop.run(|| {
+                // Handle exec requests first (they suspend the terminal)
+                let exec_requests = self.runtime.take_exec_requests();
+                for request in exec_requests {
+                    self.handle_exec_request(request)?;
+                }
+
+                // Handle terminal control commands
+                let terminal_cmds = crate::renderer::registry::take_terminal_cmds();
+                for cmd in terminal_cmds {
+                    self.handle_terminal_cmd(cmd)?;
+                }
+
+                // Handle mode switch requests (access runtime directly)
+                if let Some(mode_switch) = self.runtime.take_mode_switch_request() {
+                    self.handle_mode_switch(mode_switch)?;
+                }
+
+                // Handle println messages (access runtime directly)
+                let messages = self.runtime.take_println_messages();
+                if !messages.is_empty() {
+                    self.handle_println_messages(&messages)?;
+                }
+
+                // Handle resize
+                let (width, height) = Terminal::size()?;
+                if width != self.last_width || height != self.last_height {
+                    self.handle_resize(width, height);
+                }
+
+                // Render frame
+                self.render_frame()
+            })?;
+
+            if self.runtime.take_suspend_request() {
+                self.handle_suspend()?;
+                continue;
             }
 
-            // Handle terminal control commands
-            let terminal_cmds = crate::renderer::registry::take_terminal_cmds();
-            for cmd in terminal_cmds {
-                self.handle_terminal_cmd(cmd)?;
-            }
-
-            // Handle mode switch requests (access runtime directly)
-            if let Some(mode_switch) = self.runtime.take_mode_switch_request() {
-                self.handle_mode_switch(mode_switch)?;
-            }
-
-            // Handle println messages (access runtime directly)
-            let messages = self.runtime.take_println_messages();
-            if !messages.is_empty() {
-                self.handle_println_messages(&messages)?;
-            }
-
-            // Handle resize
-            let (width, height) = Terminal::size()?;
-            if width != self.last_width || height != self.last_height {
-                self.handle_resize(width, height);
-            }
-
-            // Render frame
-            self.render_frame()
-        })?;
+            break;
+        }
 
         // Exit terminal mode
         if self.terminal.is_alt_screen() {
@@ -268,6 +277,22 @@ where
         // Request re-render
         self.runtime.request_render();
 
+        Ok(())
+    }
+
+    /// Handle app suspend request (Ctrl+Z or use_app::suspend)
+    #[cfg(unix)]
+    fn handle_suspend(&mut self) -> std::io::Result<()> {
+        self.terminal.suspend()?;
+        crate::runtime::suspend_self()?;
+        self.terminal.resume()?;
+        self.runtime.request_render();
+        Ok(())
+    }
+
+    /// Handle suspend on non-Unix (no-op)
+    #[cfg(not(unix))]
+    fn handle_suspend(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 

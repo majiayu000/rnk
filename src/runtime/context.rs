@@ -114,8 +114,6 @@ impl RuntimeContext {
         self.input_handlers.clear();
         self.mouse_handlers.clear();
         self.mouse_enabled = false;
-        // Reset focus registrations for this render
-        self.focus_manager.clear();
     }
 
     /// End a render cycle

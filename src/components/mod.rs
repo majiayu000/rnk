@@ -19,6 +19,7 @@ mod empty_state;
 mod file_picker;
 mod gradient;
 mod help;
+mod highlight;
 mod hyperlink;
 mod key_hint;
 mod line_chart;
@@ -79,6 +80,10 @@ pub use file_picker::{
 pub use gradient::{Gradient, gradient, rainbow};
 pub use help::{
     Help, HelpMode, HelpStyle, KeyBinding, editor_help, navigation_help, vim_navigation_help,
+};
+pub use highlight::{
+    Highlight, HighlightVariant, highlight, highlight_error, highlight_primary, highlight_success,
+    highlight_warning,
 };
 pub use hyperlink::{
     Hyperlink, HyperlinkBuilder, hyperlink, link, set_hyperlinks_supported, supports_hyperlinks,

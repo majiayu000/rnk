@@ -114,6 +114,20 @@ impl FocusManager {
         }
     }
 
+    /// Update a focusable element's metadata
+    pub fn update(&mut self, id: usize, custom_id: Option<String>, is_active: bool, auto_focus: bool) {
+        if let Some(elem) = self.elements.iter_mut().find(|e| e.id == id) {
+            elem.custom_id = custom_id;
+            elem.is_active = is_active;
+        }
+
+        if auto_focus && self.focused_index.is_none() && is_active {
+            if let Some(pos) = self.elements.iter().position(|e| e.id == id) {
+                self.focused_index = Some(pos);
+            }
+        }
+    }
+
     /// Check if an element is focused
     pub fn is_focused(&self, id: usize) -> bool {
         self.focused_index
@@ -231,30 +245,83 @@ where
 pub fn use_focus(options: UseFocusOptions) -> FocusState {
     use crate::hooks::use_signal;
 
-    // Try to use RuntimeContext first, fall back to thread-local
-    if let Some(ctx) = crate::runtime::current_runtime() {
-        let focus_id = use_signal(|| {
-            ctx.borrow_mut().focus_manager_mut().register(
+    #[derive(Clone, Copy)]
+    struct FocusRegistration {
+        id: usize,
+        use_runtime: bool,
+    }
+
+    let registration = use_signal(|| {
+        if let Some(ctx) = crate::runtime::current_runtime() {
+            let id = ctx.borrow_mut().focus_manager_mut().register(
                 options.id.clone(),
                 options.is_active,
                 options.auto_focus,
-            )
-        });
-
-        let is_focused = ctx.borrow().focus_manager().is_focused(focus_id.get());
-        FocusState { is_focused }
-    } else {
-        // Legacy thread-local fallback
-        let focus_id = use_signal(|| {
-            FOCUS_MANAGER.with(|fm| {
+            );
+            FocusRegistration {
+                id,
+                use_runtime: true,
+            }
+        } else {
+            let id = FOCUS_MANAGER.with(|fm| {
                 fm.borrow_mut()
                     .register(options.id.clone(), options.is_active, options.auto_focus)
-            })
-        });
+            });
+            FocusRegistration {
+                id,
+                use_runtime: false,
+            }
+        }
+    });
 
-        let is_focused = FOCUS_MANAGER.with(|fm| fm.borrow().is_focused(focus_id.get()));
-        FocusState { is_focused }
+    let registration = registration.get();
+
+    // Update metadata when options change
+    if registration.use_runtime {
+        if let Some(ctx) = crate::runtime::current_runtime() {
+            ctx.borrow_mut().focus_manager_mut().update(
+                registration.id,
+                options.id.clone(),
+                options.is_active,
+                options.auto_focus,
+            );
+        }
+    } else {
+        FOCUS_MANAGER.with(|fm| {
+            fm.borrow_mut().update(
+                registration.id,
+                options.id.clone(),
+                options.is_active,
+                options.auto_focus,
+            );
+        });
     }
+
+    // Unregister on unmount
+    crate::hooks::use_effect_once({
+        let registration = registration;
+        move || {
+            Some(Box::new(move || {
+                if registration.use_runtime {
+                    if let Some(ctx) = crate::runtime::current_runtime() {
+                        ctx.borrow_mut().focus_manager_mut().unregister(registration.id);
+                    }
+                } else {
+                    FOCUS_MANAGER.with(|fm| fm.borrow_mut().unregister(registration.id));
+                }
+            }))
+        }
+    });
+
+    let is_focused = if registration.use_runtime {
+        crate::runtime::current_runtime()
+            .map(|ctx| ctx.borrow().focus_manager().is_focused(registration.id))
+            .unwrap_or(false)
+    } else {
+        FOCUS_MANAGER.with(|fm| fm.borrow().is_focused(registration.id))
+    };
+
+    FocusState { is_focused }
 }
 
 /// Hook to access the focus manager
