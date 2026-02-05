@@ -3,7 +3,7 @@ members = [".", "crates/rnk-style", "crates/rnk-icons"]
 
 [package]
 name = "rnk"
-version = "0.15.16"
+version = "0.15.17"
 edition = "2024"
 rust-version = "1.85"
 description = "A React-like declarative terminal UI framework for Rust, inspired by Ink"
@@ -58,6 +58,9 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "m
 
 # HTTP client (optional)
 reqwest = { version = "0.12", features = ["json"], optional = true }
+
+# Directory paths
+dirs-next = "2.0"
 
 # Unix-specific dependencies
 [target.'cfg(unix)'.dependencies]
