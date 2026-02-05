@@ -51,6 +51,7 @@ mod text_input;
 pub mod textarea;
 mod theme;
 mod timer;
+mod tooltip;
 mod transform;
 mod tree;
 pub mod viewport;
@@ -126,5 +127,6 @@ pub use timer::{
     StopwatchState, TimerState, format_duration_hhmmss, format_duration_mmss,
     format_duration_precise,
 };
+pub use tooltip::{Tooltip, TooltipPosition, tooltip, tooltip_left, tooltip_right};
 pub use transform::Transform;
 pub use tree::{Tree, TreeNode, TreeState, TreeStyle, handle_tree_input};
