@@ -1,5 +1,6 @@
 //! UI Components
 
+mod accordion;
 mod avatar;
 mod badge;
 mod barchart;
@@ -29,6 +30,7 @@ mod newline;
 mod notification;
 mod paginator;
 mod progress;
+mod quote;
 mod scrollable;
 mod scrollbar;
 mod select_input;
@@ -49,6 +51,7 @@ mod transform;
 mod tree;
 pub mod viewport;
 
+pub use accordion::{Accordion, AccordionItem};
 pub use avatar::{Avatar, AvatarSize, avatar, avatar_initials};
 pub use badge::{Badge, BadgeVariant, badge_error, badge_primary, badge_success, badge_warning};
 pub use barchart::{Bar, BarChart, BarChartOrientation};
@@ -92,6 +95,7 @@ pub use paginator::{
     Paginator, PaginatorState, PaginatorStyle, PaginatorType, handle_paginator_input,
 };
 pub use progress::{Gauge, Progress, ProgressSymbols};
+pub use quote::{Quote, QuoteStyle, quote, quote_with_author};
 pub use scrollable::{ScrollableBox, fixed_bottom_layout, virtual_scroll_view};
 pub use scrollbar::{Scrollbar, ScrollbarOrientation, ScrollbarSymbols};
 pub use select_input::{SelectInput, SelectInputStyle, SelectItem, select_input};
