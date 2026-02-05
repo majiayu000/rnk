@@ -31,6 +31,7 @@ mod use_signal;
 mod use_stdio;
 mod use_toggle;
 mod use_transition;
+mod use_window_size;
 mod use_window_title;
 
 pub use context::{HookContext, current_context, with_hooks};
@@ -78,6 +79,10 @@ pub use use_signal::{Signal, use_signal};
 pub use use_stdio::{StderrHandle, StdinHandle, StdoutHandle, use_stderr, use_stdin, use_stdout};
 pub use use_toggle::{ToggleHandle, use_toggle, use_toggle_off, use_toggle_on};
 pub use use_transition::{TransitionHandle, use_transition, use_transition_with_easing};
+pub use use_window_size::{
+    get_terminal_size, use_is_tall_enough, use_is_wide_enough, use_window_height, use_window_size,
+    use_window_width,
+};
 pub use use_window_title::{
     WindowTitleGuard, clear_window_title, set_window_title, use_window_title, use_window_title_fn,
 };
