@@ -15,6 +15,7 @@ pub mod use_focus;
 mod use_form;
 mod use_frame_rate;
 mod use_history;
+mod use_idle;
 pub mod use_input;
 mod use_interval;
 mod use_keyboard_shortcut;
@@ -60,6 +61,10 @@ pub use use_focus::{
 pub use use_form::{FormField, FormHandle, use_form, use_form_empty};
 pub use use_frame_rate::use_frame_rate;
 pub use use_history::{HistoryHandle, use_history, use_history_with_size};
+pub use use_idle::{
+    IdleConfig, IdleState, idle_duration, is_idle, record_activity, use_idle, use_idle_seconds,
+    use_idle_state,
+};
 pub use use_input::{Key, use_input};
 pub use use_interval::{use_interval, use_interval_when, use_timeout};
 pub use use_keyboard_shortcut::{
