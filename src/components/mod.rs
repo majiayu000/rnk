@@ -1,12 +1,14 @@
 //! UI Components
 
 mod accordion;
+mod alert;
 mod avatar;
 mod badge;
 mod barchart;
 mod box_component;
 mod breadcrumb;
 mod calendar;
+mod card;
 mod chip;
 mod code_editor;
 mod confirm;
@@ -37,6 +39,7 @@ mod select_input;
 mod spacer;
 mod sparkline;
 mod spinner;
+mod stat;
 mod static_output;
 mod status_bar;
 mod table;
@@ -52,12 +55,14 @@ mod tree;
 pub mod viewport;
 
 pub use accordion::{Accordion, AccordionItem};
+pub use alert::{Alert, AlertLevel, alert_error, alert_info, alert_success, alert_warning};
 pub use avatar::{Avatar, AvatarSize, avatar, avatar_initials};
 pub use badge::{Badge, BadgeVariant, badge_error, badge_primary, badge_success, badge_warning};
 pub use barchart::{Bar, BarChart, BarChartOrientation};
 pub use box_component::Box;
 pub use breadcrumb::{Breadcrumb, breadcrumb_from_path};
 pub use calendar::Calendar;
+pub use card::{Card, card, card_full};
 pub use chip::{Chip, chip, chip_selected};
 pub use code_editor::{CodeEditor, Language};
 pub use confirm::{ButtonStyle, Confirm, ConfirmState, ConfirmStyle, handle_confirm_input};
@@ -102,6 +107,7 @@ pub use select_input::{SelectInput, SelectInputStyle, SelectItem, select_input};
 pub use spacer::Spacer;
 pub use sparkline::Sparkline;
 pub use spinner::{Spinner, SpinnerBuilder};
+pub use stat::{Stat, Trend, stat, stat_down, stat_up};
 pub use static_output::{Static, static_output};
 pub use status_bar::{StatusBar, status_bar, status_bar_full};
 pub use table::{Cell, Constraint, Row, Table, TableState};
