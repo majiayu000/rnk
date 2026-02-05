@@ -33,6 +33,7 @@ pub mod navigation;
 mod newline;
 mod notification;
 mod paginator;
+mod popover;
 mod progress;
 mod quote;
 mod scrollable;
@@ -107,6 +108,10 @@ pub use notification::{
 };
 pub use paginator::{
     Paginator, PaginatorState, PaginatorStyle, PaginatorType, handle_paginator_input,
+};
+pub use popover::{
+    Popover, PopoverArrow, PopoverBorder, PopoverPosition, PopoverStyle, popover,
+    popover_with_content,
 };
 pub use progress::{Gauge, Progress, ProgressSymbols};
 pub use quote::{Quote, QuoteStyle, quote, quote_with_author};
