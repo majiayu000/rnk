@@ -17,6 +17,7 @@ mod use_frame_rate;
 mod use_history;
 pub mod use_input;
 mod use_interval;
+mod use_keyboard_shortcut;
 mod use_list;
 mod use_local_storage;
 mod use_map;
@@ -60,6 +61,9 @@ pub use use_frame_rate::use_frame_rate;
 pub use use_history::{HistoryHandle, use_history, use_history_with_size};
 pub use use_input::{Key, use_input};
 pub use use_interval::{use_interval, use_interval_when, use_timeout};
+pub use use_keyboard_shortcut::{
+    Modifiers, Shortcut, ShortcutKey, use_keyboard_shortcut, use_keyboard_shortcuts,
+};
 pub use use_list::{ListHandle, use_list, use_list_empty};
 pub use use_local_storage::{LocalStorageHandle, use_local_storage, use_local_storage_with_dir};
 pub use use_map::{MapHandle, use_map, use_map_empty, use_map_from};
