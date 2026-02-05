@@ -2,6 +2,7 @@
 //!
 //! Provides utilities for comparing rendered output against
 //! saved "golden" reference files.
+#![allow(dead_code)]
 
 use std::fs;
 use std::path::PathBuf;

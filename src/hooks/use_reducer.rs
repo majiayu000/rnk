@@ -45,7 +45,7 @@
 //! }
 //! ```
 
-use crate::hooks::use_signal::{Signal, use_signal};
+use crate::hooks::use_signal::use_signal;
 use std::sync::Arc;
 
 /// Handle for dispatching actions
