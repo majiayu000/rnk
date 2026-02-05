@@ -163,9 +163,6 @@ impl CmdExecutor {
                         let (tx, rx) = tokio::sync::oneshot::channel();
                         temp_executor.execute_with_completion(cmd, tx);
 
-                        // Prevent shutdown on drop
-                        std::mem::forget(temp_executor);
-
                         // Wait for this command to complete before starting next
                         let _ = rx.await;
                     }
@@ -211,8 +208,6 @@ impl CmdExecutor {
 
                             temp_executor.execute_internal(other, notify_render);
 
-                            // Prevent shutdown on drop
-                            std::mem::forget(temp_executor);
                         }
                     }
                 });
@@ -323,7 +318,6 @@ impl CmdExecutor {
                             };
                             let (tx, rx) = tokio::sync::oneshot::channel();
                             temp_executor.execute_with_completion(cmd, tx);
-                            std::mem::forget(temp_executor);
                             let _ = rx.await;
                         });
                         handles.push(handle);
@@ -350,7 +344,6 @@ impl CmdExecutor {
                         };
                         let (tx, rx) = tokio::sync::oneshot::channel();
                         temp_executor.execute_with_completion(cmd, tx);
-                        std::mem::forget(temp_executor);
                         let _ = rx.await;
                     }
                     let _ = completion.send(());
@@ -382,7 +375,6 @@ impl CmdExecutor {
                             };
                             let (tx, rx) = tokio::sync::oneshot::channel();
                             temp_executor.execute_with_completion(other, tx);
-                            std::mem::forget(temp_executor);
                             let _ = rx.await;
                             let _ = completion.send(());
                         }

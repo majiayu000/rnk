@@ -144,9 +144,7 @@ impl AppContext {
     /// ```
     #[cfg(unix)]
     pub fn suspend(&self) {
-        // This is handled by setting a flag that the event loop checks
-        // The actual suspend happens in the App's run loop
-        self.render_handle.request_render();
+        self.render_handle.request_suspend();
     }
 
     /// Request to suspend the application (no-op on non-Unix).
@@ -273,6 +271,8 @@ mod tests {
             }
 
             fn queue_exec(&self, _request: crate::cmd::ExecRequest) {}
+
+            fn request_suspend(&self) {}
         }
 
         RenderHandle::new(Arc::new(NoopSink))

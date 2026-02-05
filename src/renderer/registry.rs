@@ -74,6 +74,7 @@ pub(crate) trait AppSink: Send + Sync {
     fn exit_alt_screen(&self);
     fn is_alt_screen(&self) -> bool;
     fn queue_exec(&self, request: ExecRequest);
+    fn request_suspend(&self);
 }
 
 // === Mode Switch ===
@@ -96,6 +97,7 @@ pub(crate) struct AppRuntime {
     mode_switch_request: Mutex<Option<ModeSwitch>>,
     alt_screen_state: Arc<AtomicBool>,
     exec_queue: Mutex<Vec<ExecRequest>>,
+    suspend_request: AtomicBool,
 }
 
 impl AppRuntime {
@@ -107,6 +109,7 @@ impl AppRuntime {
             mode_switch_request: Mutex::new(None),
             alt_screen_state: Arc::new(AtomicBool::new(alternate_screen)),
             exec_queue: Mutex::new(Vec::new()),
+            suspend_request: AtomicBool::new(false),
         })
     }
 
@@ -160,6 +163,19 @@ impl AppRuntime {
             Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
         }
     }
+
+    pub(crate) fn request_suspend(&self) {
+        self.suspend_request.store(true, Ordering::SeqCst);
+        self.request_render();
+    }
+
+    pub(crate) fn suspend_requested(&self) -> bool {
+        self.suspend_request.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn take_suspend_request(&self) -> bool {
+        self.suspend_request.swap(false, Ordering::SeqCst)
+    }
 }
 
 impl AppSink for AppRuntime {
@@ -197,6 +213,10 @@ impl AppSink for AppRuntime {
 
     fn queue_exec(&self, request: ExecRequest) {
         AppRuntime::queue_exec(self, request);
+    }
+
+    fn request_suspend(&self) {
+        self.request_suspend();
     }
 }
 
@@ -477,6 +497,11 @@ impl RenderHandle {
     /// Check if currently in fullscreen mode
     pub fn is_alt_screen(&self) -> bool {
         self.sink.is_alt_screen()
+    }
+
+    /// Request to suspend the application (Unix only)
+    pub fn request_suspend(&self) {
+        self.sink.request_suspend();
     }
 }
 

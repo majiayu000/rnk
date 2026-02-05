@@ -23,8 +23,6 @@ pub(crate) struct EventLoop {
     should_exit: Arc<AtomicBool>,
     frame_rate: FrameRateController,
     exit_on_ctrl_c: bool,
-    /// Flag indicating a suspend was requested
-    suspend_requested: Arc<AtomicBool>,
     /// Event filter chain
     filter_chain: FilterChain,
     /// External cancel token flag
@@ -46,7 +44,6 @@ impl EventLoop {
             should_exit,
             frame_rate,
             exit_on_ctrl_c,
-            suspend_requested: Arc::new(AtomicBool::new(false)),
             filter_chain,
             cancel_flag: None,
             render_rx: None,
@@ -99,7 +96,7 @@ impl EventLoop {
             }
 
             // Check suspend condition
-            if self.suspend_requested.swap(false, Ordering::SeqCst) {
+            if self.runtime.suspend_requested() {
                 // Return a special marker - the App will handle the actual suspend
                 return Ok(());
             }
@@ -140,7 +137,7 @@ impl EventLoop {
                 if key_event.modifiers.contains(KeyModifiers::CONTROL)
                     && key_event.code == KeyCode::Char('z')
                 {
-                    self.suspend_requested.store(true, Ordering::SeqCst);
+                    self.runtime.request_suspend();
                     return;
                 }
 
