@@ -21,6 +21,7 @@ mod use_list;
 mod use_local_storage;
 mod use_map;
 mod use_measure;
+mod use_media_query;
 mod use_memo;
 pub mod use_mouse;
 mod use_previous;
@@ -65,6 +66,10 @@ pub use use_map::{MapHandle, use_map, use_map_empty, use_map_from};
 pub use use_measure::{
     Dimensions, MeasureContext, MeasureRef, get_measure_context, measure_element,
     set_measure_context, use_measure,
+};
+pub use use_media_query::{
+    Breakpoint, MediaQuery, use_breakpoint, use_breakpoint_down, use_breakpoint_only,
+    use_breakpoint_up, use_is_landscape, use_is_portrait, use_media_query,
 };
 pub use use_memo::{MemoizedCallback, use_callback, use_memo};
 pub use use_mouse::{
