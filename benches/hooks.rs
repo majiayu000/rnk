@@ -1,8 +1,7 @@
 //! Hooks system benchmarks
 
 use rnk::hooks::{HookContext, use_callback, use_effect, use_memo, use_signal, with_hooks};
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, RwLock};
 
 fn main() {
     divan::main();
@@ -15,7 +14,7 @@ fn hook_context_creation() {
 
 #[divan::bench]
 fn signal_creation() {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     with_hooks(ctx, || {
         let _signal = use_signal(|| 0i32);
@@ -24,7 +23,7 @@ fn signal_creation() {
 
 #[divan::bench]
 fn signal_get() {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     let signal = with_hooks(ctx.clone(), || use_signal(|| 42i32));
 
@@ -35,7 +34,7 @@ fn signal_get() {
 
 #[divan::bench]
 fn signal_set() {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     let signal = with_hooks(ctx.clone(), || use_signal(|| 0i32));
 
@@ -46,7 +45,7 @@ fn signal_set() {
 
 #[divan::bench]
 fn signal_update() {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     let signal = with_hooks(ctx.clone(), || use_signal(|| 0i32));
 
@@ -57,7 +56,7 @@ fn signal_update() {
 
 #[divan::bench]
 fn signal_with() {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     let signal = with_hooks(ctx.clone(), || use_signal(|| vec![1, 2, 3, 4, 5]));
 
@@ -68,7 +67,7 @@ fn signal_with() {
 
 #[divan::bench(args = [1, 5, 10, 20])]
 fn multiple_signals(count: usize) {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     with_hooks(ctx, || {
         for _ in 0..count {
@@ -79,7 +78,7 @@ fn multiple_signals(count: usize) {
 
 #[divan::bench]
 fn signal_persistence_across_renders() {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     // Simulate multiple renders
     for i in 0..100 {
@@ -95,7 +94,7 @@ fn signal_persistence_across_renders() {
 
 #[divan::bench]
 fn use_memo_simple() {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     with_hooks(ctx, || {
         let _value = use_memo(|| expensive_computation(), ());
@@ -104,7 +103,7 @@ fn use_memo_simple() {
 
 #[divan::bench]
 fn use_memo_with_deps() {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     for i in 0..100 {
         with_hooks(ctx.clone(), || {
@@ -115,7 +114,7 @@ fn use_memo_with_deps() {
 
 #[divan::bench]
 fn use_callback_creation() {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     with_hooks(ctx, || {
         let _cb = use_callback(|x: i32| x * 2, ());
@@ -124,7 +123,7 @@ fn use_callback_creation() {
 
 #[divan::bench]
 fn use_effect_registration() {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     with_hooks(ctx, || {
         use_effect(
@@ -139,7 +138,7 @@ fn use_effect_registration() {
 
 #[divan::bench]
 fn use_effect_with_deps_change() {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     for i in 0..100 {
         with_hooks(ctx.clone(), || {
@@ -156,7 +155,7 @@ fn use_effect_with_deps_change() {
 
 #[divan::bench]
 fn complex_hook_composition() {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     with_hooks(ctx, || {
         let count = use_signal(|| 0i32);
@@ -184,7 +183,7 @@ fn complex_hook_composition() {
 
 #[divan::bench(args = [10, 50, 100])]
 fn many_hooks_in_component(count: usize) {
-    let ctx = Rc::new(RefCell::new(HookContext::new()));
+    let ctx = Arc::new(RwLock::new(HookContext::new()));
 
     with_hooks(ctx, || {
         for i in 0..count {

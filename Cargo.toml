@@ -3,7 +3,7 @@ members = [".", "crates/rnk-style", "crates/rnk-icons"]
 
 [package]
 name = "rnk"
-version = "0.15.14"
+version = "0.15.15"
 edition = "2024"
 rust-version = "1.85"
 description = "A React-like declarative terminal UI framework for Rust, inspired by Ink"
