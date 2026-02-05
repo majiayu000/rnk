@@ -22,6 +22,7 @@ mod help;
 mod hyperlink;
 mod key_hint;
 mod line_chart;
+mod link;
 mod list;
 mod markdown;
 mod message;
@@ -84,6 +85,7 @@ pub use hyperlink::{
 };
 pub use key_hint::{KeyHint, key_hint, key_hints};
 pub use line_chart::{LineChart, Series};
+pub use link::{Link, link_styled, link_with_icon};
 pub use list::{List, ListItem, ListState};
 pub use markdown::Markdown;
 pub use message::{Message, MessageRole, ThinkingBlock, ToolCall};
