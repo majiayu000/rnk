@@ -11,6 +11,7 @@ mod use_debounce;
 mod use_effect;
 pub mod use_focus;
 mod use_frame_rate;
+mod use_history;
 pub mod use_input;
 mod use_interval;
 mod use_list;
@@ -45,6 +46,7 @@ pub use use_focus::{
     FocusManagerHandle, FocusState, UseFocusOptions, use_focus, use_focus_manager,
 };
 pub use use_frame_rate::use_frame_rate;
+pub use use_history::{HistoryHandle, use_history, use_history_with_size};
 pub use use_input::{Key, use_input};
 pub use use_interval::{use_interval, use_interval_when, use_timeout};
 pub use use_list::{ListHandle, use_list, use_list_empty};
