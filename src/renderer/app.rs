@@ -2,18 +2,23 @@
 //!
 //! This module provides the main application runner.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::cmd::{ExecRequest, run_exec_process};
+use crate::cmd::{Cmd, CmdExecutor, ExecRequest, run_exec_process};
 use crate::core::Element;
 use crate::hooks::context::{HookContext, with_hooks};
 use crate::hooks::use_app::{AppContext, set_app_context};
 use crate::hooks::use_input::clear_input_handlers;
 use crate::hooks::use_mouse::{clear_mouse_handlers, is_mouse_enabled};
+use crate::hooks::{MeasureContext, set_measure_context};
 use crate::layout::LayoutEngine;
 use crate::renderer::{Output, Terminal};
+use crate::runtime::{RuntimeContext, set_current_runtime};
+use tokio::sync::mpsc;
 
 use super::builder::{AppOptions, CancelToken};
 use super::element_renderer::render_element;
@@ -46,6 +51,12 @@ where
     filter_chain: FilterChain,
     /// External cancel token
     cancel_token: Option<CancelToken>,
+    /// Command executor for use_cmd and other Cmds
+    cmd_executor: CmdExecutor,
+    /// Render notifications from CmdExecutor
+    cmd_render_rx: Option<mpsc::UnboundedReceiver<()>>,
+    /// Unified runtime context for input/mouse/focus/stats
+    runtime_context: Rc<RefCell<RuntimeContext>>,
 }
 
 impl<F> App<F>
@@ -81,6 +92,14 @@ where
         let runtime = AppRuntime::new(options.alternate_screen);
         let render_handle = RenderHandle::new(runtime.clone());
         let hook_context = Arc::new(RwLock::new(HookContext::new()));
+        let should_exit = Arc::new(AtomicBool::new(false));
+        let runtime_context = Rc::new(RefCell::new(RuntimeContext::with_app_control(
+            should_exit.clone(),
+            render_handle.clone(),
+        )));
+
+        let (cmd_render_tx, cmd_render_rx) = mpsc::unbounded_channel();
+        let cmd_executor = CmdExecutor::new(cmd_render_tx);
 
         // Set up render callback
         let runtime_clone = runtime.clone();
@@ -100,7 +119,7 @@ where
             layout_engine: LayoutEngine::new(),
             hook_context,
             options,
-            should_exit: Arc::new(AtomicBool::new(false)),
+            should_exit,
             runtime,
             render_handle,
             static_renderer: StaticRenderer::new(),
@@ -108,12 +127,23 @@ where
             last_height: initial_height,
             filter_chain,
             cancel_token,
+            cmd_executor,
+            cmd_render_rx: Some(cmd_render_rx),
+            runtime_context,
         }
     }
 
     /// Run the application
     pub fn run(mut self) -> std::io::Result<()> {
         let _app_guard = register_app(self.runtime.clone());
+        set_current_runtime(Some(self.runtime_context.clone()));
+        struct CurrentRuntimeGuard;
+        impl Drop for CurrentRuntimeGuard {
+            fn drop(&mut self) {
+                set_current_runtime(None);
+            }
+        }
+        let _runtime_guard = CurrentRuntimeGuard;
 
         // Enter terminal mode based on options
         if self.options.alternate_screen {
@@ -127,11 +157,20 @@ where
         // Take ownership of filter chain for the event loop
         let filter_chain = std::mem::take(&mut self.filter_chain);
 
+        // Create frame rate controller and share stats with runtime context
+        let frame_rate = super::frame_rate::FrameRateController::new(
+            self.options.to_frame_rate_config(),
+        );
+        let shared_stats = frame_rate.shared_stats();
+        self.runtime_context
+            .borrow_mut()
+            .set_frame_rate_stats(shared_stats);
+
         // Create event loop with filters
         let mut event_loop = EventLoop::with_filters(
             self.runtime.clone(),
             self.should_exit.clone(),
-            self.options.fps,
+            frame_rate,
             self.options.exit_on_ctrl_c,
             filter_chain,
         );
@@ -139,6 +178,11 @@ where
         // Add cancel token if present
         if let Some(ref token) = self.cancel_token {
             event_loop = event_loop.with_cancel_flag(token.flag());
+        }
+
+        // Add command render notifications if present
+        if let Some(rx) = self.cmd_render_rx.take() {
+            event_loop = event_loop.with_render_rx(rx);
         }
 
         // Run event loop with render callback
@@ -348,6 +392,10 @@ where
         // Clear input and mouse handlers before render (they'll be re-registered)
         clear_input_handlers();
         clear_mouse_handlers();
+        set_measure_context(None);
+
+        // Begin runtime render cycle (clears runtime handlers)
+        self.runtime_context.borrow_mut().begin_render();
 
         // Get terminal size
         let (width, height) = Terminal::size()?;
@@ -363,6 +411,19 @@ where
 
         // Clear app context after render
         set_app_context(None);
+
+        // End runtime render cycle
+        {
+            let mut ctx = self.runtime_context.borrow_mut();
+            ctx.end_render();
+            ctx.run_effects();
+        }
+
+        // Execute any queued commands from hooks
+        let cmds = self.hook_context.write().unwrap().take_cmds();
+        if !cmds.is_empty() {
+            self.cmd_executor.execute(Cmd::batch(cmds));
+        }
 
         // Enable/disable mouse mode based on whether any component uses it
         if is_mouse_enabled() {
@@ -383,6 +444,11 @@ where
 
         // Compute layout for dynamic content
         self.layout_engine.compute(&dynamic_root, width, height);
+
+        // Update measure context with latest layouts
+        let mut measure_ctx = MeasureContext::new();
+        measure_ctx.set_layouts(self.layout_engine.get_all_layouts());
+        set_measure_context(Some(measure_ctx));
 
         // Get the actual content size from layout
         let root_layout = self
