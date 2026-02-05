@@ -11,6 +11,7 @@ mod calendar;
 mod card;
 mod chip;
 mod code_editor;
+mod command_palette;
 mod confirm;
 mod cursor;
 mod devtools;
@@ -70,6 +71,9 @@ pub use calendar::Calendar;
 pub use card::{Card, card, card_full};
 pub use chip::{Chip, chip, chip_selected};
 pub use code_editor::{CodeEditor, Language};
+pub use command_palette::{
+    Command, CommandPalette, CommandPaletteState, CommandPaletteStyle, command_palette,
+};
 pub use confirm::{ButtonStyle, Confirm, ConfirmState, ConfirmStyle, handle_confirm_input};
 pub use cursor::{Cursor, CursorShape, CursorState, CursorStyle, cursor};
 pub use devtools::{DevTools, DevToolsTab};
