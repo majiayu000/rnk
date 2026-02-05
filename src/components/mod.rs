@@ -38,6 +38,7 @@ mod paginator;
 mod popover;
 mod progress;
 mod quote;
+mod rating;
 mod scrollable;
 mod scrollbar;
 mod select_input;
@@ -122,6 +123,7 @@ pub use popover::{
 };
 pub use progress::{Gauge, Progress, ProgressSymbols};
 pub use quote::{Quote, QuoteStyle, quote, quote_with_author};
+pub use rating::{Rating, RatingStyle, RatingSymbols, rating, rating_of};
 pub use scrollable::{ScrollableBox, fixed_bottom_layout, virtual_scroll_view};
 pub use scrollbar::{Scrollbar, ScrollbarOrientation, ScrollbarSymbols};
 pub use select_input::{SelectInput, SelectInputStyle, SelectItem, select_input};
