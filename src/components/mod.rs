@@ -13,6 +13,7 @@ mod chip;
 mod code_editor;
 mod command_palette;
 mod confirm;
+mod context_menu;
 mod cursor;
 mod devtools;
 mod divider;
@@ -75,6 +76,7 @@ pub use command_palette::{
     Command, CommandPalette, CommandPaletteState, CommandPaletteStyle, command_palette,
 };
 pub use confirm::{ButtonStyle, Confirm, ConfirmState, ConfirmStyle, handle_confirm_input};
+pub use context_menu::{ContextMenu, ContextMenuState, ContextMenuStyle, MenuItem, context_menu};
 pub use cursor::{Cursor, CursorShape, CursorState, CursorStyle, cursor};
 pub use devtools::{DevTools, DevToolsTab};
 pub use divider::{Divider, DividerOrientation, DividerStyle, hr, hr_dashed, hr_label};
