@@ -5,6 +5,7 @@ mod paste;
 mod use_accessibility;
 mod use_animation;
 pub(crate) mod use_app;
+mod use_async;
 mod use_clipboard;
 mod use_cmd;
 mod use_counter;
@@ -21,6 +22,7 @@ mod use_measure;
 mod use_memo;
 pub mod use_mouse;
 mod use_previous;
+mod use_reducer;
 mod use_scroll;
 mod use_set;
 mod use_signal;
@@ -40,6 +42,7 @@ pub use use_accessibility::{
 };
 pub use use_animation::{AnimationHandle, use_animation, use_animation_auto};
 pub use use_app::{AppContext, get_app_context, set_app_context, use_app};
+pub use use_async::{AsyncHandle, AsyncState, use_async_state, use_async_state_with};
 pub use use_clipboard::{ClipboardHandle, is_clipboard_available, read_clipboard, use_clipboard, write_clipboard};
 pub use use_cmd::{Deps, use_cmd, use_cmd_once};
 pub use use_counter::{CounterHandle, use_counter, use_counter_zero};
@@ -64,6 +67,7 @@ pub use use_mouse::{
     set_mouse_enabled, use_mouse,
 };
 pub use use_previous::{use_changed, use_is_first_render, use_previous};
+pub use use_reducer::{Dispatch, use_reducer, use_reducer_lazy};
 pub use use_scroll::{ScrollHandle, ScrollState, use_scroll};
 pub use use_set::{SetHandle, use_set, use_set_empty};
 pub use use_signal::{Signal, use_signal};
