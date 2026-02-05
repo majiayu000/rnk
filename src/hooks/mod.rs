@@ -25,6 +25,7 @@ mod use_measure;
 mod use_media_query;
 mod use_memo;
 pub mod use_mouse;
+mod use_online;
 mod use_previous;
 mod use_reducer;
 mod use_scroll;
@@ -79,6 +80,10 @@ pub use use_memo::{MemoizedCallback, use_callback, use_memo};
 pub use use_mouse::{
     Mouse, MouseAction, MouseButton, clear_mouse_handlers, dispatch_mouse_event, is_mouse_enabled,
     set_mouse_enabled, use_mouse,
+};
+pub use use_online::{
+    NetworkStatus, check_host_reachable, check_online, use_host_reachable, use_network_status,
+    use_online,
 };
 pub use use_previous::{use_changed, use_is_first_render, use_previous};
 pub use use_reducer::{Dispatch, use_reducer, use_reducer_lazy};
