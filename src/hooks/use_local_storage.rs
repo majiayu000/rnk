@@ -21,9 +21,9 @@
 //! }
 //! ```
 
-use crate::hooks::use_signal::{Signal, use_signal};
+use crate::hooks::use_signal::{use_signal, Signal};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Handle for local storage operations
 #[derive(Clone)]
@@ -64,7 +64,7 @@ impl LocalStorageHandle {
         let _ = fs::write(path, value);
     }
 
-    fn load(storage_dir: &PathBuf, key: &str) -> Option<String> {
+    fn load(storage_dir: &Path, key: &str) -> Option<String> {
         let path = storage_dir.join(key);
         fs::read_to_string(path).ok()
     }

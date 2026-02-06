@@ -101,7 +101,10 @@ impl MenuItem {
 
     /// Set icon
     pub fn icon(mut self, icon: impl Into<String>) -> Self {
-        if let Self::Action { icon: ref mut i, .. } = self {
+        if let Self::Action {
+            icon: ref mut i, ..
+        } = self
+        {
             *i = Some(icon.into());
         }
         self
@@ -335,9 +338,9 @@ impl ContextMenu {
 
                 // Selection indicator
                 if is_selected && index == self.state.selected {
-                    line.push_str(">");
+                    line.push('>');
                 } else {
-                    line.push_str(" ");
+                    line.push(' ');
                 }
 
                 line.push_str(&padding);
@@ -354,7 +357,10 @@ impl ContextMenu {
                 // Shortcut (right-aligned)
                 if let Some(shortcut) = shortcut {
                     let current_len = line.len();
-                    let shortcut_space = self.style.width.saturating_sub(current_len + shortcut.len() + 2);
+                    let shortcut_space = self
+                        .style
+                        .width
+                        .saturating_sub(current_len + shortcut.len() + 2);
                     line.push_str(&" ".repeat(shortcut_space));
                     line.push_str(shortcut);
                 }
@@ -387,9 +393,9 @@ impl ContextMenu {
 
                 // Selection indicator
                 if is_selected && index == self.state.selected {
-                    line.push_str(">");
+                    line.push('>');
                 } else {
-                    line.push_str(" ");
+                    line.push(' ');
                 }
 
                 line.push_str(&padding);
@@ -488,7 +494,10 @@ mod tests {
             .disabled(false);
 
         if let MenuItem::Action {
-            shortcut, icon, disabled, ..
+            shortcut,
+            icon,
+            disabled,
+            ..
         } = item
         {
             assert_eq!(shortcut, Some("Ctrl+C".to_string()));
@@ -535,10 +544,7 @@ mod tests {
 
     #[test]
     fn test_context_menu_creation() {
-        let items = vec![
-            MenuItem::new("cut", "Cut"),
-            MenuItem::new("copy", "Copy"),
-        ];
+        let items = vec![MenuItem::new("cut", "Cut"), MenuItem::new("copy", "Copy")];
 
         let menu = ContextMenu::new(items);
         assert_eq!(menu.items.len(), 2);
@@ -556,9 +562,7 @@ mod tests {
 
     #[test]
     fn test_context_menu_style() {
-        let style = ContextMenuStyle::new()
-            .width(40)
-            .background(Color::Blue);
+        let style = ContextMenuStyle::new().width(40).background(Color::Blue);
 
         assert_eq!(style.width, 40);
         assert_eq!(style.background, Color::Blue);

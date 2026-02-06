@@ -28,8 +28,8 @@ use std::time::Duration;
 pub fn check_online() -> bool {
     // Try to connect to common DNS servers
     let targets = [
-        ("8.8.8.8", 53),      // Google DNS
-        ("1.1.1.1", 53),      // Cloudflare DNS
+        ("8.8.8.8", 53),        // Google DNS
+        ("1.1.1.1", 53),        // Cloudflare DNS
         ("208.67.222.222", 53), // OpenDNS
     ];
 
@@ -73,7 +73,7 @@ pub fn use_host_reachable(host: &str, port: u16) -> bool {
 }
 
 /// Network status information
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NetworkStatus {
     /// Whether the system is online
     pub online: bool,
@@ -93,15 +93,6 @@ impl NetworkStatus {
         };
 
         Self { online, latency_ms }
-    }
-}
-
-impl Default for NetworkStatus {
-    fn default() -> Self {
-        Self {
-            online: false,
-            latency_ms: None,
-        }
     }
 }
 
@@ -131,7 +122,10 @@ mod tests {
     #[test]
     fn test_check_host_reachable_invalid() {
         // Invalid host should return false
-        assert!(!check_host_reachable("invalid.host.that.does.not.exist", 80));
+        assert!(!check_host_reachable(
+            "invalid.host.that.does.not.exist",
+            80
+        ));
     }
 
     #[test]

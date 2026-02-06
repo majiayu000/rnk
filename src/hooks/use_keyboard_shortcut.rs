@@ -20,7 +20,7 @@
 //! }
 //! ```
 
-use crate::hooks::use_input::{Key, use_input};
+use crate::hooks::use_input::{use_input, Key};
 
 /// Modifier keys
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -256,7 +256,7 @@ impl Shortcut {
             ShortcutKey::Char(c) => {
                 if input.len() == 1 {
                     let input_char = input.chars().next().unwrap();
-                    input_char.to_ascii_lowercase() == c.to_ascii_lowercase()
+                    input_char.eq_ignore_ascii_case(c)
                 } else {
                     false
                 }

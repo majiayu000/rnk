@@ -106,7 +106,7 @@ impl Skeleton {
 
         match self.variant {
             SkeletonVariant::Text => {
-                let content: String = std::iter::repeat(char).take(self.width).collect();
+                let content: String = std::iter::repeat_n(char, self.width).collect();
                 Text::new(content)
                     .color(Color::Ansi256(242))
                     .background(bg)
@@ -114,7 +114,10 @@ impl Skeleton {
             }
             SkeletonVariant::Circle => {
                 // Simple circle representation
-                let content = format!("({})", std::iter::repeat(char).take(self.width.saturating_sub(2)).collect::<String>());
+                let content = format!(
+                    "({})",
+                    std::iter::repeat_n(char, self.width.saturating_sub(2)).collect::<String>()
+                );
                 Text::new(content)
                     .color(Color::Ansi256(242))
                     .background(bg)
@@ -122,7 +125,7 @@ impl Skeleton {
             }
             SkeletonVariant::Rectangle => {
                 let mut children = Vec::new();
-                let line: String = std::iter::repeat(char).take(self.width).collect();
+                let line: String = std::iter::repeat_n(char, self.width).collect();
                 for _ in 0..self.height {
                     children.push(
                         Text::new(&line)
