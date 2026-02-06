@@ -6,7 +6,7 @@
 use crate::components::Box as TinkBox;
 use crate::components::navigation::{NavigationConfig, handle_list_navigation};
 use crate::components::selection_list::{ListStyle, indicator_padding, render_list};
-use crate::core::{Color, Element, FlexDirection};
+use crate::core::{Color, Element};
 use crate::hooks::{Signal, use_input, use_signal};
 
 /// A selectable item in the SelectInput
