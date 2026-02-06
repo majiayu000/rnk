@@ -53,8 +53,7 @@ pub fn render_to_string_no_trim(element: &Element, width: u16) -> String {
 /// does not perform a carriage return.
 pub fn render_to_string_raw(element: &Element, width: u16) -> String {
     let helper = RenderHelper;
-    let rendered = helper.render_element_to_string_raw(element, width);
-    rendered
+    helper.render_element_to_string_raw(element, width)
 }
 
 /// Render an element to a string with automatic width detection.
