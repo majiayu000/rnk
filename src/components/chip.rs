@@ -17,7 +17,7 @@
 //! }
 //! ```
 
-use crate::components::Text;
+use crate::components::capsule::capsule_padded;
 use crate::core::{Color, Element};
 
 /// A chip component for selectable options
@@ -86,10 +86,7 @@ impl Chip {
         // Label
         content.push_str(&self.label);
 
-        Text::new(format!(" {} ", content))
-            .color(fg)
-            .background(bg)
-            .into_element()
+        capsule_padded(content, fg, bg).into_element()
     }
 }
 
