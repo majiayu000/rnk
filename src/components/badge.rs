@@ -21,7 +21,7 @@
 //! }
 //! ```
 
-use crate::components::Text;
+use crate::components::capsule::{capsule_padded, capsule_wrapped};
 use crate::core::{Color, Element};
 
 /// Badge variant for different styles
@@ -79,13 +79,13 @@ impl Badge {
             BadgeVariant::Info => (Color::White, Color::Cyan),
         };
 
-        let content = if self.pill {
-            format!(" {} ", self.text)
+        let text = if self.pill {
+            capsule_padded(self.text, fg, bg)
         } else {
-            format!("[{}]", self.text)
+            capsule_wrapped(self.text, fg, bg, "[", "]")
         };
 
-        Text::new(content).color(fg).background(bg).into_element()
+        text.into_element()
     }
 }
 
@@ -97,12 +97,16 @@ impl Default for Badge {
 
 /// Create a primary badge
 pub fn badge_primary(text: impl Into<String>) -> Element {
-    Badge::new(text).variant(BadgeVariant::Primary).into_element()
+    Badge::new(text)
+        .variant(BadgeVariant::Primary)
+        .into_element()
 }
 
 /// Create a success badge
 pub fn badge_success(text: impl Into<String>) -> Element {
-    Badge::new(text).variant(BadgeVariant::Success).into_element()
+    Badge::new(text)
+        .variant(BadgeVariant::Success)
+        .into_element()
 }
 
 /// Create an error badge
@@ -112,7 +116,9 @@ pub fn badge_error(text: impl Into<String>) -> Element {
 
 /// Create a warning badge
 pub fn badge_warning(text: impl Into<String>) -> Element {
-    Badge::new(text).variant(BadgeVariant::Warning).into_element()
+    Badge::new(text)
+        .variant(BadgeVariant::Warning)
+        .into_element()
 }
 
 #[cfg(test)]
