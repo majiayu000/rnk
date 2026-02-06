@@ -3,6 +3,7 @@
 //! Provides toast-style notifications with auto-dismiss and various styles.
 
 use crate::components::{Box, Text};
+use crate::components::status::{StatusLevel, status_style};
 use crate::core::{AlignItems, Color, Element, FlexDirection, JustifyContent};
 
 /// Notification level/type
@@ -22,31 +23,27 @@ pub enum NotificationLevel {
 impl NotificationLevel {
     /// Get the default color for this level
     pub fn color(&self) -> Color {
-        match self {
-            NotificationLevel::Info => Color::Cyan,
-            NotificationLevel::Success => Color::Green,
-            NotificationLevel::Warning => Color::Yellow,
-            NotificationLevel::Error => Color::Red,
-        }
+        status_style((*self).into()).fg
     }
 
     /// Get the default icon for this level
     pub fn icon(&self) -> &'static str {
-        match self {
-            NotificationLevel::Info => "ℹ",
-            NotificationLevel::Success => "✓",
-            NotificationLevel::Warning => "⚠",
-            NotificationLevel::Error => "✗",
-        }
+        status_style((*self).into()).icon
     }
 
     /// Get the label for this level
     pub fn label(&self) -> &'static str {
-        match self {
-            NotificationLevel::Info => "INFO",
-            NotificationLevel::Success => "SUCCESS",
-            NotificationLevel::Warning => "WARNING",
-            NotificationLevel::Error => "ERROR",
+        status_style((*self).into()).label
+    }
+}
+
+impl From<NotificationLevel> for StatusLevel {
+    fn from(level: NotificationLevel) -> Self {
+        match level {
+            NotificationLevel::Info => StatusLevel::Info,
+            NotificationLevel::Success => StatusLevel::Success,
+            NotificationLevel::Warning => StatusLevel::Warning,
+            NotificationLevel::Error => StatusLevel::Error,
         }
     }
 }
