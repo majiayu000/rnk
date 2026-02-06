@@ -31,7 +31,7 @@ use rnk::prelude::{Color, Display, Element, FlexDirection, Text};
 use rnk::renderer::Output;
 
 // Alias tink's Box to avoid conflict with std::boxed::Box
-use rnk::prelude::Box as TinkBox;
+use rnk::prelude::Box as RnkBox;
 
 const API_URL: &str = "https://open.bigmodel.cn/api/anthropic/v1/messages";
 
@@ -472,7 +472,7 @@ fn render_element_recursive(
 // ===== Claude Code Style UI Components =====
 
 fn render_banner() -> Element {
-    TinkBox::new()
+    RnkBox::new()
         .flex_direction(FlexDirection::Column)
         .child(
             Text::new("GLM Chat CLI")
@@ -490,7 +490,7 @@ fn render_banner() -> Element {
 
 /// Render user message with Claude Code style (> prefix, no background)
 fn render_user_message(text: &str) -> Element {
-    TinkBox::new()
+    RnkBox::new()
         .flex_direction(FlexDirection::Row)
         .child(Text::new("> ").color(Color::Yellow).bold().into_element())
         .child(Text::new(text).color(Color::BrightWhite).into_element())
@@ -499,7 +499,7 @@ fn render_user_message(text: &str) -> Element {
 
 /// Render tool call (Claude Code style: ● ToolName(args))
 fn render_tool_call(name: &str, args: &str) -> Element {
-    TinkBox::new()
+    RnkBox::new()
         .flex_direction(FlexDirection::Row)
         .child(Text::new("● ").color(Color::Magenta).into_element())
         .child(Text::new(name).color(Color::Magenta).bold().into_element())
@@ -513,7 +513,7 @@ fn render_tool_call(name: &str, args: &str) -> Element {
 
 /// Render tool result (Claude Code style: ⎿ result with indent)
 fn render_tool_result(result: &str) -> Element {
-    TinkBox::new()
+    RnkBox::new()
         .flex_direction(FlexDirection::Row)
         .child(Text::new("  ⎿ ").color(Color::Ansi256(245)).into_element())
         .child(Text::new(result).color(Color::Ansi256(245)).into_element())
@@ -525,7 +525,7 @@ fn render_thinking(text: &str) -> Element {
     let lines: Vec<&str> = text.lines().take(5).collect();
     let has_more = text.lines().count() > 5;
 
-    let mut container = TinkBox::new().flex_direction(FlexDirection::Column).child(
+    let mut container = RnkBox::new().flex_direction(FlexDirection::Column).child(
         Text::new("● Thinking...")
             .color(Color::Magenta) // Pink/Magenta color
             .into_element(),
@@ -533,7 +533,7 @@ fn render_thinking(text: &str) -> Element {
 
     for line in lines {
         container = container.child(
-            TinkBox::new()
+            RnkBox::new()
                 .flex_direction(FlexDirection::Row)
                 .child(Text::new("  ").into_element())
                 .child(Text::new(line).color(Color::Magenta).dim().into_element())
@@ -554,7 +554,7 @@ fn render_thinking(text: &str) -> Element {
 }
 
 fn render_error(message: &str) -> Element {
-    TinkBox::new()
+    RnkBox::new()
         .flex_direction(FlexDirection::Row)
         .child(Text::new("● ").color(Color::Red).into_element())
         .child(Text::new(message).color(Color::Red).into_element())
@@ -562,7 +562,7 @@ fn render_error(message: &str) -> Element {
 }
 
 fn render_prompt() -> Element {
-    TinkBox::new()
+    RnkBox::new()
         .flex_direction(FlexDirection::Row)
         .child(Text::new("> ").color(Color::Yellow).bold().into_element())
         .into_element()
@@ -573,7 +573,7 @@ fn render_goodbye() -> Element {
 }
 
 fn render_cancelled() -> Element {
-    TinkBox::new()
+    RnkBox::new()
         .flex_direction(FlexDirection::Row)
         .child(Text::new("● ").color(Color::Yellow).into_element())
         .child(

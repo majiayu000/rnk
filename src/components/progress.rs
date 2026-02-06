@@ -2,7 +2,7 @@
 //!
 //! Provides progress bars and gauges for showing completion status.
 
-use crate::components::{Box as TinkBox, Line, Span, Text};
+use crate::components::{Box as RnkBox, Line, Span, Text};
 use crate::core::{Color, Element};
 
 /// Progress bar style
@@ -250,7 +250,7 @@ impl Progress {
         }
 
         let text = Text::line(Line::from_spans(spans));
-        let mut container = TinkBox::new().child(text.into_element());
+        let mut container = RnkBox::new().child(text.into_element());
 
         if let Some(key) = self.key {
             container = container.key(key);
@@ -347,7 +347,7 @@ impl Gauge {
         }
 
         let text = Text::line(Line::from_spans(spans));
-        let mut container = TinkBox::new().child(text.into_element());
+        let mut container = RnkBox::new().child(text.into_element());
 
         if let Some(key) = self.key {
             container = container.key(key);

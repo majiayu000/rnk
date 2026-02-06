@@ -35,7 +35,7 @@
 //! }
 //! ```
 
-use crate::components::{Box as TinkBox, Text};
+use crate::components::{Box as RnkBox, Text};
 use crate::core::{Color, Element, FlexDirection};
 
 /// Confirm dialog state
@@ -377,7 +377,7 @@ impl<'a> Confirm<'a> {
 
     /// Convert to Element
     pub fn into_element(self) -> Element {
-        let mut container = TinkBox::new().flex_direction(FlexDirection::Column);
+        let mut container = RnkBox::new().flex_direction(FlexDirection::Column);
 
         // Prompt
         let mut prompt_text = Text::new(&self.state.prompt);
@@ -387,7 +387,7 @@ impl<'a> Confirm<'a> {
         container = container.child(prompt_text.into_element());
 
         // Buttons row
-        let mut buttons = TinkBox::new().flex_direction(FlexDirection::Row);
+        let mut buttons = RnkBox::new().flex_direction(FlexDirection::Row);
 
         // Yes button
         let yes_label = self.style.format_button(&self.style.yes_label, Some('Y'));

@@ -6,7 +6,7 @@
 use crate::components::navigation::{
     NavigationConfig, calculate_visible_range, handle_list_navigation,
 };
-use crate::components::{Box as TinkBox, Text};
+use crate::components::{Box as RnkBox, Text};
 use crate::core::{Color, Element, FlexDirection};
 use crate::hooks::{Signal, use_input, use_signal};
 
@@ -223,7 +223,7 @@ impl<T: Clone + 'static> SelectInput<T> {
     /// Convert to element with internal state management
     pub fn into_element(self) -> Element {
         if self.items.is_empty() {
-            return TinkBox::new().into_element();
+            return RnkBox::new().into_element();
         }
 
         let items = self.items.clone();
@@ -276,7 +276,7 @@ fn render_select_list<T: Clone + 'static>(
     // Calculate visible range
     let (start, end) = calculate_visible_range(highlighted, total_items, limit);
 
-    let mut container = TinkBox::new().flex_direction(FlexDirection::Column);
+    let mut container = RnkBox::new().flex_direction(FlexDirection::Column);
 
     for (idx, item) in items.iter().enumerate().skip(start).take(end - start) {
         let is_highlighted = idx == highlighted;

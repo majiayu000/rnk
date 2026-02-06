@@ -3,7 +3,7 @@
 //! Provides a table widget with headers, rows, and optional selection.
 
 use crate::components::navigation::SelectionState;
-use crate::components::{Box as TinkBox, Line, Span, Text};
+use crate::components::{Box as RnkBox, Line, Span, Text};
 use crate::core::{Color, Element, FlexDirection, Style};
 
 /// Table cell content
@@ -264,7 +264,7 @@ impl Table {
         let separator = self.column_separator.as_deref().unwrap_or(" ");
         let symbol_width = self.highlight_symbol.as_ref().map(|s| s.len()).unwrap_or(0);
 
-        let mut container = TinkBox::new().flex_direction(FlexDirection::Column);
+        let mut container = RnkBox::new().flex_direction(FlexDirection::Column);
 
         if let Some(ref key) = self.key {
             container = container.key(key.clone());

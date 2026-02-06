@@ -2,7 +2,7 @@
 //!
 //! Provides vertical and horizontal scrollbar widgets.
 
-use crate::components::{Box as TinkBox, Text};
+use crate::components::{Box as RnkBox, Text};
 use crate::core::{Color, Element, FlexDirection};
 
 /// Scrollbar orientation
@@ -207,7 +207,7 @@ impl Scrollbar {
 
         if track_length == 0 {
             // Not enough space for a scrollbar
-            return TinkBox::new().into_element();
+            return RnkBox::new().into_element();
         }
 
         // Calculate thumb size and position
@@ -242,7 +242,7 @@ impl Scrollbar {
 
         // For vertical scrollbar, each character is on its own line
         if self.orientation == ScrollbarOrientation::Vertical {
-            let mut container = TinkBox::new().flex_direction(FlexDirection::Column);
+            let mut container = RnkBox::new().flex_direction(FlexDirection::Column);
 
             if let Some(key) = self.key {
                 container = container.key(key);
@@ -271,7 +271,7 @@ impl Scrollbar {
                 text = text.color(color);
             }
 
-            let mut container = TinkBox::new();
+            let mut container = RnkBox::new();
             if let Some(key) = self.key {
                 container = container.key(key);
             }

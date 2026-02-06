@@ -30,7 +30,7 @@
 //! }
 //! ```
 
-use crate::components::{Box as TinkBox, Text};
+use crate::components::{Box as RnkBox, Text};
 use crate::core::{Color, Element, FlexDirection};
 use std::collections::HashSet;
 
@@ -458,7 +458,7 @@ impl<'a, T: Clone> Tree<'a, T> {
 
     /// Convert to Element
     pub fn into_element(self) -> Element {
-        let mut container = TinkBox::new().flex_direction(FlexDirection::Column);
+        let mut container = RnkBox::new().flex_direction(FlexDirection::Column);
 
         // Render tree recursively
         let elements = self.render_node(self.root, 0, vec![]);

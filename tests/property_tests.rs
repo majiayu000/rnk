@@ -4,7 +4,7 @@
 
 use proptest::prelude::*;
 
-use rnk::components::{Box as TinkBox, Text};
+use rnk::components::{Box as RnkBox, Text};
 use rnk::core::{Dimension, Element, FlexDirection};
 use rnk::layout::measure::measure_text_width;
 use rnk::testing::{TestRenderer, display_width};
@@ -53,7 +53,7 @@ proptest! {
         width in 1u16..200,
         height in 1u16..100
     ) {
-        let element = TinkBox::new()
+        let element = RnkBox::new()
             .width(Dimension::Points(width as f32))
             .height(Dimension::Points(height as f32))
             .into_element();
@@ -78,7 +78,7 @@ proptest! {
         prop_assume!(width < term_width);
         prop_assume!(height < term_height);
 
-        let element = TinkBox::new()
+        let element = RnkBox::new()
             .width(Dimension::Points(width as f32))
             .height(Dimension::Points(height as f32))
             .into_element();
@@ -96,7 +96,7 @@ proptest! {
             if depth == 0 {
                 return Text::new("leaf").into_element();
             }
-            TinkBox::new()
+            RnkBox::new()
                 .padding(1)
                 .child(create_nested(depth - 1))
                 .into_element()
@@ -135,7 +135,7 @@ proptest! {
         term_width in 40u16..200,
         term_height in 10u16..100
     ) {
-        let element = TinkBox::new()
+        let element = RnkBox::new()
             .width(Dimension::Percent(100.0))
             .height(Dimension::Percent(100.0))
             .child(Text::new("Content").into_element())
@@ -174,7 +174,7 @@ proptest! {
             .map(|i| format!("child{}", i))
             .collect();
 
-        let mut builder = TinkBox::new()
+        let mut builder = RnkBox::new()
             .flex_direction(FlexDirection::Column);
 
         for text in &texts {
@@ -253,7 +253,7 @@ proptest! {
     /// Zero dimensions should be handled
     #[test]
     fn zero_dimensions_safe(_dummy in Just(())) {
-        let element = TinkBox::new()
+        let element = RnkBox::new()
             .width(Dimension::Points(0.0))
             .height(Dimension::Points(0.0))
             .into_element();

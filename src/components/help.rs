@@ -3,7 +3,7 @@
 //! Provides a component to display keybindings and help text,
 //! similar to Bubbles' help component.
 
-use crate::components::{Box as TinkBox, Text};
+use crate::components::{Box as RnkBox, Text};
 use crate::core::{Color, Element, FlexDirection};
 
 /// A single key binding with its description
@@ -236,7 +236,7 @@ impl Help {
     /// Convert to element
     pub fn into_element(self) -> Element {
         if !self.visible || self.bindings.is_empty() {
-            return TinkBox::new().into_element();
+            return RnkBox::new().into_element();
         }
 
         match self.mode {
@@ -269,7 +269,7 @@ impl Help {
     }
 
     fn render_multi_line(self) -> Element {
-        let mut container = TinkBox::new().flex_direction(FlexDirection::Column);
+        let mut container = RnkBox::new().flex_direction(FlexDirection::Column);
 
         for binding in &self.bindings {
             let line = format!(
@@ -290,7 +290,7 @@ impl Help {
     }
 
     fn render_two_column(self) -> Element {
-        let mut container = TinkBox::new().flex_direction(FlexDirection::Column);
+        let mut container = RnkBox::new().flex_direction(FlexDirection::Column);
 
         // Find the maximum key width for alignment
         let max_key_width = self

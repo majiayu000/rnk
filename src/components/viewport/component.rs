@@ -3,7 +3,7 @@
 //! A high-performance scrollable view for displaying large text content,
 //! similar to Bubbles' viewport component.
 
-use crate::components::{Box as TinkBox, Text};
+use crate::components::{Box as RnkBox, Text};
 use crate::core::{BorderStyle, Color, Element, FlexDirection, Overflow};
 
 use super::keymap::{ViewportAction, ViewportKeyMap};
@@ -207,7 +207,7 @@ impl<'a> Viewport<'a> {
         let width = self.state.width();
 
         // Build the content
-        let mut container = TinkBox::new()
+        let mut container = RnkBox::new()
             .flex_direction(FlexDirection::Column)
             .height(height as i32)
             .width(width as i32)
@@ -257,7 +257,7 @@ impl<'a> Viewport<'a> {
                     content_text = content_text.color(color);
                 }
 
-                TinkBox::new()
+                RnkBox::new()
                     .flex_direction(FlexDirection::Row)
                     .child(num_text.into_element())
                     .child(content_text.into_element())
@@ -278,7 +278,7 @@ impl<'a> Viewport<'a> {
         if self.style.scrollbar && !self.state.fits_in_viewport() {
             // Scrollbar is rendered separately
             let scrollbar = self.render_scrollbar();
-            return TinkBox::new()
+            return RnkBox::new()
                 .flex_direction(FlexDirection::Row)
                 .child(container.into_element())
                 .child(scrollbar)
@@ -294,7 +294,7 @@ impl<'a> Viewport<'a> {
         let total_lines = self.state.total_line_count();
 
         if total_lines == 0 || height == 0 {
-            return TinkBox::new().into_element();
+            return RnkBox::new().into_element();
         }
 
         // Calculate scrollbar thumb position and size
@@ -303,7 +303,7 @@ impl<'a> Viewport<'a> {
             .min(height as f64) as usize;
         let thumb_pos = (self.state.scroll_percent() * (height - thumb_size) as f64) as usize;
 
-        let mut scrollbar_box = TinkBox::new()
+        let mut scrollbar_box = RnkBox::new()
             .flex_direction(FlexDirection::Column)
             .width(1);
 

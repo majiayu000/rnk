@@ -3,7 +3,7 @@
 //! Provides a scrollable, selectable list widget similar to Ratatui's List.
 
 use crate::components::navigation::SelectionState;
-use crate::components::{Box as TinkBox, Line, Span, Text};
+use crate::components::{Box as RnkBox, Line, Span, Text};
 use crate::core::{Color, Element, Style};
 
 /// List item with content and optional styling
@@ -221,7 +221,7 @@ impl List {
             .collect();
 
         // Build list element
-        let mut container = TinkBox::new().flex_direction(crate::core::FlexDirection::Column);
+        let mut container = RnkBox::new().flex_direction(crate::core::FlexDirection::Column);
 
         if let Some(key) = self.key {
             container = container.key(key);

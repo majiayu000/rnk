@@ -2,7 +2,7 @@
 //!
 //! Displays a monthly calendar with navigation and date selection.
 
-use crate::components::{Box as TinkBox, Text};
+use crate::components::{Box as RnkBox, Text};
 use crate::core::{AlignItems, Color, Element, FlexDirection, JustifyContent};
 
 /// Calendar component
@@ -129,7 +129,7 @@ impl Calendar {
             .color(self.header_color)
             .bold();
         rows.push(
-            TinkBox::new()
+            RnkBox::new()
                 .justify_content(JustifyContent::Center)
                 .child(header.into_element())
                 .into_element(),
@@ -145,7 +145,7 @@ impl Calendar {
             rows.push(week);
         }
 
-        let mut container = TinkBox::new()
+        let mut container = RnkBox::new()
             .flex_direction(FlexDirection::Column)
             .gap(0.0)
             .children(rows);
@@ -168,7 +168,7 @@ impl Calendar {
 
         if self.show_week_numbers {
             children.push(
-                TinkBox::new()
+                RnkBox::new()
                     .width(3)
                     .child(Text::new("Wk").dim().into_element())
                     .into_element(),
@@ -177,7 +177,7 @@ impl Calendar {
 
         for day in days {
             children.push(
-                TinkBox::new()
+                RnkBox::new()
                     .width(3)
                     .justify_content(JustifyContent::Center)
                     .child(Text::new(day).dim().into_element())
@@ -185,7 +185,7 @@ impl Calendar {
             );
         }
 
-        TinkBox::new()
+        RnkBox::new()
             .flex_direction(FlexDirection::Row)
             .children(children)
             .into_element()
@@ -207,7 +207,7 @@ impl Calendar {
 
         if self.show_week_numbers {
             first_week.push(
-                TinkBox::new()
+                RnkBox::new()
                     .width(3)
                     .child(Text::new(format!("{:2}", week_num)).dim().into_element())
                     .into_element(),
@@ -217,7 +217,7 @@ impl Calendar {
         for i in 0..7 {
             if i < offset {
                 first_week.push(
-                    TinkBox::new()
+                    RnkBox::new()
                         .width(3)
                         .child(Text::new("  ").into_element())
                         .into_element(),
@@ -229,7 +229,7 @@ impl Calendar {
         }
 
         weeks.push(
-            TinkBox::new()
+            RnkBox::new()
                 .flex_direction(FlexDirection::Row)
                 .children(first_week)
                 .into_element(),
@@ -242,7 +242,7 @@ impl Calendar {
 
             if self.show_week_numbers {
                 week.push(
-                    TinkBox::new()
+                    RnkBox::new()
                         .width(3)
                         .child(Text::new(format!("{:2}", week_num % 53)).dim().into_element())
                         .into_element(),
@@ -255,7 +255,7 @@ impl Calendar {
                     current_day += 1;
                 } else {
                     week.push(
-                        TinkBox::new()
+                        RnkBox::new()
                             .width(3)
                             .child(Text::new("  ").into_element())
                             .into_element(),
@@ -264,7 +264,7 @@ impl Calendar {
             }
 
             weeks.push(
-                TinkBox::new()
+                RnkBox::new()
                     .flex_direction(FlexDirection::Row)
                     .children(week)
                     .into_element(),
@@ -293,7 +293,7 @@ impl Calendar {
             text_elem = text_elem.color(self.highlighted_color);
         }
 
-        TinkBox::new()
+        RnkBox::new()
             .width(3)
             .justify_content(JustifyContent::Center)
             .align_items(AlignItems::Center)
