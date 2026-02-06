@@ -150,6 +150,7 @@ pub use crate::renderer::{
     render_to_string,
     render_to_string_auto,
     render_to_string_no_trim,
+    render_to_string_raw,
     // Cross-thread APIs
     request_render,
 };

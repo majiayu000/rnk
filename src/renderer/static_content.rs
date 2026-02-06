@@ -3,6 +3,7 @@
 //! This module handles the extraction and rendering of `Static` elements,
 //! which are elements that persist in the terminal history (like Ink's `<Static>`).
 
+use crate::components::text::Line;
 use crate::core::Element;
 use crate::layout::LayoutEngine;
 use crate::renderer::{Output, Terminal};
@@ -155,13 +156,16 @@ impl StaticRenderer {
             Self::render_border(element, output, x, y, width, height);
         }
 
-        if let Some(text) = &element.text_content {
-            let text_x = x
-                + if element.style.has_border() { 1 } else { 0 }
-                + element.style.padding.left as u16;
-            let text_y = y
-                + if element.style.has_border() { 1 } else { 0 }
-                + element.style.padding.top as u16;
+        let text_x = x
+            + if element.style.has_border() { 1 } else { 0 }
+            + element.style.padding.left as u16;
+        let text_y = y
+            + if element.style.has_border() { 1 } else { 0 }
+            + element.style.padding.top as u16;
+
+        if let Some(spans) = &element.spans {
+            Self::render_spans(spans, output, text_x, text_y);
+        } else if let Some(text) = &element.text_content {
             output.write(text_x, text_y, text, &element.style);
         }
 
@@ -240,6 +244,17 @@ impl StaticRenderer {
         if element.style.border_right && width > 1 {
             for row in (y + 1)..(y + height - 1) {
                 output.write_char(x + width - 1, row, v.chars().next().unwrap(), &right_style);
+            }
+        }
+    }
+
+    fn render_spans(lines: &[Line], output: &mut Output, start_x: u16, start_y: u16) {
+        for (line_idx, line) in lines.iter().enumerate() {
+            let y = start_y + line_idx as u16;
+            let mut x = start_x;
+            for span in &line.spans {
+                output.write(x, y, &span.content, &span.style);
+                x += span.width() as u16;
             }
         }
     }

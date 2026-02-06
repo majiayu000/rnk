@@ -54,7 +54,7 @@ pub use registry::{
 };
 
 // Element rendering APIs
-pub use render_to_string::{render_to_string, render_to_string_auto, render_to_string_no_trim};
+pub use render_to_string::{render_to_string, render_to_string_auto, render_to_string_no_trim, render_to_string_raw};
 
 // Frame rate control
 pub use frame_rate::{FrameRateConfig, FrameRateController, FrameRateStats, SharedFrameRateStats};
