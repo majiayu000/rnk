@@ -458,7 +458,7 @@ impl Paginator {
 
     /// Render dots as Element
     fn render_dots_element(&self) -> Element {
-        use crate::components::Box as TinkBox;
+        use crate::components::Box as RnkBox;
         use crate::core::FlexDirection;
 
         let _total = match self.max_dots {
@@ -484,7 +484,7 @@ impl Paginator {
             (0, self.total_pages)
         };
 
-        let mut container = TinkBox::new().flex_direction(FlexDirection::Row);
+        let mut container = RnkBox::new().flex_direction(FlexDirection::Row);
 
         for i in start..end {
             let is_active = i == self.page;

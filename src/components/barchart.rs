@@ -2,7 +2,7 @@
 //!
 //! Displays horizontal or vertical bar charts.
 
-use crate::components::{Box as TinkBox, Line, Span, Text};
+use crate::components::{Box as RnkBox, Line, Span, Text};
 use crate::core::{Color, Element, FlexDirection};
 
 /// Bar chart orientation
@@ -171,7 +171,7 @@ impl BarChart {
     /// Convert to element
     pub fn into_element(self) -> Element {
         if self.bars.is_empty() {
-            return TinkBox::new().into_element();
+            return RnkBox::new().into_element();
         }
 
         match self.orientation {
@@ -190,7 +190,7 @@ impl BarChart {
             0
         };
 
-        let mut container = TinkBox::new().flex_direction(FlexDirection::Column);
+        let mut container = RnkBox::new().flex_direction(FlexDirection::Column);
 
         if let Some(ref key) = self.key {
             container = container.key(key.clone());
@@ -241,7 +241,7 @@ impl BarChart {
         let max_value = self.bars.iter().map(|b| b.value).fold(0.0f64, f64::max);
         let height = self.bar_max_size as usize;
 
-        let mut container = TinkBox::new().flex_direction(FlexDirection::Column);
+        let mut container = RnkBox::new().flex_direction(FlexDirection::Column);
 
         if let Some(ref key) = self.key {
             container = container.key(key.clone());

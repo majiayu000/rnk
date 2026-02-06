@@ -3,7 +3,7 @@
 //! Provides generators for creating random but valid Element trees
 //! for use with property-based testing frameworks like proptest.
 
-use crate::components::{Box as TinkBox, Text};
+use crate::components::{Box as RnkBox, Text};
 use crate::core::{Color, Dimension, Element};
 
 /// Generate a random color for testing
@@ -95,7 +95,7 @@ pub fn gen_styled_text(text: &str, seed: u8) -> Element {
 
 /// Generate a simple box element
 pub fn gen_box(width: u16, height: u16) -> Element {
-    TinkBox::new()
+    RnkBox::new()
         .width(Dimension::Points(width as f32))
         .height(Dimension::Points(height as f32))
         .into_element()
@@ -103,7 +103,7 @@ pub fn gen_box(width: u16, height: u16) -> Element {
 
 /// Generate a box with children
 pub fn gen_box_with_children(children: Vec<Element>) -> Element {
-    let mut b = TinkBox::new();
+    let mut b = RnkBox::new();
     for child in children {
         b = b.child(child);
     }
@@ -116,7 +116,7 @@ pub fn gen_nested_boxes(depth: usize) -> Element {
         return Text::new("Leaf").into_element();
     }
 
-    TinkBox::new()
+    RnkBox::new()
         .padding(1)
         .child(gen_nested_boxes(depth - 1))
         .into_element()
@@ -126,7 +126,7 @@ pub fn gen_nested_boxes(depth: usize) -> Element {
 pub fn gen_row(children: Vec<Element>) -> Element {
     use crate::core::FlexDirection;
 
-    let mut b = TinkBox::new().flex_direction(FlexDirection::Row);
+    let mut b = RnkBox::new().flex_direction(FlexDirection::Row);
     for child in children {
         b = b.child(child);
     }
@@ -137,7 +137,7 @@ pub fn gen_row(children: Vec<Element>) -> Element {
 pub fn gen_column(children: Vec<Element>) -> Element {
     use crate::core::FlexDirection;
 
-    let mut b = TinkBox::new().flex_direction(FlexDirection::Column);
+    let mut b = RnkBox::new().flex_direction(FlexDirection::Column);
     for child in children {
         b = b.child(child);
     }

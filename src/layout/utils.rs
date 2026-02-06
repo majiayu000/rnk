@@ -3,7 +3,7 @@
 //! Provides helper functions for common layout operations,
 //! inspired by Lip Gloss's layout functions.
 
-use crate::components::Box as TinkBox;
+use crate::components::Box as RnkBox;
 use crate::core::{AlignItems, Element, FlexDirection, JustifyContent};
 
 /// Position for alignment operations
@@ -61,7 +61,7 @@ pub fn join_horizontal(align: Position, elements: Vec<Element>) -> Element {
         Position::At(_) => AlignItems::Center,
     };
 
-    let mut container = TinkBox::new()
+    let mut container = RnkBox::new()
         .flex_direction(FlexDirection::Row)
         .align_items(align_items);
 
@@ -95,7 +95,7 @@ pub fn join_vertical(align: Position, elements: Vec<Element>) -> Element {
         Position::At(_) => AlignItems::Center,
     };
 
-    let mut container = TinkBox::new()
+    let mut container = RnkBox::new()
         .flex_direction(FlexDirection::Column)
         .align_items(align_items);
 
@@ -130,7 +130,7 @@ pub fn place_horizontal(width: u16, pos: Position, element: Element) -> Element 
         Position::At(_) => JustifyContent::Center,
     };
 
-    TinkBox::new()
+    RnkBox::new()
         .flex_direction(FlexDirection::Row)
         .justify_content(justify)
         .width(width)
@@ -162,7 +162,7 @@ pub fn place_vertical(height: u16, pos: Position, element: Element) -> Element {
         Position::At(_) => JustifyContent::Center,
     };
 
-    TinkBox::new()
+    RnkBox::new()
         .flex_direction(FlexDirection::Column)
         .justify_content(justify)
         .height(height)
@@ -212,7 +212,7 @@ pub fn place(
     };
 
     // Create inner container for horizontal positioning
-    let inner = TinkBox::new()
+    let inner = RnkBox::new()
         .flex_direction(FlexDirection::Row)
         .justify_content(h_justify)
         .width(width)
@@ -220,7 +220,7 @@ pub fn place(
         .into_element();
 
     // Create outer container for vertical positioning
-    TinkBox::new()
+    RnkBox::new()
         .flex_direction(FlexDirection::Column)
         .justify_content(v_justify)
         .width(width)
@@ -231,12 +231,12 @@ pub fn place(
 
 /// Create a horizontal spacer that fills available space
 pub fn h_spacer() -> Element {
-    TinkBox::new().flex_grow(1.0).into_element()
+    RnkBox::new().flex_grow(1.0).into_element()
 }
 
 /// Create a vertical spacer that fills available space
 pub fn v_spacer() -> Element {
-    TinkBox::new()
+    RnkBox::new()
         .flex_grow(1.0)
         .flex_direction(FlexDirection::Column)
         .into_element()
@@ -244,12 +244,12 @@ pub fn v_spacer() -> Element {
 
 /// Create a fixed-width horizontal gap
 pub fn h_gap(width: u16) -> Element {
-    TinkBox::new().width(width).into_element()
+    RnkBox::new().width(width).into_element()
 }
 
 /// Create a fixed-height vertical gap
 pub fn v_gap(height: u16) -> Element {
-    TinkBox::new().height(height).into_element()
+    RnkBox::new().height(height).into_element()
 }
 
 /// Center an element horizontally within a given width
@@ -269,7 +269,7 @@ pub fn center(width: u16, height: u16, element: Element) -> Element {
 
 /// Create a row of elements with equal spacing between them
 pub fn space_between(elements: Vec<Element>) -> Element {
-    TinkBox::new()
+    RnkBox::new()
         .flex_direction(FlexDirection::Row)
         .justify_content(JustifyContent::SpaceBetween)
         .children(elements)
@@ -278,7 +278,7 @@ pub fn space_between(elements: Vec<Element>) -> Element {
 
 /// Create a row of elements with equal spacing around them
 pub fn space_around(elements: Vec<Element>) -> Element {
-    TinkBox::new()
+    RnkBox::new()
         .flex_direction(FlexDirection::Row)
         .justify_content(JustifyContent::SpaceAround)
         .children(elements)
@@ -287,7 +287,7 @@ pub fn space_around(elements: Vec<Element>) -> Element {
 
 /// Create a row of elements with equal spacing (including edges)
 pub fn space_evenly(elements: Vec<Element>) -> Element {
-    TinkBox::new()
+    RnkBox::new()
         .flex_direction(FlexDirection::Row)
         .justify_content(JustifyContent::SpaceEvenly)
         .children(elements)

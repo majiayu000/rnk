@@ -2,7 +2,7 @@
 //!
 //! Provides a tab bar widget with selectable tabs.
 
-use crate::components::{Box as TinkBox, Line, Span, Text};
+use crate::components::{Box as RnkBox, Line, Span, Text};
 use crate::core::{Color, Element, Style};
 
 /// Tab item
@@ -182,7 +182,7 @@ impl Tabs {
         }
 
         let text = Text::line(Line::from_spans(spans));
-        let mut container = TinkBox::new().child(text.into_element());
+        let mut container = RnkBox::new().child(text.into_element());
 
         if let Some(key) = self.key {
             container = container.key(key);

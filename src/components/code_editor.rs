@@ -2,7 +2,7 @@
 //!
 //! A simple code display/editor component for terminal UIs.
 
-use crate::components::{Box as TinkBox, Text};
+use crate::components::{Box as RnkBox, Text};
 use crate::core::{Color, Element, FlexDirection};
 
 /// Syntax highlighting language
@@ -174,7 +174,7 @@ impl CodeEditor {
                 row_children.push(Text::new(" ◂").color(Color::Yellow).into_element());
             }
 
-            let mut row = TinkBox::new()
+            let mut row = RnkBox::new()
                 .flex_direction(FlexDirection::Row)
                 .children(row_children);
 
@@ -185,7 +185,7 @@ impl CodeEditor {
             elements.push(row.into_element());
         }
 
-        let mut container = TinkBox::new()
+        let mut container = RnkBox::new()
             .flex_direction(FlexDirection::Column)
             .children(elements);
 

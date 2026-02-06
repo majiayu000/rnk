@@ -2,7 +2,7 @@
 //!
 //! Displays a small graph of data points using Unicode block characters.
 
-use crate::components::{Box as TinkBox, Text};
+use crate::components::{Box as RnkBox, Text};
 use crate::core::{Color, Element};
 
 /// Block characters for sparkline (from lowest to highest)
@@ -118,7 +118,7 @@ impl Sparkline {
     /// Convert to element
     pub fn into_element(self) -> Element {
         if self.data.is_empty() {
-            return TinkBox::new().into_element();
+            return RnkBox::new().into_element();
         }
 
         // Calculate min/max
@@ -170,7 +170,7 @@ impl Sparkline {
             text = text.background(bg);
         }
 
-        let mut container = TinkBox::new().child(text.into_element());
+        let mut container = RnkBox::new().child(text.into_element());
         if let Some(bg) = self.background {
             container = container.background(bg);
         }

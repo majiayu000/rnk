@@ -2,7 +2,7 @@
 //!
 //! Renders basic Markdown text with terminal styling.
 
-use crate::components::{Box as TinkBox, Text};
+use crate::components::{Box as RnkBox, Text};
 use crate::core::{Color, Element, FlexDirection};
 
 /// Markdown rendering component
@@ -78,7 +78,7 @@ impl Markdown {
     pub fn into_element(self) -> Element {
         let lines = self.parse_markdown();
 
-        let mut container = TinkBox::new()
+        let mut container = RnkBox::new()
             .flex_direction(FlexDirection::Column)
             .children(lines);
 
@@ -131,7 +131,7 @@ impl Markdown {
 
         // Empty line
         if trimmed.is_empty() {
-            return TinkBox::new().height(1).into_element();
+            return RnkBox::new().height(1).into_element();
         }
 
         // Headings
@@ -201,7 +201,7 @@ impl Markdown {
             heading = heading.underline();
         }
 
-        TinkBox::new()
+        RnkBox::new()
             .margin_top(if level <= 2 { 1.0 } else { 0.0 })
             .margin_bottom(0.0)
             .child(heading.into_element())
@@ -219,7 +219,7 @@ impl Markdown {
             );
         }
 
-        TinkBox::new()
+        RnkBox::new()
             .flex_direction(FlexDirection::Column)
             .margin_top(0.0)
             .margin_bottom(0.0)
@@ -228,7 +228,7 @@ impl Markdown {
     }
 
     fn render_blockquote(&self, text: &str) -> Element {
-        TinkBox::new()
+        RnkBox::new()
             .child(
                 Text::new(format!("│ {}", text))
                     .color(self.quote_color)

@@ -2,7 +2,7 @@
 //!
 //! A multi-line text input component similar to Bubbles' textarea.
 
-use crate::components::{Box as TinkBox, Text};
+use crate::components::{Box as RnkBox, Text};
 use crate::core::{BorderStyle, Color, Element, FlexDirection, Overflow};
 
 use super::keymap::{TextAreaAction, TextAreaKeyMap};
@@ -229,7 +229,7 @@ impl<'a> TextArea<'a> {
         let height = self.height.unwrap_or(self.state.viewport_height());
 
         // Build the container
-        let mut container = TinkBox::new()
+        let mut container = RnkBox::new()
             .flex_direction(FlexDirection::Column)
             .overflow_y(Overflow::Hidden);
 
@@ -354,7 +354,7 @@ impl<'a> TextArea<'a> {
         if parts.len() == 1 {
             parts.pop().unwrap_or_else(|| Text::new("").into_element())
         } else {
-            TinkBox::new()
+            RnkBox::new()
                 .flex_direction(FlexDirection::Row)
                 .children(parts)
                 .into_element()
@@ -370,7 +370,7 @@ impl<'a> TextArea<'a> {
         let cursor_char = chars.get(cursor_col).copied().unwrap_or(' ');
         let after: String = chars.iter().skip(cursor_col + 1).collect();
 
-        let mut container = TinkBox::new().flex_direction(FlexDirection::Row);
+        let mut container = RnkBox::new().flex_direction(FlexDirection::Row);
 
         // Before cursor
         if !before.is_empty() {

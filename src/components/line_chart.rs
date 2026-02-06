@@ -2,7 +2,7 @@
 //!
 //! Displays a line chart using Unicode braille characters for high resolution.
 
-use crate::components::{Box as TinkBox, Text};
+use crate::components::{Box as RnkBox, Text};
 use crate::core::{Color, Element, FlexDirection};
 
 /// Braille patterns for line chart rendering
@@ -170,7 +170,7 @@ impl LineChart {
     /// Convert to element
     pub fn into_element(self) -> Element {
         if self.series.is_empty() || self.series.iter().all(|s| s.data.is_empty()) {
-            return TinkBox::new().into_element();
+            return RnkBox::new().into_element();
         }
 
         // Calculate bounds
@@ -254,7 +254,7 @@ impl LineChart {
             }
             if !legend_children.is_empty() {
                 lines.push(
-                    TinkBox::new()
+                    RnkBox::new()
                         .flex_direction(FlexDirection::Row)
                         .gap(2.0)
                         .children(legend_children)
@@ -263,7 +263,7 @@ impl LineChart {
             }
         }
 
-        let mut container = TinkBox::new()
+        let mut container = RnkBox::new()
             .flex_direction(FlexDirection::Column)
             .children(lines);
 

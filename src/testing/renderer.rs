@@ -351,7 +351,7 @@ pub fn display_width(s: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Box as TinkBox, Text};
+    use crate::components::{Box as RnkBox, Text};
 
     #[test]
     fn test_strip_ansi_codes() {
@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn test_layout_validation() {
         let renderer = TestRenderer::new(80, 24);
-        let element = TinkBox::new()
+        let element = RnkBox::new()
             .width(20)
             .height(5)
             .child(Text::new("Test").into_element())
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn test_get_layouts() {
         let renderer = TestRenderer::new(80, 24);
-        let element = TinkBox::new().width(20).height(5).into_element();
+        let element = RnkBox::new().width(20).height(5).into_element();
 
         let layouts = renderer.get_layouts(&element);
         assert!(!layouts.is_empty());
