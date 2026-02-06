@@ -3,6 +3,7 @@
 //! This module provides utilities for rendering elements to strings
 //! outside of the main application runtime.
 
+use crate::components::text::Line;
 use crate::core::Element;
 use crate::layout::LayoutEngine;
 use crate::renderer::{Output, Terminal};
@@ -44,6 +45,16 @@ pub fn render_to_string(element: &Element, width: u16) -> String {
 /// * `width` - The maximum width for rendering
 pub fn render_to_string_no_trim(element: &Element, width: u16) -> String {
     render_to_string_impl(element, width, false)
+}
+
+/// Render an element to a string with CRLF line endings for raw mode.
+///
+/// Use this when writing to a terminal in raw mode, where `\n` alone
+/// does not perform a carriage return.
+pub fn render_to_string_raw(element: &Element, width: u16) -> String {
+    let helper = RenderHelper;
+    let rendered = helper.render_element_to_string_raw(element, width);
+    rendered
 }
 
 /// Render an element to a string with automatic width detection.
@@ -262,13 +273,16 @@ impl RenderHelper {
             self.render_border(element, output, x, y, width, height);
         }
 
-        if let Some(text) = &element.text_content {
-            let text_x = x
-                + if element.style.has_border() { 1 } else { 0 }
-                + element.style.padding.left as u16;
-            let text_y = y
-                + if element.style.has_border() { 1 } else { 0 }
-                + element.style.padding.top as u16;
+        let text_x = x
+            + if element.style.has_border() { 1 } else { 0 }
+            + element.style.padding.left as u16;
+        let text_y = y
+            + if element.style.has_border() { 1 } else { 0 }
+            + element.style.padding.top as u16;
+
+        if let Some(spans) = &element.spans {
+            Self::render_spans(spans, output, text_x, text_y);
+        } else if let Some(text) = &element.text_content {
             output.write(text_x, text_y, text, &element.style);
         }
 
@@ -349,6 +363,33 @@ impl RenderHelper {
                 output.write_char(x + width - 1, row, v.chars().next().unwrap(), &right_style);
             }
         }
+    }
+
+    fn render_spans(lines: &[Line], output: &mut Output, start_x: u16, start_y: u16) {
+        for (line_idx, line) in lines.iter().enumerate() {
+            let y = start_y + line_idx as u16;
+            let mut x = start_x;
+            for span in &line.spans {
+                output.write(x, y, &span.content, &span.style);
+                x += span.width() as u16;
+            }
+        }
+    }
+
+    fn render_element_to_string_raw(&self, element: &Element, width: u16) -> String {
+        let mut engine = LayoutEngine::new();
+        let layout_width = width;
+        let height = self.calculate_element_height(element, layout_width, &mut engine);
+        engine.compute(element, layout_width, height.max(1000));
+
+        let _layout = engine.get_layout(element.id).unwrap_or_default();
+        let render_width = layout_width;
+        let content_height = height.max(1);
+
+        let mut output = Output::new(render_width, content_height);
+        self.render_element_to_output(element, &engine, &mut output, 0.0, 0.0);
+
+        output.render()
     }
 }
 

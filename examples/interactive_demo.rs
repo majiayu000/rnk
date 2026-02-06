@@ -259,7 +259,7 @@ fn main() -> std::io::Result<()> {
 
         // Render using rnk's built-in API
         let element = render_ui(&state);
-        let output = rnk::render_to_string(&element, width);
+        let output = rnk::render_to_string_raw(&element, width);
 
         execute!(
             stdout,

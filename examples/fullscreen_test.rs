@@ -79,7 +79,7 @@ fn main() -> io::Result<()> {
         .into_element();
 
     // Render and print (EXACTLY like sage)
-    let output = rnk::render_to_string(&root, term_width);
+    let output = rnk::render_to_string_raw(&root, term_width);
     print!("{}", output);
     stdout.flush()?;
 
