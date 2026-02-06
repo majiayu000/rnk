@@ -618,7 +618,7 @@ cargo run --example rnk_chat     # Terminal chat client
 
 # Component demos
 cargo run --example tree_demo
-cargo run --example modal_demo
+cargo run --example multi_select_demo
 cargo run --example notification_demo
 cargo run --example textarea_demo
 cargo run --example file_picker_demo
@@ -629,6 +629,8 @@ cargo run --example typed_cmd_demo
 cargo run --example macros_demo
 cargo run --example streaming_demo
 cargo run --example glm_chat
+
+# Note: use `--example` (not `cargo run example <name>`)
 ```
 
 ## Architecture
