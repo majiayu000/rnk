@@ -47,6 +47,7 @@ mod skeleton;
 mod spacer;
 mod sparkline;
 mod spinner;
+mod status;
 mod stat;
 mod static_output;
 mod status_bar;

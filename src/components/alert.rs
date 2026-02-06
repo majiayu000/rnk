@@ -23,6 +23,7 @@
 //! ```
 
 use crate::components::{Box as RnkBox, Text};
+use crate::components::status::{StatusLevel, status_style};
 use crate::core::{BorderStyle, Color, Element, FlexDirection};
 
 /// Alert severity level
@@ -33,6 +34,17 @@ pub enum AlertLevel {
     Success,
     Warning,
     Error,
+}
+
+impl From<AlertLevel> for StatusLevel {
+    fn from(level: AlertLevel) -> Self {
+        match level {
+            AlertLevel::Info => StatusLevel::Info,
+            AlertLevel::Success => StatusLevel::Success,
+            AlertLevel::Warning => StatusLevel::Warning,
+            AlertLevel::Error => StatusLevel::Error,
+        }
+    }
 }
 
 /// An alert component
@@ -95,12 +107,10 @@ impl Alert {
 
     /// Convert to Element
     pub fn into_element(self) -> Element {
-        let (icon, color, bg) = match self.level {
-            AlertLevel::Info => ("ℹ", Color::Cyan, Color::Ansi256(23)),
-            AlertLevel::Success => ("✓", Color::Green, Color::Ansi256(22)),
-            AlertLevel::Warning => ("⚠", Color::Yellow, Color::Ansi256(58)),
-            AlertLevel::Error => ("✗", Color::Red, Color::Ansi256(52)),
-        };
+        let style = status_style(self.level.into());
+        let icon = style.icon;
+        let color = style.fg;
+        let bg = style.bg;
 
         let mut children = Vec::new();
 
