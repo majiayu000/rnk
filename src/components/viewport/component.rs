@@ -303,9 +303,7 @@ impl<'a> Viewport<'a> {
             .min(height as f64) as usize;
         let thumb_pos = (self.state.scroll_percent() * (height - thumb_size) as f64) as usize;
 
-        let mut scrollbar_box = RnkBox::new()
-            .flex_direction(FlexDirection::Column)
-            .width(1);
+        let mut scrollbar_box = RnkBox::new().flex_direction(FlexDirection::Column).width(1);
 
         for i in 0..height {
             let is_thumb = i >= thumb_pos && i < thumb_pos + thumb_size;

@@ -78,14 +78,14 @@ impl ColorPalette {
         Self::new(
             "Rainbow",
             vec![
-                Color::Rgb(255, 0, 0),     // Red
-                Color::Rgb(255, 127, 0),   // Orange
-                Color::Rgb(255, 255, 0),   // Yellow
-                Color::Rgb(0, 255, 0),     // Green
-                Color::Rgb(0, 255, 255),   // Cyan
-                Color::Rgb(0, 0, 255),     // Blue
-                Color::Rgb(127, 0, 255),   // Purple
-                Color::Rgb(255, 0, 255),   // Magenta
+                Color::Rgb(255, 0, 0),   // Red
+                Color::Rgb(255, 127, 0), // Orange
+                Color::Rgb(255, 255, 0), // Yellow
+                Color::Rgb(0, 255, 0),   // Green
+                Color::Rgb(0, 255, 255), // Cyan
+                Color::Rgb(0, 0, 255),   // Blue
+                Color::Rgb(127, 0, 255), // Purple
+                Color::Rgb(255, 0, 255), // Magenta
             ],
         )
     }
@@ -110,22 +110,22 @@ impl ColorPalette {
         Self::new(
             "Material",
             vec![
-                Color::Rgb(244, 67, 54),   // Red
-                Color::Rgb(233, 30, 99),   // Pink
-                Color::Rgb(156, 39, 176),  // Purple
-                Color::Rgb(103, 58, 183),  // Deep Purple
-                Color::Rgb(63, 81, 181),   // Indigo
-                Color::Rgb(33, 150, 243),  // Blue
-                Color::Rgb(3, 169, 244),   // Light Blue
-                Color::Rgb(0, 188, 212),   // Cyan
-                Color::Rgb(0, 150, 136),   // Teal
-                Color::Rgb(76, 175, 80),   // Green
-                Color::Rgb(139, 195, 74),  // Light Green
-                Color::Rgb(205, 220, 57),  // Lime
-                Color::Rgb(255, 235, 59),  // Yellow
-                Color::Rgb(255, 193, 7),   // Amber
-                Color::Rgb(255, 152, 0),   // Orange
-                Color::Rgb(255, 87, 34),   // Deep Orange
+                Color::Rgb(244, 67, 54),  // Red
+                Color::Rgb(233, 30, 99),  // Pink
+                Color::Rgb(156, 39, 176), // Purple
+                Color::Rgb(103, 58, 183), // Deep Purple
+                Color::Rgb(63, 81, 181),  // Indigo
+                Color::Rgb(33, 150, 243), // Blue
+                Color::Rgb(3, 169, 244),  // Light Blue
+                Color::Rgb(0, 188, 212),  // Cyan
+                Color::Rgb(0, 150, 136),  // Teal
+                Color::Rgb(76, 175, 80),  // Green
+                Color::Rgb(139, 195, 74), // Light Green
+                Color::Rgb(205, 220, 57), // Lime
+                Color::Rgb(255, 235, 59), // Yellow
+                Color::Rgb(255, 193, 7),  // Amber
+                Color::Rgb(255, 152, 0),  // Orange
+                Color::Rgb(255, 87, 34),  // Deep Orange
             ],
         )
     }
@@ -335,13 +335,7 @@ impl ColorPicker {
             "  "
         };
 
-        format!(
-            "{}{}{}{}",
-            color.to_ansi_fg(),
-            block,
-            "\x1b[0m",
-            indicator
-        )
+        format!("{}{}{}{}", color.to_ansi_fg(), block, "\x1b[0m", indicator)
     }
 
     /// Convert to Element
@@ -470,9 +464,7 @@ mod tests {
 
     #[test]
     fn test_color_picker_style() {
-        let style = ColorPickerStyle::new()
-            .colors_per_row(4)
-            .show_hex(true);
+        let style = ColorPickerStyle::new().colors_per_row(4).show_hex(true);
 
         assert_eq!(style.colors_per_row, 4);
         assert!(style.show_hex);

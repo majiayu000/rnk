@@ -272,12 +272,10 @@ impl RenderHelper {
             self.render_border(element, output, x, y, width, height);
         }
 
-        let text_x = x
-            + if element.style.has_border() { 1 } else { 0 }
-            + element.style.padding.left as u16;
-        let text_y = y
-            + if element.style.has_border() { 1 } else { 0 }
-            + element.style.padding.top as u16;
+        let text_x =
+            x + if element.style.has_border() { 1 } else { 0 } + element.style.padding.left as u16;
+        let text_y =
+            y + if element.style.has_border() { 1 } else { 0 } + element.style.padding.top as u16;
 
         if let Some(spans) = &element.spans {
             Self::render_spans(spans, output, text_x, text_y);

@@ -13,16 +13,16 @@
 //!     .fg(Color::Cyan)
 //!     .bold()
 //!     .padding(1, 2)
-//!     .border(BorderStyle::Rounded);
+//!     .border(BorderStyle::Round);
 //!
 //! println!("{}", style.render("Hello, World!"));
 //! ```
 
-mod color;
-mod style;
-mod border;
 mod render;
+mod style;
 
-pub use color::Color;
+pub use rnk_style_core::{
+    AdaptiveColor, BorderStyle, Color, adaptive_colors, detect_background,
+    init_background_detection, is_dark_background, set_dark_background,
+};
 pub use style::Style;
-pub use border::BorderStyle;

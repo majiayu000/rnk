@@ -172,6 +172,26 @@ pub trait Component: Sized {
     /// * `_model` - Reference to the current model
     #[allow(unused_variables)]
     fn unmount(model: &Self::Model) {}
+
+    /// Called after the component is first mounted.
+    ///
+    /// Use this for initialization tasks that require the component to be
+    /// fully mounted, such as starting subscriptions or fetching data.
+    /// Returns a command for any side effects that should occur.
+    ///
+    /// Default implementation returns no command.
+    ///
+    /// # Arguments
+    ///
+    /// * `_model` - Reference to the current model
+    ///
+    /// # Returns
+    ///
+    /// A command describing side effects to execute after mount
+    #[allow(unused_variables)]
+    fn on_mount(model: &Self::Model) -> Cmd {
+        Cmd::none()
+    }
 }
 
 /// A stateless component that only depends on props.
@@ -282,6 +302,11 @@ impl<C: Component> ComponentInstance<C> {
         };
         if !cmd.is_none() {
             instance.pending_cmds.push(cmd);
+        }
+        // Call on_mount lifecycle hook
+        let mount_cmd = C::on_mount(&instance.model);
+        if !mount_cmd.is_none() {
+            instance.pending_cmds.push(mount_cmd);
         }
         instance
     }
@@ -487,5 +512,81 @@ mod tests {
         let mut model = ();
         let cmd = <StatelessTest as Component>::update(&mut model, ());
         assert!(cmd.is_none());
+    }
+
+    // Test component with lifecycle hooks
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[derive(Clone, Default)]
+    struct LifecycleProps {
+        mounted: Arc<AtomicBool>,
+        unmounted: Arc<AtomicBool>,
+    }
+
+    struct LifecycleModel {
+        mounted: Arc<AtomicBool>,
+        unmounted: Arc<AtomicBool>,
+    }
+
+    struct LifecycleComponent;
+
+    impl Component for LifecycleComponent {
+        type Props = LifecycleProps;
+        type Msg = ();
+        type Model = LifecycleModel;
+
+        fn init(props: &Self::Props) -> (Self::Model, Cmd) {
+            (
+                LifecycleModel {
+                    mounted: props.mounted.clone(),
+                    unmounted: props.unmounted.clone(),
+                },
+                Cmd::none(),
+            )
+        }
+
+        fn update(_model: &mut Self::Model, _msg: Self::Msg) -> Cmd {
+            Cmd::none()
+        }
+
+        fn view(_model: &Self::Model, _props: &Self::Props) -> Element {
+            Element::text("")
+        }
+
+        fn on_mount(model: &Self::Model) -> Cmd {
+            model.mounted.store(true, Ordering::SeqCst);
+            Cmd::none()
+        }
+
+        fn unmount(model: &Self::Model) {
+            model.unmounted.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn test_lifecycle_hooks() {
+        let mounted = Arc::new(AtomicBool::new(false));
+        let unmounted = Arc::new(AtomicBool::new(false));
+
+        let props = LifecycleProps {
+            mounted: mounted.clone(),
+            unmounted: unmounted.clone(),
+        };
+
+        // Create instance - on_mount should be called
+        let instance = ComponentInstance::<LifecycleComponent>::new(props);
+        assert!(mounted.load(Ordering::SeqCst), "on_mount should be called");
+        assert!(
+            !unmounted.load(Ordering::SeqCst),
+            "unmount should not be called yet"
+        );
+
+        // Unmount - unmount should be called
+        instance.unmount();
+        assert!(
+            unmounted.load(Ordering::SeqCst),
+            "unmount should be called after unmount()"
+        );
     }
 }

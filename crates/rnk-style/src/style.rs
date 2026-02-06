@@ -1,7 +1,6 @@
 //! Style definition and builder
 
-use crate::border::BorderStyle;
-use crate::color::Color;
+use rnk_style_core::{BorderStyle, Color};
 
 /// Text alignment
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -59,8 +58,8 @@ impl Style {
     /// Create a new empty style
     pub fn new() -> Self {
         Self {
-            fg: Color::Default,
-            bg: Color::Default,
+            fg: Color::Reset,
+            bg: Color::Reset,
             bold: false,
             italic: false,
             underline: false,
@@ -76,7 +75,7 @@ impl Style {
             margin_bottom: 0,
             margin_left: 0,
             border_style: BorderStyle::None,
-            border_fg: Color::Default,
+            border_fg: Color::Reset,
             width: None,
             height: None,
             align: Align::Left,

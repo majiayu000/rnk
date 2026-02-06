@@ -3,11 +3,9 @@
 //! A multi-selection component similar to Ink's ink-multi-select that handles
 //! keyboard navigation and selection internally.
 
-use crate::components::navigation::{
-    NavigationConfig, handle_list_navigation,
-};
-use crate::components::selection_list::{ListStyle, indicator_padding, render_list};
 use crate::components::Box as TinkBox;
+use crate::components::navigation::{NavigationConfig, handle_list_navigation};
+use crate::components::selection_list::{ListStyle, indicator_padding, render_list};
 use crate::core::{Color, Element};
 use crate::hooks::{use_input, use_signal};
 

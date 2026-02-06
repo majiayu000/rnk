@@ -158,9 +158,8 @@ where
         let filter_chain = std::mem::take(&mut self.filter_chain);
 
         // Create frame rate controller and share stats with runtime context
-        let frame_rate = super::frame_rate::FrameRateController::new(
-            self.options.to_frame_rate_config(),
-        );
+        let frame_rate =
+            super::frame_rate::FrameRateController::new(self.options.to_frame_rate_config());
         let shared_stats = frame_rate.shared_stats();
         self.runtime_context
             .borrow_mut()

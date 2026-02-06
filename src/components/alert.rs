@@ -22,8 +22,8 @@
 //! }
 //! ```
 
-use crate::components::{Box as RnkBox, Text};
 use crate::components::status::{StatusLevel, status_style};
+use crate::components::{Box as RnkBox, Text};
 use crate::core::{BorderStyle, Color, Element, FlexDirection};
 
 /// Alert severity level
@@ -123,26 +123,13 @@ impl Alert {
         ];
 
         if let Some(title) = &self.title {
-            header_children.push(
-                Text::new(title)
-                    .color(color)
-                    .bold()
-                    .into_element(),
-            );
+            header_children.push(Text::new(title).color(color).bold().into_element());
         } else {
-            header_children.push(
-                Text::new(&self.message)
-                    .color(Color::White)
-                    .into_element(),
-            );
+            header_children.push(Text::new(&self.message).color(Color::White).into_element());
         }
 
         if self.dismissible {
-            header_children.push(
-                Text::new(" [x]")
-                    .color(Color::BrightBlack)
-                    .into_element(),
-            );
+            header_children.push(Text::new(" [x]").color(Color::BrightBlack).into_element());
         }
 
         children.push(

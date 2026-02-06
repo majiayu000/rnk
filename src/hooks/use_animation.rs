@@ -92,6 +92,77 @@ impl AnimationHandle {
             callback();
         }
     }
+
+    // =========================================================================
+    // Try methods (non-panicking versions)
+    // =========================================================================
+
+    /// Try to get the current animated value, returning None if lock is poisoned
+    pub fn try_get(&self) -> Option<f32> {
+        self.instance.read().ok().map(|g| g.get())
+    }
+
+    /// Try to get the current value as i32, returning None if lock is poisoned
+    pub fn try_get_i32(&self) -> Option<i32> {
+        self.instance.read().ok().map(|g| g.get_i32())
+    }
+
+    /// Try to get the current value as usize, returning None if lock is poisoned
+    pub fn try_get_usize(&self) -> Option<usize> {
+        self.instance.read().ok().map(|g| g.get_usize())
+    }
+
+    /// Try to start or resume the animation, returning false if lock is poisoned
+    pub fn try_play(&self) -> bool {
+        if let Ok(mut guard) = self.instance.write() {
+            guard.play();
+            self.trigger_render();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Try to pause the animation, returning false if lock is poisoned
+    pub fn try_pause(&self) -> bool {
+        if let Ok(mut guard) = self.instance.write() {
+            guard.pause();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Try to reset the animation, returning false if lock is poisoned
+    pub fn try_reset(&self) -> bool {
+        if let Ok(mut guard) = self.instance.write() {
+            guard.reset();
+            self.trigger_render();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Try to check if the animation is running, returning None if lock is poisoned
+    pub fn try_is_running(&self) -> Option<bool> {
+        self.instance.read().ok().map(|g| g.is_running())
+    }
+
+    /// Try to check if the animation has completed, returning None if lock is poisoned
+    pub fn try_is_completed(&self) -> Option<bool> {
+        self.instance.read().ok().map(|g| g.is_completed())
+    }
+
+    /// Try to get the current animation state, returning None if lock is poisoned
+    pub fn try_state(&self) -> Option<AnimationState> {
+        self.instance.read().ok().map(|g| g.state())
+    }
+
+    /// Try to get the animation progress, returning None if lock is poisoned
+    pub fn try_progress(&self) -> Option<f32> {
+        self.instance.read().ok().map(|g| g.progress())
+    }
 }
 
 impl std::fmt::Debug for AnimationHandle {

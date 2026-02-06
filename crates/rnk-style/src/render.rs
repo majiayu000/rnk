@@ -1,7 +1,7 @@
 //! Rendering logic for styled text
 
-use crate::color::Color;
 use crate::style::{Align, Style};
+use rnk_style_core::{BorderStyle, Color};
 use unicode_width::UnicodeWidthStr;
 
 const RESET: &str = "\x1b[0m";
@@ -24,7 +24,11 @@ pub fn render(style: &Style, text: &str) -> String {
     };
 
     // Calculate total width including padding and border
-    let border_width = if style.border_style.is_visible() { 2 } else { 0 };
+    let border_width = if style.border_style.is_visible() {
+        2
+    } else {
+        0
+    };
     let inner_width = content_width + style.padding_left as usize + style.padding_right as usize;
     let _total_width = inner_width + border_width;
 
@@ -57,7 +61,14 @@ pub fn render(style: &Style, text: &str) -> String {
 
     // Top padding
     for _ in 0..style.padding_top {
-        render_padding_line(&mut result, style, &border_codes, v, inner_width, &style_codes);
+        render_padding_line(
+            &mut result,
+            style,
+            &border_codes,
+            v,
+            inner_width,
+            &style_codes,
+        );
     }
 
     // Content lines
@@ -68,17 +79,40 @@ pub fn render(style: &Style, text: &str) -> String {
         if i >= target_height {
             break;
         }
-        render_content_line(&mut result, style, &border_codes, v, inner_width, &style_codes, line, content_width);
+        render_content_line(
+            &mut result,
+            style,
+            &border_codes,
+            v,
+            inner_width,
+            &style_codes,
+            line,
+            content_width,
+        );
     }
 
     // Fill remaining height with empty lines
     for _ in line_count..target_height {
-        render_padding_line(&mut result, style, &border_codes, v, inner_width, &style_codes);
+        render_padding_line(
+            &mut result,
+            style,
+            &border_codes,
+            v,
+            inner_width,
+            &style_codes,
+        );
     }
 
     // Bottom padding
     for _ in 0..style.padding_bottom {
-        render_padding_line(&mut result, style, &border_codes, v, inner_width, &style_codes);
+        render_padding_line(
+            &mut result,
+            style,
+            &border_codes,
+            v,
+            inner_width,
+            &style_codes,
+        );
     }
 
     // Bottom border
@@ -110,10 +144,10 @@ pub fn render(style: &Style, text: &str) -> String {
 fn build_style_codes(style: &Style) -> String {
     let mut codes = String::new();
 
-    if style.fg != Color::Default {
+    if style.fg != Color::Reset {
         codes.push_str(&style.fg.fg_code());
     }
-    if style.bg != Color::Default {
+    if style.bg != Color::Reset {
         codes.push_str(&style.bg.bg_code());
     }
     if style.bold {
@@ -139,7 +173,7 @@ fn build_style_codes(style: &Style) -> String {
 }
 
 fn build_border_codes(style: &Style) -> String {
-    if style.border_fg != Color::Default {
+    if style.border_fg != Color::Reset {
         style.border_fg.fg_code()
     } else {
         String::new()
@@ -258,7 +292,6 @@ fn render_content_line(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::border::BorderStyle;
 
     #[test]
     fn test_simple_render() {
@@ -295,7 +328,7 @@ mod tests {
 
     #[test]
     fn test_border_render() {
-        let style = Style::new().border(BorderStyle::Rounded);
+        let style = Style::new().border(BorderStyle::Round);
         let output = style.render("Hi");
         assert!(output.contains("╭"));
         assert!(output.contains("╯"));
@@ -332,7 +365,7 @@ mod tests {
             .bg(Color::Black)
             .bold()
             .padding(1, 2)
-            .border(BorderStyle::Rounded)
+            .border(BorderStyle::Round)
             .border_fg(Color::Magenta);
 
         let output = style.render("Test");

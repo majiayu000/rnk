@@ -62,6 +62,12 @@ pub struct HookContext {
     is_rendering: bool,
     /// Commands to execute after render
     cmd_queue: Vec<Cmd>,
+    /// Hook type IDs for order verification (debug mode only)
+    #[cfg(debug_assertions)]
+    hook_types: Vec<std::any::TypeId>,
+    /// Whether this is the first render (for hook order verification)
+    #[cfg(debug_assertions)]
+    first_render_complete: bool,
 }
 
 // Safety: HookContext is Send + Sync because all fields are thread-safe
@@ -79,6 +85,10 @@ impl HookContext {
             render_callback: None,
             is_rendering: false,
             cmd_queue: Vec::new(),
+            #[cfg(debug_assertions)]
+            hook_types: Vec::new(),
+            #[cfg(debug_assertions)]
+            first_render_complete: false,
         }
     }
 
@@ -102,6 +112,10 @@ impl HookContext {
     /// End a render cycle
     pub fn end_render(&mut self) {
         self.is_rendering = false;
+        #[cfg(debug_assertions)]
+        {
+            self.first_render_complete = true;
+        }
     }
 
     /// Get or create a hook at the current index
@@ -114,11 +128,32 @@ impl HookContext {
 
         if index >= self.hooks.len() {
             // First render - create the hook
+            #[cfg(debug_assertions)]
+            {
+                self.hook_types.push(std::any::TypeId::of::<T>());
+            }
             let storage = HookStorage::new(init());
             self.hooks.push(storage.clone());
             storage
         } else {
-            // Subsequent render - return existing hook
+            // Subsequent render - verify hook type matches (debug mode only)
+            #[cfg(debug_assertions)]
+            {
+                if self.first_render_complete {
+                    let expected = self.hook_types[index];
+                    let actual = std::any::TypeId::of::<T>();
+                    if expected != actual {
+                        panic!(
+                            "Hook order violation at index {}! \
+                            Hooks must be called in the same order on every render. \
+                            This usually happens when hooks are called conditionally. \
+                            Move conditional logic inside the hook or use separate components.",
+                            index
+                        );
+                    }
+                }
+            }
+            // Return existing hook
             self.hooks[index].clone()
         }
     }
@@ -262,5 +297,28 @@ mod tests {
         });
 
         assert_eq!(result, 42);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "Hook order violation")]
+    fn test_hook_order_violation() {
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+
+        // First render - establish hook order
+        with_hooks(ctx.clone(), || {
+            let ctx = current_context().unwrap();
+            let mut guard = ctx.write().unwrap();
+            let _ = guard.use_hook(|| 42i32);
+            let _ = guard.use_hook(|| "hello".to_string());
+        });
+
+        // Second render - violate hook order by using different types
+        with_hooks(ctx.clone(), || {
+            let ctx = current_context().unwrap();
+            let mut guard = ctx.write().unwrap();
+            // This should panic because we're using String where i32 was expected
+            let _ = guard.use_hook(|| "wrong type".to_string());
+        });
     }
 }

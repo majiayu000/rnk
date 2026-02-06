@@ -144,12 +144,20 @@ pub fn stat(label: impl Into<String>, value: impl Into<String>) -> Element {
 }
 
 /// Create a stat with upward trend
-pub fn stat_up(label: impl Into<String>, value: impl Into<String>, change: impl Into<String>) -> Element {
+pub fn stat_up(
+    label: impl Into<String>,
+    value: impl Into<String>,
+    change: impl Into<String>,
+) -> Element {
     Stat::new(label, value).trend_up(change).into_element()
 }
 
 /// Create a stat with downward trend
-pub fn stat_down(label: impl Into<String>, value: impl Into<String>, change: impl Into<String>) -> Element {
+pub fn stat_down(
+    label: impl Into<String>,
+    value: impl Into<String>,
+    change: impl Into<String>,
+) -> Element {
     Stat::new(label, value).trend_down(change).into_element()
 }
 

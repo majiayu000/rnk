@@ -6,9 +6,7 @@ use crate::core::Color;
 /// Create padded capsule text with a single leading/trailing space.
 pub(crate) fn capsule_padded(content: impl Into<String>, fg: Color, bg: Color) -> Text {
     let content = content.into();
-    Text::new(format!(" {} ", content))
-        .color(fg)
-        .background(bg)
+    Text::new(format!(" {} ", content)).color(fg).background(bg)
 }
 
 /// Create wrapped capsule text (no extra padding).

@@ -82,12 +82,7 @@ impl Card {
                 RnkBox::new()
                     .padding_x(1.0)
                     .background(Color::Ansi256(238))
-                    .child(
-                        Text::new(title)
-                            .color(Color::White)
-                            .bold()
-                            .into_element(),
-                    )
+                    .child(Text::new(title).color(Color::White).bold().into_element())
                     .into_element(),
             );
         }
@@ -97,11 +92,7 @@ impl Card {
             children.push(
                 RnkBox::new()
                     .padding(1)
-                    .child(
-                        Text::new(body)
-                            .color(Color::White)
-                            .into_element(),
-                    )
+                    .child(Text::new(body).color(Color::White).into_element())
                     .into_element(),
             );
         }
@@ -112,11 +103,7 @@ impl Card {
                 RnkBox::new()
                     .padding_x(1.0)
                     .background(Color::Ansi256(236))
-                    .child(
-                        Text::new(footer)
-                            .color(Color::BrightBlack)
-                            .into_element(),
-                    )
+                    .child(Text::new(footer).color(Color::BrightBlack).into_element())
                     .into_element(),
             );
         }
@@ -171,10 +158,7 @@ mod tests {
 
     #[test]
     fn test_card_with_content() {
-        let c = Card::new()
-            .title("Title")
-            .body("Body")
-            .footer("Footer");
+        let c = Card::new().title("Title").body("Body").footer("Footer");
         assert_eq!(c.title, Some("Title".to_string()));
         assert_eq!(c.body, Some("Body".to_string()));
         assert_eq!(c.footer, Some("Footer".to_string()));
@@ -182,10 +166,7 @@ mod tests {
 
     #[test]
     fn test_card_into_element() {
-        let _ = Card::new()
-            .title("Test")
-            .body("Content")
-            .into_element();
+        let _ = Card::new().title("Test").body("Content").into_element();
     }
 
     #[test]

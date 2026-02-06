@@ -118,7 +118,9 @@ impl Divider {
                 let label_len = label.len() + 2; // " label "
                 let side_len = self.width.saturating_sub(label_len) / 2;
                 let left = char.to_string().repeat(side_len);
-                let right = char.to_string().repeat(self.width.saturating_sub(side_len + label_len));
+                let right = char
+                    .to_string()
+                    .repeat(self.width.saturating_sub(side_len + label_len));
                 format!("{} {} {}", left, label, right)
             }
             _ => char.to_string().repeat(self.width),
@@ -146,7 +148,9 @@ pub fn hr_label(label: impl Into<String>) -> Element {
 
 /// Create a dashed horizontal divider
 pub fn hr_dashed() -> Element {
-    Divider::horizontal().style(DividerStyle::Dashed).into_element()
+    Divider::horizontal()
+        .style(DividerStyle::Dashed)
+        .into_element()
 }
 
 #[cfg(test)]

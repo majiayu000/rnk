@@ -68,11 +68,7 @@ impl EmptyState {
 
         // Icon
         if let Some(icon) = self.icon {
-            children.push(
-                Text::new(icon)
-                    .color(Color::BrightBlack)
-                    .into_element(),
-            );
+            children.push(Text::new(icon).color(Color::BrightBlack).into_element());
         }
 
         // Title
@@ -85,11 +81,7 @@ impl EmptyState {
 
         // Description
         if let Some(desc) = self.description {
-            children.push(
-                Text::new(desc)
-                    .color(Color::BrightBlack)
-                    .into_element(),
-            );
+            children.push(Text::new(desc).color(Color::BrightBlack).into_element());
         }
 
         RnkBox::new()

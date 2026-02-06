@@ -187,7 +187,9 @@ impl LineChart {
 
         // Plot each series
         for series in &self.series {
-            self.plot_series(&mut grid, series, min_x, x_range, min_y, y_range, dot_width, dot_height);
+            self.plot_series(
+                &mut grid, series, min_x, x_range, min_y, y_range, dot_width, dot_height,
+            );
         }
 
         // Convert grid to braille characters
@@ -199,7 +201,11 @@ impl LineChart {
         }
 
         // Y axis label area width
-        let y_label_width = if self.show_y_axis && self.show_labels { 8 } else { 0 };
+        let y_label_width = if self.show_y_axis && self.show_labels {
+            8
+        } else {
+            0
+        };
 
         // Render chart rows
         for row in 0..self.height as usize {
@@ -317,7 +323,8 @@ impl LineChart {
             // Plot single point
             if let Some(&(x, y)) = series.data.first() {
                 let dx = ((x - min_x) / x_range * (dot_width - 1) as f64) as usize;
-                let dy = ((max_f64(y_range, 0.001) - (y - min_y)) / max_f64(y_range, 0.001) * (dot_height - 1) as f64) as usize;
+                let dy = ((max_f64(y_range, 0.001) - (y - min_y)) / max_f64(y_range, 0.001)
+                    * (dot_height - 1) as f64) as usize;
                 if dx < dot_width && dy < dot_height {
                     grid[dy][dx] = true;
                 }
@@ -472,8 +479,16 @@ mod tests {
     #[test]
     fn test_multiple_series() {
         let chart = LineChart::new()
-            .series(Series::from_y_values(vec![1.0, 2.0, 3.0]).color(Color::Red).label("A"))
-            .series(Series::from_y_values(vec![3.0, 2.0, 1.0]).color(Color::Blue).label("B"));
+            .series(
+                Series::from_y_values(vec![1.0, 2.0, 3.0])
+                    .color(Color::Red)
+                    .label("A"),
+            )
+            .series(
+                Series::from_y_values(vec![3.0, 2.0, 1.0])
+                    .color(Color::Blue)
+                    .label("B"),
+            );
 
         assert_eq!(chart.series.len(), 2);
     }

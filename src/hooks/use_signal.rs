@@ -27,9 +27,35 @@ impl<T> Signal<T> {
         self.value.read().unwrap().clone()
     }
 
+    /// Get a read lock guard, avoiding clone (useful for large data structures)
+    ///
+    /// # Panics
+    /// Panics if the lock is poisoned. Use `try_get_ref()` for non-panicking version.
+    pub fn get_ref(&self) -> std::sync::RwLockReadGuard<'_, T> {
+        self.value.read().unwrap()
+    }
+
+    /// Try to get a clone of the value, returning None if lock is poisoned
+    pub fn try_get(&self) -> Option<T>
+    where
+        T: Clone,
+    {
+        self.value.read().ok().map(|g| g.clone())
+    }
+
+    /// Try to get a read lock guard, returning None if lock is poisoned
+    pub fn try_get_ref(&self) -> Option<std::sync::RwLockReadGuard<'_, T>> {
+        self.value.read().ok()
+    }
+
     /// Get a reference to the current value
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         f(&self.value.read().unwrap())
+    }
+
+    /// Try to get a reference to the current value, returning None if lock is poisoned
+    pub fn try_with<R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
+        self.value.read().ok().map(|guard| f(&guard))
     }
 
     /// Set a new value and trigger re-render
@@ -38,15 +64,47 @@ impl<T> Signal<T> {
         self.trigger_render();
     }
 
+    /// Try to set a new value, returning false if lock is poisoned
+    pub fn try_set(&self, value: T) -> bool {
+        if let Ok(mut guard) = self.value.write() {
+            *guard = value;
+            self.trigger_render();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Update the value using a function and trigger re-render
     pub fn update(&self, f: impl FnOnce(&mut T)) {
         f(&mut self.value.write().unwrap());
         self.trigger_render();
     }
 
+    /// Try to update the value using a function, returning false if lock is poisoned
+    pub fn try_update(&self, f: impl FnOnce(&mut T)) -> bool {
+        if let Ok(mut guard) = self.value.write() {
+            f(&mut guard);
+            self.trigger_render();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Modify the value without triggering re-render
     pub fn set_silent(&self, value: T) {
         *self.value.write().unwrap() = value;
+    }
+
+    /// Try to modify the value without triggering re-render, returning false if lock is poisoned
+    pub fn try_set_silent(&self, value: T) -> bool {
+        if let Ok(mut guard) = self.value.write() {
+            *guard = value;
+            true
+        } else {
+            false
+        }
     }
 
     fn trigger_render(&self) {

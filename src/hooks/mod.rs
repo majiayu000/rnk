@@ -50,7 +50,9 @@ pub use use_accessibility::{
 pub use use_animation::{AnimationHandle, use_animation, use_animation_auto};
 pub use use_app::{AppContext, get_app_context, set_app_context, use_app};
 pub use use_async::{AsyncHandle, AsyncState, use_async_state, use_async_state_with};
-pub use use_clipboard::{ClipboardHandle, is_clipboard_available, read_clipboard, use_clipboard, write_clipboard};
+pub use use_clipboard::{
+    ClipboardHandle, is_clipboard_available, read_clipboard, use_clipboard, write_clipboard,
+};
 pub use use_cmd::{Deps, use_cmd, use_cmd_once};
 pub use use_counter::{CounterHandle, use_counter, use_counter_zero};
 pub use use_debounce::{DebounceHandle, use_debounce, use_debounce_handle, use_throttle};

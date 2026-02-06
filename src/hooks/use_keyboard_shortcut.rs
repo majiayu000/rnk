@@ -20,7 +20,7 @@
 //! }
 //! ```
 
-use crate::hooks::use_input::{use_input, Key};
+use crate::hooks::use_input::{Key, use_input};
 
 /// Modifier keys
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

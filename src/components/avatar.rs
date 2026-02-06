@@ -151,7 +151,9 @@ mod tests {
     #[test]
     fn test_avatar_into_element() {
         let _ = Avatar::new("Test User").into_element();
-        let _ = Avatar::initials("TU").size(AvatarSize::Large).into_element();
+        let _ = Avatar::initials("TU")
+            .size(AvatarSize::Large)
+            .into_element();
     }
 
     #[test]

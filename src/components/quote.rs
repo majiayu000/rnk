@@ -82,9 +82,7 @@ impl Quote {
             RnkBox::new()
                 .flex_direction(FlexDirection::Row)
                 .children(vec![
-                    Text::new("│ ")
-                        .color(Color::Cyan)
-                        .into_element(),
+                    Text::new("│ ").color(Color::Cyan).into_element(),
                     Text::new(&self.text)
                         .color(Color::White)
                         .italic()
@@ -105,11 +103,7 @@ impl Quote {
                 }
                 attr.push_str(source);
             }
-            children.push(
-                Text::new(attr)
-                    .color(Color::BrightBlack)
-                    .into_element(),
-            );
+            children.push(Text::new(attr).color(Color::BrightBlack).into_element());
         }
 
         RnkBox::new()

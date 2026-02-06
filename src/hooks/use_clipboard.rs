@@ -61,16 +61,13 @@ pub fn use_clipboard() -> ClipboardHandle {
 pub fn read_clipboard() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
-        Command::new("pbpaste")
-            .output()
-            .ok()
-            .and_then(|output| {
-                if output.status.success() {
-                    String::from_utf8(output.stdout).ok()
-                } else {
-                    None
-                }
-            })
+        Command::new("pbpaste").output().ok().and_then(|output| {
+            if output.status.success() {
+                String::from_utf8(output.stdout).ok()
+            } else {
+                None
+            }
+        })
     }
 
     #[cfg(target_os = "linux")]
@@ -110,7 +107,9 @@ pub fn read_clipboard() -> Option<String> {
             .ok()
             .and_then(|output| {
                 if output.status.success() {
-                    String::from_utf8(output.stdout).ok().map(|s| s.trim().to_string())
+                    String::from_utf8(output.stdout)
+                        .ok()
+                        .map(|s| s.trim().to_string())
                 } else {
                     None
                 }

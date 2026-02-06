@@ -98,7 +98,11 @@ pub fn link_styled(text: impl Into<String>, url: impl Into<String>) -> Element {
 }
 
 /// Create a link with icon
-pub fn link_with_icon(text: impl Into<String>, url: impl Into<String>, icon: impl Into<String>) -> Element {
+pub fn link_with_icon(
+    text: impl Into<String>,
+    url: impl Into<String>,
+    icon: impl Into<String>,
+) -> Element {
     Link::new(text, url).icon(icon).into_element()
 }
 
@@ -122,8 +126,12 @@ mod tests {
     #[test]
     fn test_link_into_element() {
         let _ = Link::new("Test", "https://test.com").into_element();
-        let _ = Link::new("Test", "https://test.com").icon("*").into_element();
-        let _ = Link::new("Test", "https://test.com").no_underline().into_element();
+        let _ = Link::new("Test", "https://test.com")
+            .icon("*")
+            .into_element();
+        let _ = Link::new("Test", "https://test.com")
+            .no_underline()
+            .into_element();
     }
 
     #[test]
