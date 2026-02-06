@@ -21,7 +21,7 @@
 //! }
 //! ```
 
-use crate::components::Text;
+use crate::components::capsule::capsule_padded;
 use crate::core::{Color, Element};
 
 /// A tag component for labels and categories
@@ -88,10 +88,7 @@ impl Tag {
             content.push_str(" ×");
         }
 
-        Text::new(format!(" {} ", content))
-            .color(self.color)
-            .background(self.background)
-            .into_element()
+        capsule_padded(content, self.color, self.background).into_element()
     }
 }
 
@@ -130,7 +127,9 @@ impl Tag {
 
     /// Create a yellow tag
     pub fn yellow(text: impl Into<String>) -> Self {
-        Self::new(text).color(Color::Black).background(Color::Yellow)
+        Self::new(text)
+            .color(Color::Black)
+            .background(Color::Yellow)
     }
 
     /// Create a cyan tag
@@ -140,7 +139,9 @@ impl Tag {
 
     /// Create a magenta tag
     pub fn magenta(text: impl Into<String>) -> Self {
-        Self::new(text).color(Color::White).background(Color::Magenta)
+        Self::new(text)
+            .color(Color::White)
+            .background(Color::Magenta)
     }
 }
 
