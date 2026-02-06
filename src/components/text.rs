@@ -438,7 +438,18 @@ impl Text {
                 element.style.inverse = true;
             }
         } else {
-            // Rich text: store spans for rendering
+            // Rich text: concatenate plain text for layout measurement
+            let mut full_text = String::new();
+            for (i, line) in self.lines.iter().enumerate() {
+                if i > 0 {
+                    full_text.push('\n');
+                }
+                for span in &line.spans {
+                    full_text.push_str(&span.content);
+                }
+            }
+            element.text_content = Some(full_text);
+            // Store spans for styled rendering (renderer prioritizes spans over text_content)
             element.spans = Some(self.lines);
         }
 
