@@ -21,6 +21,8 @@ pub struct Sparkline {
     max: Option<f64>,
     /// Color for the sparkline
     color: Option<Color>,
+    /// Background color
+    background: Option<Color>,
     /// Show baseline (empty bottom character)
     show_baseline: bool,
     /// Key for reconciliation
@@ -36,6 +38,7 @@ impl Sparkline {
             min: None,
             max: None,
             color: None,
+            background: None,
             show_baseline: false,
             key: None,
         }
@@ -91,6 +94,12 @@ impl Sparkline {
     /// Set color
     pub fn color(mut self, color: Color) -> Self {
         self.color = Some(color);
+        self
+    }
+
+    /// Set background color
+    pub fn background(mut self, color: Color) -> Self {
+        self.background = Some(color);
         self
     }
 
@@ -157,8 +166,14 @@ impl Sparkline {
         if let Some(color) = self.color {
             text = text.color(color);
         }
+        if let Some(bg) = self.background {
+            text = text.background(bg);
+        }
 
         let mut container = TinkBox::new().child(text.into_element());
+        if let Some(bg) = self.background {
+            container = container.background(bg);
+        }
 
         if let Some(key) = self.key {
             container = container.key(key);
