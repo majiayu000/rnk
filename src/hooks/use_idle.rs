@@ -47,7 +47,7 @@ pub fn is_idle(threshold: Duration) -> bool {
 }
 
 /// Idle state information
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct IdleState {
     /// Whether the user is currently idle
     pub is_idle: bool,
@@ -62,15 +62,6 @@ impl IdleState {
         Self {
             is_idle: duration >= threshold,
             idle_seconds: duration.as_secs(),
-        }
-    }
-}
-
-impl Default for IdleState {
-    fn default() -> Self {
-        Self {
-            is_idle: false,
-            idle_seconds: 0,
         }
     }
 }

@@ -115,7 +115,13 @@ impl FocusManager {
     }
 
     /// Update a focusable element's metadata
-    pub fn update(&mut self, id: usize, custom_id: Option<String>, is_active: bool, auto_focus: bool) {
+    pub fn update(
+        &mut self,
+        id: usize,
+        custom_id: Option<String>,
+        is_active: bool,
+        auto_focus: bool,
+    ) {
         if let Some(elem) = self.elements.iter_mut().find(|e| e.id == id) {
             elem.custom_id = custom_id;
             elem.is_active = is_active;
@@ -299,12 +305,13 @@ pub fn use_focus(options: UseFocusOptions) -> FocusState {
 
     // Unregister on unmount
     crate::hooks::use_effect_once({
-        let registration = registration;
         move || {
             Some(Box::new(move || {
                 if registration.use_runtime {
                     if let Some(ctx) = crate::runtime::current_runtime() {
-                        ctx.borrow_mut().focus_manager_mut().unregister(registration.id);
+                        ctx.borrow_mut()
+                            .focus_manager_mut()
+                            .unregister(registration.id);
                     }
                 } else {
                     FOCUS_MANAGER.with(|fm| fm.borrow_mut().unregister(registration.id));
@@ -460,7 +467,7 @@ mod tests {
 
     #[test]
     fn test_focus_with_runtime() {
-        use crate::runtime::{RuntimeContext, with_runtime};
+        use crate::runtime::{with_runtime, RuntimeContext};
         use std::rc::Rc;
 
         let ctx = Rc::new(RefCell::new(RuntimeContext::new()));

@@ -23,12 +23,13 @@
 //! }
 //! ```
 
-use crate::hooks::use_signal::{Signal, use_signal};
+use crate::hooks::use_signal::{use_signal, Signal};
 
 /// Async operation state
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum AsyncState<T, E> {
     /// Not started
+    #[default]
     Idle,
     /// In progress
     Loading,
@@ -73,12 +74,6 @@ impl<T, E> AsyncState<T, E> {
             AsyncState::Error(e) => Some(e),
             _ => None,
         }
-    }
-}
-
-impl<T: Default, E> Default for AsyncState<T, E> {
-    fn default() -> Self {
-        AsyncState::Idle
     }
 }
 
