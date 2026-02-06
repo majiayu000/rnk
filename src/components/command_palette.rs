@@ -407,7 +407,10 @@ impl CommandPalette {
 
         // Shortcut (right-aligned)
         if let Some(shortcut) = &cmd.shortcut {
-            let padding = self.style.width.saturating_sub(line.len() + shortcut.len() + 2);
+            let padding = self
+                .style
+                .width
+                .saturating_sub(line.len() + shortcut.len() + 2);
             line.push_str(&" ".repeat(padding));
             line.push_str(shortcut);
         }
@@ -434,11 +437,8 @@ impl CommandPalette {
 
         // Title
         if let Some(title) = &self.title {
-            container = container.child(
-                Text::new(title)
-                    .color(self.style.text_color)
-                    .into_element(),
-            );
+            container =
+                container.child(Text::new(title).color(self.style.text_color).into_element());
         }
 
         // Search input
@@ -473,12 +473,7 @@ impl CommandPalette {
                 (self.style.text_color, self.style.background)
             };
 
-            container = container.child(
-                Text::new(line)
-                    .color(fg)
-                    .background(bg)
-                    .into_element(),
-            );
+            container = container.child(Text::new(line).color(fg).background(bg).into_element());
         }
 
         // Show count if more items

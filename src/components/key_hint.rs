@@ -122,10 +122,6 @@ mod tests {
 
     #[test]
     fn test_key_hints_helper() {
-        let _ = key_hints(vec![
-            ("q", "Quit"),
-            ("↑↓", "Navigate"),
-            ("Enter", "Select"),
-        ]);
+        let _ = key_hints(vec![("q", "Quit"), ("↑↓", "Navigate"), ("Enter", "Select")]);
     }
 }

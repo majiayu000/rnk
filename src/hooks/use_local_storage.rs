@@ -21,7 +21,7 @@
 //! }
 //! ```
 
-use crate::hooks::use_signal::{use_signal, Signal};
+use crate::hooks::use_signal::{Signal, use_signal};
 use std::fs;
 use std::path::{Path, PathBuf};
 

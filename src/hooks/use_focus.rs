@@ -223,7 +223,15 @@ thread_local! {
 }
 
 /// Set the focus manager (called by App during render)
+///
+/// # Deprecated
+/// This function uses thread-local state. Prefer using `RuntimeContext` directly
+/// for new code. This API is maintained for backward compatibility.
 #[allow(dead_code)]
+#[deprecated(
+    since = "0.17.0",
+    note = "Use RuntimeContext::focus_manager_mut() instead"
+)]
 pub fn with_focus_manager<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
@@ -467,7 +475,7 @@ mod tests {
 
     #[test]
     fn test_focus_with_runtime() {
-        use crate::runtime::{with_runtime, RuntimeContext};
+        use crate::runtime::{RuntimeContext, with_runtime};
         use std::rc::Rc;
 
         let ctx = Rc::new(RefCell::new(RuntimeContext::new()));

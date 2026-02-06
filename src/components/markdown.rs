@@ -193,9 +193,7 @@ impl Markdown {
     }
 
     fn render_heading(&self, text: &str, level: usize) -> Element {
-        let mut heading = Text::new(text.to_string())
-            .color(self.heading_color)
-            .bold();
+        let mut heading = Text::new(text.to_string()).color(self.heading_color).bold();
 
         if level == 1 {
             heading = heading.underline();

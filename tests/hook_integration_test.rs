@@ -6,8 +6,8 @@ use rnk::renderer::{FrameRateConfig, FrameRateController};
 use rnk::runtime::{RuntimeContext, set_current_runtime};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 

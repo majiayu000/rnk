@@ -188,11 +188,7 @@ impl DevTools {
             })
             .child(
                 Text::new(format!("{}{} {}", indent, prefix, name))
-                    .color(if selected {
-                        Color::Cyan
-                    } else {
-                        Color::White
-                    })
+                    .color(if selected { Color::Cyan } else { Color::White })
                     .into_element(),
             )
             .into_element()

@@ -207,7 +207,6 @@ impl CmdExecutor {
                             };
 
                             temp_executor.execute_internal(other, notify_render);
-
                         }
                     }
                 });

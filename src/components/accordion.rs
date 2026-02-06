@@ -94,9 +94,7 @@ impl Accordion {
                     .padding_x(1.0)
                     .background(Color::Ansi256(238))
                     .children(vec![
-                        Text::new(indicator)
-                            .color(Color::Cyan)
-                            .into_element(),
+                        Text::new(indicator).color(Color::Cyan).into_element(),
                         Text::new(format!(" {}", item.title))
                             .color(Color::White)
                             .bold()
@@ -112,11 +110,7 @@ impl Accordion {
                         .padding_x(2.0)
                         .padding_y(0.5)
                         .background(Color::Ansi256(236))
-                        .child(
-                            Text::new(&item.content)
-                                .color(Color::White)
-                                .into_element(),
-                        )
+                        .child(Text::new(&item.content).color(Color::White).into_element())
                         .into_element(),
                 );
             }
@@ -155,10 +149,7 @@ mod tests {
 
     #[test]
     fn test_accordion_expanded() {
-        let acc = Accordion::new()
-            .item("A", "a")
-            .item("B", "b")
-            .expanded(0);
+        let acc = Accordion::new().item("A", "a").item("B", "b").expanded(0);
         assert_eq!(acc.expanded, Some(0));
     }
 

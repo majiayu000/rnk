@@ -262,11 +262,7 @@ fn process_list(processes: Vec<Process>, selected: usize) -> Element {
                 .children(vec![
                     Box::new()
                         .width(8)
-                        .child(
-                            Text::new(format!("{}", proc.pid))
-                                .dim()
-                                .into_element(),
-                        )
+                        .child(Text::new(format!("{}", proc.pid)).dim().into_element())
                         .into_element(),
                     Box::new()
                         .width(20)

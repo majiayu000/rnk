@@ -136,6 +136,11 @@ thread_local! {
 }
 
 /// Register a paste handler
+///
+/// # Deprecated
+/// This function uses thread-local state. Prefer using `RuntimeContext` directly
+/// for new code. This API is maintained for backward compatibility.
+#[deprecated(since = "0.17.0", note = "Use use_paste hook instead")]
 pub fn register_paste_handler<F>(handler: F)
 where
     F: Fn(&PasteEvent) + 'static,
@@ -146,6 +151,14 @@ where
 }
 
 /// Clear all paste handlers
+///
+/// # Deprecated
+/// This function uses thread-local state. Prefer using `RuntimeContext` directly
+/// for new code. This API is maintained for backward compatibility.
+#[deprecated(
+    since = "0.17.0",
+    note = "Handlers are automatically cleared on each render"
+)]
 pub fn clear_paste_handlers() {
     PASTE_HANDLERS.with(|handlers| {
         handlers.borrow_mut().clear();

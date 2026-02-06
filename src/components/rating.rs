@@ -41,7 +41,11 @@ impl Default for RatingSymbols {
 
 impl RatingSymbols {
     /// Create new symbols
-    pub fn new(filled: impl Into<String>, half: impl Into<String>, empty: impl Into<String>) -> Self {
+    pub fn new(
+        filled: impl Into<String>,
+        half: impl Into<String>,
+        empty: impl Into<String>,
+    ) -> Self {
         Self {
             filled: filled.into(),
             half: half.into(),

@@ -2,8 +2,8 @@
 //!
 //! Provides toast-style notifications with auto-dismiss and various styles.
 
-use crate::components::{Box, Text};
 use crate::components::status::{StatusLevel, status_style};
+use crate::components::{Box, Text};
 use crate::core::{AlignItems, Color, Element, FlexDirection, JustifyContent};
 
 /// Notification level/type

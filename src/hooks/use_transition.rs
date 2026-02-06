@@ -122,6 +122,115 @@ impl TransitionHandle {
             callback();
         }
     }
+
+    // =========================================================================
+    // Try methods (non-panicking versions)
+    // =========================================================================
+
+    /// Try to get the current value, returning None if lock is poisoned
+    pub fn try_get(&self) -> Option<f32> {
+        let instance_guard = self.instance.read().ok()?;
+        if let Some(ref instance) = *instance_guard {
+            if instance.is_running() {
+                return Some(instance.get());
+            }
+        }
+        self.current.read().ok().map(|g| *g)
+    }
+
+    /// Try to get the current value as i32, returning None if lock is poisoned
+    pub fn try_get_i32(&self) -> Option<i32> {
+        self.try_get().map(|v| v.round() as i32)
+    }
+
+    /// Try to get the current value as usize, returning None if lock is poisoned
+    pub fn try_get_usize(&self) -> Option<usize> {
+        self.try_get().map(|v| v.round().max(0.0) as usize)
+    }
+
+    /// Try to get the target value, returning None if lock is poisoned
+    pub fn try_target(&self) -> Option<f32> {
+        self.target.read().ok().map(|g| *g)
+    }
+
+    /// Try to set a new target value, returning false if lock is poisoned
+    pub fn try_set(&self, value: f32) -> bool {
+        let current = match self.try_get() {
+            Some(v) => v,
+            None => return false,
+        };
+
+        if self.target.write().ok().map(|mut g| *g = value).is_none() {
+            return false;
+        }
+
+        if (current - value).abs() < 0.001 {
+            // Already at target, no transition needed
+            if self.current.write().ok().map(|mut g| *g = value).is_none() {
+                return false;
+            }
+            if self.instance.write().ok().map(|mut g| *g = None).is_none() {
+                return false;
+            }
+            return true;
+        }
+
+        // Create new animation from current to target
+        let anim = Animation::new()
+            .from(current)
+            .to(value)
+            .duration(self.duration)
+            .easing(self.easing)
+            .fill_mode(FillMode::Forwards);
+
+        let mut instance = anim.start();
+        instance.play();
+
+        if self
+            .instance
+            .write()
+            .ok()
+            .map(|mut g| *g = Some(instance))
+            .is_none()
+        {
+            return false;
+        }
+        if self
+            .last_tick
+            .write()
+            .ok()
+            .map(|mut g| *g = Instant::now())
+            .is_none()
+        {
+            return false;
+        }
+
+        self.trigger_render();
+        true
+    }
+
+    /// Try to set value immediately without transition, returning false if lock is poisoned
+    pub fn try_set_immediate(&self, value: f32) -> bool {
+        if self.current.write().ok().map(|mut g| *g = value).is_none() {
+            return false;
+        }
+        if self.target.write().ok().map(|mut g| *g = value).is_none() {
+            return false;
+        }
+        if self.instance.write().ok().map(|mut g| *g = None).is_none() {
+            return false;
+        }
+        self.trigger_render();
+        true
+    }
+
+    /// Try to check if currently transitioning, returning None if lock is poisoned
+    pub fn try_is_transitioning(&self) -> Option<bool> {
+        self.instance
+            .read()
+            .ok()
+            .map(|g| g.as_ref().is_some_and(|i| i.is_running()))
+    }
 }
 
 impl std::fmt::Debug for TransitionHandle {

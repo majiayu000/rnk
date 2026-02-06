@@ -69,9 +69,7 @@ impl Tooltip {
 
     /// Convert to Element
     pub fn into_element(self) -> Element {
-        let label_elem = Text::new(&self.label)
-            .color(Color::White)
-            .into_element();
+        let label_elem = Text::new(&self.label).color(Color::White).into_element();
 
         if !self.visible || self.content.is_empty() {
             return label_elem;
@@ -80,22 +78,12 @@ impl Tooltip {
         let tooltip_elem = RnkBox::new()
             .padding_x(1.0)
             .background(Color::Ansi256(240))
-            .child(
-                Text::new(&self.content)
-                    .color(Color::White)
-                    .into_element(),
-            )
+            .child(Text::new(&self.content).color(Color::White).into_element())
             .into_element();
 
         let (direction, children) = match self.position {
-            TooltipPosition::Top => (
-                FlexDirection::Column,
-                vec![tooltip_elem, label_elem],
-            ),
-            TooltipPosition::Bottom => (
-                FlexDirection::Column,
-                vec![label_elem, tooltip_elem],
-            ),
+            TooltipPosition::Top => (FlexDirection::Column, vec![tooltip_elem, label_elem]),
+            TooltipPosition::Bottom => (FlexDirection::Column, vec![label_elem, tooltip_elem]),
             TooltipPosition::Left => (
                 FlexDirection::Row,
                 vec![tooltip_elem, Text::new(" ").into_element(), label_elem],
@@ -158,10 +146,22 @@ mod tests {
 
     #[test]
     fn test_tooltip_positions() {
-        let _ = Tooltip::new("L").content("C").position(TooltipPosition::Top).into_element();
-        let _ = Tooltip::new("L").content("C").position(TooltipPosition::Bottom).into_element();
-        let _ = Tooltip::new("L").content("C").position(TooltipPosition::Left).into_element();
-        let _ = Tooltip::new("L").content("C").position(TooltipPosition::Right).into_element();
+        let _ = Tooltip::new("L")
+            .content("C")
+            .position(TooltipPosition::Top)
+            .into_element();
+        let _ = Tooltip::new("L")
+            .content("C")
+            .position(TooltipPosition::Bottom)
+            .into_element();
+        let _ = Tooltip::new("L")
+            .content("C")
+            .position(TooltipPosition::Left)
+            .into_element();
+        let _ = Tooltip::new("L")
+            .content("C")
+            .position(TooltipPosition::Right)
+            .into_element();
     }
 
     #[test]

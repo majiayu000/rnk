@@ -15,5 +15,6 @@ authors = ["majiayu000 <1835304752@qq.com>"]
 
 [dependencies]
 unicode-width = "0.2"
+rnk-style-core = { path = "../rnk-style-core" }
 
 [dev-dependencies]

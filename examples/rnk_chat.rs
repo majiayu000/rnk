@@ -130,9 +130,7 @@ fn header() -> Element {
                 .color(Color::Cyan)
                 .bold()
                 .into_element(),
-            Text::new("AI Assistant")
-                .color(Color::Green)
-                .into_element(),
+            Text::new("AI Assistant").color(Color::Green).into_element(),
         ])
         .into_element()
 }
@@ -189,8 +187,18 @@ fn message_list(messages: &[ChatMessage], scroll_offset: usize, is_typing: bool)
 fn render_message(msg: &ChatMessage) -> Element {
     let (name, name_color, content_color, align) = match msg.role {
         Role::User => ("You", Color::Blue, Color::White, JustifyContent::FlexEnd),
-        Role::Assistant => ("Assistant", Color::Green, Color::Reset, JustifyContent::FlexStart),
-        Role::System => ("System", Color::Yellow, Color::BrightBlack, JustifyContent::Center),
+        Role::Assistant => (
+            "Assistant",
+            Color::Green,
+            Color::Reset,
+            JustifyContent::FlexStart,
+        ),
+        Role::System => (
+            "System",
+            Color::Yellow,
+            Color::BrightBlack,
+            JustifyContent::Center,
+        ),
     };
 
     let bubble_bg = match msg.role {
@@ -261,9 +269,15 @@ fn footer() -> Element {
         .background(Color::Ansi256(236))
         .gap(2.0)
         .children(vec![
-            Text::new("Enter").color(Color::Yellow).bold().into_element(),
+            Text::new("Enter")
+                .color(Color::Yellow)
+                .bold()
+                .into_element(),
             Text::new("Send").dim().into_element(),
-            Text::new("PgUp/PgDn").color(Color::Yellow).bold().into_element(),
+            Text::new("PgUp/PgDn")
+                .color(Color::Yellow)
+                .bold()
+                .into_element(),
             Text::new("Scroll").dim().into_element(),
             Text::new("Esc").color(Color::Yellow).bold().into_element(),
             Text::new("Exit").dim().into_element(),
@@ -296,8 +310,14 @@ fn generate_response(input: &str) -> String {
     } else if input_lower.contains("thank") {
         "You're welcome! Let me know if you need anything else.".to_string()
     } else {
-        format!("I received your message: \"{}\". How can I assist you further?",
-            if input.len() > 30 { &input[..30] } else { input })
+        format!(
+            "I received your message: \"{}\". How can I assist you further?",
+            if input.len() > 30 {
+                &input[..30]
+            } else {
+                input
+            }
+        )
     }
 }
 
@@ -305,7 +325,8 @@ fn initial_messages() -> Vec<ChatMessage> {
     vec![
         ChatMessage {
             role: Role::System,
-            content: "Welcome to rnk-chat! This is a demo of rnk's chat UI capabilities.".to_string(),
+            content: "Welcome to rnk-chat! This is a demo of rnk's chat UI capabilities."
+                .to_string(),
             timestamp: current_time(),
         },
         ChatMessage {

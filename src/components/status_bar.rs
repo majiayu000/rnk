@@ -165,10 +165,7 @@ mod tests {
 
     #[test]
     fn test_status_bar_into_element() {
-        let _ = StatusBar::new()
-            .left("Mode")
-            .right("100%")
-            .into_element();
+        let _ = StatusBar::new().left("Mode").right("100%").into_element();
     }
 
     #[test]

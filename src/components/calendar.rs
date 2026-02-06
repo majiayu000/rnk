@@ -244,7 +244,11 @@ impl Calendar {
                 week.push(
                     RnkBox::new()
                         .width(3)
-                        .child(Text::new(format!("{:2}", week_num % 53)).dim().into_element())
+                        .child(
+                            Text::new(format!("{:2}", week_num % 53))
+                                .dim()
+                                .into_element(),
+                        )
                         .into_element(),
                 );
             }

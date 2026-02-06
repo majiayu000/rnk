@@ -320,17 +320,15 @@ impl Stepper {
         let icon = if self.style.show_numbers {
             format!("{}", index + 1)
         } else {
-            step.icon.clone().unwrap_or_else(|| status.icon().to_string())
+            step.icon
+                .clone()
+                .unwrap_or_else(|| status.icon().to_string())
         };
 
         let mut container = Box::new().flex_direction(FlexDirection::Column);
 
         // Icon/number
-        container = container.child(
-            Text::new(&icon)
-                .color(icon_color)
-                .into_element(),
-        );
+        container = container.child(Text::new(&icon).color(icon_color).into_element());
 
         // Title
         let title_color = if is_current {
@@ -341,11 +339,7 @@ impl Stepper {
             self.style.title_color
         };
 
-        container = container.child(
-            Text::new(&step.title)
-                .color(title_color)
-                .into_element(),
-        );
+        container = container.child(Text::new(&step.title).color(title_color).into_element());
 
         // Description
         if self.style.show_descriptions {
@@ -439,10 +433,7 @@ mod tests {
 
     #[test]
     fn test_stepper_creation() {
-        let steps = vec![
-            Step::titled("Step 1"),
-            Step::titled("Step 2"),
-        ];
+        let steps = vec![Step::titled("Step 1"), Step::titled("Step 2")];
         let stepper = Stepper::new(steps);
         assert_eq!(stepper.steps.len(), 2);
         assert_eq!(stepper.current, 0);
@@ -461,10 +452,7 @@ mod tests {
 
     #[test]
     fn test_stepper_is_first_last() {
-        let steps = vec![
-            Step::titled("Step 1"),
-            Step::titled("Step 2"),
-        ];
+        let steps = vec![Step::titled("Step 1"), Step::titled("Step 2")];
 
         let stepper = Stepper::new(steps.clone()).current(0);
         assert!(stepper.is_first());
@@ -507,10 +495,7 @@ mod tests {
 
     #[test]
     fn test_stepper_into_element() {
-        let steps = vec![
-            Step::titled("Step 1"),
-            Step::titled("Step 2"),
-        ];
+        let steps = vec![Step::titled("Step 1"), Step::titled("Step 2")];
         let stepper = Stepper::new(steps).current(0);
         let _ = stepper.into_element();
     }

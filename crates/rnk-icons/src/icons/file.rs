@@ -1,127 +1,209 @@
 //! File type icons (Nerd Font)
 
 /// Rust file icon
-pub const fn rust() -> &'static str { "" }
+pub const fn rust() -> &'static str {
+    ""
+}
 
 /// Python file icon
-pub const fn python() -> &'static str { "" }
+pub const fn python() -> &'static str {
+    ""
+}
 
 /// JavaScript file icon
-pub const fn javascript() -> &'static str { "" }
+pub const fn javascript() -> &'static str {
+    ""
+}
 
 /// TypeScript file icon
-pub const fn typescript() -> &'static str { "" }
+pub const fn typescript() -> &'static str {
+    ""
+}
 
 /// Go file icon
-pub const fn go() -> &'static str { "" }
+pub const fn go() -> &'static str {
+    ""
+}
 
 /// C file icon
-pub const fn c() -> &'static str { "" }
+pub const fn c() -> &'static str {
+    ""
+}
 
 /// C++ file icon
-pub const fn cpp() -> &'static str { "" }
+pub const fn cpp() -> &'static str {
+    ""
+}
 
 /// Java file icon
-pub const fn java() -> &'static str { "" }
+pub const fn java() -> &'static str {
+    ""
+}
 
 /// Ruby file icon
-pub const fn ruby() -> &'static str { "" }
+pub const fn ruby() -> &'static str {
+    ""
+}
 
 /// PHP file icon
-pub const fn php() -> &'static str { "" }
+pub const fn php() -> &'static str {
+    ""
+}
 
 /// Swift file icon
-pub const fn swift() -> &'static str { "" }
+pub const fn swift() -> &'static str {
+    ""
+}
 
 /// Kotlin file icon
-pub const fn kotlin() -> &'static str { "" }
+pub const fn kotlin() -> &'static str {
+    ""
+}
 
 /// Lua file icon
-pub const fn lua() -> &'static str { "" }
+pub const fn lua() -> &'static str {
+    ""
+}
 
 /// Vim file icon
-pub const fn vim() -> &'static str { "" }
+pub const fn vim() -> &'static str {
+    ""
+}
 
 /// Shell/Bash file icon
-pub const fn shell() -> &'static str { "" }
+pub const fn shell() -> &'static str {
+    ""
+}
 
 /// HTML file icon
-pub const fn html() -> &'static str { "" }
+pub const fn html() -> &'static str {
+    ""
+}
 
 /// CSS file icon
-pub const fn css() -> &'static str { "" }
+pub const fn css() -> &'static str {
+    ""
+}
 
 /// Sass/SCSS file icon
-pub const fn sass() -> &'static str { "" }
+pub const fn sass() -> &'static str {
+    ""
+}
 
 /// JSON file icon
-pub const fn json() -> &'static str { "" }
+pub const fn json() -> &'static str {
+    ""
+}
 
 /// YAML file icon
-pub const fn yaml() -> &'static str { "" }
+pub const fn yaml() -> &'static str {
+    ""
+}
 
 /// TOML file icon
-pub const fn toml() -> &'static str { "" }
+pub const fn toml() -> &'static str {
+    ""
+}
 
 /// XML file icon
-pub const fn xml() -> &'static str { "謹" }
+pub const fn xml() -> &'static str {
+    "謹"
+}
 
 /// Markdown file icon
-pub const fn markdown() -> &'static str { "" }
+pub const fn markdown() -> &'static str {
+    ""
+}
 
 /// Text file icon
-pub const fn text() -> &'static str { "" }
+pub const fn text() -> &'static str {
+    ""
+}
 
 /// PDF file icon
-pub const fn pdf() -> &'static str { "" }
+pub const fn pdf() -> &'static str {
+    ""
+}
 
 /// Image file icon
-pub const fn image() -> &'static str { "" }
+pub const fn image() -> &'static str {
+    ""
+}
 
 /// Video file icon
-pub const fn video() -> &'static str { "" }
+pub const fn video() -> &'static str {
+    ""
+}
 
 /// Audio file icon
-pub const fn audio() -> &'static str { "" }
+pub const fn audio() -> &'static str {
+    ""
+}
 
 /// Archive/Zip file icon
-pub const fn archive() -> &'static str { "" }
+pub const fn archive() -> &'static str {
+    ""
+}
 
 /// Binary file icon
-pub const fn binary() -> &'static str { "" }
+pub const fn binary() -> &'static str {
+    ""
+}
 
 /// Lock file icon
-pub const fn lock() -> &'static str { "" }
+pub const fn lock() -> &'static str {
+    ""
+}
 
 /// Config file icon
-pub const fn config() -> &'static str { "" }
+pub const fn config() -> &'static str {
+    ""
+}
 
 /// Database file icon
-pub const fn database() -> &'static str { "" }
+pub const fn database() -> &'static str {
+    ""
+}
 
 /// Docker file icon
-pub const fn docker() -> &'static str { "" }
+pub const fn docker() -> &'static str {
+    ""
+}
 
 /// Makefile icon
-pub const fn makefile() -> &'static str { "" }
+pub const fn makefile() -> &'static str {
+    ""
+}
 
 /// License file icon
-pub const fn license() -> &'static str { "" }
+pub const fn license() -> &'static str {
+    ""
+}
 
 /// Readme file icon
-pub const fn readme() -> &'static str { "" }
+pub const fn readme() -> &'static str {
+    ""
+}
 
 /// Git file icon
-pub const fn gitfile() -> &'static str { "" }
+pub const fn gitfile() -> &'static str {
+    ""
+}
 
 /// NPM file icon
-pub const fn npm() -> &'static str { "" }
+pub const fn npm() -> &'static str {
+    ""
+}
 
 /// Cargo.toml icon
-pub const fn cargo() -> &'static str { "" }
+pub const fn cargo() -> &'static str {
+    ""
+}
 
 /// Default/unknown file icon
-pub const fn default() -> &'static str { "" }
+pub const fn default() -> &'static str {
+    ""
+}
 
 /// Get icon for a file extension
 pub fn for_extension(ext: &str) -> &'static str {

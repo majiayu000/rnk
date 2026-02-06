@@ -23,7 +23,7 @@
 //! }
 //! ```
 
-use crate::hooks::use_signal::{use_signal, Signal};
+use crate::hooks::use_signal::{Signal, use_signal};
 
 /// Async operation state
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

@@ -84,19 +84,167 @@ impl ClipRegion {
 pub struct Output {
     pub width: u16,
     pub height: u16,
-    grid: Vec<Vec<StyledChar>>,
+    /// Flat grid storage for better cache locality (row-major order)
+    grid: Vec<StyledChar>,
     clip_stack: Vec<ClipRegion>,
+    /// Tracks which rows have been modified since last clear_dirty()
+    dirty_rows: Vec<bool>,
+    /// Quick check if any row is dirty
+    any_dirty: bool,
 }
 
 impl Output {
     /// Create a new output buffer
     pub fn new(width: u16, height: u16) -> Self {
-        let grid = vec![vec![StyledChar::new(' '); width as usize]; height as usize];
+        let size = (width as usize) * (height as usize);
+        let grid = vec![StyledChar::new(' '); size];
         Self {
             width,
             height,
             grid,
             clip_stack: Vec::new(),
+            dirty_rows: vec![false; height as usize],
+            any_dirty: false,
+        }
+    }
+
+    /// Calculate flat index from (col, row) coordinates
+    #[inline]
+    fn index(&self, col: usize, row: usize) -> usize {
+        row * (self.width as usize) + col
+    }
+
+    /// Get a reference to a cell at (col, row)
+    #[inline]
+    fn get(&self, col: usize, row: usize) -> Option<&StyledChar> {
+        if col < self.width as usize && row < self.height as usize {
+            Some(&self.grid[self.index(col, row)])
+        } else {
+            None
+        }
+    }
+
+    /// Get a mutable reference to a cell at (col, row)
+    #[inline]
+    fn get_mut(&mut self, col: usize, row: usize) -> Option<&mut StyledChar> {
+        if col < self.width as usize && row < self.height as usize {
+            let idx = self.index(col, row);
+            Some(&mut self.grid[idx])
+        } else {
+            None
+        }
+    }
+
+    /// Set a cell at (col, row)
+    #[inline]
+    fn set(&mut self, col: usize, row: usize, value: StyledChar) {
+        if col < self.width as usize && row < self.height as usize {
+            let idx = self.index(col, row);
+            self.grid[idx] = value;
+        }
+    }
+
+    /// Get an iterator over a row
+    fn row_iter(&self, row: usize) -> impl Iterator<Item = &StyledChar> {
+        let start = row * (self.width as usize);
+        let end = start + (self.width as usize);
+        self.grid[start..end].iter()
+    }
+
+    /// Get a reference to a cell at (col, row) - public for testing
+    #[cfg(test)]
+    pub fn cell_at(&self, col: usize, row: usize) -> Option<&StyledChar> {
+        self.get(col, row)
+    }
+
+    /// Check if any row has been modified
+    pub fn is_dirty(&self) -> bool {
+        self.any_dirty
+    }
+
+    /// Check if a specific row has been modified
+    pub fn is_row_dirty(&self, row: usize) -> bool {
+        self.dirty_rows.get(row).copied().unwrap_or(false)
+    }
+
+    /// Clear all dirty flags
+    pub fn clear_dirty(&mut self) {
+        self.dirty_rows.fill(false);
+        self.any_dirty = false;
+    }
+
+    /// Get indices of all dirty rows
+    pub fn dirty_row_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.dirty_rows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &dirty)| if dirty { Some(i) } else { None })
+    }
+
+    /// Render only the dirty rows, returning (row_index, rendered_line) pairs
+    pub fn render_dirty_rows(&self) -> Vec<(usize, String)> {
+        self.dirty_row_indices()
+            .map(|row_idx| {
+                let line = self.render_row(row_idx);
+                (row_idx, line)
+            })
+            .collect()
+    }
+
+    /// Render a single row to a string with ANSI codes
+    fn render_row(&self, row_idx: usize) -> String {
+        if row_idx >= self.height as usize {
+            return String::new();
+        }
+
+        let mut last_content_idx = 0;
+        for (i, cell) in self.row_iter(row_idx).enumerate() {
+            if cell.ch != '\0' && (cell.ch != ' ' || cell.has_style()) {
+                last_content_idx = i + 1;
+            }
+        }
+
+        let mut line = String::new();
+        let mut current_style: Option<StyledChar> = None;
+
+        for (i, cell) in self.row_iter(row_idx).enumerate() {
+            if i >= last_content_idx {
+                break;
+            }
+
+            if cell.ch == '\0' {
+                continue;
+            }
+
+            let need_style_change = match &current_style {
+                None => cell.has_style(),
+                Some(prev) => !cell.same_style(prev),
+            };
+
+            if need_style_change {
+                if current_style.is_some() {
+                    line.push_str("\x1b[0m");
+                }
+                self.apply_style(&mut line, cell);
+                current_style = Some(cell.clone());
+            }
+
+            line.push(cell.ch);
+        }
+
+        if current_style.is_some() {
+            line.push_str("\x1b[0m");
+        }
+
+        line
+    }
+
+    /// Mark a row as dirty
+    #[inline]
+    fn mark_dirty(&mut self, row: usize) {
+        if row < self.dirty_rows.len() {
+            self.dirty_rows[row] = true;
+            self.any_dirty = true;
         }
     }
 
@@ -105,25 +253,30 @@ impl Output {
         let mut col = x as usize;
         let row = y as usize;
 
-        if row >= self.grid.len() {
+        if row >= self.height as usize {
             return;
         }
+
+        // Mark row as dirty before any modifications
+        self.mark_dirty(row);
+
+        let width = self.width as usize;
 
         for ch in text.chars() {
             if ch == '\n' {
                 break;
             }
 
-            if col >= self.grid[row].len() {
+            if col >= width {
                 break;
             }
 
             let char_width = ch.width().unwrap_or(1);
 
             // Handle wide character at buffer boundary - skip if it won't fit
-            if char_width == 2 && col + 1 >= self.grid[row].len() {
+            if char_width == 2 && col + 1 >= width {
                 // Wide char would extend past buffer, write a space instead
-                self.grid[row][col] = StyledChar::with_style(' ', style);
+                self.set(col, row, StyledChar::with_style(' ', style));
                 col += 1;
                 continue;
             }
@@ -138,35 +291,39 @@ impl Output {
 
             // Handle overwriting wide character's second half (placeholder)
             // If current position is a placeholder '\0', we're breaking a wide char
-            if self.grid[row][col].ch == '\0' && col > 0 {
-                // Clear the first half of the broken wide char
-                self.grid[row][col - 1] = StyledChar::new(' ');
+            if let Some(cell) = self.get(col, row) {
+                if cell.ch == '\0' && col > 0 {
+                    // Clear the first half of the broken wide char
+                    self.set(col - 1, row, StyledChar::new(' '));
+                }
             }
 
             // Handle overwriting wide character's first half
             // If current position has a wide char, its placeholder will be orphaned
-            let old_char_width = self.grid[row][col].ch.width().unwrap_or(1);
-            if old_char_width == 2 && col + 1 < self.grid[row].len() {
-                // Clear the orphaned placeholder
-                self.grid[row][col + 1] = StyledChar::new(' ');
+            if let Some(cell) = self.get(col, row) {
+                let old_char_width = cell.ch.width().unwrap_or(1);
+                if old_char_width == 2 && col + 1 < width {
+                    // Clear the orphaned placeholder
+                    self.set(col + 1, row, StyledChar::new(' '));
+                }
             }
 
-            self.grid[row][col] = StyledChar::with_style(ch, style);
+            self.set(col, row, StyledChar::with_style(ch, style));
 
             // For wide characters (width=2), mark the next cell as a placeholder
-            if char_width == 2 && col + 1 < self.grid[row].len() {
+            if char_width == 2 && col + 1 < width {
                 // Check if we're about to overwrite another wide char's first half
-                if self.grid[row][col + 1].ch == '\0' {
-                    // This shouldn't happen as we just handled it, but be safe
-                } else {
-                    let next_char_width = self.grid[row][col + 1].ch.width().unwrap_or(1);
-                    if next_char_width == 2 && col + 2 < self.grid[row].len() {
-                        // Clear the placeholder of the wide char we're overwriting
-                        self.grid[row][col + 2] = StyledChar::new(' ');
+                if let Some(next_cell) = self.get(col + 1, row) {
+                    if next_cell.ch != '\0' {
+                        let next_char_width = next_cell.ch.width().unwrap_or(1);
+                        if next_char_width == 2 && col + 2 < width {
+                            // Clear the placeholder of the wide char we're overwriting
+                            self.set(col + 2, row, StyledChar::new(' '));
+                        }
                     }
                 }
                 // Use a special marker for wide char continuation
-                self.grid[row][col + 1] = StyledChar::new('\0');
+                self.set(col + 1, row, StyledChar::new('\0'));
             }
 
             col += char_width;
@@ -177,17 +334,21 @@ impl Output {
     pub fn write_char(&mut self, x: u16, y: u16, ch: char, style: &Style) {
         let col = x as usize;
         let row = y as usize;
+        let width = self.width as usize;
 
-        if row >= self.grid.len() || col >= self.grid[row].len() {
+        if row >= self.height as usize || col >= width {
             return;
         }
+
+        // Mark row as dirty before any modifications
+        self.mark_dirty(row);
 
         let char_width = ch.width().unwrap_or(1);
 
         // Handle wide character at buffer boundary - skip if it won't fit
-        if char_width == 2 && col + 1 >= self.grid[row].len() {
+        if char_width == 2 && col + 1 >= width {
             // Wide char would extend past buffer, write a space instead
-            self.grid[row][col] = StyledChar::with_style(' ', style);
+            self.set(col, row, StyledChar::with_style(' ', style));
             return;
         }
 
@@ -199,26 +360,32 @@ impl Output {
         }
 
         // Handle overwriting wide character's second half (placeholder)
-        if self.grid[row][col].ch == '\0' && col > 0 {
-            self.grid[row][col - 1] = StyledChar::new(' ');
+        if let Some(cell) = self.get(col, row) {
+            if cell.ch == '\0' && col > 0 {
+                self.set(col - 1, row, StyledChar::new(' '));
+            }
         }
 
         // Handle overwriting wide character's first half
-        let old_char_width = self.grid[row][col].ch.width().unwrap_or(1);
-        if old_char_width == 2 && col + 1 < self.grid[row].len() {
-            self.grid[row][col + 1] = StyledChar::new(' ');
+        if let Some(cell) = self.get(col, row) {
+            let old_char_width = cell.ch.width().unwrap_or(1);
+            if old_char_width == 2 && col + 1 < width {
+                self.set(col + 1, row, StyledChar::new(' '));
+            }
         }
 
-        self.grid[row][col] = StyledChar::with_style(ch, style);
+        self.set(col, row, StyledChar::with_style(ch, style));
 
         // For wide characters (width=2), mark the next cell as a placeholder
-        if char_width == 2 && col + 1 < self.grid[row].len() {
+        if char_width == 2 && col + 1 < width {
             // Handle overwriting the next position's wide char if any
-            let next_char_width = self.grid[row][col + 1].ch.width().unwrap_or(1);
-            if next_char_width == 2 && col + 2 < self.grid[row].len() {
-                self.grid[row][col + 2] = StyledChar::new(' ');
+            if let Some(next_cell) = self.get(col + 1, row) {
+                let next_char_width = next_cell.ch.width().unwrap_or(1);
+                if next_char_width == 2 && col + 2 < width {
+                    self.set(col + 2, row, StyledChar::new(' '));
+                }
             }
-            self.grid[row][col + 1] = StyledChar::new('\0');
+            self.set(col + 1, row, StyledChar::new('\0'));
         }
     }
 
@@ -245,11 +412,11 @@ impl Output {
     pub fn render(&self) -> String {
         let mut lines: Vec<String> = Vec::new();
 
-        for row in self.grid.iter() {
+        for row_idx in 0..self.height as usize {
             // First, find the last non-space, non-placeholder character
             // This determines where meaningful content ends
             let mut last_content_idx = 0;
-            for (i, cell) in row.iter().enumerate() {
+            for (i, cell) in self.row_iter(row_idx).enumerate() {
                 // Consider any non-default-space character as content
                 // A space with styling (color, bg, etc) is still content
                 if cell.ch != '\0' && (cell.ch != ' ' || cell.has_style()) {
@@ -260,7 +427,7 @@ impl Output {
             let mut line = String::new();
             let mut current_style: Option<StyledChar> = None;
 
-            for (i, cell) in row.iter().enumerate() {
+            for (i, cell) in self.row_iter(row_idx).enumerate() {
                 // Stop at trailing whitespace (unstyled spaces at the end)
                 if i >= last_content_idx {
                     break;
@@ -313,9 +480,9 @@ impl Output {
     pub fn render_fixed_height(&self) -> String {
         let mut lines: Vec<String> = Vec::new();
 
-        for row in self.grid.iter() {
+        for row_idx in 0..self.height as usize {
             let mut last_content_idx = 0;
-            for (i, cell) in row.iter().enumerate() {
+            for (i, cell) in self.row_iter(row_idx).enumerate() {
                 if cell.ch != '\0' && (cell.ch != ' ' || cell.has_style()) {
                     last_content_idx = i + 1;
                 }
@@ -324,7 +491,7 @@ impl Output {
             let mut line = String::new();
             let mut current_style: Option<StyledChar> = None;
 
-            for (i, cell) in row.iter().enumerate() {
+            for (i, cell) in self.row_iter(row_idx).enumerate() {
                 if i >= last_content_idx {
                     break;
                 }
@@ -457,8 +624,8 @@ mod tests {
         let mut output = Output::new(80, 24);
         output.write(0, 0, "Hello", &Style::default());
 
-        assert_eq!(output.grid[0][0].ch, 'H');
-        assert_eq!(output.grid[0][4].ch, 'o');
+        assert_eq!(output.cell_at(0, 0).unwrap().ch, 'H');
+        assert_eq!(output.cell_at(4, 0).unwrap().ch, 'o');
     }
 
     #[test]
@@ -480,11 +647,11 @@ mod tests {
         output.write(0, 0, "你好", &Style::default());
 
         // '你' at position 0, placeholder at position 1
-        assert_eq!(output.grid[0][0].ch, '你');
-        assert_eq!(output.grid[0][1].ch, '\0');
+        assert_eq!(output.cell_at(0, 0).unwrap().ch, '你');
+        assert_eq!(output.cell_at(1, 0).unwrap().ch, '\0');
         // '好' at position 2, placeholder at position 3
-        assert_eq!(output.grid[0][2].ch, '好');
-        assert_eq!(output.grid[0][3].ch, '\0');
+        assert_eq!(output.cell_at(2, 0).unwrap().ch, '好');
+        assert_eq!(output.cell_at(3, 0).unwrap().ch, '\0');
     }
 
     #[test]
@@ -492,15 +659,15 @@ mod tests {
         let mut output = Output::new(80, 24);
         // Write a wide char first
         output.write(0, 0, "你", &Style::default());
-        assert_eq!(output.grid[0][0].ch, '你');
-        assert_eq!(output.grid[0][1].ch, '\0');
+        assert_eq!(output.cell_at(0, 0).unwrap().ch, '你');
+        assert_eq!(output.cell_at(1, 0).unwrap().ch, '\0');
 
         // Overwrite the placeholder with a narrow char
         output.write_char(1, 0, 'X', &Style::default());
 
         // The wide char should be replaced with space (broken)
-        assert_eq!(output.grid[0][0].ch, ' ');
-        assert_eq!(output.grid[0][1].ch, 'X');
+        assert_eq!(output.cell_at(0, 0).unwrap().ch, ' ');
+        assert_eq!(output.cell_at(1, 0).unwrap().ch, 'X');
     }
 
     #[test]
@@ -508,15 +675,15 @@ mod tests {
         let mut output = Output::new(80, 24);
         // Write a wide char first
         output.write(0, 0, "你", &Style::default());
-        assert_eq!(output.grid[0][0].ch, '你');
-        assert_eq!(output.grid[0][1].ch, '\0');
+        assert_eq!(output.cell_at(0, 0).unwrap().ch, '你');
+        assert_eq!(output.cell_at(1, 0).unwrap().ch, '\0');
 
         // Overwrite the first half with a narrow char
         output.write_char(0, 0, 'X', &Style::default());
 
         // The wide char's placeholder should be cleared
-        assert_eq!(output.grid[0][0].ch, 'X');
-        assert_eq!(output.grid[0][1].ch, ' ');
+        assert_eq!(output.cell_at(0, 0).unwrap().ch, 'X');
+        assert_eq!(output.cell_at(1, 0).unwrap().ch, ' ');
     }
 
     #[test]
@@ -581,15 +748,15 @@ mod tests {
         output.write(3, 0, "你", &Style::default());
 
         // Position 3 should be a space, position 4 is at boundary
-        assert_eq!(output.grid[0][3].ch, '你');
-        assert_eq!(output.grid[0][4].ch, '\0');
+        assert_eq!(output.cell_at(3, 0).unwrap().ch, '你');
+        assert_eq!(output.cell_at(4, 0).unwrap().ch, '\0');
 
         // Now test when wide char would extend past buffer
         let mut output2 = Output::new(5, 1);
         output2.write(4, 0, "你", &Style::default());
 
         // Should write a space instead since wide char won't fit
-        assert_eq!(output2.grid[0][4].ch, ' ');
+        assert_eq!(output2.cell_at(4, 0).unwrap().ch, ' ');
     }
 
     #[test]
@@ -599,7 +766,77 @@ mod tests {
         output.write(2, 0, "你", &Style::default());
 
         // Wide char at position 2-3 should fit exactly
-        assert_eq!(output.grid[0][2].ch, '你');
-        assert_eq!(output.grid[0][3].ch, '\0');
+        assert_eq!(output.cell_at(2, 0).unwrap().ch, '你');
+        assert_eq!(output.cell_at(3, 0).unwrap().ch, '\0');
+    }
+
+    #[test]
+    fn test_dirty_tracking_initial_state() {
+        let output = Output::new(80, 24);
+        assert!(!output.is_dirty());
+        assert!(!output.is_row_dirty(0));
+    }
+
+    #[test]
+    fn test_dirty_tracking_after_write() {
+        let mut output = Output::new(80, 24);
+        output.write(0, 5, "Hello", &Style::default());
+
+        assert!(output.is_dirty());
+        assert!(output.is_row_dirty(5));
+        assert!(!output.is_row_dirty(0));
+        assert!(!output.is_row_dirty(6));
+    }
+
+    #[test]
+    fn test_dirty_tracking_after_write_char() {
+        let mut output = Output::new(80, 24);
+        output.write_char(10, 3, 'X', &Style::default());
+
+        assert!(output.is_dirty());
+        assert!(output.is_row_dirty(3));
+        assert!(!output.is_row_dirty(2));
+    }
+
+    #[test]
+    fn test_dirty_tracking_clear() {
+        let mut output = Output::new(80, 24);
+        output.write(0, 0, "Test", &Style::default());
+        output.write(0, 5, "Test", &Style::default());
+
+        assert!(output.is_dirty());
+        assert!(output.is_row_dirty(0));
+        assert!(output.is_row_dirty(5));
+
+        output.clear_dirty();
+
+        assert!(!output.is_dirty());
+        assert!(!output.is_row_dirty(0));
+        assert!(!output.is_row_dirty(5));
+    }
+
+    #[test]
+    fn test_dirty_row_indices() {
+        let mut output = Output::new(80, 24);
+        output.write(0, 1, "A", &Style::default());
+        output.write(0, 3, "B", &Style::default());
+        output.write(0, 7, "C", &Style::default());
+
+        let dirty: Vec<usize> = output.dirty_row_indices().collect();
+        assert_eq!(dirty, vec![1, 3, 7]);
+    }
+
+    #[test]
+    fn test_render_dirty_rows() {
+        let mut output = Output::new(80, 24);
+        output.write(0, 0, "Line 0", &Style::default());
+        output.write(0, 2, "Line 2", &Style::default());
+
+        let dirty_rows = output.render_dirty_rows();
+        assert_eq!(dirty_rows.len(), 2);
+        assert_eq!(dirty_rows[0].0, 0);
+        assert_eq!(dirty_rows[0].1, "Line 0");
+        assert_eq!(dirty_rows[1].0, 2);
+        assert_eq!(dirty_rows[1].1, "Line 2");
     }
 }

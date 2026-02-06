@@ -56,8 +56,11 @@ pub struct FormHandle {
 impl FormHandle {
     /// Get a field value
     pub fn get(&self, name: &str) -> String {
-        self.fields
-            .with(|f| f.get(name).map(|field| field.value.clone()).unwrap_or_default())
+        self.fields.with(|f| {
+            f.get(name)
+                .map(|field| field.value.clone())
+                .unwrap_or_default()
+        })
     }
 
     /// Set a field value
@@ -73,7 +76,8 @@ impl FormHandle {
 
     /// Get a field's error
     pub fn error(&self, name: &str) -> Option<String> {
-        self.fields.with(|f| f.get(name).and_then(|field| field.error.clone()))
+        self.fields
+            .with(|f| f.get(name).and_then(|field| field.error.clone()))
     }
 
     /// Set a field's error
@@ -96,7 +100,8 @@ impl FormHandle {
 
     /// Check if a field has been touched
     pub fn is_touched(&self, name: &str) -> bool {
-        self.fields.with(|f| f.get(name).map(|field| field.touched).unwrap_or(false))
+        self.fields
+            .with(|f| f.get(name).map(|field| field.touched).unwrap_or(false))
     }
 
     /// Mark a field as touched
@@ -110,7 +115,8 @@ impl FormHandle {
 
     /// Check if the form is valid (no errors)
     pub fn is_valid(&self) -> bool {
-        self.fields.with(|f| f.values().all(|field| field.error.is_none()))
+        self.fields
+            .with(|f| f.values().all(|field| field.error.is_none()))
     }
 
     /// Check if any field has been touched

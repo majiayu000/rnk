@@ -83,7 +83,16 @@ pub enum PopoverBorder {
 
 impl PopoverBorder {
     /// Get border characters (top-left, top-right, bottom-left, bottom-right, horizontal, vertical)
-    pub fn chars(&self) -> Option<(&'static str, &'static str, &'static str, &'static str, &'static str, &'static str)> {
+    pub fn chars(
+        &self,
+    ) -> Option<(
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+    )> {
         match self {
             PopoverBorder::None => None,
             PopoverBorder::Single => Some(("┌", "┐", "└", "┘", "─", "│")),
@@ -426,10 +435,22 @@ mod tests {
 
     #[test]
     fn test_popover_arrow() {
-        assert_eq!(PopoverArrow::Unicode.char_for_position(PopoverPosition::Top), "▼");
-        assert_eq!(PopoverArrow::Unicode.char_for_position(PopoverPosition::Bottom), "▲");
-        assert_eq!(PopoverArrow::Simple.char_for_position(PopoverPosition::Left), ">");
-        assert_eq!(PopoverArrow::None.char_for_position(PopoverPosition::Right), "");
+        assert_eq!(
+            PopoverArrow::Unicode.char_for_position(PopoverPosition::Top),
+            "▼"
+        );
+        assert_eq!(
+            PopoverArrow::Unicode.char_for_position(PopoverPosition::Bottom),
+            "▲"
+        );
+        assert_eq!(
+            PopoverArrow::Simple.char_for_position(PopoverPosition::Left),
+            ">"
+        );
+        assert_eq!(
+            PopoverArrow::None.char_for_position(PopoverPosition::Right),
+            ""
+        );
     }
 
     #[test]

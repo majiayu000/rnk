@@ -212,41 +212,98 @@ impl CodeEditor {
 
     fn highlight_rust(&self, line: &str) -> String {
         let keywords = [
-            "fn", "let", "mut", "const", "static", "struct", "enum", "impl", "trait",
-            "pub", "use", "mod", "crate", "self", "super", "where", "for", "loop",
-            "while", "if", "else", "match", "return", "break", "continue", "async",
-            "await", "move", "ref", "type", "dyn", "unsafe", "extern",
+            "fn", "let", "mut", "const", "static", "struct", "enum", "impl", "trait", "pub", "use",
+            "mod", "crate", "self", "super", "where", "for", "loop", "while", "if", "else",
+            "match", "return", "break", "continue", "async", "await", "move", "ref", "type", "dyn",
+            "unsafe", "extern",
         ];
         self.highlight_generic(line, &keywords, "//")
     }
 
     fn highlight_python(&self, line: &str) -> String {
         let keywords = [
-            "def", "class", "if", "elif", "else", "for", "while", "try", "except",
-            "finally", "with", "as", "import", "from", "return", "yield", "raise",
-            "pass", "break", "continue", "lambda", "and", "or", "not", "in", "is",
-            "None", "True", "False", "self", "async", "await",
+            "def", "class", "if", "elif", "else", "for", "while", "try", "except", "finally",
+            "with", "as", "import", "from", "return", "yield", "raise", "pass", "break",
+            "continue", "lambda", "and", "or", "not", "in", "is", "None", "True", "False", "self",
+            "async", "await",
         ];
         self.highlight_generic(line, &keywords, "#")
     }
 
     fn highlight_js(&self, line: &str) -> String {
         let keywords = [
-            "function", "const", "let", "var", "if", "else", "for", "while", "do",
-            "switch", "case", "break", "continue", "return", "try", "catch", "finally",
-            "throw", "class", "extends", "new", "this", "super", "import", "export",
-            "default", "async", "await", "yield", "typeof", "instanceof", "null",
-            "undefined", "true", "false",
+            "function",
+            "const",
+            "let",
+            "var",
+            "if",
+            "else",
+            "for",
+            "while",
+            "do",
+            "switch",
+            "case",
+            "break",
+            "continue",
+            "return",
+            "try",
+            "catch",
+            "finally",
+            "throw",
+            "class",
+            "extends",
+            "new",
+            "this",
+            "super",
+            "import",
+            "export",
+            "default",
+            "async",
+            "await",
+            "yield",
+            "typeof",
+            "instanceof",
+            "null",
+            "undefined",
+            "true",
+            "false",
         ];
         self.highlight_generic(line, &keywords, "//")
     }
 
     fn highlight_go(&self, line: &str) -> String {
         let keywords = [
-            "func", "var", "const", "type", "struct", "interface", "map", "chan",
-            "if", "else", "for", "range", "switch", "case", "default", "break",
-            "continue", "return", "go", "defer", "select", "package", "import",
-            "nil", "true", "false", "make", "new", "len", "cap", "append",
+            "func",
+            "var",
+            "const",
+            "type",
+            "struct",
+            "interface",
+            "map",
+            "chan",
+            "if",
+            "else",
+            "for",
+            "range",
+            "switch",
+            "case",
+            "default",
+            "break",
+            "continue",
+            "return",
+            "go",
+            "defer",
+            "select",
+            "package",
+            "import",
+            "nil",
+            "true",
+            "false",
+            "make",
+            "new",
+            "len",
+            "cap",
+            "append",
         ];
         self.highlight_generic(line, &keywords, "//")
     }
@@ -316,9 +373,9 @@ impl CodeEditor {
 
     fn highlight_shell(&self, line: &str) -> String {
         let keywords = [
-            "if", "then", "else", "elif", "fi", "for", "while", "do", "done",
-            "case", "esac", "function", "return", "exit", "export", "local",
-            "echo", "cd", "ls", "rm", "cp", "mv", "mkdir", "cat", "grep",
+            "if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case", "esac",
+            "function", "return", "exit", "export", "local", "echo", "cd", "ls", "rm", "cp", "mv",
+            "mkdir", "cat", "grep",
         ];
         self.highlight_generic(line, &keywords, "#")
     }
@@ -420,8 +477,7 @@ mod tests {
 
     #[test]
     fn test_code_editor_creation() {
-        let editor = CodeEditor::new("fn main() {}")
-            .language(Language::Rust);
+        let editor = CodeEditor::new("fn main() {}").language(Language::Rust);
         assert_eq!(editor.language, Language::Rust);
     }
 
@@ -451,9 +507,7 @@ mod tests {
 
     #[test]
     fn test_cursor() {
-        let editor = CodeEditor::new("code")
-            .cursor(1, 5)
-            .highlighted_line(1);
+        let editor = CodeEditor::new("code").cursor(1, 5).highlighted_line(1);
         assert_eq!(editor.cursor, Some((1, 5)));
         assert_eq!(editor.highlighted_line, Some(1));
     }

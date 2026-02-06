@@ -179,10 +179,10 @@ impl EventLoop {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::renderer::registry::{AppRuntime, AppSink, ModeSwitch, Printable};
-    use crate::renderer::frame_rate::FrameRateConfig;
     use crate::hooks::use_input::{clear_input_handlers, register_input_handler};
     use crate::hooks::use_mouse::{clear_mouse_handlers, register_mouse_handler};
+    use crate::renderer::frame_rate::FrameRateConfig;
+    use crate::renderer::registry::{AppRuntime, AppSink, ModeSwitch, Printable};
     use crossterm::event::{KeyEvent, MouseEvent, MouseEventKind};
     use std::sync::atomic::AtomicBool;
 
@@ -292,9 +292,14 @@ mod tests {
         let should_exit = Arc::new(AtomicBool::new(false));
         let frame_rate = FrameRateController::new(FrameRateConfig::new(60));
         let (tx, rx) = mpsc::unbounded_channel();
-        let mut event_loop =
-            EventLoop::with_filters(runtime.clone(), should_exit, frame_rate, true, FilterChain::new())
-                .with_render_rx(rx);
+        let mut event_loop = EventLoop::with_filters(
+            runtime.clone(),
+            should_exit,
+            frame_rate,
+            true,
+            FilterChain::new(),
+        )
+        .with_render_rx(rx);
 
         tx.send(()).unwrap();
         event_loop.drain_render_notifications();

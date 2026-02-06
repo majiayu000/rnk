@@ -120,7 +120,9 @@ mod tests {
 
     fn test_reducer(state: &TestState, action: TestAction) -> TestState {
         match action {
-            TestAction::Add(n) => TestState { value: state.value + n },
+            TestAction::Add(n) => TestState {
+                value: state.value + n,
+            },
             TestAction::Reset => TestState { value: 0 },
         }
     }
@@ -128,10 +130,7 @@ mod tests {
     #[test]
     fn test_use_reducer_compiles() {
         fn _test() {
-            let (state, dispatch) = use_reducer(
-                TestState { value: 0 },
-                test_reducer,
-            );
+            let (state, dispatch) = use_reducer(TestState { value: 0 }, test_reducer);
             let _ = state.value;
             dispatch.dispatch(TestAction::Add(1));
         }
@@ -140,10 +139,7 @@ mod tests {
     #[test]
     fn test_use_reducer_lazy_compiles() {
         fn _test() {
-            let (state, _dispatch) = use_reducer_lazy(
-                || TestState { value: 42 },
-                test_reducer,
-            );
+            let (state, _dispatch) = use_reducer_lazy(|| TestState { value: 42 }, test_reducer);
             let _ = state.value;
         }
     }

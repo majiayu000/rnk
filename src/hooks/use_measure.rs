@@ -55,6 +55,14 @@ thread_local! {
 }
 
 /// Set the current measure context (called by App during render)
+///
+/// # Deprecated
+/// This function uses thread-local state. Prefer using `RuntimeContext` directly
+/// for new code. This API is maintained for backward compatibility.
+#[deprecated(
+    since = "0.17.0",
+    note = "Use RuntimeContext::set_measurement() instead"
+)]
 pub fn set_measure_context(ctx: Option<MeasureContext>) {
     MEASURE_CONTEXT.with(|c| {
         *c.borrow_mut() = ctx;
@@ -62,6 +70,14 @@ pub fn set_measure_context(ctx: Option<MeasureContext>) {
 }
 
 /// Get the current measure context
+///
+/// # Deprecated
+/// This function uses thread-local state. Prefer using `RuntimeContext` directly
+/// for new code. This API is maintained for backward compatibility.
+#[deprecated(
+    since = "0.17.0",
+    note = "Use RuntimeContext::get_measurement() instead"
+)]
 pub fn get_measure_context() -> Option<MeasureContext> {
     MEASURE_CONTEXT.with(|c| c.borrow().clone())
 }

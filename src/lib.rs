@@ -109,6 +109,7 @@ pub mod animation;
 pub mod cmd;
 pub mod components;
 pub mod core;
+pub mod error;
 pub mod hooks;
 pub mod layout;
 #[macro_use]

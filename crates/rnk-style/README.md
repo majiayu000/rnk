@@ -24,7 +24,7 @@ fn main() {
         .bg(Color::Black)
         .bold()
         .padding(1, 2)
-        .border(BorderStyle::Rounded);
+        .border(BorderStyle::Round);
 
     println!("{}", style.render("Hello, World!"));
 }
@@ -55,7 +55,7 @@ use rnk_style::{Style, Color, BorderStyle};
 
 let box_style = Style::new()
     .padding(1, 2)
-    .border(BorderStyle::Rounded)
+    .border(BorderStyle::Round)
     .border_fg(Color::Cyan);
 
 println!("{}", box_style.render("Boxed content"));

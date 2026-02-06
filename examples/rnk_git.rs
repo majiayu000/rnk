@@ -216,16 +216,16 @@ fn header() -> Element {
                 .bold()
                 .into_element(),
         )
-        .child(
-            Text::new("main")
-                .color(Color::Cyan)
-                .into_element(),
-        )
+        .child(Text::new("main").color(Color::Cyan).into_element())
         .into_element()
 }
 
 fn status_panel(files: &[FileStatus], selected: usize, active: bool) -> Element {
-    let border_color = if active { Color::Green } else { Color::BrightBlack };
+    let border_color = if active {
+        Color::Green
+    } else {
+        Color::BrightBlack
+    };
 
     let mut children = vec![
         Text::new(format!(" Unstaged Changes ({}) ", files.len()))
@@ -276,7 +276,11 @@ fn status_panel(files: &[FileStatus], selected: usize, active: bool) -> Element 
 }
 
 fn staged_panel(files: &[FileStatus], selected: usize, active: bool) -> Element {
-    let border_color = if active { Color::Green } else { Color::BrightBlack };
+    let border_color = if active {
+        Color::Green
+    } else {
+        Color::BrightBlack
+    };
 
     let mut children = vec![
         Text::new(format!(" Staged Changes ({}) ", files.len()))
@@ -331,7 +335,11 @@ fn staged_panel(files: &[FileStatus], selected: usize, active: bool) -> Element 
 }
 
 fn commits_panel(commits: &[Commit], selected: usize, active: bool) -> Element {
-    let border_color = if active { Color::Green } else { Color::BrightBlack };
+    let border_color = if active {
+        Color::Green
+    } else {
+        Color::BrightBlack
+    };
 
     let mut children = vec![
         Text::new(" Commits ")
@@ -377,7 +385,11 @@ fn commits_panel(commits: &[Commit], selected: usize, active: bool) -> Element {
 }
 
 fn diff_panel(content: &str, active: bool) -> Element {
-    let border_color = if active { Color::Green } else { Color::BrightBlack };
+    let border_color = if active {
+        Color::Green
+    } else {
+        Color::BrightBlack
+    };
 
     let mut children = vec![
         Text::new(" Diff ")
@@ -399,11 +411,7 @@ fn diff_panel(content: &str, active: bool) -> Element {
             Color::Reset
         };
 
-        children.push(
-            Text::new(format!(" {}", line))
-                .color(color)
-                .into_element(),
-        );
+        children.push(Text::new(format!(" {}", line)).color(color).into_element());
     }
 
     Box::new()
@@ -426,7 +434,10 @@ fn footer() -> Element {
             Text::new("Quit").dim().into_element(),
             Text::new("Tab").color(Color::Yellow).bold().into_element(),
             Text::new("Switch").dim().into_element(),
-            Text::new("Space").color(Color::Yellow).bold().into_element(),
+            Text::new("Space")
+                .color(Color::Yellow)
+                .bold()
+                .into_element(),
             Text::new("Stage/Unstage").dim().into_element(),
             Text::new("↑↓").color(Color::Yellow).bold().into_element(),
             Text::new("Navigate").dim().into_element(),
@@ -497,12 +508,10 @@ fn mock_unstaged_files() -> Vec<FileStatus> {
 }
 
 fn mock_staged_files() -> Vec<FileStatus> {
-    vec![
-        FileStatus {
-            name: "src/utils.rs".to_string(),
-            status: FileState::Added,
-        },
-    ]
+    vec![FileStatus {
+        name: "src/utils.rs".to_string(),
+        status: FileState::Added,
+    }]
 }
 
 fn mock_commits() -> Vec<Commit> {
