@@ -4,10 +4,11 @@
 //! keyboard navigation and selection internally.
 
 use crate::components::navigation::{
-    NavigationConfig, calculate_visible_range, handle_list_navigation,
+    NavigationConfig, handle_list_navigation,
 };
-use crate::components::{Box as RnkBox, Text};
-use crate::core::{Color, Element, FlexDirection};
+use crate::components::selection_list::{ListStyle, indicator_padding, render_list};
+use crate::components::Box as TinkBox;
+use crate::core::{Color, Element};
 use crate::hooks::{use_input, use_signal};
 
 /// A selectable item in the MultiSelect
@@ -113,7 +114,7 @@ impl MultiSelectStyle {
     /// Set the indicator string
     pub fn indicator(mut self, indicator: impl Into<String>) -> Self {
         let ind = indicator.into();
-        self.indicator_padding = " ".repeat(ind.chars().count());
+        self.indicator_padding = indicator_padding(&ind);
         self.indicator = ind;
         self
     }
@@ -271,7 +272,7 @@ impl<T: Clone + 'static> MultiSelect<T> {
     /// Convert to element with internal state management
     pub fn into_element(self) -> Element {
         if self.items.is_empty() {
-            return RnkBox::new().into_element();
+            return TinkBox::new().into_element();
         }
 
         let initial_highlighted = self.highlighted;
@@ -342,6 +343,32 @@ impl<T: Clone + 'static> MultiSelect<T> {
     }
 }
 
+impl ListStyle for MultiSelectStyle {
+    fn highlight_color(&self) -> Option<Color> {
+        self.highlight_color
+    }
+
+    fn highlight_bg(&self) -> Option<Color> {
+        self.highlight_bg
+    }
+
+    fn highlight_bold(&self) -> bool {
+        self.highlight_bold
+    }
+
+    fn indicator(&self) -> &str {
+        &self.indicator
+    }
+
+    fn indicator_padding(&self) -> &str {
+        &self.indicator_padding
+    }
+
+    fn item_color(&self) -> Option<Color> {
+        self.item_color
+    }
+}
+
 /// Render the multi-select list as an Element
 fn render_multi_select_list<T: Clone + 'static>(
     items: &[MultiSelectItem<T>],
@@ -352,54 +379,33 @@ fn render_multi_select_list<T: Clone + 'static>(
 ) -> Element {
     let highlighted = highlighted_signal.get();
     let selections = selections_signal.get();
-    let total_items = items.len();
 
-    // Calculate visible range
-    let (start, end) = calculate_visible_range(highlighted, total_items, limit);
-
-    let mut container = RnkBox::new().flex_direction(FlexDirection::Column);
-
-    for (idx, item) in items.iter().enumerate().skip(start).take(end - start) {
-        let is_highlighted = idx == highlighted;
-        let is_selected = selections.get(idx).copied().unwrap_or(item.selected);
-
-        let prefix = if is_highlighted {
-            &style.indicator
-        } else {
-            &style.indicator_padding
-        };
-
-        let checkbox = if is_selected {
-            &style.checkbox_selected
-        } else {
-            &style.checkbox_unselected
-        };
-
-        let label = format!("{}{}{}", prefix, checkbox, item.label);
-        let mut text = Text::new(&label);
-
-        if is_highlighted {
-            if let Some(color) = style.highlight_color {
+    render_list(
+        items,
+        highlighted,
+        limit,
+        style,
+        |item, idx, _is_highlighted, prefix| {
+            let is_selected = selections.get(idx).copied().unwrap_or(item.selected);
+            let checkbox = if is_selected {
+                &style.checkbox_selected
+            } else {
+                &style.checkbox_unselected
+            };
+            format!("{}{}{}", prefix, checkbox, item.label)
+        },
+        |item, idx, style, _is_highlighted, mut text| {
+            let is_selected = selections.get(idx).copied().unwrap_or(item.selected);
+            if is_selected {
+                if let Some(color) = style.selected_color {
+                    text = text.color(color);
+                }
+            } else if let Some(color) = style.item_color() {
                 text = text.color(color);
             }
-            if let Some(bg) = style.highlight_bg {
-                text = text.background(bg);
-            }
-            if style.highlight_bold {
-                text = text.bold();
-            }
-        } else if is_selected {
-            if let Some(color) = style.selected_color {
-                text = text.color(color);
-            }
-        } else if let Some(color) = style.item_color {
-            text = text.color(color);
-        }
-
-        container = container.child(text.into_element());
-    }
-
-    container.into_element()
+            text
+        },
+    )
 }
 
 #[cfg(test)]
