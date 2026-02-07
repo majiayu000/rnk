@@ -21,7 +21,7 @@
 //! }
 //! ```
 
-use crate::components::capsule::{capsule_padded, capsule_wrapped};
+use crate::components::capsule::CapsuleLabel;
 use crate::core::{Color, Element};
 
 /// Badge variant for different styles
@@ -79,13 +79,11 @@ impl Badge {
             BadgeVariant::Info => (Color::White, Color::Cyan),
         };
 
-        let text = if self.pill {
-            capsule_padded(self.text, fg, bg)
+        if self.pill {
+            CapsuleLabel::padded(self.text, fg, bg).into_element()
         } else {
-            capsule_wrapped(self.text, fg, bg, "[", "]")
-        };
-
-        text.into_element()
+            CapsuleLabel::wrapped(self.text, fg, bg, "[", "]").into_element()
+        }
     }
 }
 
