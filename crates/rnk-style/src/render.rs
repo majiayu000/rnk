@@ -1,7 +1,7 @@
 //! Rendering logic for styled text
 
 use crate::style::{Align, Style};
-use rnk_style_core::{BorderStyle, Color};
+use rnk_style_core::Color;
 use unicode_width::UnicodeWidthStr;
 
 const RESET: &str = "\x1b[0m";
@@ -84,7 +84,6 @@ pub fn render(style: &Style, text: &str) -> String {
             style,
             &border_codes,
             v,
-            inner_width,
             &style_codes,
             line,
             content_width,
@@ -145,10 +144,10 @@ fn build_style_codes(style: &Style) -> String {
     let mut codes = String::new();
 
     if style.fg != Color::Reset {
-        codes.push_str(&style.fg.fg_code());
+        codes.push_str(&style.fg.to_ansi_fg());
     }
     if style.bg != Color::Reset {
-        codes.push_str(&style.bg.bg_code());
+        codes.push_str(&style.bg.to_ansi_bg());
     }
     if style.bold {
         codes.push_str(BOLD);
@@ -174,7 +173,7 @@ fn build_style_codes(style: &Style) -> String {
 
 fn build_border_codes(style: &Style) -> String {
     if style.border_fg != Color::Reset {
-        style.border_fg.fg_code()
+        style.border_fg.to_ansi_fg()
     } else {
         String::new()
     }
@@ -223,7 +222,6 @@ fn render_content_line(
     style: &Style,
     border_codes: &str,
     v: &str,
-    _inner_width: usize,
     style_codes: &str,
     text: &str,
     content_width: usize,
@@ -292,6 +290,7 @@ fn render_content_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rnk_style_core::BorderStyle;
 
     #[test]
     fn test_simple_render() {
