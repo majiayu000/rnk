@@ -127,58 +127,6 @@ impl RenderHelper {
         }
     }
 
-    #[allow(dead_code)]
-    fn calculate_content_width(&self, element: &Element) -> u16 {
-        use unicode_width::UnicodeWidthStr;
-
-        // If element has explicit width set, use it
-        if let crate::core::Dimension::Points(w) = element.style.width {
-            return w as u16;
-        }
-
-        let mut width = 0u16;
-
-        // Calculate text content width
-        if let Some(text) = &element.text_content {
-            width = width.max(text.width() as u16);
-        }
-
-        // Calculate spans width
-        if let Some(lines) = &element.spans {
-            for line in lines {
-                let line_width: usize = line.spans.iter().map(|span| span.width()).sum();
-                width = width.max(line_width as u16);
-            }
-        }
-
-        // Recursively check children for row layout
-        if element.style.flex_direction == crate::core::FlexDirection::Row {
-            let mut child_width_sum = 0u16;
-            for child in &element.children {
-                let child_width = self.calculate_content_width(child);
-                child_width_sum = child_width_sum.saturating_add(child_width);
-            }
-            width = width.max(child_width_sum);
-        } else {
-            // For column layout, take the maximum child width
-            for child in &element.children {
-                let child_width = self.calculate_content_width(child);
-                width = width.max(child_width);
-            }
-        }
-
-        // Add border width
-        if element.style.has_border() {
-            width = width.saturating_add(2);
-        }
-
-        // Add padding width
-        let padding_h = (element.style.padding.left + element.style.padding.right) as u16;
-        width = width.saturating_add(padding_h);
-
-        width.max(1)
-    }
-
     fn calculate_element_height(
         &self,
         element: &Element,
