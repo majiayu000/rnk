@@ -20,7 +20,7 @@ fn app() -> Element {
     let selected = use_signal(|| 0usize);
     let show_footer = use_signal(|| true);
 
-    let items = vec!["Apple", "Banana", "Cherry", "Date", "Elderberry"];
+    let items = ["Apple", "Banana", "Cherry", "Date", "Elderberry"];
 
     let selected_for_input = selected.clone();
     let show_footer_for_input = show_footer.clone();

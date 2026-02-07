@@ -34,21 +34,6 @@ fn get_line_starts(output: &str) -> Vec<usize> {
         .collect()
 }
 
-/// Check if all non-empty lines start at column 0 (left-aligned)
-fn is_left_aligned(output: &str) -> bool {
-    for line in output.lines() {
-        let stripped = strip_ansi(line);
-        if !stripped.is_empty() && !stripped.chars().next().map(|c| c != ' ').unwrap_or(true) {
-            // Line starts with space - check if it's intentional padding or wrong alignment
-            let leading_spaces = stripped.len() - stripped.trim_start().len();
-            if leading_spaces > 0 {
-                return false;
-            }
-        }
-    }
-    true
-}
-
 #[test]
 fn test_simple_column_layout_left_aligned() {
     let element = RnkBox::new()

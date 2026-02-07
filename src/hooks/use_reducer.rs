@@ -133,7 +133,9 @@ mod tests {
             let (state, dispatch) = use_reducer(TestState { value: 0 }, test_reducer);
             let _ = state.value;
             dispatch.dispatch(TestAction::Add(1));
+            dispatch.dispatch(TestAction::Reset);
         }
+        let _ = _test as fn();
     }
 
     #[test]
@@ -142,5 +144,6 @@ mod tests {
             let (state, _dispatch) = use_reducer_lazy(|| TestState { value: 42 }, test_reducer);
             let _ = state.value;
         }
+        let _ = _test as fn();
     }
 }

@@ -27,8 +27,8 @@ enum TestStatus {
 fn app() -> Element {
     let app = use_app();
     let start_time = use_signal(|| Instant::now());
-    let completed_tests = use_signal(|| Vec::<TestResult>::new());
-    let running_tests = use_signal(|| Vec::<TestResult>::new());
+    let completed_tests = use_signal(Vec::<TestResult>::new);
+    let running_tests = use_signal(Vec::<TestResult>::new);
     let next_test_idx = use_signal(|| 0usize);
     let tick = use_signal(|| 0u32);
 

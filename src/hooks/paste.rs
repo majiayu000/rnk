@@ -135,6 +135,21 @@ thread_local! {
     static PASTE_HANDLERS: RefCell<Vec<PasteHandlerRc>> = RefCell::new(Vec::new());
 }
 
+fn register_paste_handler_internal<F>(handler: F)
+where
+    F: Fn(&PasteEvent) + 'static,
+{
+    PASTE_HANDLERS.with(|handlers| {
+        handlers.borrow_mut().push(Rc::new(handler));
+    });
+}
+
+fn clear_paste_handlers_internal() {
+    PASTE_HANDLERS.with(|handlers| {
+        handlers.borrow_mut().clear();
+    });
+}
+
 /// Register a paste handler
 ///
 /// # Deprecated
@@ -145,9 +160,7 @@ pub fn register_paste_handler<F>(handler: F)
 where
     F: Fn(&PasteEvent) + 'static,
 {
-    PASTE_HANDLERS.with(|handlers| {
-        handlers.borrow_mut().push(Rc::new(handler));
-    });
+    register_paste_handler_internal(handler);
 }
 
 /// Clear all paste handlers
@@ -160,9 +173,7 @@ where
     note = "Handlers are automatically cleared on each render"
 )]
 pub fn clear_paste_handlers() {
-    PASTE_HANDLERS.with(|handlers| {
-        handlers.borrow_mut().clear();
-    });
+    clear_paste_handlers_internal();
 }
 
 /// Dispatch a paste event to all handlers
@@ -191,7 +202,7 @@ pub fn use_paste<F>(handler: F)
 where
     F: Fn(&PasteEvent) + 'static,
 {
-    register_paste_handler(handler);
+    register_paste_handler_internal(handler);
 }
 
 #[cfg(test)]
@@ -250,12 +261,12 @@ mod tests {
 
     #[test]
     fn test_paste_handler_dispatch() {
-        clear_paste_handlers();
+        clear_paste_handlers_internal();
 
         let received = Rc::new(RefCell::new(String::new()));
         let received_clone = received.clone();
 
-        register_paste_handler(move |event| {
+        register_paste_handler_internal(move |event| {
             *received_clone.borrow_mut() = event.content().to_string();
         });
 
@@ -263,22 +274,22 @@ mod tests {
 
         assert_eq!(*received.borrow(), "test paste");
 
-        clear_paste_handlers();
+        clear_paste_handlers_internal();
     }
 
     #[test]
     fn test_multiple_paste_handlers() {
-        clear_paste_handlers();
+        clear_paste_handlers_internal();
 
         let count = Rc::new(RefCell::new(0));
         let count1 = count.clone();
         let count2 = count.clone();
 
-        register_paste_handler(move |_| {
+        register_paste_handler_internal(move |_| {
             *count1.borrow_mut() += 1;
         });
 
-        register_paste_handler(move |_| {
+        register_paste_handler_internal(move |_| {
             *count2.borrow_mut() += 1;
         });
 
@@ -286,6 +297,6 @@ mod tests {
 
         assert_eq!(*count.borrow(), 2);
 
-        clear_paste_handlers();
+        clear_paste_handlers_internal();
     }
 }

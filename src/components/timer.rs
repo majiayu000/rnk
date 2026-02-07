@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn test_timer_format_hhmmss() {
-        let mut timer = TimerState::new(Duration::from_secs(3661));
+        let timer = TimerState::new(Duration::from_secs(3661));
         assert_eq!(timer.format_hhmmss(), "01:01:01");
     }
 

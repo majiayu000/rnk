@@ -4,10 +4,6 @@
 //! async operations that return typed messages.
 
 use rnk::cmd::{AppMsg, TypedCmd};
-use rnk::components::Text;
-use rnk::core::Element;
-use rnk::{col, row, text};
-
 /// Application messages
 #[derive(Debug, Clone)]
 enum Msg {
@@ -53,6 +49,22 @@ enum ParentMsg {
     Other,
 }
 
+fn describe_msg(msg: &Msg) -> String {
+    match msg {
+        Msg::DataLoaded(items) => format!("Loaded {} items", items.len()),
+        Msg::LoadError(err) => format!("Error: {}", err),
+        Msg::Tick(tick) => format!("Tick {}", tick),
+        Msg::Refresh => "Refresh requested".to_string(),
+    }
+}
+
+fn describe_parent_msg(msg: &ParentMsg) -> String {
+    match msg {
+        ParentMsg::Child(child) => format!("Child({})", describe_msg(child)),
+        ParentMsg::Other => "Other".to_string(),
+    }
+}
+
 fn map_example() -> TypedCmd<ParentMsg> {
     // Child command produces Msg
     let child_cmd: TypedCmd<Msg> = load_data();
@@ -93,8 +105,25 @@ fn main() {
         TypedCmd::sleep(std::time::Duration::from_millis(50)).and_then(load_data());
     println!("   {:?}\n", cmd);
 
+    println!("7. Sample message values:");
+    let sample_msgs = [
+        Msg::DataLoaded(vec!["Preview".to_string()]),
+        Msg::LoadError("network timeout".to_string()),
+        Msg::Tick(42),
+        Msg::Refresh,
+    ];
+    for msg in &sample_msgs {
+        println!("   {}", describe_msg(msg));
+    }
+
+    let sample_parent_msgs = [ParentMsg::Child(Msg::Refresh), ParentMsg::Other];
+    for msg in &sample_parent_msgs {
+        println!("   {}", describe_parent_msg(msg));
+    }
+    println!();
+
     // Show AppMsg usage
-    println!("7. Built-in AppMsg types:");
+    println!("8. Built-in AppMsg types:");
     let msgs = vec![
         AppMsg::WindowResize {
             width: 80,

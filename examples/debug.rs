@@ -40,9 +40,7 @@ fn render_element(
     offset_x: f32,
     offset_y: f32,
 ) {
-    use rnk::layout::Layout;
-
-    let layout = engine.get_layout(element.id).unwrap_or(Layout::default());
+    let layout = engine.get_layout(element.id).unwrap_or_default();
 
     let x = (offset_x + layout.x) as u16;
     let y = (offset_y + layout.y) as u16;

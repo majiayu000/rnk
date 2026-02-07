@@ -21,7 +21,7 @@ fn main() {
     let adding = use_signal(|| false);
 
     // New todo text buffer
-    let input_buffer = use_signal(|| String::new());
+    let input_buffer = use_signal(String::new);
 
     // Handle keyboard input
     use_input({

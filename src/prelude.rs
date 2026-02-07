@@ -154,6 +154,7 @@ pub use crate::hooks::{use_cmd, use_cmd_once, use_effect, use_effect_once};
 // Hooks - Input Handling
 // =============================================================================
 
+#[allow(deprecated)]
 pub use crate::hooks::{
     BracketedPasteGuard, Key, Mouse, MouseAction, MouseButton, PasteEvent, PasteHandler,
     clear_mouse_handlers, clear_paste_handlers, disable_bracketed_paste, dispatch_mouse_event,
@@ -173,6 +174,7 @@ pub use crate::hooks::{
 // Hooks - Scroll & Measure
 // =============================================================================
 
+#[allow(deprecated)]
 pub use crate::hooks::{
     Dimensions, MeasureContext, MeasureRef, ScrollHandle, ScrollState, get_measure_context,
     measure_element, set_measure_context, use_measure, use_scroll,

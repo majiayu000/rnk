@@ -69,7 +69,7 @@ fn main() {
     for (i, line) in output.lines().enumerate() {
         let stripped = strip_ansi(line);
         let first_non_space = stripped.chars().position(|c| c != ' ').unwrap_or(0);
-        if first_non_space > 0 || stripped.trim().len() > 0 {
+        if first_non_space > 0 || !stripped.trim().is_empty() {
             println!("{:3}: col={:3} |{}|", i, first_non_space, stripped);
         }
     }

@@ -12,8 +12,8 @@ fn main() -> std::io::Result<()> {
 
 fn app() -> Element {
     let app = use_app();
-    let input = use_signal(|| String::new());
-    let messages = use_signal(|| Vec::<String>::new());
+    let input = use_signal(String::new);
+    let messages = use_signal(Vec::<String>::new);
 
     let input_clone = input.clone();
     let messages_clone = messages.clone();

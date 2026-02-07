@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn test_list_macro() {
-        let items = vec!["A", "B", "C"];
+        let items = ["A", "B", "C"];
         let element = list!(items.iter(), |item| text!("{}", item));
 
         assert!(matches!(element.element_type, ElementType::Box));
@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn test_list_indexed_macro() {
-        let items = vec!["A", "B", "C"];
+        let items = ["A", "B", "C"];
         let element = list_indexed!(items.iter(), |item, idx| text!("{}: {}", idx, item));
 
         assert!(matches!(element.element_type, ElementType::Box));

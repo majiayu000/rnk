@@ -38,8 +38,7 @@ where
 
     let mut container = TinkBox::new().flex_direction(FlexDirection::Column);
 
-    for idx in start..end {
-        let item = &items[idx];
+    for (idx, item) in items.iter().enumerate().take(end).skip(start) {
         let is_highlighted = idx == highlighted;
 
         let prefix = if is_highlighted {

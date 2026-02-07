@@ -14,7 +14,7 @@ use crate::hooks::context::{HookContext, with_hooks};
 use crate::hooks::use_app::{AppContext, set_app_context};
 use crate::hooks::use_input::clear_input_handlers;
 use crate::hooks::use_mouse::{clear_mouse_handlers, is_mouse_enabled};
-use crate::hooks::{MeasureContext, set_measure_context};
+use crate::hooks::{MeasureContext, set_measure_context_internal};
 use crate::layout::LayoutEngine;
 use crate::renderer::{Output, Terminal};
 use crate::runtime::{RuntimeContext, set_current_runtime};
@@ -416,7 +416,7 @@ where
         // Clear input and mouse handlers before render (they'll be re-registered)
         clear_input_handlers();
         clear_mouse_handlers();
-        set_measure_context(None);
+        set_measure_context_internal(None);
 
         // Begin runtime render cycle (clears runtime handlers)
         self.runtime_context.borrow_mut().begin_render();
@@ -472,7 +472,7 @@ where
         // Update measure context with latest layouts
         let mut measure_ctx = MeasureContext::new();
         measure_ctx.set_layouts(self.layout_engine.get_all_layouts());
-        set_measure_context(Some(measure_ctx));
+        set_measure_context_internal(Some(measure_ctx));
 
         // Get the actual content size from layout
         let root_layout = self

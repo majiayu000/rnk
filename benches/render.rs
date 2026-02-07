@@ -26,9 +26,11 @@ fn output_write_ascii() {
 #[divan::bench]
 fn output_write_styled() {
     let mut output = Output::new(80, 24);
-    let mut style = Style::default();
-    style.color = Some(Color::Green);
-    style.bold = true;
+    let style = Style {
+        color: Some(Color::Green),
+        bold: true,
+        ..Style::default()
+    };
 
     for y in 0..24 {
         output.write(0, y, "Styled text with colors and bold", &style);
@@ -89,10 +91,12 @@ fn output_render_styled_ansi() {
     ];
 
     for y in 0..24 {
-        let mut style = Style::default();
-        style.color = Some(colors[y as usize % colors.len()]);
-        style.bold = y % 2 == 0;
-        style.italic = y % 3 == 0;
+        let style = Style {
+            color: Some(colors[y as usize % colors.len()]),
+            bold: y % 2 == 0,
+            italic: y % 3 == 0,
+            ..Style::default()
+        };
 
         output.write(0, y, "Colorful styled text for benchmark", &style);
     }
@@ -128,7 +132,7 @@ fn render_many_text_elements(count: usize) {
     root.style.flex_direction = FlexDirection::Column;
 
     for i in 0..count {
-        root.add_child(Element::text(&format!("Line number {}", i)));
+        root.add_child(Element::text(format!("Line number {}", i)));
     }
 
     divan::black_box(render_to_string(&root, 80));
@@ -202,7 +206,7 @@ fn render_with_colors() {
     let colors = [Color::Red, Color::Green, Color::Blue, Color::Yellow];
 
     for (i, color) in colors.iter().enumerate() {
-        let mut text = Element::text(&format!("Colored line {}", i));
+        let mut text = Element::text(format!("Colored line {}", i));
         text.style.color = Some(*color);
         root.add_child(text);
     }
@@ -218,7 +222,7 @@ fn render_full_screen(size: (u16, u16)) {
     root.style.flex_direction = FlexDirection::Column;
 
     for i in 0..size.1 {
-        root.add_child(Element::text(&format!(
+        root.add_child(Element::text(format!(
             "Line {:03}: {}",
             i,
             "x".repeat(size.0 as usize - 10)

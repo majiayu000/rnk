@@ -15,7 +15,7 @@ fn main() -> std::io::Result<()> {
 
 fn app() -> Element {
     let scroll = use_scroll();
-    let input_text = use_signal(|| String::new());
+    let input_text = use_signal(String::new);
     let messages = use_signal(|| {
         (0..50)
             .map(|i| format!("Message {}: This is a sample message content", i))
