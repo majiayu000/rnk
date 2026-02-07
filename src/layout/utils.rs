@@ -38,6 +38,40 @@ impl From<f32> for Position {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PositionBucket {
+    Start,
+    Center,
+    End,
+}
+
+fn position_bucket(pos: Position) -> PositionBucket {
+    match pos {
+        Position::Start => PositionBucket::Start,
+        Position::Center => PositionBucket::Center,
+        Position::End => PositionBucket::End,
+        Position::At(v) if v <= 0.33 => PositionBucket::Start,
+        Position::At(v) if v >= 0.67 => PositionBucket::End,
+        Position::At(_) => PositionBucket::Center,
+    }
+}
+
+fn position_to_align_items(pos: Position) -> AlignItems {
+    match position_bucket(pos) {
+        PositionBucket::Start => AlignItems::FlexStart,
+        PositionBucket::Center => AlignItems::Center,
+        PositionBucket::End => AlignItems::FlexEnd,
+    }
+}
+
+fn position_to_justify_content(pos: Position) -> JustifyContent {
+    match position_bucket(pos) {
+        PositionBucket::Start => JustifyContent::FlexStart,
+        PositionBucket::Center => JustifyContent::Center,
+        PositionBucket::End => JustifyContent::FlexEnd,
+    }
+}
+
 /// Join multiple elements horizontally (in a row)
 ///
 /// # Arguments
@@ -52,14 +86,7 @@ impl From<f32> for Position {
 /// let row = join_horizontal(Position::Center, vec![elem1, elem2, elem3]);
 /// ```
 pub fn join_horizontal(align: Position, elements: Vec<Element>) -> Element {
-    let align_items = match align {
-        Position::Start => AlignItems::FlexStart,
-        Position::Center => AlignItems::Center,
-        Position::End => AlignItems::FlexEnd,
-        Position::At(v) if v <= 0.33 => AlignItems::FlexStart,
-        Position::At(v) if v >= 0.67 => AlignItems::FlexEnd,
-        Position::At(_) => AlignItems::Center,
-    };
+    let align_items = position_to_align_items(align);
 
     let mut container = RnkBox::new()
         .flex_direction(FlexDirection::Row)
@@ -86,14 +113,7 @@ pub fn join_horizontal(align: Position, elements: Vec<Element>) -> Element {
 /// let column = join_vertical(Position::Center, vec![elem1, elem2, elem3]);
 /// ```
 pub fn join_vertical(align: Position, elements: Vec<Element>) -> Element {
-    let align_items = match align {
-        Position::Start => AlignItems::FlexStart,
-        Position::Center => AlignItems::Center,
-        Position::End => AlignItems::FlexEnd,
-        Position::At(v) if v <= 0.33 => AlignItems::FlexStart,
-        Position::At(v) if v >= 0.67 => AlignItems::FlexEnd,
-        Position::At(_) => AlignItems::Center,
-    };
+    let align_items = position_to_align_items(align);
 
     let mut container = RnkBox::new()
         .flex_direction(FlexDirection::Column)
@@ -121,14 +141,7 @@ pub fn join_vertical(align: Position, elements: Vec<Element>) -> Element {
 /// let centered = place_horizontal(80, Position::Center, my_element);
 /// ```
 pub fn place_horizontal(width: u16, pos: Position, element: Element) -> Element {
-    let justify = match pos {
-        Position::Start => JustifyContent::FlexStart,
-        Position::Center => JustifyContent::Center,
-        Position::End => JustifyContent::FlexEnd,
-        Position::At(v) if v <= 0.33 => JustifyContent::FlexStart,
-        Position::At(v) if v >= 0.67 => JustifyContent::FlexEnd,
-        Position::At(_) => JustifyContent::Center,
-    };
+    let justify = position_to_justify_content(pos);
 
     RnkBox::new()
         .flex_direction(FlexDirection::Row)
@@ -153,14 +166,7 @@ pub fn place_horizontal(width: u16, pos: Position, element: Element) -> Element 
 /// let centered = place_vertical(24, Position::Center, my_element);
 /// ```
 pub fn place_vertical(height: u16, pos: Position, element: Element) -> Element {
-    let justify = match pos {
-        Position::Start => JustifyContent::FlexStart,
-        Position::Center => JustifyContent::Center,
-        Position::End => JustifyContent::FlexEnd,
-        Position::At(v) if v <= 0.33 => JustifyContent::FlexStart,
-        Position::At(v) if v >= 0.67 => JustifyContent::FlexEnd,
-        Position::At(_) => JustifyContent::Center,
-    };
+    let justify = position_to_justify_content(pos);
 
     RnkBox::new()
         .flex_direction(FlexDirection::Column)
@@ -193,23 +199,8 @@ pub fn place(
     v_pos: Position,
     element: Element,
 ) -> Element {
-    let h_justify = match h_pos {
-        Position::Start => JustifyContent::FlexStart,
-        Position::Center => JustifyContent::Center,
-        Position::End => JustifyContent::FlexEnd,
-        Position::At(v) if v <= 0.33 => JustifyContent::FlexStart,
-        Position::At(v) if v >= 0.67 => JustifyContent::FlexEnd,
-        Position::At(_) => JustifyContent::Center,
-    };
-
-    let v_justify = match v_pos {
-        Position::Start => JustifyContent::FlexStart,
-        Position::Center => JustifyContent::Center,
-        Position::End => JustifyContent::FlexEnd,
-        Position::At(v) if v <= 0.33 => JustifyContent::FlexStart,
-        Position::At(v) if v >= 0.67 => JustifyContent::FlexEnd,
-        Position::At(_) => JustifyContent::Center,
-    };
+    let h_justify = position_to_justify_content(h_pos);
+    let v_justify = position_to_justify_content(v_pos);
 
     // Create inner container for horizontal positioning
     let inner = RnkBox::new()
@@ -341,6 +332,26 @@ mod tests {
     fn test_position_clamp() {
         assert_eq!(Position::At(1.5).as_f32(), 1.0);
         assert_eq!(Position::At(-0.5).as_f32(), 0.0);
+    }
+
+    #[test]
+    fn test_position_threshold_mapping() {
+        assert_eq!(
+            position_to_justify_content(Position::At(0.33)),
+            JustifyContent::FlexStart
+        );
+        assert_eq!(
+            position_to_justify_content(Position::At(0.34)),
+            JustifyContent::Center
+        );
+        assert_eq!(
+            position_to_justify_content(Position::At(0.67)),
+            JustifyContent::FlexEnd
+        );
+        assert_eq!(
+            position_to_align_items(Position::At(0.66)),
+            AlignItems::Center
+        );
     }
 
     #[test]
