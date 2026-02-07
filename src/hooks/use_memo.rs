@@ -55,8 +55,12 @@ where
     D: Hash,
     F: FnOnce() -> T,
 {
-    let ctx = current_context().expect("use_memo must be called within a component");
-    let mut ctx_ref = ctx.write().unwrap();
+    let Some(ctx) = current_context() else {
+        return compute();
+    };
+    let Ok(mut ctx_ref) = ctx.write() else {
+        return compute();
+    };
 
     let new_hash = compute_deps_hash(&deps);
 
@@ -68,11 +72,20 @@ where
         if let Some(mut memo) = existing {
             if memo.deps_hash != new_hash {
                 let recomputed = compute();
-                *memo.value.write().unwrap() = recomputed;
+                if let Ok(mut value) = memo.value.write() {
+                    *value = recomputed.clone();
+                } else {
+                    memo.value = Arc::new(RwLock::new(recomputed.clone()));
+                }
                 memo.deps_hash = new_hash;
                 storage.set(Some(memo.clone()));
+                return recomputed;
             }
-            memo.value.read().unwrap().clone()
+            if let Ok(value) = memo.value.read() {
+                value.clone()
+            } else {
+                compute()
+            }
         } else {
             let value = compute();
             storage.set(Some(MemoStorage {
@@ -82,7 +95,7 @@ where
             value
         }
     } else {
-        panic!("use_memo: storage type mismatch");
+        compute()
     }
 }
 
