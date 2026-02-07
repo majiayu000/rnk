@@ -21,7 +21,7 @@
 //! }
 //! ```
 
-use crate::components::capsule::capsule_padded;
+use crate::components::capsule::CapsuleLabel;
 use crate::core::{Color, Element};
 
 /// A tag component for labels and categories
@@ -88,7 +88,7 @@ impl Tag {
             content.push_str(" ×");
         }
 
-        capsule_padded(content, self.color, self.background).into_element()
+        CapsuleLabel::padded(content, self.color, self.background).into_element()
     }
 }
 

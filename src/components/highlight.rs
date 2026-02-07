@@ -20,7 +20,7 @@
 //! }
 //! ```
 
-use crate::components::capsule::capsule_padded;
+use crate::components::capsule::CapsuleLabel;
 use crate::core::{Color, Element};
 
 /// Highlight variant
@@ -93,7 +93,7 @@ impl Highlight {
             HighlightVariant::Info => (Color::White, Color::Cyan),
         };
 
-        capsule_padded(self.text, fg, bg).into_element()
+        CapsuleLabel::padded(self.text, fg, bg).into_element()
     }
 }
 
