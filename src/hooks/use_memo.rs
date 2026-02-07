@@ -18,6 +18,7 @@ fn compute_deps_hash<D: Hash>(deps: &D) -> u64 {
 #[derive(Clone)]
 struct MemoStorage<T> {
     value: Arc<RwLock<T>>,
+    deps_hash: u64,
 }
 
 /// Memoize an expensive computation
@@ -59,28 +60,29 @@ where
 
     let new_hash = compute_deps_hash(&deps);
 
-    // First, check if we have existing storage with the hash
-    let hash_storage = ctx_ref.use_hook(|| new_hash);
-    let stored_hash = hash_storage.get::<u64>().unwrap_or(0);
+    // Use an Option wrapper so the init closure does not consume `compute`.
+    // This allows recomputing immediately when dependencies change.
+    let storage = ctx_ref.use_hook(|| Option::<MemoStorage<T>>::None);
 
-    // Get or create the value storage
-    let storage = ctx_ref.use_hook(|| {
-        let value = compute();
-        MemoStorage {
-            value: Arc::new(RwLock::new(value)),
+    if let Some(existing) = storage.get::<Option<MemoStorage<T>>>() {
+        if let Some(mut memo) = existing {
+            if memo.deps_hash != new_hash {
+                let recomputed = compute();
+                *memo.value.write().unwrap() = recomputed;
+                memo.deps_hash = new_hash;
+                storage.set(Some(memo.clone()));
+            }
+            memo.value.read().unwrap().clone()
+        } else {
+            let value = compute();
+            storage.set(Some(MemoStorage {
+                value: Arc::new(RwLock::new(value.clone())),
+                deps_hash: new_hash,
+            }));
+            value
         }
-    });
-
-    if let Some(memo) = storage.get::<MemoStorage<T>>() {
-        // Check if deps changed - if so, we can't recompute because compute is FnOnce
-        // and was already consumed. The value will be stale until next render.
-        // Update the hash for next render comparison
-        if stored_hash != new_hash {
-            hash_storage.set(new_hash);
-        }
-        memo.value.read().unwrap().clone()
     } else {
-        panic!("use_memo: storage type mismatch")
+        panic!("use_memo: storage type mismatch");
     }
 }
 
@@ -189,6 +191,7 @@ where
 mod tests {
     use super::*;
     use crate::hooks::context::{HookContext, with_hooks};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn test_use_memo_basic() {
@@ -217,6 +220,49 @@ mod tests {
         let result = with_hooks(ctx.clone(), || use_memo(|| vec![4, 5, 6], (1, "a", true)));
 
         assert_eq!(result, vec![1, 2, 3]); // Cached
+    }
+
+    #[test]
+    fn test_use_memo_recomputes_when_deps_change() {
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let compute_calls = Arc::new(AtomicUsize::new(0));
+
+        let calls = compute_calls.clone();
+        let first = with_hooks(ctx.clone(), || {
+            use_memo(
+                || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    10
+                },
+                1,
+            )
+        });
+        assert_eq!(first, 10);
+
+        let calls = compute_calls.clone();
+        let second = with_hooks(ctx.clone(), || {
+            use_memo(
+                || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    99
+                },
+                1,
+            )
+        });
+        assert_eq!(second, 10);
+
+        let calls = compute_calls.clone();
+        let third = with_hooks(ctx.clone(), || {
+            use_memo(
+                || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    99
+                },
+                2,
+            )
+        });
+        assert_eq!(third, 99);
+        assert_eq!(compute_calls.load(Ordering::SeqCst), 2);
     }
 
     #[test]
