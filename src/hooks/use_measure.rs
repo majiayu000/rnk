@@ -54,6 +54,16 @@ thread_local! {
     static MEASURE_CONTEXT: std::cell::RefCell<Option<MeasureContext>> = const { std::cell::RefCell::new(None) };
 }
 
+pub(crate) fn set_measure_context_internal(ctx: Option<MeasureContext>) {
+    MEASURE_CONTEXT.with(|c| {
+        *c.borrow_mut() = ctx;
+    });
+}
+
+pub(crate) fn get_measure_context_internal() -> Option<MeasureContext> {
+    MEASURE_CONTEXT.with(|c| c.borrow().clone())
+}
+
 /// Set the current measure context (called by App during render)
 ///
 /// # Deprecated
@@ -64,9 +74,7 @@ thread_local! {
     note = "Use RuntimeContext::set_measurement() instead"
 )]
 pub fn set_measure_context(ctx: Option<MeasureContext>) {
-    MEASURE_CONTEXT.with(|c| {
-        *c.borrow_mut() = ctx;
-    });
+    set_measure_context_internal(ctx);
 }
 
 /// Get the current measure context
@@ -79,7 +87,7 @@ pub fn set_measure_context(ctx: Option<MeasureContext>) {
     note = "Use RuntimeContext::get_measurement() instead"
 )]
 pub fn get_measure_context() -> Option<MeasureContext> {
-    MEASURE_CONTEXT.with(|c| c.borrow().clone())
+    get_measure_context_internal()
 }
 
 /// Measure an element by its ID
@@ -102,7 +110,7 @@ pub fn get_measure_context() -> Option<MeasureContext> {
 /// }
 /// ```
 pub fn measure_element(element_id: ElementId) -> Option<Dimensions> {
-    get_measure_context().and_then(|ctx| ctx.measure(element_id))
+    get_measure_context_internal().and_then(|ctx| ctx.measure(element_id))
 }
 
 /// Hook to create a ref-like pattern for measuring elements

@@ -5,59 +5,48 @@
 //! 2. Diff algorithm (only updates changed lines)
 //! 3. Proper output preservation on exit
 
-use std::io::Write;
+fn terminal_source() -> String {
+    std::fs::read_to_string(format!(
+        "{}/src/renderer/terminal.rs",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("failed to read terminal.rs")
+}
+
+fn exit_inline_section(source: &str) -> &str {
+    let start = source
+        .find("pub fn exit_inline")
+        .expect("exit_inline() should exist");
+    let end = source[start..]
+        .find("pub fn switch_to_alt_screen")
+        .map(|idx| start + idx)
+        .expect("switch_to_alt_screen() should exist after exit_inline()");
+    &source[start..end]
+}
 
 /// Test that virtual screen buffer stores previous frame
 #[test]
 fn test_virtual_screen_buffer_exists() {
-    // This test verifies the Terminal struct has the required fields
-    // By inspecting the source code in terminal.rs:134-146
-
-    // From terminal.rs line 135: previous_lines: Vec<String>
-    // This is the virtual screen buffer that stores the last frame
-
-    assert!(
-        true,
-        "Virtual screen buffer (previous_lines) exists in Terminal struct"
-    );
+    let source = terminal_source();
+    assert!(source.contains("previous_lines: Vec<String>"));
 }
 
 /// Test that diff algorithm compares old and new lines
 #[test]
 fn test_diff_algorithm_implementation() {
-    // Verify the diff algorithm is implemented correctly
-    // From terminal.rs:474-479 (inline mode) and 393-406 (fullscreen mode)
-
-    // The algorithm:
-    // 1. Get old line: `let old_line = self.previous_lines.get(i)`
-    // 2. Compare: `if old_line != Some(new_line)`
-    // 3. Update only if different: write new content
-
-    assert!(
-        true,
-        "Diff algorithm correctly compares and updates only changed lines"
-    );
+    let source = terminal_source();
+    assert!(source.contains("let old_line = self.previous_lines.get(i)"));
+    assert!(source.contains("if old_line != Some(*new_line)"));
 }
 
 /// Test that exit_inline preserves output
 #[test]
 fn test_exit_inline_preserves_output() {
-    // Verify exit_inline() doesn't clear content
-    // From terminal.rs:211-241
-
-    // exit_inline() does:
-    // 1. Disable mouse capture (if enabled)
-    // 2. Show cursor
-    // 3. Move to end of output
-    // 4. Add newline
-    // 5. Disable raw mode
-
-    // It does NOT:
-    // - Clear the screen
-    // - Erase lines
-    // - Use alternate screen escape sequences
-
-    assert!(true, "exit_inline() preserves output in terminal history");
+    let source = terminal_source();
+    let section = exit_inline_section(&source);
+    assert!(section.contains("DisableMouseCapture"));
+    assert!(section.contains("writeln!(stdout)?"));
+    assert!(!section.contains("LeaveAlternateScreen"));
 }
 
 /// Test incremental rendering logic
@@ -65,8 +54,8 @@ fn test_exit_inline_preserves_output() {
 fn test_incremental_rendering() {
     // Simulate the incremental rendering logic
 
-    let previous_lines = vec!["Line 1", "Line 2", "Line 3"];
-    let new_lines = vec!["Line 1", "Line 2 CHANGED", "Line 3"];
+    let previous_lines = ["Line 1", "Line 2", "Line 3"];
+    let new_lines = ["Line 1", "Line 2 CHANGED", "Line 3"];
 
     let mut updates_needed = Vec::new();
 
@@ -88,8 +77,8 @@ fn test_incremental_rendering() {
 fn test_size_change_handling() {
     // Test when new content is shorter than previous
 
-    let previous_lines = vec!["Line 1", "Line 2", "Line 3", "Line 4"];
-    let new_lines = vec!["Line 1", "Line 2"];
+    let previous_lines = ["Line 1", "Line 2", "Line 3", "Line 4"];
+    let new_lines = ["Line 1", "Line 2"];
 
     let max_lines = previous_lines.len().max(new_lines.len());
     let mut clears_needed = 0;
@@ -112,7 +101,7 @@ fn test_previous_lines_update() {
     // Verify the previous_lines buffer is updated after each render
     // This is done at terminal.rs:454, 502, 423
 
-    let new_lines = vec!["Line 1", "Line 2"];
+    let new_lines = ["Line 1", "Line 2"];
     let previous_lines: Vec<String> = new_lines.iter().map(|s| s.to_string()).collect();
 
     assert_eq!(previous_lines.len(), 2);
@@ -144,18 +133,9 @@ fn test_cursor_position_management() {
 /// Test that escape sequences are correctly avoided
 #[test]
 fn test_no_alternate_screen_in_inline_mode() {
-    // Verify that inline mode doesn't use alternate screen
-
-    // From terminal.rs:196-208 (enter_inline)
-    // Only uses: enable_raw_mode, hide_cursor
-    // Does NOT use: EnterAlternateScreen
-
-    // From terminal.rs:211-241 (exit_inline)
-    // Only uses: DisableMouseCapture, show_cursor, disable_raw_mode
-    // Does NOT use: LeaveAlternateScreen
-
-    assert!(
-        true,
-        "Inline mode correctly avoids alternate screen escape sequences"
-    );
+    let source = terminal_source();
+    let section = exit_inline_section(&source);
+    assert!(section.contains("disable_raw_mode()"));
+    assert!(!section.contains("EnterAlternateScreen"));
+    assert!(!section.contains("LeaveAlternateScreen"));
 }

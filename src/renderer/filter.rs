@@ -195,14 +195,14 @@ mod tests {
 
     #[test]
     fn test_event_filter_creation() {
-        let filter = EventFilter::new("test", |e| FilterResult::Pass(e));
+        let filter = EventFilter::new("test", FilterResult::Pass);
         assert_eq!(filter.name(), "test");
         assert_eq!(filter.priority(), 0);
     }
 
     #[test]
     fn test_event_filter_with_priority() {
-        let filter = EventFilter::with_priority("test", 10, |e| FilterResult::Pass(e));
+        let filter = EventFilter::with_priority("test", 10, FilterResult::Pass);
         assert_eq!(filter.name(), "test");
         assert_eq!(filter.priority(), 10);
     }
@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn test_filter_chain_add() {
         let mut chain = FilterChain::new();
-        chain.add(EventFilter::new("test", |e| FilterResult::Pass(e)));
+        chain.add(EventFilter::new("test", FilterResult::Pass));
         assert!(!chain.is_empty());
         assert_eq!(chain.len(), 1);
     }
@@ -233,7 +233,7 @@ mod tests {
     #[test]
     fn test_filter_chain_apply_pass() {
         let mut chain = FilterChain::new();
-        chain.add_fn("pass", |e| FilterResult::Pass(e));
+        chain.add_fn("pass", FilterResult::Pass);
 
         let event = make_key_event(KeyCode::Char('a'));
         let result = chain.apply(event);
@@ -273,15 +273,9 @@ mod tests {
         let mut chain = FilterChain::new();
 
         // Add filters in reverse priority order
-        chain.add(EventFilter::with_priority("low", 0, |e| {
-            FilterResult::Pass(e)
-        }));
-        chain.add(EventFilter::with_priority("high", 10, |e| {
-            FilterResult::Pass(e)
-        }));
-        chain.add(EventFilter::with_priority("medium", 5, |e| {
-            FilterResult::Pass(e)
-        }));
+        chain.add(EventFilter::with_priority("low", 0, FilterResult::Pass));
+        chain.add(EventFilter::with_priority("high", 10, FilterResult::Pass));
+        chain.add(EventFilter::with_priority("medium", 5, FilterResult::Pass));
 
         // Should be sorted by priority (high first)
         let names = chain.filter_names();
@@ -293,7 +287,7 @@ mod tests {
         let mut chain = FilterChain::new();
 
         // First filter passes
-        chain.add_fn("pass1", |e| FilterResult::Pass(e));
+        chain.add_fn("pass1", FilterResult::Pass);
 
         // Second filter replaces 'a' with 'b'
         chain.add_fn("replace", |e| {
@@ -306,7 +300,7 @@ mod tests {
         });
 
         // Third filter passes
-        chain.add_fn("pass2", |e| FilterResult::Pass(e));
+        chain.add_fn("pass2", FilterResult::Pass);
 
         let event = make_key_event(KeyCode::Char('a'));
         let result = chain.apply(event);

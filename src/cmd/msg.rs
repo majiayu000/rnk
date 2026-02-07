@@ -398,7 +398,6 @@ mod tests {
     #[derive(Debug, PartialEq)]
     enum TestMsg {
         Loaded(String),
-        Error(String),
         Tick(u64),
     }
 

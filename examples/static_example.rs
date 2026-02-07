@@ -26,7 +26,7 @@ enum LogLevel {
 
 fn app() -> Element {
     let app = use_app();
-    let logs = use_signal(|| Vec::<LogEntry>::new());
+    let logs = use_signal(Vec::<LogEntry>::new);
     let next_id = use_signal(|| 0usize);
     let counter = use_signal(|| 0i32);
 

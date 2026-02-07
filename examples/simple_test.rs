@@ -126,7 +126,7 @@ fn create_ui() -> Element {
 }
 
 fn create_list_items() -> Element {
-    let items = vec!["First item", "Second item", "Third item", "Fourth item"];
+    let items = ["First item", "Second item", "Third item", "Fourth item"];
     let selected = 0;
 
     let mut container = Box::new().flex_direction(FlexDirection::Column);

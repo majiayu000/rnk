@@ -39,6 +39,7 @@ mod use_window_size;
 mod use_window_title;
 
 pub use context::{HookContext, current_context, with_hooks};
+#[allow(deprecated)]
 pub use paste::{
     BracketedPasteGuard, PasteEvent, PasteHandler, clear_paste_handlers, disable_bracketed_paste,
     dispatch_paste, enable_bracketed_paste, is_bracketed_paste_enabled, register_paste_handler,
@@ -75,10 +76,12 @@ pub use use_keyboard_shortcut::{
 pub use use_list::{ListHandle, use_list, use_list_empty};
 pub use use_local_storage::{LocalStorageHandle, use_local_storage, use_local_storage_with_dir};
 pub use use_map::{MapHandle, use_map, use_map_empty, use_map_from};
+#[allow(deprecated)]
 pub use use_measure::{
     Dimensions, MeasureContext, MeasureRef, get_measure_context, measure_element,
     set_measure_context, use_measure,
 };
+pub(crate) use use_measure::set_measure_context_internal;
 pub use use_media_query::{
     Breakpoint, MediaQuery, use_breakpoint, use_breakpoint_down, use_breakpoint_only,
     use_breakpoint_up, use_is_landscape, use_is_portrait, use_media_query,

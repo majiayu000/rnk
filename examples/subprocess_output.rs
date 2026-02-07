@@ -20,9 +20,9 @@ struct ProcessOutput {
 
 fn app() -> Element {
     let app = use_app();
-    let outputs = use_signal(|| Vec::<ProcessOutput>::new());
+    let outputs = use_signal(Vec::<ProcessOutput>::new);
     let is_running = use_signal(|| false);
-    let current_cmd = use_signal(|| String::new());
+    let current_cmd = use_signal(String::new);
 
     let outputs_clone = outputs.clone();
     let is_running_clone = is_running.clone();

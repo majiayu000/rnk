@@ -44,7 +44,7 @@ fn app() -> Element {
     let counter = use_signal(|| 0);
 
     // Streaming text simulation
-    let stream_text = use_signal(|| String::new());
+    let stream_text = use_signal(String::new);
     let full_text = "Hello! This is simulated streaming text that appears progressively...";
 
     // Update state on each render
