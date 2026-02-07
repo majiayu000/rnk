@@ -31,61 +31,27 @@ impl Deps for () {
     fn output(&self) -> Self::Output {}
 }
 
-// Implement Deps for tuples
-impl<T1: Hash + Clone, T2: Hash + Clone> Deps for (T1, T2) {
-    type Output = (T1, T2);
+macro_rules! impl_deps_for_tuple {
+    ($($name:ident:$index:tt),+ $(,)?) => {
+        impl<$($name: Hash + Clone),+> Deps for ($($name,)+) {
+            type Output = ($($name,)+);
 
-    fn deps_hash(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.0.hash(&mut hasher);
-        self.1.hash(&mut hasher);
-        hasher.finish()
-    }
+            fn deps_hash(&self) -> u64 {
+                let mut hasher = DefaultHasher::new();
+                $(self.$index.hash(&mut hasher);)+
+                hasher.finish()
+            }
 
-    fn output(&self) -> Self::Output {
-        (self.0.clone(), self.1.clone())
-    }
+            fn output(&self) -> Self::Output {
+                ($(self.$index.clone(),)+)
+            }
+        }
+    };
 }
 
-impl<T1: Hash + Clone, T2: Hash + Clone, T3: Hash + Clone> Deps for (T1, T2, T3) {
-    type Output = (T1, T2, T3);
-
-    fn deps_hash(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.0.hash(&mut hasher);
-        self.1.hash(&mut hasher);
-        self.2.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    fn output(&self) -> Self::Output {
-        (self.0.clone(), self.1.clone(), self.2.clone())
-    }
-}
-
-impl<T1: Hash + Clone, T2: Hash + Clone, T3: Hash + Clone, T4: Hash + Clone> Deps
-    for (T1, T2, T3, T4)
-{
-    type Output = (T1, T2, T3, T4);
-
-    fn deps_hash(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.0.hash(&mut hasher);
-        self.1.hash(&mut hasher);
-        self.2.hash(&mut hasher);
-        self.3.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    fn output(&self) -> Self::Output {
-        (
-            self.0.clone(),
-            self.1.clone(),
-            self.2.clone(),
-            self.3.clone(),
-        )
-    }
-}
+impl_deps_for_tuple!(T1:0, T2:1);
+impl_deps_for_tuple!(T1:0, T2:1, T3:2);
+impl_deps_for_tuple!(T1:0, T2:1, T3:2, T4:3);
 
 // Implement Deps for Vec
 impl<T: Hash + Clone> Deps for Vec<T> {
@@ -265,6 +231,24 @@ mod tests {
         assert_eq!(hash1, hash2);
 
         let hash3 = (1, 3).deps_hash();
+        assert_ne!(hash1, hash3);
+    }
+
+    #[test]
+    fn test_deps_tuple_three_items() {
+        let hash1 = (1, 2, 3).deps_hash();
+        let hash2 = (1, 2, 3).deps_hash();
+        let hash3 = (1, 2, 4).deps_hash();
+        assert_eq!(hash1, hash2);
+        assert_ne!(hash1, hash3);
+    }
+
+    #[test]
+    fn test_deps_tuple_four_items() {
+        let hash1 = (1, 2, 3, 4).deps_hash();
+        let hash2 = (1, 2, 3, 4).deps_hash();
+        let hash3 = (1, 2, 3, 5).deps_hash();
+        assert_eq!(hash1, hash2);
         assert_ne!(hash1, hash3);
     }
 
