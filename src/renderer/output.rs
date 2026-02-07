@@ -400,11 +400,19 @@ impl Output {
 
     /// Push a clip region
     pub fn clip(&mut self, region: ClipRegion) {
+        debug_assert!(
+            region.x1 <= region.x2 && region.y1 <= region.y2,
+            "Invalid clip region: min > max"
+        );
         self.clip_stack.push(region);
     }
 
     /// Pop the current clip region
     pub fn unclip(&mut self) {
+        debug_assert!(
+            !self.clip_stack.is_empty(),
+            "Output::unclip called with an empty clip stack"
+        );
         self.clip_stack.pop();
     }
 
@@ -838,5 +846,13 @@ mod tests {
         assert_eq!(dirty_rows[0].1, "Line 0");
         assert_eq!(dirty_rows[1].0, 2);
         assert_eq!(dirty_rows[1].1, "Line 2");
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "Output::unclip called with an empty clip stack")]
+    fn test_unclip_panics_when_stack_is_empty_in_debug() {
+        let mut output = Output::new(10, 5);
+        output.unclip();
     }
 }
