@@ -40,6 +40,7 @@ pub(crate) mod render_to_string;
 pub(crate) mod runtime;
 pub(crate) mod static_content;
 mod terminal;
+pub(crate) mod tree_renderer;
 
 // Core App type
 pub use app::App;

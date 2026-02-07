@@ -3,9 +3,9 @@
 //! This module provides utilities for rendering elements to strings
 //! outside of the main application runtime.
 
-use crate::components::text::Line;
 use crate::core::Element;
 use crate::layout::LayoutEngine;
+use crate::renderer::tree_renderer::render_element_tree;
 use crate::renderer::{Output, Terminal};
 
 /// Render an element to a string with specified width.
@@ -107,7 +107,7 @@ impl RenderHelper {
 
         // Render to output buffer
         let mut output = Output::new(render_width, content_height);
-        self.render_element_to_output(element, &engine, &mut output, 0.0, 0.0);
+        render_element_tree(element, &engine, &mut output, 0.0, 0.0);
 
         let rendered = output.render();
 
@@ -244,135 +244,6 @@ impl RenderHelper {
         height
     }
 
-    fn render_element_to_output(
-        &self,
-        element: &Element,
-        engine: &LayoutEngine,
-        output: &mut Output,
-        offset_x: f32,
-        offset_y: f32,
-    ) {
-        // Skip elements with display: none
-        if element.style.display == crate::core::Display::None {
-            return;
-        }
-
-        let layout = engine.get_layout(element.id).unwrap_or_default();
-
-        let x = (offset_x + layout.x) as u16;
-        let y = (offset_y + layout.y) as u16;
-        let width = layout.width as u16;
-        let height = layout.height as u16;
-
-        if element.style.background_color.is_some() {
-            output.fill_rect(x, y, width, height, ' ', &element.style);
-        }
-
-        if element.style.has_border() {
-            self.render_border(element, output, x, y, width, height);
-        }
-
-        let text_x =
-            x + if element.style.has_border() { 1 } else { 0 } + element.style.padding.left as u16;
-        let text_y =
-            y + if element.style.has_border() { 1 } else { 0 } + element.style.padding.top as u16;
-
-        if let Some(spans) = &element.spans {
-            Self::render_spans(spans, output, text_x, text_y);
-        } else if let Some(text) = &element.text_content {
-            output.write(text_x, text_y, text, &element.style);
-        }
-
-        let child_offset_x = offset_x + layout.x;
-        let child_offset_y = offset_y + layout.y;
-
-        for child in &element.children {
-            self.render_element_to_output(child, engine, output, child_offset_x, child_offset_y);
-        }
-    }
-
-    fn render_border(
-        &self,
-        element: &Element,
-        output: &mut Output,
-        x: u16,
-        y: u16,
-        width: u16,
-        height: u16,
-    ) {
-        let (tl, tr, bl, br, h, v) = element.style.border_style.chars();
-
-        // Create base style for borders
-        let mut base_style = element.style.clone();
-        base_style.dim = element.style.border_dim;
-
-        // Create per-side styles with their respective colors
-        let mut top_style = base_style.clone();
-        top_style.color = element.style.get_border_top_color();
-
-        let mut right_style = base_style.clone();
-        right_style.color = element.style.get_border_right_color();
-
-        let mut bottom_style = base_style.clone();
-        bottom_style.color = element.style.get_border_bottom_color();
-
-        let mut left_style = base_style.clone();
-        left_style.color = element.style.get_border_left_color();
-
-        // Top border
-        if element.style.border_top && height > 0 {
-            output.write_char(x, y, tl.chars().next().unwrap(), &top_style);
-            for col in (x + 1)..(x + width - 1) {
-                output.write_char(col, y, h.chars().next().unwrap(), &top_style);
-            }
-            if width > 1 {
-                output.write_char(x + width - 1, y, tr.chars().next().unwrap(), &top_style);
-            }
-        }
-
-        // Bottom border
-        if element.style.border_bottom && height > 1 {
-            let bottom_y = y + height - 1;
-            output.write_char(x, bottom_y, bl.chars().next().unwrap(), &bottom_style);
-            for col in (x + 1)..(x + width - 1) {
-                output.write_char(col, bottom_y, h.chars().next().unwrap(), &bottom_style);
-            }
-            if width > 1 {
-                output.write_char(
-                    x + width - 1,
-                    bottom_y,
-                    br.chars().next().unwrap(),
-                    &bottom_style,
-                );
-            }
-        }
-
-        // Left border
-        if element.style.border_left {
-            for row in (y + 1)..(y + height - 1) {
-                output.write_char(x, row, v.chars().next().unwrap(), &left_style);
-            }
-        }
-
-        // Right border
-        if element.style.border_right && width > 1 {
-            for row in (y + 1)..(y + height - 1) {
-                output.write_char(x + width - 1, row, v.chars().next().unwrap(), &right_style);
-            }
-        }
-    }
-
-    fn render_spans(lines: &[Line], output: &mut Output, start_x: u16, start_y: u16) {
-        for (line_idx, line) in lines.iter().enumerate() {
-            let y = start_y + line_idx as u16;
-            let mut x = start_x;
-            for span in &line.spans {
-                output.write(x, y, &span.content, &span.style);
-                x += span.width() as u16;
-            }
-        }
-    }
-
     fn render_element_to_string_raw(&self, element: &Element, width: u16) -> String {
         let mut engine = LayoutEngine::new();
         let layout_width = width;
@@ -384,7 +255,7 @@ impl RenderHelper {
         let content_height = height.max(1);
 
         let mut output = Output::new(render_width, content_height);
-        self.render_element_to_output(element, &engine, &mut output, 0.0, 0.0);
+        render_element_tree(element, &engine, &mut output, 0.0, 0.0);
 
         output.render()
     }
@@ -422,5 +293,20 @@ mod tests {
         // Both should contain the text
         assert!(trimmed.contains("Hi"));
         assert!(not_trimmed.contains("Hi"));
+    }
+
+    #[test]
+    fn test_render_to_string_applies_scroll_offset() {
+        let element = Box::new()
+            .padding_left(4.0)
+            .scroll_offset_x(2)
+            .child(Text::new("X").into_element())
+            .into_element();
+
+        let output = render_to_string(&element, 20);
+        let first_line = output.lines().next().unwrap_or_default();
+        let x_pos = first_line.find('X').unwrap_or(usize::MAX);
+
+        assert_eq!(x_pos, 2);
     }
 }
