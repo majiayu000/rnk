@@ -13,7 +13,7 @@ fn terminal_source() -> String {
     .expect("failed to read terminal.rs")
 }
 
-fn section(source: &str, start_marker: &str, end_marker: &str) -> &str {
+fn section<'a>(source: &'a str, start_marker: &str, end_marker: &str) -> &'a str {
     let start = source.find(start_marker).expect("start marker not found");
     let end = source[start..]
         .find(end_marker)

@@ -167,7 +167,7 @@ fn build_ui(
             .padding(1.0)
             .margin_top(1.0)
             .child(
-                Text::new(&format!("New todo: {}_", input_buffer.get()))
+                Text::new(format!("New todo: {}_", input_buffer.get()))
                     .color(Color::Green)
                     .into_element(),
             )

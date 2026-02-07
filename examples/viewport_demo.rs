@@ -2,9 +2,7 @@
 //!
 //! Run: cargo run --example viewport_demo
 
-use rnk::components::viewport::{
-    Viewport, ViewportKeyMap, ViewportState, ViewportStyle, handle_viewport_input,
-};
+use rnk::components::viewport::{ViewportState, ViewportStyle};
 use rnk::core::{BorderStyle, Color};
 
 fn main() {
@@ -89,7 +87,7 @@ fn main() {
 
     // Style options
     println!("--- ViewportStyle Options ---");
-    let style = ViewportStyle::new()
+    let _style = ViewportStyle::new()
         .border(BorderStyle::Round)
         .border_color(Color::Cyan)
         .background(Color::Black)
@@ -143,12 +141,13 @@ fn main() {
 }
 
 fn generate_sample_content() -> String {
-    let mut lines = Vec::new();
-    lines.push("# Viewport Demo Content".to_string());
-    lines.push("".to_string());
-    lines.push("This is a demonstration of the Viewport component.".to_string());
-    lines.push("It supports scrolling through large amounts of text.".to_string());
-    lines.push("".to_string());
+    let mut lines = vec![
+        "# Viewport Demo Content".to_string(),
+        "".to_string(),
+        "This is a demonstration of the Viewport component.".to_string(),
+        "It supports scrolling through large amounts of text.".to_string(),
+        "".to_string(),
+    ];
 
     for i in 1..=50 {
         lines.push(format!(

@@ -153,7 +153,7 @@ fn render_log_entry(entry: &LogEntry) -> Element {
         .flex_direction(FlexDirection::Row)
         .child(Text::new(prefix).color(color).bold().into_element())
         .child(
-            Text::new(format!(" {}", entry.message))
+            Text::new(format!(" #{} {}", entry.id, entry.message))
                 .color(Color::White)
                 .into_element(),
         )

@@ -48,9 +48,9 @@ fn app() -> Element {
     let staged_selected = use_signal(|| 0usize);
     let commits_selected = use_signal(|| 0usize);
 
-    let unstaged_files = use_signal(|| mock_unstaged_files());
-    let staged_files = use_signal(|| mock_staged_files());
-    let commits = use_signal(|| mock_commits());
+    let unstaged_files = use_signal(mock_unstaged_files);
+    let staged_files = use_signal(mock_staged_files);
+    let commits = use_signal(mock_commits);
 
     let app = use_app();
 
@@ -350,24 +350,37 @@ fn commits_panel(commits: &[Commit], selected: usize, active: bool) -> Element {
 
     for (i, commit) in commits.iter().take(6).enumerate() {
         let is_selected = i == selected;
+        let meta = format!(" {} · {}", commit.author, commit.time);
 
         children.push(
             Box::new()
-                .flex_direction(FlexDirection::Row)
+                .flex_direction(FlexDirection::Column)
                 .background(if is_selected && active {
                     Color::Ansi256(238)
                 } else {
                     Color::Reset
                 })
                 .children(vec![
-                    Text::new(format!(" {} ", &commit.hash[..7]))
-                        .color(Color::Yellow)
+                    Box::new()
+                        .flex_direction(FlexDirection::Row)
+                        .children(vec![
+                            Text::new(format!(" {} ", &commit.hash[..7]))
+                                .color(Color::Yellow)
+                                .into_element(),
+                            Text::new(&commit.message)
+                                .color(if is_selected && active {
+                                    Color::White
+                                } else {
+                                    Color::Reset
+                                })
+                                .into_element(),
+                        ])
                         .into_element(),
-                    Text::new(&commit.message)
+                    Text::new(meta)
                         .color(if is_selected && active {
-                            Color::White
+                            Color::Ansi256(252)
                         } else {
-                            Color::Reset
+                            Color::BrightBlack
                         })
                         .into_element(),
                 ])

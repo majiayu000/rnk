@@ -2,7 +2,7 @@
 //!
 //! Run: cargo run --example tree_demo
 
-use rnk::components::{Tree, TreeNode, TreeState, TreeStyle};
+use rnk::components::{TreeNode, TreeState, TreeStyle};
 
 fn main() {
     println!("=== Tree Component Demo ===\n");
@@ -219,7 +219,7 @@ fn print_node(
     // Color
     let (color_start, color_end) = if is_focused {
         ("\x1b[1;36m", "\x1b[0m")
-    } else if let Some(_) = style.icon_color {
+    } else if style.icon_color.is_some() {
         ("\x1b[36m", "\x1b[0m")
     } else {
         ("", "")
