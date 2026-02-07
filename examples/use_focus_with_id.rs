@@ -14,22 +14,20 @@ fn app() -> Element {
     let app = use_app();
     let focus_manager = use_focus_manager();
 
-    let focus_manager_clone = focus_manager.clone();
-
     use_input(move |ch, key| {
         match ch {
             "q" => app.exit(),
-            "1" => focus_manager_clone.focus("input-1"),
-            "2" => focus_manager_clone.focus("input-2"),
-            "3" => focus_manager_clone.focus("input-3"),
+            "1" => focus_manager.focus("input-1"),
+            "2" => focus_manager.focus("input-2"),
+            "3" => focus_manager.focus("input-3"),
             _ => {}
         }
         // Handle Tab for navigation
         if key.tab {
             if key.shift {
-                focus_manager_clone.focus_previous();
+                focus_manager.focus_previous();
             } else {
-                focus_manager_clone.focus_next();
+                focus_manager.focus_next();
             }
         }
     });

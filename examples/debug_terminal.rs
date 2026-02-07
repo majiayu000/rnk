@@ -1,11 +1,6 @@
 //! Debug interactive demo with actual terminal size
 
-use std::io::{Write, stdout};
-
-use crossterm::{
-    cursor, execute,
-    terminal::{self},
-};
+use crossterm::terminal;
 
 use rnk::core::Dimension;
 use rnk::layout::LayoutEngine;
