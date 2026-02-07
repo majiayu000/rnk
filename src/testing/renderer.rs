@@ -6,9 +6,10 @@
 use std::collections::HashMap;
 use unicode_width::UnicodeWidthChar;
 
-use crate::core::{Display, Element, ElementId, Position};
+use crate::core::{Element, ElementId};
 use crate::layout::{Layout, LayoutEngine};
 use crate::renderer::Output;
+use crate::renderer::tree_renderer::render_element_tree;
 
 /// Test renderer configuration
 #[derive(Debug, Clone)]
@@ -50,7 +51,7 @@ impl TestRenderer {
         engine.compute(element, self.width, self.height);
 
         let mut output = Output::new(self.width, self.height);
-        self.render_element(element, &engine, &mut output, 0.0, 0.0);
+        render_element_tree(element, &engine, &mut output, 0.0, 0.0);
         output.render()
     }
 
@@ -127,94 +128,6 @@ impl TestRenderer {
         Ok(())
     }
 
-    /// Render a single element recursively
-    fn render_element(
-        &self,
-        element: &Element,
-        engine: &LayoutEngine,
-        output: &mut Output,
-        offset_x: f32,
-        offset_y: f32,
-    ) {
-        if element.style.display == Display::None {
-            return;
-        }
-
-        let layout = match engine.get_layout(element.id) {
-            Some(l) => l,
-            None => return,
-        };
-
-        let x = (offset_x + layout.x) as u16;
-        let y = (offset_y + layout.y) as u16;
-        let w = layout.width as u16;
-        let h = layout.height as u16;
-
-        // Background
-        if element.style.background_color.is_some() {
-            for row in 0..h {
-                output.write(x, y + row, &" ".repeat(w as usize), &element.style);
-            }
-        }
-
-        // Border
-        if element.style.has_border() {
-            let (tl, tr, bl, br, hz, vt) = element.style.border_style.chars();
-            let mut style = element.style.clone();
-
-            style.color = element.style.get_border_top_color();
-            output.write(
-                x,
-                y,
-                &format!("{}{}{}", tl, hz.repeat((w as usize).saturating_sub(2)), tr),
-                &style,
-            );
-
-            style.color = element.style.get_border_bottom_color();
-            output.write(
-                x,
-                y + h.saturating_sub(1),
-                &format!("{}{}{}", bl, hz.repeat((w as usize).saturating_sub(2)), br),
-                &style,
-            );
-
-            for row in 1..h.saturating_sub(1) {
-                style.color = element.style.get_border_left_color();
-                output.write(x, y + row, vt, &style);
-                style.color = element.style.get_border_right_color();
-                output.write(x + w.saturating_sub(1), y + row, vt, &style);
-            }
-        }
-
-        // Text content
-        if let Some(text) = &element.text_content {
-            let text_x = x
-                + if element.style.has_border() { 1 } else { 0 }
-                + element.style.padding.left as u16;
-            let text_y = y
-                + if element.style.has_border() { 1 } else { 0 }
-                + element.style.padding.top as u16;
-            output.write(text_x, text_y, text, &element.style);
-        }
-
-        // Children
-        let cx = offset_x + layout.x;
-        let cy = offset_y + layout.y;
-
-        for child in element.children.iter() {
-            if child.style.position == Position::Absolute {
-                self.render_element(
-                    child,
-                    engine,
-                    output,
-                    child.style.left.unwrap_or(0.0),
-                    child.style.top.unwrap_or(0.0),
-                );
-            } else {
-                self.render_element(child, engine, output, cx, cy);
-            }
-        }
-    }
 }
 
 impl Default for TestRenderer {
@@ -401,5 +314,21 @@ mod tests {
         let layout = layouts.get(&element.id).unwrap();
         assert_eq!(layout.width, 20.0);
         assert_eq!(layout.height, 5.0);
+    }
+
+    #[test]
+    fn test_render_to_plain_applies_scroll_offset() {
+        let renderer = TestRenderer::new(20, 3);
+        let element = RnkBox::new()
+            .padding_left(4.0)
+            .scroll_offset_x(2)
+            .child(Text::new("X").into_element())
+            .into_element();
+
+        let output = renderer.render_to_plain(&element);
+        let first_line = output.lines().next().unwrap_or_default();
+        let x_pos = first_line.find('X').unwrap_or(usize::MAX);
+
+        assert_eq!(x_pos, 2);
     }
 }
