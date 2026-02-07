@@ -15,7 +15,7 @@ fn app() -> Element {
     let selected = use_signal(|| 0usize);
     let confirmed = use_signal(|| Option::<String>::None);
 
-    let items = vec![
+    let items = [
         ("red", "Red", Color::Red),
         ("green", "Green", Color::Green),
         ("blue", "Blue", Color::Blue),
@@ -45,7 +45,7 @@ fn app() -> Element {
             });
         } else if key.return_key {
             let idx = selected_clone.get();
-            let items = vec!["Red", "Green", "Blue", "Yellow", "Magenta", "Cyan"];
+            let items = ["Red", "Green", "Blue", "Yellow", "Magenta", "Cyan"];
             confirmed_clone.set(Some(items[idx].to_string()));
         }
     });

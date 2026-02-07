@@ -99,7 +99,7 @@ fn demo_counter() {
         )
         .child(Newline::new().into_element())
         .child(
-            Text::new(&format!("Count: {}", count))
+            Text::new(format!("Count: {}", count))
                 .color(Color::Yellow)
                 .into_element(),
         )

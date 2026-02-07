@@ -341,7 +341,7 @@ fn render_to_string(element: &Element, width: u16) -> String {
     let height = calculate_element_height(element, width);
 
     let mut output = Output::new(width, height);
-    render_element_recursive(element, &engine, &mut output, 0.0, 0.0, width);
+    render_element_recursive(element, &engine, &mut output, 0.0, 0.0);
     output.render()
 }
 
@@ -352,7 +352,6 @@ fn render_element_recursive(
     output: &mut Output,
     offset_x: f32,
     offset_y: f32,
-    container_width: u16,
 ) {
     if element.style.display == Display::None {
         return;
@@ -465,7 +464,7 @@ fn render_element_recursive(
 
     // Recursively render children
     for child in element.children.iter() {
-        render_element_recursive(child, engine, output, x as f32, y as f32, container_width);
+        render_element_recursive(child, engine, output, x as f32, y as f32);
     }
 }
 

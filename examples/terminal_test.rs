@@ -1,8 +1,8 @@
 //! Test rendering directly to terminal
-use crossterm::{cursor, execute, terminal};
+use crossterm::terminal;
 use rnk::prelude::Box as RnkBox;
 use rnk::prelude::*;
-use std::io::{self, Write};
+use std::io;
 
 fn main() -> io::Result<()> {
     let (term_width, term_height) = terminal::size().unwrap_or((80, 24));

@@ -60,15 +60,10 @@ fn app() -> Element {
                 // Advance to next step
                 steps_clone.update(|s| {
                     // Find first pending and mark previous as complete
-                    let mut found_running = false;
                     for step in s.iter_mut() {
                         if step.status == StepStatus::Running {
                             step.status = StepStatus::Complete;
-                            found_running = true;
-                        } else if step.status == StepStatus::Pending && found_running {
-                            step.status = StepStatus::Running;
-                            break;
-                        } else if step.status == StepStatus::Pending && !found_running {
+                        } else if step.status == StepStatus::Pending {
                             step.status = StepStatus::Running;
                             break;
                         }
@@ -123,7 +118,7 @@ fn app() -> Element {
         )
         .child(Newline::new().into_element())
         // Steps
-        .children(current_steps.iter().map(|step| render_step(step)))
+        .children(current_steps.iter().map(render_step))
         .child(Newline::new().into_element())
         // Status
         .child(if all_complete {
