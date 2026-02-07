@@ -40,20 +40,34 @@ where
 {
     let debounced = use_signal(|| value.clone());
     let last_value = use_signal(|| value.clone());
-    let last_change = use_signal(Instant::now);
+    let generation = use_signal(|| 0u64);
 
-    // Check if value changed
-    let current_last: T = last_value.get();
-    if current_last != value {
-        last_value.set(value.clone());
-        last_change.set(Instant::now());
+    // Zero-delay debounce should update immediately.
+    if delay.is_zero() {
+        if debounced.get() != value {
+            debounced.set(value);
+        }
+        return debounced.get();
     }
 
-    // Check if enough time has passed
-    let current_debounced: T = debounced.get();
-    let current_last: T = last_value.get();
-    if last_change.get().elapsed() >= delay && current_debounced != current_last {
-        debounced.set(current_last);
+    if last_value.get() != value {
+        last_value.set(value);
+        generation.update(|g| *g = g.wrapping_add(1));
+
+        let expected_generation = generation.get();
+        let generation_clone = generation.clone();
+        let last_value_clone = last_value.clone();
+        let debounced_clone = debounced.clone();
+
+        std::thread::spawn(move || {
+            std::thread::sleep(delay);
+            if generation_clone.get() == expected_generation {
+                let latest = last_value_clone.get();
+                if debounced_clone.get() != latest {
+                    debounced_clone.set(latest);
+                }
+            }
+        });
     }
 
     debounced.get()
@@ -125,6 +139,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hooks::context::{HookContext, with_hooks};
+    use std::sync::{Arc, RwLock};
 
     #[test]
     fn test_use_debounce_compiles() {
@@ -148,5 +164,23 @@ mod tests {
             let _ = handle.is_ready();
             handle.reset();
         }
+    }
+
+    #[test]
+    fn test_use_debounce_updates_after_delay() {
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+
+        let first = with_hooks(ctx.clone(), || use_debounce("a".to_string(), Duration::from_millis(30)));
+        assert_eq!(first, "a");
+
+        let second =
+            with_hooks(ctx.clone(), || use_debounce("b".to_string(), Duration::from_millis(30)));
+        assert_eq!(second, "a");
+
+        std::thread::sleep(Duration::from_millis(60));
+
+        let third =
+            with_hooks(ctx.clone(), || use_debounce("b".to_string(), Duration::from_millis(30)));
+        assert_eq!(third, "b");
     }
 }

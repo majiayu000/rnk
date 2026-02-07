@@ -21,6 +21,7 @@
 //! ```
 
 use crate::cmd::Cmd;
+use crate::hooks::use_effect::use_effect;
 use crate::hooks::use_cmd::use_cmd_once;
 use std::time::Duration;
 
@@ -32,12 +33,7 @@ pub fn use_interval<F>(delay: Duration, callback: F)
 where
     F: Fn() + Send + Sync + Clone + 'static,
 {
-    use_cmd_once(move |_| {
-        let cb = callback.clone();
-        Cmd::every(delay, move |_| {
-            cb();
-        })
-    });
+    use_interval_when(delay, true, callback);
 }
 
 /// Run a callback at regular intervals with control
@@ -48,16 +44,29 @@ pub fn use_interval_when<F>(delay: Duration, enabled: bool, callback: F)
 where
     F: Fn() + Send + Sync + Clone + 'static,
 {
-    use_cmd_once(move |_| {
-        if enabled {
+    use_effect(
+        move || {
+            if !enabled || delay.is_zero() {
+                return None;
+            }
+
+            let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
             let cb = callback.clone();
-            Cmd::every(delay, move |_| {
-                cb();
-            })
-        } else {
-            Cmd::none()
-        }
-    });
+
+            let handle = std::thread::spawn(move || loop {
+                match stop_rx.recv_timeout(delay) {
+                    Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => cb(),
+                }
+            });
+
+            Some(Box::new(move || {
+                let _ = stop_tx.send(());
+                let _ = handle.join();
+            }) as Box<dyn FnOnce() + Send>)
+        },
+        (delay, enabled),
+    );
 }
 
 /// Run a callback once after a delay (setTimeout equivalent)
@@ -77,6 +86,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hooks::context::{HookContext, with_hooks};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, RwLock};
 
     #[test]
     fn test_use_interval_compiles() {
@@ -104,5 +116,72 @@ mod tests {
                 println!("done");
             });
         }
+    }
+
+    #[test]
+    fn test_use_interval_runs_repeatedly() {
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let count = Arc::new(AtomicUsize::new(0));
+        let count_clone = count.clone();
+
+        with_hooks(ctx.clone(), || {
+            use_interval(Duration::from_millis(20), move || {
+                count_clone.fetch_add(1, Ordering::SeqCst);
+            });
+        });
+
+        std::thread::sleep(Duration::from_millis(90));
+        let observed = count.load(Ordering::SeqCst);
+        assert!(
+            observed >= 2,
+            "expected at least 2 interval ticks, observed {}",
+            observed
+        );
+
+        drop(ctx);
+    }
+
+    #[test]
+    fn test_use_interval_when_toggle_stops_ticks() {
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let count = Arc::new(AtomicUsize::new(0));
+
+        let count_clone = count.clone();
+        with_hooks(ctx.clone(), || {
+            use_interval_when(Duration::from_millis(20), true, move || {
+                count_clone.fetch_add(1, Ordering::SeqCst);
+            });
+        });
+
+        std::thread::sleep(Duration::from_millis(70));
+        let before_disable = count.load(Ordering::SeqCst);
+        assert!(before_disable > 0, "interval did not tick before disable");
+
+        let count_clone = count.clone();
+        with_hooks(ctx.clone(), || {
+            use_interval_when(Duration::from_millis(20), false, move || {
+                count_clone.fetch_add(1, Ordering::SeqCst);
+            });
+        });
+
+        // Allow any in-flight tick that raced with disable to drain.
+        std::thread::sleep(Duration::from_millis(70));
+        let settled = count.load(Ordering::SeqCst);
+        assert!(
+            settled <= before_disable + 1,
+            "too many ticks after disable; before={}, settled={}",
+            before_disable,
+            settled
+        );
+
+        // After settling, count should no longer increase.
+        std::thread::sleep(Duration::from_millis(80));
+        let after_disable = count.load(Ordering::SeqCst);
+        assert_eq!(
+            settled, after_disable,
+            "interval continued ticking after disable"
+        );
+
+        drop(ctx);
     }
 }

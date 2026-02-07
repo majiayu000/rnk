@@ -225,6 +225,14 @@ impl CmdExecutor {
 
             Cmd::Every { duration, callback } => {
                 runtime.spawn(async move {
+                    if duration.is_zero() {
+                        callback(Instant::now());
+                        if notify_render {
+                            render_handle.request();
+                        }
+                        return;
+                    }
+
                     // Calculate time until next aligned boundary
                     // For example, if duration is 1 second and current time is 12:34:56.789,
                     // we want to wait until 12:34:57.000
@@ -392,6 +400,12 @@ impl CmdExecutor {
 
             Cmd::Every { duration, callback } => {
                 runtime.spawn(async move {
+                    if duration.is_zero() {
+                        callback(Instant::now());
+                        let _ = completion.send(());
+                        return;
+                    }
+
                     let now = std::time::SystemTime::now();
                     let since_epoch = now
                         .duration_since(std::time::UNIX_EPOCH)
@@ -1134,6 +1148,28 @@ mod tests {
             .expect("channel closed");
 
         assert!(timestamp_received.lock().unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_every_zero_duration_is_safe_and_immediate() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let executor = CmdExecutor::new(tx);
+
+        let flag = Arc::new(AtomicBool::new(false));
+        let flag_clone = Arc::clone(&flag);
+
+        let start = std::time::Instant::now();
+        executor.execute(Cmd::every(Duration::ZERO, move |_| {
+            flag_clone.store(true, Ordering::SeqCst);
+        }));
+
+        tokio::time::timeout(Duration::from_millis(200), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+
+        assert!(flag.load(Ordering::SeqCst));
+        assert!(start.elapsed() < Duration::from_millis(100));
     }
 
     // ==================== Mixed Composition Tests ====================

@@ -100,7 +100,7 @@ where
     let new_deps_hash = deps.to_hash();
 
     // Get or create effect storage
-    let storage = ctx_ref.use_hook(|| EffectStorage {
+    let (storage, effect_slot) = ctx_ref.use_hook_with_index(|| EffectStorage {
         prev_deps_hash: None,
     });
 
@@ -123,8 +123,7 @@ where
         // Add effect to run after render
         ctx_ref.add_effect(Effect {
             callback: Box::new(effect),
-            cleanup: None,
-            deps: Some(vec![new_deps_hash]),
+            slot: effect_slot,
         });
     }
 }
@@ -147,7 +146,7 @@ where
     let mut ctx_ref = ctx.write().unwrap();
 
     // Use a flag to track if effect has run
-    let storage = ctx_ref.use_hook(|| false);
+    let (storage, effect_slot) = ctx_ref.use_hook_with_index(|| false);
 
     let has_run = storage.get::<bool>().unwrap_or(false);
 
@@ -156,8 +155,7 @@ where
 
         ctx_ref.add_effect(Effect {
             callback: Box::new(effect),
-            cleanup: None,
-            deps: None,
+            slot: effect_slot,
         });
     }
 }
@@ -269,6 +267,57 @@ mod tests {
         });
 
         // Now cleanup should have run
+        assert!(*cleanup_ran.lock().unwrap());
+    }
+
+    #[test]
+    fn test_use_effect_does_not_cleanup_when_deps_unchanged() {
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let cleanup_count = Arc::new(Mutex::new(0usize));
+
+        let cleanup_count_clone = cleanup_count.clone();
+        with_hooks(ctx.clone(), || {
+            use_effect(
+                move || {
+                    let cleanup_count_inner = cleanup_count_clone.clone();
+                    Some(Box::new(move || {
+                        *cleanup_count_inner.lock().unwrap() += 1;
+                    }) as Box<dyn FnOnce() + Send>)
+                },
+                (1i32,),
+            );
+        });
+        assert_eq!(*cleanup_count.lock().unwrap(), 0);
+
+        // Same deps: effect should not rerun, cleanup should not run.
+        with_hooks(ctx.clone(), || {
+            use_effect(|| None, (1i32,));
+        });
+        assert_eq!(*cleanup_count.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_use_effect_once_cleanup_runs_on_drop() {
+        let cleanup_ran = Arc::new(Mutex::new(false));
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+
+        let cleanup_ran_clone = cleanup_ran.clone();
+        with_hooks(ctx.clone(), || {
+            use_effect_once(move || {
+                let cleanup_ran_inner = cleanup_ran_clone.clone();
+                Some(Box::new(move || {
+                    *cleanup_ran_inner.lock().unwrap() = true;
+                }) as Box<dyn FnOnce() + Send>)
+            });
+        });
+
+        // Should not cleanup on normal rerender when use_effect_once doesn't rerun.
+        with_hooks(ctx.clone(), || {
+            use_effect_once(|| None);
+        });
+        assert!(!*cleanup_ran.lock().unwrap());
+
+        drop(ctx);
         assert!(*cleanup_ran.lock().unwrap());
     }
 }
