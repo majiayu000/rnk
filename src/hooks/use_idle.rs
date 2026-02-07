@@ -18,6 +18,7 @@
 //! }
 //! ```
 
+use crate::hooks::use_interval::use_interval;
 use crate::hooks::use_signal::use_signal;
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
@@ -26,6 +27,8 @@ thread_local! {
     /// Last activity timestamp
     static LAST_ACTIVITY: RefCell<Instant> = RefCell::new(Instant::now());
 }
+
+const IDLE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Record user activity
 ///
@@ -70,20 +73,29 @@ impl IdleState {
 ///
 /// Returns true if the user has been idle for at least the given duration.
 pub fn use_idle(threshold: Duration) -> bool {
-    let idle = use_signal(move || is_idle(threshold));
-    idle.get()
+    use_idle_refresh_tick();
+    is_idle(threshold)
 }
 
 /// Hook to get detailed idle state
 pub fn use_idle_state(threshold: Duration) -> IdleState {
-    let state = use_signal(move || IdleState::new(threshold));
-    state.get()
+    use_idle_refresh_tick();
+    IdleState::new(threshold)
 }
 
 /// Hook to get idle duration in seconds
 pub fn use_idle_seconds() -> u64 {
-    let seconds = use_signal(|| idle_duration().as_secs());
-    seconds.get()
+    use_idle_refresh_tick();
+    idle_duration().as_secs()
+}
+
+fn use_idle_refresh_tick() {
+    let tick = use_signal(|| 0u64);
+    let tick_for_interval = tick.clone();
+    use_interval(IDLE_POLL_INTERVAL, move || {
+        tick_for_interval.update(|v| *v = v.wrapping_add(1));
+    });
+    let _ = tick.get();
 }
 
 /// Idle callback configuration

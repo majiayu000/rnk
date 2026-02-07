@@ -39,8 +39,8 @@ impl HookStorage {
 /// Effect to be run after render (thread-safe)
 pub struct Effect {
     pub callback: EffectCallback,
-    pub cleanup: Option<Box<dyn FnOnce() + Send>>,
-    pub deps: Option<Vec<u64>>, // Hash of dependencies
+    /// Hook slot index this effect belongs to
+    pub slot: usize,
 }
 
 // Safety: Effect is Send because all its fields are Send
@@ -123,10 +123,18 @@ impl HookContext {
         &mut self,
         init: F,
     ) -> HookStorage {
+        self.use_hook_with_index(init).0
+    }
+
+    /// Get or create a hook at the current index, returning both storage and slot index
+    pub fn use_hook_with_index<T: Clone + Send + Sync + 'static, F: FnOnce() -> T>(
+        &mut self,
+        init: F,
+    ) -> (HookStorage, usize) {
         let index = self.hook_index;
         self.hook_index += 1;
 
-        if index >= self.hooks.len() {
+        let storage = if index >= self.hooks.len() {
             // First render - create the hook
             #[cfg(debug_assertions)]
             {
@@ -155,7 +163,9 @@ impl HookContext {
             }
             // Return existing hook
             self.hooks[index].clone()
-        }
+        };
+
+        (storage, index)
     }
 
     /// Add an effect to run after render
@@ -165,16 +175,18 @@ impl HookContext {
 
     /// Run all pending effects
     pub fn run_effects(&mut self) {
-        // Run cleanup functions from previous render
-        for cleanup_fn in self.cleanups.drain(..).flatten() {
-            cleanup_fn();
-        }
-
-        // Run new effects and collect cleanup functions
+        // Run effects and update cleanup functions only for the slots that re-ran.
         let effects = std::mem::take(&mut self.effects);
         for effect in effects {
-            let cleanup = (effect.callback)();
-            self.cleanups.push(cleanup);
+            if effect.slot >= self.cleanups.len() {
+                self.cleanups.resize_with(effect.slot + 1, || None);
+            }
+
+            if let Some(cleanup_fn) = self.cleanups[effect.slot].take() {
+                cleanup_fn();
+            }
+
+            self.cleanups[effect.slot] = (effect.callback)();
         }
     }
 
@@ -199,6 +211,14 @@ impl HookContext {
 impl Default for HookContext {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Drop for HookContext {
+    fn drop(&mut self) {
+        for cleanup_fn in self.cleanups.drain(..).flatten() {
+            cleanup_fn();
+        }
     }
 }
 

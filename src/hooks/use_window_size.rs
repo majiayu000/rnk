@@ -14,7 +14,6 @@
 //! }
 //! ```
 
-use crate::hooks::use_signal::use_signal;
 use crossterm::terminal;
 
 /// Get the current terminal size
@@ -26,8 +25,7 @@ pub fn get_terminal_size() -> (u16, u16) {
 ///
 /// Returns (width, height) tuple that updates on resize.
 pub fn use_window_size() -> (u16, u16) {
-    let size = use_signal(get_terminal_size);
-    size.get()
+    get_terminal_size()
 }
 
 /// Hook to get only the terminal width
