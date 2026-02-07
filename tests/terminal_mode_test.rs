@@ -5,6 +5,23 @@
 
 use std::process::Command;
 
+fn terminal_source() -> String {
+    std::fs::read_to_string(format!(
+        "{}/src/renderer/terminal.rs",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("failed to read terminal.rs")
+}
+
+fn section(source: &str, start_marker: &str, end_marker: &str) -> &str {
+    let start = source.find(start_marker).expect("start marker not found");
+    let end = source[start..]
+        .find(end_marker)
+        .map(|idx| start + idx)
+        .expect("end marker not found");
+    &source[start..end]
+}
+
 /// Test alternate screen escape sequences
 #[test]
 fn test_alternate_screen_escape_sequences() {
@@ -22,31 +39,38 @@ fn test_alternate_screen_escape_sequences() {
 /// Test that fullscreen mode uses alternate screen
 #[test]
 fn test_fullscreen_uses_alternate_screen() {
-    // This is a documentation test - we're verifying the behavior is as expected
-    // In fullscreen mode:
-    // 1. enter() should call EnterAlternateScreen
-    // 2. exit() should call LeaveAlternateScreen
-
-    // This is verified by code inspection in terminal.rs:
-    // Line 170: execute!(stdout(), EnterAlternateScreen, Hide)?;
-    // Line 184: execute!(stdout(), Show, LeaveAlternateScreen)?;
-
-    assert!(true, "Fullscreen mode correctly uses alternate screen");
+    let source = terminal_source();
+    let enter_section = section(
+        &source,
+        "pub fn enter(&mut self)",
+        "pub fn enter_inline(&mut self)",
+    );
+    assert!(enter_section.contains("EnterAlternateScreen"));
+    let exit_section = section(
+        &source,
+        "pub fn exit(&mut self)",
+        "pub fn exit_inline(&mut self)",
+    );
+    assert!(exit_section.contains("LeaveAlternateScreen"));
 }
 
 /// Test that inline mode does NOT use alternate screen
 #[test]
 fn test_inline_no_alternate_screen() {
-    // This is a documentation test - we're verifying the behavior is as expected
-    // In inline mode:
-    // 1. enter_inline() should NOT call EnterAlternateScreen
-    // 2. exit_inline() should NOT call LeaveAlternateScreen
+    let source = terminal_source();
+    let enter_inline_section = section(
+        &source,
+        "pub fn enter_inline(&mut self)",
+        "pub fn exit_inline(&mut self)",
+    );
+    assert!(!enter_inline_section.contains("EnterAlternateScreen"));
 
-    // This is verified by code inspection in terminal.rs:
-    // Lines 196-208: enter_inline() only uses hide_cursor(), no EnterAlternateScreen
-    // Lines 211-241: exit_inline() only uses show_cursor(), no LeaveAlternateScreen
-
-    assert!(true, "Inline mode correctly avoids alternate screen");
+    let exit_inline_section = section(
+        &source,
+        "pub fn exit_inline(&mut self)",
+        "pub fn switch_to_alt_screen(&mut self)",
+    );
+    assert!(!exit_inline_section.contains("LeaveAlternateScreen"));
 }
 
 /// Integration test: Verify terminal history preservation
