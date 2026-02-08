@@ -136,25 +136,34 @@ struct CmdHookState {
 /// }
 /// ```
 ///
-/// # Panics
-///
-/// Panics if called outside of a hook context (i.e., not during render).
+/// When called outside hook render context, the callback still executes
+/// and the produced command is dropped.
 pub fn use_cmd<D, F>(deps: D, f: F)
 where
     D: Deps + 'static,
     F: FnOnce(D::Output) -> Cmd + 'static,
 {
-    let ctx = current_context().expect("use_cmd must be called within a component render");
+    let Some(ctx) = current_context() else {
+        let _ = f(deps.output());
+        return;
+    };
+    let Ok(mut ctx_ref) = ctx.write() else {
+        let _ = f(deps.output());
+        return;
+    };
 
     let new_hash = deps.deps_hash();
 
     // Get or create hook state
-    let hook = ctx.write().unwrap().use_hook(|| CmdHookState {
+    let hook = ctx_ref.use_hook(|| CmdHookState {
         deps_hash: 0,
         is_first_render: true,
     });
 
-    let mut state = hook.get::<CmdHookState>().unwrap();
+    let mut state = hook.get::<CmdHookState>().unwrap_or(CmdHookState {
+        deps_hash: 0,
+        is_first_render: true,
+    });
     let old_hash = state.deps_hash;
     let is_first = state.is_first_render;
 
@@ -169,7 +178,7 @@ where
         let cmd = f(deps.output());
 
         // Queue command for execution
-        ctx.write().unwrap().queue_cmd(cmd);
+        ctx_ref.queue_cmd(cmd);
     }
 }
 
@@ -455,8 +464,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "use_cmd must be called within a component render")]
-    fn test_use_cmd_panics_outside_context() {
-        use_cmd((), |_| Cmd::none());
+    fn test_use_cmd_outside_context_does_not_panic() {
+        let called = Arc::new(RwLock::new(0usize));
+        let called_ref = called.clone();
+
+        use_cmd((), move |_| {
+            *called_ref.write().unwrap() += 1;
+            Cmd::none()
+        });
+
+        assert_eq!(*called.read().unwrap(), 1);
     }
 }
