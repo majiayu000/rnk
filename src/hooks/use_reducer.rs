@@ -101,12 +101,34 @@ where
     F: Fn(&S, A) -> S + Send + Sync + 'static,
     I: FnOnce() -> S,
 {
-    use_reducer(init_fn(), reducer)
+    let state = use_signal(|| Option::<S>::None);
+    if state.with(|value| value.is_none()) {
+        state.set_silent(Some(init_fn()));
+    }
+
+    let reducer = Arc::new(reducer);
+    let state_clone = state.clone();
+    let dispatch_fn = Arc::new(move |action: A| {
+        let current = state_clone
+            .get()
+            .expect("use_reducer_lazy: state should be initialized before dispatch");
+        let new_state = reducer(&current, action);
+        state_clone.set(Some(new_state));
+    });
+
+    let dispatch = Dispatch { dispatch_fn };
+    let current = state
+        .get()
+        .expect("use_reducer_lazy: state should be initialized before read");
+    (current, dispatch)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hooks::context::{HookContext, with_hooks};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, RwLock};
 
     #[derive(Clone, PartialEq, Debug)]
     struct TestState {
@@ -128,19 +150,50 @@ mod tests {
     }
 
     #[test]
-    fn test_use_reducer_compiles() {
-        fn _test() {
-            let (state, dispatch) = use_reducer(TestState { value: 0 }, test_reducer);
-            let _ = state.value;
-            dispatch.dispatch(TestAction::Add(1));
-        }
+    fn test_use_reducer_updates_state() {
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+
+        let (state, dispatch) =
+            with_hooks(ctx.clone(), || use_reducer(TestState { value: 0 }, test_reducer));
+        assert_eq!(state.value, 0);
+
+        dispatch.dispatch(TestAction::Add(3));
+
+        let (state, _) = with_hooks(ctx.clone(), || {
+            use_reducer(TestState { value: 999 }, test_reducer)
+        });
+        assert_eq!(state.value, 3);
     }
 
     #[test]
-    fn test_use_reducer_lazy_compiles() {
-        fn _test() {
-            let (state, _dispatch) = use_reducer_lazy(|| TestState { value: 42 }, test_reducer);
-            let _ = state.value;
-        }
+    fn test_use_reducer_lazy_initializes_once_and_updates_state() {
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let init_calls = Arc::new(AtomicUsize::new(0));
+
+        let calls = init_calls.clone();
+        let (state, dispatch) = with_hooks(ctx.clone(), || {
+            use_reducer_lazy(
+                || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    TestState { value: 42 }
+                },
+                test_reducer,
+            )
+        });
+        assert_eq!(state.value, 42);
+        assert_eq!(init_calls.load(Ordering::SeqCst), 1);
+
+        dispatch.dispatch(TestAction::Reset);
+        let (state, _) = with_hooks(ctx.clone(), || {
+            use_reducer_lazy(
+                || {
+                    init_calls.fetch_add(1, Ordering::SeqCst);
+                    TestState { value: 999 }
+                },
+                test_reducer,
+            )
+        });
+        assert_eq!(state.value, 0);
+        assert_eq!(init_calls.load(Ordering::SeqCst), 1);
     }
 }
