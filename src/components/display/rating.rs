@@ -290,16 +290,6 @@ impl Default for Rating {
     }
 }
 
-/// Create a rating
-pub fn rating(value: f32) -> Rating {
-    Rating::new(value)
-}
-
-/// Create a rating with max
-pub fn rating_of(value: f32, max: u8) -> Rating {
-    Rating::new(value).max(max)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,16 +348,6 @@ mod tests {
     fn test_rating_into_element() {
         let r = Rating::new(4.0);
         let _ = r.into_element();
-    }
-
-    #[test]
-    fn test_rating_helpers() {
-        let r1 = rating(3.5);
-        assert_eq!(r1.value, 3.5);
-
-        let r2 = rating_of(7.0, 10);
-        assert_eq!(r2.value, 7.0);
-        assert_eq!(r2.max, 10);
     }
 
     #[test]

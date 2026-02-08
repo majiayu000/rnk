@@ -138,29 +138,6 @@ impl Default for Stat {
     }
 }
 
-/// Create a simple stat
-pub fn stat(label: impl Into<String>, value: impl Into<String>) -> Element {
-    Stat::new(label, value).into_element()
-}
-
-/// Create a stat with upward trend
-pub fn stat_up(
-    label: impl Into<String>,
-    value: impl Into<String>,
-    change: impl Into<String>,
-) -> Element {
-    Stat::new(label, value).trend_up(change).into_element()
-}
-
-/// Create a stat with downward trend
-pub fn stat_down(
-    label: impl Into<String>,
-    value: impl Into<String>,
-    change: impl Into<String>,
-) -> Element {
-    Stat::new(label, value).trend_down(change).into_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,12 +160,5 @@ mod tests {
         let _ = Stat::new("Test", "123").into_element();
         let _ = Stat::new("Test", "123").trend_up("5%").into_element();
         let _ = Stat::new("Test", "123").trend_down("3%").into_element();
-    }
-
-    #[test]
-    fn test_stat_helpers() {
-        let _ = stat("Label", "Value");
-        let _ = stat_up("Sales", "$100", "10%");
-        let _ = stat_down("Costs", "$50", "5%");
     }
 }

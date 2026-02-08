@@ -140,14 +140,14 @@ mod theme;
 pub mod viewport;
 
 pub use accordion::{Accordion, AccordionItem};
-pub use alert::{Alert, AlertLevel, alert_error, alert_info, alert_success, alert_warning};
-pub use avatar::{Avatar, AvatarSize, avatar, avatar_initials};
+pub use alert::{Alert, AlertLevel};
+pub use avatar::{Avatar, AvatarSize};
 pub use badge::{Badge, BadgeVariant};
 pub use barchart::{Bar, BarChart, BarChartOrientation};
 pub use box_component::Box;
 pub use breadcrumb::{Breadcrumb, breadcrumb_from_path};
 pub use calendar::Calendar;
-pub use card::{Card, card, card_full};
+pub use card::Card;
 pub use chip::Chip;
 pub use code_editor::{CodeEditor, Language};
 pub use color_picker::{
@@ -162,7 +162,7 @@ pub use context_menu::{ContextMenu, ContextMenuState, ContextMenuStyle, MenuItem
 pub use cursor::{Cursor, CursorShape, CursorState, CursorStyle, cursor};
 pub use devtools::{DevTools, DevToolsTab};
 pub use divider::{Divider, DividerOrientation, DividerStyle, hr, hr_dashed, hr_label};
-pub use empty_state::{EmptyState, empty_state, empty_state_with_icon};
+pub use empty_state::EmptyState;
 pub use file_picker::{
     FileEntry, FileFilter, FilePicker, FilePickerState, FilePickerStyle, FileType, file_picker,
 };
@@ -194,24 +194,21 @@ pub use notification::{
 pub use paginator::{
     Paginator, PaginatorState, PaginatorStyle, PaginatorType, handle_paginator_input,
 };
-pub use popover::{
-    Popover, PopoverArrow, PopoverBorder, PopoverPosition, PopoverStyle, popover,
-    popover_with_content,
-};
+pub use popover::{Popover, PopoverArrow, PopoverBorder, PopoverPosition, PopoverStyle};
 pub use progress::{Gauge, Progress, ProgressSymbols};
-pub use quote::{Quote, QuoteStyle, quote, quote_with_author};
-pub use rating::{Rating, RatingStyle, RatingSymbols, rating, rating_of};
+pub use quote::{Quote, QuoteStyle};
+pub use rating::{Rating, RatingStyle, RatingSymbols};
 pub use scrollable::{ScrollableBox, fixed_bottom_layout, virtual_scroll_view};
 pub use scrollbar::{Scrollbar, ScrollbarOrientation, ScrollbarSymbols};
 pub use select_input::{SelectInput, SelectInputStyle, SelectItem, select_input};
-pub use skeleton::{Skeleton, SkeletonVariant, skeleton_paragraph, skeleton_text};
+pub use skeleton::{Skeleton, SkeletonVariant};
 pub use spacer::Spacer;
 pub use sparkline::Sparkline;
 pub use spinner::{Spinner, SpinnerBuilder};
-pub use stat::{Stat, Trend, stat, stat_down, stat_up};
+pub use stat::{Stat, Trend};
 pub use static_output::{Static, static_output};
-pub use status_bar::{StatusBar, status_bar, status_bar_full};
-pub use stepper::{Step, StepStatus, Stepper, StepperOrientation, StepperStyle, stepper};
+pub use status_bar::StatusBar;
+pub use stepper::{Step, StepStatus, Stepper, StepperOrientation, StepperStyle};
 pub use table::{Cell, Constraint, Row, Table, TableState};
 pub use tabs::{Tab, Tabs};
 pub use tag::Tag;
@@ -226,6 +223,6 @@ pub use timer::{
     StopwatchState, TimerState, format_duration_hhmmss, format_duration_mmss,
     format_duration_precise,
 };
-pub use tooltip::{Tooltip, TooltipPosition, tooltip, tooltip_left, tooltip_right};
+pub use tooltip::{Tooltip, TooltipPosition};
 pub use transform::Transform;
 pub use tree::{Tree, TreeNode, TreeState, TreeStyle, handle_tree_input};

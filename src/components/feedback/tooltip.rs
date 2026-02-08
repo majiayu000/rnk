@@ -107,27 +107,6 @@ impl Default for Tooltip {
     }
 }
 
-/// Create a tooltip
-pub fn tooltip(label: impl Into<String>, content: impl Into<String>) -> Element {
-    Tooltip::new(label).content(content).into_element()
-}
-
-/// Create a tooltip on the right
-pub fn tooltip_right(label: impl Into<String>, content: impl Into<String>) -> Element {
-    Tooltip::new(label)
-        .content(content)
-        .position(TooltipPosition::Right)
-        .into_element()
-}
-
-/// Create a tooltip on the left
-pub fn tooltip_left(label: impl Into<String>, content: impl Into<String>) -> Element {
-    Tooltip::new(label)
-        .content(content)
-        .position(TooltipPosition::Left)
-        .into_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,12 +141,5 @@ mod tests {
             .content("C")
             .position(TooltipPosition::Right)
             .into_element();
-    }
-
-    #[test]
-    fn test_tooltip_helpers() {
-        let _ = tooltip("Label", "Content");
-        let _ = tooltip_right("Label", "Content");
-        let _ = tooltip_left("Label", "Content");
     }
 }

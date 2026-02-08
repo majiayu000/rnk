@@ -166,26 +166,6 @@ impl Default for Alert {
     }
 }
 
-/// Create an info alert
-pub fn alert_info(message: impl Into<String>) -> Element {
-    Alert::info(message).into_element()
-}
-
-/// Create a success alert
-pub fn alert_success(message: impl Into<String>) -> Element {
-    Alert::success(message).into_element()
-}
-
-/// Create a warning alert
-pub fn alert_warning(message: impl Into<String>) -> Element {
-    Alert::warning(message).into_element()
-}
-
-/// Create an error alert
-pub fn alert_error(message: impl Into<String>) -> Element {
-    Alert::error(message).into_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,13 +188,5 @@ mod tests {
     fn test_alert_with_title() {
         let a = Alert::error("Details").title("Error!");
         assert_eq!(a.title, Some("Error!".to_string()));
-    }
-
-    #[test]
-    fn test_alert_helpers() {
-        let _ = alert_info("Info");
-        let _ = alert_success("Success");
-        let _ = alert_warning("Warning");
-        let _ = alert_error("Error");
     }
 }

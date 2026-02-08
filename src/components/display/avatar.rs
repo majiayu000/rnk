@@ -116,16 +116,6 @@ impl Default for Avatar {
     }
 }
 
-/// Create an avatar from a name
-pub fn avatar(name: impl Into<String>) -> Element {
-    Avatar::new(name).into_element()
-}
-
-/// Create an avatar with custom initials
-pub fn avatar_initials(initials: impl Into<String>) -> Element {
-    Avatar::initials(initials).into_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,11 +144,5 @@ mod tests {
         let _ = Avatar::initials("TU")
             .size(AvatarSize::Large)
             .into_element();
-    }
-
-    #[test]
-    fn test_avatar_helpers() {
-        let _ = avatar("John");
-        let _ = avatar_initials("AB");
     }
 }

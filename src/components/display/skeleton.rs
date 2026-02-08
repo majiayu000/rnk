@@ -151,16 +151,6 @@ impl Default for Skeleton {
     }
 }
 
-/// Create a text skeleton
-pub fn skeleton_text(width: usize) -> Element {
-    Skeleton::text(width).into_element()
-}
-
-/// Create a paragraph skeleton (multiple lines)
-pub fn skeleton_paragraph(lines: usize, width: usize) -> Element {
-    Skeleton::rectangle(width, lines).into_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,11 +180,5 @@ mod tests {
         let _ = Skeleton::text(10).into_element();
         let _ = Skeleton::circle(5).into_element();
         let _ = Skeleton::rectangle(10, 3).into_element();
-    }
-
-    #[test]
-    fn test_skeleton_helpers() {
-        let _ = skeleton_text(15);
-        let _ = skeleton_paragraph(3, 20);
     }
 }
