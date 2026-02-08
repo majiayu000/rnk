@@ -161,8 +161,12 @@ where
     F: Clone + Send + Sync + 'static,
     D: Hash,
 {
-    let ctx = current_context().expect("use_callback must be called within a component");
-    let mut ctx_ref = ctx.write().unwrap();
+    let Some(ctx) = current_context() else {
+        return MemoizedCallback::new(callback);
+    };
+    let Ok(mut ctx_ref) = ctx.write() else {
+        return MemoizedCallback::new(callback);
+    };
 
     let new_hash = compute_deps_hash(&deps);
 
@@ -358,5 +362,11 @@ mod tests {
             use_callback(double as fn(i32) -> i32, "fn_deps2")
         });
         assert_eq!((cb3.get())(5), 10);
+    }
+
+    #[test]
+    fn test_use_callback_without_context_does_not_panic() {
+        let cb = use_callback(|x: i32| x + 1, "no_ctx");
+        assert_eq!((cb.get())(41), 42);
     }
 }
