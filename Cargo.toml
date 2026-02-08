@@ -47,9 +47,6 @@ textwrap = "0.16"
 # Logging
 log = "0.4"
 
-# Error handling
-thiserror = "2.0"
-
 # Signal handling
 ctrlc = { version = "3.4", features = ["termination"] }
 
