@@ -270,9 +270,16 @@ impl HyperlinkBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn test_lock() -> &'static Mutex<()> {
+        static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        TEST_LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn test_hyperlink_creation() {
+        let _guard = test_lock().lock().unwrap();
         let link = Hyperlink::new("https://example.com", "Example");
         assert_eq!(link.get_url(), "https://example.com");
         assert_eq!(link.get_text(), "Example");
@@ -280,6 +287,7 @@ mod tests {
 
     #[test]
     fn test_hyperlink_url() {
+        let _guard = test_lock().lock().unwrap();
         let link = Hyperlink::url("https://example.com");
         assert_eq!(link.get_url(), "https://example.com");
         assert_eq!(link.get_text(), "https://example.com");
@@ -287,12 +295,14 @@ mod tests {
 
     #[test]
     fn test_hyperlink_with_id() {
+        let _guard = test_lock().lock().unwrap();
         let link = Hyperlink::new("https://example.com", "Example").with_id("link1");
         assert_eq!(link.id, Some("link1".to_string()));
     }
 
     #[test]
     fn test_hyperlink_render_osc8() {
+        let _guard = test_lock().lock().unwrap();
         let link = Hyperlink::new("https://example.com", "Example");
         let rendered = link.render_osc8();
 
@@ -304,6 +314,7 @@ mod tests {
 
     #[test]
     fn test_hyperlink_render_osc8_with_id() {
+        let _guard = test_lock().lock().unwrap();
         let link = Hyperlink::new("https://example.com", "Example").with_id("mylink");
         let rendered = link.render_osc8();
 
@@ -312,6 +323,7 @@ mod tests {
 
     #[test]
     fn test_hyperlink_render_fallback() {
+        let _guard = test_lock().lock().unwrap();
         let link = Hyperlink::new("https://example.com", "Example");
         let fallback = link.render_fallback();
 
@@ -320,6 +332,7 @@ mod tests {
 
     #[test]
     fn test_hyperlink_render_fallback_same_text() {
+        let _guard = test_lock().lock().unwrap();
         let link = Hyperlink::url("https://example.com");
         let fallback = link.render_fallback();
 
@@ -328,6 +341,7 @@ mod tests {
 
     #[test]
     fn test_hyperlink_function() {
+        let _guard = test_lock().lock().unwrap();
         // Force disable hyperlinks for predictable test
         set_hyperlinks_supported(false);
         let result = hyperlink("https://example.com", "Click");
@@ -337,6 +351,7 @@ mod tests {
 
     #[test]
     fn test_link_function() {
+        let _guard = test_lock().lock().unwrap();
         set_hyperlinks_supported(false);
         let result = link("https://example.com");
         assert_eq!(result, "https://example.com");
@@ -344,6 +359,7 @@ mod tests {
 
     #[test]
     fn test_hyperlink_builder() {
+        let _guard = test_lock().lock().unwrap();
         let builder = HyperlinkBuilder::new("https://example.com", "Example")
             .color(crate::core::Color::Cyan)
             .underline(true)
@@ -357,6 +373,7 @@ mod tests {
 
     #[test]
     fn test_hyperlink_builder_no_style() {
+        let _guard = test_lock().lock().unwrap();
         let builder = HyperlinkBuilder::new("https://example.com", "Example")
             .no_color()
             .underline(false)
@@ -369,6 +386,7 @@ mod tests {
 
     #[test]
     fn test_set_hyperlinks_supported() {
+        let _guard = test_lock().lock().unwrap();
         set_hyperlinks_supported(true);
         assert!(supports_hyperlinks());
 
@@ -381,6 +399,7 @@ mod tests {
 
     #[test]
     fn test_render_with_fallback() {
+        let _guard = test_lock().lock().unwrap();
         set_hyperlinks_supported(false);
 
         let link = Hyperlink::new("https://example.com", "Example");
