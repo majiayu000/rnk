@@ -1,70 +1,142 @@
 //! UI Components
 
+// Display components
+#[path = "display/accordion.rs"]
 mod accordion;
-mod alert;
+#[path = "display/avatar.rs"]
 mod avatar;
+#[path = "display/badge.rs"]
 mod badge;
+#[path = "display/barchart.rs"]
 mod barchart;
-mod box_component;
+#[path = "display/breadcrumb.rs"]
 mod breadcrumb;
+#[path = "display/calendar.rs"]
 mod calendar;
-mod capsule;
+#[path = "display/card.rs"]
 mod card;
+#[path = "display/chip.rs"]
 mod chip;
-mod code_editor;
-mod color_picker;
-mod command_palette;
-mod confirm;
-mod context_menu;
-mod cursor;
-mod devtools;
+#[path = "display/divider.rs"]
 mod divider;
+#[path = "display/empty_state.rs"]
 mod empty_state;
-mod file_picker;
+#[path = "display/gradient.rs"]
 mod gradient;
-mod help;
+#[path = "display/highlight.rs"]
 mod highlight;
+#[path = "display/hyperlink.rs"]
 mod hyperlink;
+#[path = "display/key_hint.rs"]
 mod key_hint;
+#[path = "display/line_chart.rs"]
 mod line_chart;
+#[path = "display/link.rs"]
 mod link;
+#[path = "display/list.rs"]
 mod list;
+#[path = "display/markdown.rs"]
 mod markdown;
+#[path = "display/message.rs"]
 mod message;
-mod modal;
-mod multi_select;
-pub mod navigation;
+#[path = "display/newline.rs"]
 mod newline;
-mod notification;
-mod paginator;
-mod popover;
+#[path = "display/progress.rs"]
 mod progress;
+#[path = "display/quote.rs"]
 mod quote;
+#[path = "display/rating.rs"]
 mod rating;
-mod scrollable;
-mod scrollbar;
-mod select_input;
-mod selection_list;
+#[path = "display/skeleton.rs"]
 mod skeleton;
-mod spacer;
+#[path = "display/sparkline.rs"]
 mod sparkline;
-mod spinner;
+#[path = "display/stat.rs"]
 mod stat;
+#[path = "display/static_output.rs"]
 mod static_output;
+#[path = "display/status.rs"]
 mod status;
-mod status_bar;
-mod stepper;
-mod table;
-mod tabs;
+#[path = "display/tag.rs"]
 mod tag;
+#[path = "display/text.rs"]
 pub mod text;
+#[path = "display/timer.rs"]
+mod timer;
+
+// Input components
+#[path = "input/code_editor.rs"]
+mod code_editor;
+#[path = "input/color_picker.rs"]
+mod color_picker;
+#[path = "input/command_palette.rs"]
+mod command_palette;
+#[path = "input/confirm.rs"]
+mod confirm;
+#[path = "input/context_menu.rs"]
+mod context_menu;
+#[path = "input/file_picker.rs"]
+mod file_picker;
+#[path = "input/multi_select.rs"]
+mod multi_select;
+#[path = "input/paginator.rs"]
+mod paginator;
+#[path = "input/select_input.rs"]
+mod select_input;
+#[path = "input/selection_list.rs"]
+mod selection_list;
+#[path = "input/text_input.rs"]
 mod text_input;
+
+// Layout components
+#[path = "layout/box_component.rs"]
+mod box_component;
+#[path = "layout/capsule.rs"]
+mod capsule;
+#[path = "layout/navigation.rs"]
+pub mod navigation;
+#[path = "layout/scrollable.rs"]
+mod scrollable;
+#[path = "layout/scrollbar.rs"]
+mod scrollbar;
+#[path = "layout/spacer.rs"]
+mod spacer;
+#[path = "layout/table.rs"]
+mod table;
+#[path = "layout/tabs.rs"]
+mod tabs;
+#[path = "layout/transform.rs"]
+mod transform;
+#[path = "layout/tree.rs"]
+mod tree;
+
+// Feedback components
+#[path = "feedback/alert.rs"]
+mod alert;
+#[path = "feedback/cursor.rs"]
+mod cursor;
+#[path = "feedback/devtools.rs"]
+mod devtools;
+#[path = "feedback/help.rs"]
+mod help;
+#[path = "feedback/modal.rs"]
+mod modal;
+#[path = "feedback/notification.rs"]
+mod notification;
+#[path = "feedback/popover.rs"]
+mod popover;
+#[path = "feedback/spinner.rs"]
+mod spinner;
+#[path = "feedback/status_bar.rs"]
+mod status_bar;
+#[path = "feedback/stepper.rs"]
+mod stepper;
+#[path = "feedback/tooltip.rs"]
+mod tooltip;
+
+// Existing nested modules
 pub mod textarea;
 mod theme;
-mod timer;
-mod tooltip;
-mod transform;
-mod tree;
 pub mod viewport;
 
 pub use accordion::{Accordion, AccordionItem};
