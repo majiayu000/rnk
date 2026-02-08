@@ -16,43 +16,22 @@ impl Deps for () {
     }
 }
 
-impl<T: Hash> Deps for (T,) {
-    fn to_hash(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.0.hash(&mut hasher);
-        hasher.finish()
-    }
+macro_rules! impl_deps_for_tuple {
+    ($($name:ident:$index:tt),+ $(,)?) => {
+        impl<$($name: Hash),+> Deps for ($($name,)+) {
+            fn to_hash(&self) -> u64 {
+                let mut hasher = DefaultHasher::new();
+                $(self.$index.hash(&mut hasher);)+
+                hasher.finish()
+            }
+        }
+    };
 }
 
-impl<T1: Hash, T2: Hash> Deps for (T1, T2) {
-    fn to_hash(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.0.hash(&mut hasher);
-        self.1.hash(&mut hasher);
-        hasher.finish()
-    }
-}
-
-impl<T1: Hash, T2: Hash, T3: Hash> Deps for (T1, T2, T3) {
-    fn to_hash(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.0.hash(&mut hasher);
-        self.1.hash(&mut hasher);
-        self.2.hash(&mut hasher);
-        hasher.finish()
-    }
-}
-
-impl<T1: Hash, T2: Hash, T3: Hash, T4: Hash> Deps for (T1, T2, T3, T4) {
-    fn to_hash(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.0.hash(&mut hasher);
-        self.1.hash(&mut hasher);
-        self.2.hash(&mut hasher);
-        self.3.hash(&mut hasher);
-        hasher.finish()
-    }
-}
+impl_deps_for_tuple!(T1:0);
+impl_deps_for_tuple!(T1:0, T2:1);
+impl_deps_for_tuple!(T1:0, T2:1, T3:2);
+impl_deps_for_tuple!(T1:0, T2:1, T3:2, T4:3);
 
 impl<T: Hash> Deps for Vec<T> {
     fn to_hash(&self) -> u64 {
@@ -202,6 +181,24 @@ mod tests {
 
         assert_eq!(deps1.to_hash(), deps2.to_hash());
         assert_ne!(deps1.to_hash(), deps3.to_hash());
+    }
+
+    #[test]
+    fn test_deps_hash_tuple_arity() {
+        assert_eq!((1i32,).to_hash(), (1i32,).to_hash());
+        assert_ne!((1i32,).to_hash(), (2i32,).to_hash());
+
+        assert_eq!((1i32, 2i32, 3i32).to_hash(), (1i32, 2i32, 3i32).to_hash());
+        assert_ne!((1i32, 2i32, 3i32).to_hash(), (1i32, 2i32, 4i32).to_hash());
+
+        assert_eq!(
+            (1i32, 2i32, 3i32, 4i32).to_hash(),
+            (1i32, 2i32, 3i32, 4i32).to_hash()
+        );
+        assert_ne!(
+            (1i32, 2i32, 3i32, 4i32).to_hash(),
+            (1i32, 2i32, 3i32, 5i32).to_hash()
+        );
     }
 
     #[test]
