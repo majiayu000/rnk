@@ -263,32 +263,36 @@ impl Text {
         &self.lines
     }
 
+    /// Apply a mutation to every span in the text.
+    fn for_each_span_mut(&mut self, mut apply: impl FnMut(&mut Span)) {
+        for line in &mut self.lines {
+            for span in &mut line.spans {
+                apply(span);
+            }
+        }
+    }
+
     // === Text styles (applied as default to all spans) ===
 
     /// Set text color
     pub fn color(mut self, color: Color) -> Self {
         self.style.color = Some(color);
-        // Apply to existing spans that don't have a color
-        for line in &mut self.lines {
-            for span in &mut line.spans {
-                if span.style.color.is_none() {
-                    span.style.color = Some(color);
-                }
+        self.for_each_span_mut(|span| {
+            if span.style.color.is_none() {
+                span.style.color = Some(color);
             }
-        }
+        });
         self
     }
 
     /// Set background color
     pub fn background(mut self, color: Color) -> Self {
         self.style.background_color = Some(color);
-        for line in &mut self.lines {
-            for span in &mut line.spans {
-                if span.style.background_color.is_none() {
-                    span.style.background_color = Some(color);
-                }
+        self.for_each_span_mut(|span| {
+            if span.style.background_color.is_none() {
+                span.style.background_color = Some(color);
             }
-        }
+        });
         self
     }
 
@@ -300,66 +304,42 @@ impl Text {
     /// Set bold
     pub fn bold(mut self) -> Self {
         self.style.bold = true;
-        for line in &mut self.lines {
-            for span in &mut line.spans {
-                span.style.bold = true;
-            }
-        }
+        self.for_each_span_mut(|span| span.style.bold = true);
         self
     }
 
     /// Set italic
     pub fn italic(mut self) -> Self {
         self.style.italic = true;
-        for line in &mut self.lines {
-            for span in &mut line.spans {
-                span.style.italic = true;
-            }
-        }
+        self.for_each_span_mut(|span| span.style.italic = true);
         self
     }
 
     /// Set underline
     pub fn underline(mut self) -> Self {
         self.style.underline = true;
-        for line in &mut self.lines {
-            for span in &mut line.spans {
-                span.style.underline = true;
-            }
-        }
+        self.for_each_span_mut(|span| span.style.underline = true);
         self
     }
 
     /// Set strikethrough
     pub fn strikethrough(mut self) -> Self {
         self.style.strikethrough = true;
-        for line in &mut self.lines {
-            for span in &mut line.spans {
-                span.style.strikethrough = true;
-            }
-        }
+        self.for_each_span_mut(|span| span.style.strikethrough = true);
         self
     }
 
     /// Set dim (less bright)
     pub fn dim(mut self) -> Self {
         self.style.dim = true;
-        for line in &mut self.lines {
-            for span in &mut line.spans {
-                span.style.dim = true;
-            }
-        }
+        self.for_each_span_mut(|span| span.style.dim = true);
         self
     }
 
     /// Set inverse (swap foreground and background)
     pub fn inverse(mut self) -> Self {
         self.style.inverse = true;
-        for line in &mut self.lines {
-            for span in &mut line.spans {
-                span.style.inverse = true;
-            }
-        }
+        self.for_each_span_mut(|span| span.style.inverse = true);
         self
     }
 
