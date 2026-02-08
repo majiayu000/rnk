@@ -10,35 +10,13 @@ pub trait Deps {
     fn to_hash(&self) -> u64;
 }
 
-impl Deps for () {
-    fn to_hash(&self) -> u64 {
-        0
-    }
-}
-
-macro_rules! impl_deps_for_tuple {
-    ($($name:ident:$index:tt),+ $(,)?) => {
-        impl<$($name: Hash),+> Deps for ($($name,)+) {
-            fn to_hash(&self) -> u64 {
-                let mut hasher = DefaultHasher::new();
-                $(self.$index.hash(&mut hasher);)+
-                hasher.finish()
-            }
-        }
-    };
-}
-
-impl_deps_for_tuple!(T1:0);
-impl_deps_for_tuple!(T1:0, T2:1);
-impl_deps_for_tuple!(T1:0, T2:1, T3:2);
-impl_deps_for_tuple!(T1:0, T2:1, T3:2, T4:3);
-
-impl<T: Hash> Deps for Vec<T> {
+impl<T> Deps for T
+where
+    T: Hash,
+{
     fn to_hash(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
-        for item in self {
-            item.hash(&mut hasher);
-        }
+        self.hash(&mut hasher);
         hasher.finish()
     }
 }
