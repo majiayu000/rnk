@@ -172,6 +172,7 @@ impl Output {
 
     /// Render only the dirty rows, returning (row_index, rendered_line) pairs
     pub fn render_dirty_rows(&self) -> Vec<(usize, String)> {
+        self.assert_no_active_clips("render_dirty_rows");
         self.dirty_row_indices()
             .map(|row_idx| {
                 let line = self.render_row(row_idx);
@@ -412,8 +413,18 @@ impl Output {
         self.clip_stack.len()
     }
 
+    fn assert_no_active_clips(&self, method: &str) {
+        assert!(
+            self.clip_stack.is_empty(),
+            "Output::{} called with an unbalanced clip stack (depth={})",
+            method,
+            self.clip_stack.len()
+        );
+    }
+
     /// Convert the buffer to a string with ANSI codes
     pub fn render(&self) -> String {
+        self.assert_no_active_clips("render");
         let mut lines: Vec<String> = Vec::new();
 
         for row_idx in 0..self.height as usize {
@@ -482,6 +493,7 @@ impl Output {
     /// consistent line counts between frames. Use `render()` for normal rendering
     /// that strips trailing empty lines.
     pub fn render_fixed_height(&self) -> String {
+        self.assert_no_active_clips("render_fixed_height");
         let mut lines: Vec<String> = Vec::new();
 
         for row_idx in 0..self.height as usize {
@@ -867,5 +879,18 @@ mod tests {
 
         output.unclip();
         assert_eq!(output.clip_depth(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Output::render called with an unbalanced clip stack")]
+    fn test_render_panics_with_active_clip_stack() {
+        let mut output = Output::new(10, 5);
+        output.clip(ClipRegion {
+            x1: 0,
+            y1: 0,
+            x2: 5,
+            y2: 5,
+        });
+        let _ = output.render();
     }
 }
