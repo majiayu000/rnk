@@ -21,6 +21,11 @@ pub(crate) struct CapsuleLabel {
     shape: CapsuleShape,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct CapsuleContent {
+    parts: Vec<String>,
+}
+
 impl CapsuleLabel {
     pub(crate) fn padded(content: impl Into<String>, fg: Color, bg: Color) -> Self {
         Self {
@@ -61,6 +66,24 @@ impl CapsuleLabel {
 
     pub(crate) fn into_element(self) -> Element {
         self.into_text().into_element()
+    }
+}
+
+impl CapsuleContent {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn push(mut self, part: impl Into<String>) -> Self {
+        let part = part.into();
+        if !part.is_empty() {
+            self.parts.push(part);
+        }
+        self
+    }
+
+    pub(crate) fn build(self) -> String {
+        self.parts.join(" ")
     }
 }
 
