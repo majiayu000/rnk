@@ -43,9 +43,6 @@ pub struct Effect {
     pub slot: usize,
 }
 
-// Safety: Effect is Send because all its fields are Send
-unsafe impl Send for Effect {}
-
 /// Hook context for a component (thread-safe)
 pub struct HookContext {
     /// Hook values storage
@@ -67,10 +64,6 @@ pub struct HookContext {
     /// Whether this is the first render (for hook order verification)
     first_render_complete: bool,
 }
-
-// Safety: HookContext is Send + Sync because all fields are thread-safe
-unsafe impl Send for HookContext {}
-unsafe impl Sync for HookContext {}
 
 impl HookContext {
     /// Create a new hook context

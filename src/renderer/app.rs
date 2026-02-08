@@ -5,12 +5,11 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::cmd::{Cmd, CmdExecutor, ExecRequest, run_exec_process};
 use crate::core::Element;
-use crate::hooks::context::{HookContext, with_hooks};
+use crate::hooks::context::with_hooks;
 use crate::hooks::use_app::{AppContext, set_app_context};
 use crate::hooks::use_input::clear_input_handlers;
 use crate::hooks::use_mouse::{clear_mouse_handlers, is_mouse_enabled};
@@ -36,7 +35,6 @@ where
     component: F,
     terminal: Terminal,
     layout_engine: LayoutEngine,
-    hook_context: Arc<RwLock<HookContext>>,
     options: AppOptions,
     should_exit: Arc<AtomicBool>,
     runtime: Arc<AppRuntime>,
@@ -91,7 +89,6 @@ where
     ) -> Self {
         let runtime = AppRuntime::new(options.alternate_screen);
         let render_handle = RenderHandle::new(runtime.clone());
-        let hook_context = Arc::new(RwLock::new(HookContext::new()));
         let should_exit = Arc::new(AtomicBool::new(false));
         let runtime_context = Rc::new(RefCell::new(RuntimeContext::with_app_control(
             should_exit.clone(),
@@ -103,9 +100,8 @@ where
 
         // Set up render callback
         let runtime_clone = runtime.clone();
-        hook_context
-            .write()
-            .unwrap()
+        runtime_context
+            .borrow_mut()
             .set_render_callback(Arc::new(move || {
                 runtime_clone.request_render();
             }));
@@ -117,7 +113,6 @@ where
             component,
             terminal: Terminal::new(),
             layout_engine: LayoutEngine::new(),
-            hook_context,
             options,
             should_exit,
             runtime,
@@ -418,8 +413,8 @@ where
         clear_mouse_handlers();
         set_measure_context(None);
 
-        // Begin runtime render cycle (clears runtime handlers)
-        self.runtime_context.borrow_mut().begin_render();
+        // Clear runtime per-frame handler registrations.
+        self.runtime_context.borrow_mut().prepare_render();
 
         // Get terminal size
         let (width, height) = Terminal::size()?;
@@ -431,20 +426,14 @@ where
         )));
 
         // Build element tree with hooks context
-        let root = with_hooks(self.hook_context.clone(), || (self.component)());
+        let hook_context = self.runtime_context.borrow().hook_context();
+        let root = with_hooks(hook_context, || (self.component)());
 
         // Clear app context after render
         set_app_context(None);
 
-        // End runtime render cycle
-        {
-            let mut ctx = self.runtime_context.borrow_mut();
-            ctx.end_render();
-            ctx.run_effects();
-        }
-
         // Execute any queued commands from hooks
-        let cmds = self.hook_context.write().unwrap().take_cmds();
+        let cmds = self.runtime_context.borrow_mut().take_cmds();
         if !cmds.is_empty() {
             self.cmd_executor.execute(Cmd::batch(cmds));
         }

@@ -3,7 +3,7 @@
 //! This module handles the main event loop, event processing, and
 //! integration with the Command system (CmdExecutor).
 
-use crossterm::event::{Event, KeyCode, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -126,6 +126,11 @@ impl EventLoop {
     fn handle_event(&mut self, event: Event) {
         match event {
             Event::Key(key_event) => {
+                // Ignore key release/repeat events to avoid duplicate actions.
+                if key_event.kind != KeyEventKind::Press {
+                    return;
+                }
+
                 // Handle Ctrl+C
                 if self.exit_on_ctrl_c && Terminal::is_ctrl_c(&Event::Key(key_event)) {
                     self.should_exit.store(true, Ordering::SeqCst);
@@ -183,7 +188,7 @@ mod tests {
     use crate::hooks::use_mouse::{clear_mouse_handlers, register_mouse_handler};
     use crate::renderer::frame_rate::FrameRateConfig;
     use crate::renderer::registry::{AppRuntime, AppSink, ModeSwitch, Printable};
-    use crossterm::event::{KeyEvent, MouseEvent, MouseEventKind};
+    use crossterm::event::{KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
     use std::sync::atomic::AtomicBool;
 
     fn create_event_loop(runtime: Arc<AppRuntime>, should_exit: Arc<AtomicBool>) -> EventLoop {
@@ -254,6 +259,29 @@ mod tests {
 
         assert!(hit.load(Ordering::SeqCst));
         assert!(runtime.render_requested());
+
+        clear_input_handlers();
+    }
+
+    #[test]
+    fn test_event_loop_ignores_key_release_events() {
+        let runtime = AppRuntime::new(false);
+        runtime.clear_render_request();
+        let should_exit = Arc::new(AtomicBool::new(false));
+        let mut event_loop = create_event_loop(runtime.clone(), should_exit);
+
+        let hit = Arc::new(AtomicBool::new(false));
+        let hit_clone = hit.clone();
+        register_input_handler(move |_input, _| {
+            hit_clone.store(true, Ordering::SeqCst);
+        });
+
+        let mut key_event = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        key_event.kind = KeyEventKind::Release;
+        event_loop.handle_event(Event::Key(key_event));
+
+        assert!(!hit.load(Ordering::SeqCst));
+        assert!(!runtime.render_requested());
 
         clear_input_handlers();
     }
