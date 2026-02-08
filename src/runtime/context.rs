@@ -20,8 +20,8 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 
 use crate::cmd::Cmd;
 use crate::hooks::context::{HookContext, HookStorage};
@@ -42,7 +42,7 @@ pub type MouseHandlerFn = Rc<dyn Fn(&Mouse)>;
 /// It replaces the previous scattered thread-local and global state.
 pub struct RuntimeContext {
     /// Hook state for the component tree
-    hook_context: HookContext,
+    hook_context: Arc<RwLock<HookContext>>,
 
     /// Input handlers registered via use_input
     input_handlers: Vec<InputHandlerFn>,
@@ -76,7 +76,7 @@ impl RuntimeContext {
     /// Create a new runtime context
     pub fn new() -> Self {
         Self {
-            hook_context: HookContext::new(),
+            hook_context: Arc::new(RwLock::new(HookContext::new())),
             input_handlers: Vec::new(),
             mouse_handlers: Vec::new(),
             mouse_enabled: false,
@@ -92,7 +92,7 @@ impl RuntimeContext {
     /// Create a runtime context with app control
     pub fn with_app_control(exit_flag: Arc<AtomicBool>, render_handle: RenderHandle) -> Self {
         Self {
-            hook_context: HookContext::new(),
+            hook_context: Arc::new(RwLock::new(HookContext::new())),
             input_handlers: Vec::new(),
             mouse_handlers: Vec::new(),
             mouse_enabled: false,
@@ -107,23 +107,39 @@ impl RuntimeContext {
 
     // === Hook Context Methods ===
 
-    /// Begin a render cycle
-    pub fn begin_render(&mut self) {
-        self.hook_context.begin_render();
-        // Clear handlers for fresh registration
+    /// Clear per-render input/mouse registrations.
+    pub fn prepare_render(&mut self) {
         self.input_handlers.clear();
         self.mouse_handlers.clear();
         self.mouse_enabled = false;
     }
 
+    /// Begin a render cycle
+    pub fn begin_render(&mut self) {
+        self.prepare_render();
+        let mut hook_ctx = self
+            .hook_context
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        hook_ctx.begin_render();
+    }
+
     /// End a render cycle
     pub fn end_render(&mut self) {
-        self.hook_context.end_render();
+        let mut hook_ctx = self
+            .hook_context
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        hook_ctx.end_render();
     }
 
     /// Run effects after render
     pub fn run_effects(&mut self) {
-        self.hook_context.run_effects();
+        let mut hook_ctx = self
+            .hook_context
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        hook_ctx.run_effects();
     }
 
     /// Get or create a hook at the current index
@@ -131,30 +147,55 @@ impl RuntimeContext {
         &mut self,
         init: F,
     ) -> HookStorage {
-        self.hook_context.use_hook(init)
+        let mut hook_ctx = self
+            .hook_context
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        hook_ctx.use_hook(init)
     }
 
     /// Queue a command to execute after render
     pub fn queue_cmd(&mut self, cmd: Cmd) {
-        self.hook_context.queue_cmd(cmd);
+        let mut hook_ctx = self
+            .hook_context
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        hook_ctx.queue_cmd(cmd);
     }
 
     /// Take all queued commands
     pub fn take_cmds(&mut self) -> Vec<Cmd> {
-        self.hook_context.take_cmds()
+        let mut hook_ctx = self
+            .hook_context
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        hook_ctx.take_cmds()
     }
 
     /// Set the render callback for hooks
     pub fn set_render_callback(&mut self, callback: crate::hooks::context::RenderCallback) {
-        self.hook_context.set_render_callback(callback);
+        let mut hook_ctx = self
+            .hook_context
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        hook_ctx.set_render_callback(callback);
     }
 
     /// Request a re-render
     pub fn request_render(&self) {
-        self.hook_context.request_render();
+        let hook_ctx = self
+            .hook_context
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        hook_ctx.request_render();
         if let Some(handle) = &self.render_handle {
             handle.request_render();
         }
+    }
+
+    /// Get the shared hook context used by `with_hooks`.
+    pub fn hook_context(&self) -> Arc<RwLock<HookContext>> {
+        self.hook_context.clone()
     }
 
     // === Input Handler Methods ===

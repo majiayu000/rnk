@@ -1,6 +1,7 @@
 //! Effect hook for side effects
 
 use crate::hooks::context::{Effect, current_context};
+use std::any::TypeId;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -71,8 +72,8 @@ struct EffectStorage {
 
 /// Run a side effect after render
 ///
-/// The effect runs after every render by default.
-/// Pass dependencies to only run when they change.
+/// `deps = ()` runs after every render.
+/// Any other deps value runs only when deps change.
 ///
 /// # Example
 ///
@@ -108,10 +109,17 @@ where
         .get::<EffectStorage>()
         .and_then(|s| s.prev_deps_hash);
 
+    // `()` is the "always run" mode.
+    let always_run = TypeId::of::<D>() == TypeId::of::<()>();
+
     // Check if deps changed
-    let should_run = match prev_deps_hash {
-        None => true,                        // First render
-        Some(prev) => prev != new_deps_hash, // Deps changed
+    let should_run = if always_run {
+        true
+    } else {
+        match prev_deps_hash {
+            None => true,                        // First render
+            Some(prev) => prev != new_deps_hash, // Deps changed
+        }
     };
 
     if should_run {
@@ -237,6 +245,36 @@ mod tests {
                 (2i32,),
             );
         });
+        assert_eq!(*run_count.lock().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_use_effect_unit_deps_runs_every_render() {
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let run_count = Arc::new(Mutex::new(0));
+
+        let run_count_clone = run_count.clone();
+        with_hooks(ctx.clone(), || {
+            use_effect(
+                move || {
+                    *run_count_clone.lock().unwrap() += 1;
+                    None
+                },
+                (),
+            );
+        });
+
+        let run_count_clone = run_count.clone();
+        with_hooks(ctx.clone(), || {
+            use_effect(
+                move || {
+                    *run_count_clone.lock().unwrap() += 1;
+                    None
+                },
+                (),
+            );
+        });
+
         assert_eq!(*run_count.lock().unwrap(), 2);
     }
 
