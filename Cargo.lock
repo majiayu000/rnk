@@ -1244,7 +1244,7 @@ dependencies = [
 
 [[package]]
 name = "rnk"
-version = "0.17.1"
+version = "0.17.3"
 dependencies = [
  "crossterm",
  "ctrlc",
