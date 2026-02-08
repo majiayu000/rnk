@@ -455,11 +455,6 @@ impl ContextMenu {
     }
 }
 
-/// Create a context menu
-pub fn context_menu(items: Vec<MenuItem>) -> ContextMenu {
-    ContextMenu::new(items)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,11 +561,5 @@ mod tests {
 
         assert_eq!(style.width, 40);
         assert_eq!(style.background, Color::Blue);
-    }
-
-    #[test]
-    fn test_context_menu_helper() {
-        let menu = context_menu(vec![MenuItem::new("test", "Test")]);
-        assert_eq!(menu.items.len(), 1);
     }
 }

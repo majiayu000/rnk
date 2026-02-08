@@ -620,16 +620,6 @@ impl<'a> Notification<'a> {
     }
 }
 
-/// Create a toast notification
-pub fn toast(item: &NotificationItem) -> Toast<'_> {
-    Toast::new(item)
-}
-
-/// Create a notification container
-pub fn notification(state: &NotificationState) -> Notification<'_> {
-    Notification::new(state)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

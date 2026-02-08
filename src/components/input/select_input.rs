@@ -312,15 +312,6 @@ fn render_select_list<T: Clone + 'static>(
     )
 }
 
-/// Create a simple SelectInput from string items
-pub fn select_input<T: Clone + ToString + 'static>(items: Vec<T>) -> SelectInput<T> {
-    let select_items: Vec<SelectItem<T>> = items
-        .into_iter()
-        .map(|item| SelectItem::new(item.to_string(), item))
-        .collect();
-    SelectInput::new(select_items)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
