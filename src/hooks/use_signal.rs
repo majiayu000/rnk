@@ -141,26 +141,36 @@ struct SignalStorage<T> {
 /// count.set(count.get() + 1);
 /// ```
 pub fn use_signal<T: Clone + Send + Sync + 'static>(init: impl FnOnce() -> T) -> Signal<T> {
-    let init_value = init();
     let Some(ctx) = current_context() else {
-        return Signal::new(init_value, None);
+        return Signal::new(init(), None);
     };
     let Ok(mut ctx_ref) = ctx.write() else {
-        return Signal::new(init_value, None);
+        return Signal::new(init(), None);
     };
     let render_callback = ctx_ref.get_render_callback();
+    let mut init_fn = Some(init);
 
     let storage = ctx_ref.use_hook(|| SignalStorage {
-        signal: Signal::new(init_value.clone(), render_callback.clone()),
+        signal: Signal::new(
+            init_fn
+                .take()
+                .expect("use_signal initializer should be available on first render")(
+            ),
+            render_callback.clone(),
+        ),
     });
 
-    // Get the signal from storage
     storage
         .get::<SignalStorage<T>>()
         .map(|s| s.signal)
         .unwrap_or_else(|| {
-            // This shouldn't happen, but provide a sensible default
-            Signal::new(init_value, render_callback)
+            Signal::new(
+                init_fn
+                    .take()
+                    .expect("use_signal initializer should be available for fallback")(
+                ),
+                render_callback,
+            )
         })
 }
 
@@ -168,6 +178,7 @@ pub fn use_signal<T: Clone + Send + Sync + 'static>(init: impl FnOnce() -> T) ->
 mod tests {
     use super::*;
     use crate::hooks::context::{HookContext, with_hooks};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn test_signal_get_set() {
@@ -216,6 +227,30 @@ mod tests {
         });
 
         assert_eq!(signal2.get(), 42);
+    }
+
+    #[test]
+    fn test_use_signal_initializer_runs_once_in_hook_context() {
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let init_calls = Arc::new(AtomicUsize::new(0));
+
+        let calls = init_calls.clone();
+        let _ = with_hooks(ctx.clone(), || {
+            use_signal(|| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                1i32
+            })
+        });
+
+        let calls = init_calls.clone();
+        let _ = with_hooks(ctx.clone(), || {
+            use_signal(|| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                2i32
+            })
+        });
+
+        assert_eq!(init_calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
