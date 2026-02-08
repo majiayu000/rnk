@@ -165,10 +165,10 @@ pub use crate::hooks::{
 // =============================================================================
 
 pub use crate::hooks::{
-    BracketedPasteGuard, Key, Mouse, MouseAction, MouseButton, PasteEvent, PasteHandler,
-    clear_mouse_handlers, clear_paste_handlers, disable_bracketed_paste, dispatch_mouse_event,
-    dispatch_paste, enable_bracketed_paste, is_bracketed_paste_enabled, is_mouse_enabled,
-    register_paste_handler, set_mouse_enabled, use_input, use_mouse, use_paste,
+    BracketedPasteGuard, Key, Mouse, MouseAction, MouseButton, PasteEvent, clear_mouse_handlers,
+    disable_bracketed_paste, dispatch_mouse_event, dispatch_paste, enable_bracketed_paste,
+    is_bracketed_paste_enabled, is_mouse_enabled, set_mouse_enabled, use_input, use_mouse,
+    use_paste,
 };
 
 // =============================================================================
@@ -184,8 +184,8 @@ pub use crate::hooks::{
 // =============================================================================
 
 pub use crate::hooks::{
-    Dimensions, MeasureContext, MeasureRef, ScrollHandle, ScrollState, get_measure_context,
-    measure_element, set_measure_context, use_measure, use_scroll,
+    Dimensions, MeasureContext, MeasureRef, ScrollHandle, ScrollState, measure_element,
+    use_measure, use_scroll,
 };
 
 // =============================================================================
