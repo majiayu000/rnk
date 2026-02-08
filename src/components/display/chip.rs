@@ -17,7 +17,7 @@
 //! }
 //! ```
 
-use crate::components::capsule::{CapsuleContent, CapsuleLabel};
+use crate::components::capsule::CapsuleElementBuilder;
 use crate::core::{Color, Element};
 
 /// A chip component for selectable options
@@ -68,16 +68,14 @@ impl Chip {
             (Color::White, Color::Ansi256(240))
         };
 
-        let mut content = CapsuleContent::new();
-        content = content.push(if self.selected { "●" } else { "○" });
+        let mut builder = CapsuleElementBuilder::new(self.label, fg, bg)
+            .prefix(if self.selected { "●" } else { "○" });
 
         if let Some(icon) = self.icon {
-            content = content.push(icon);
+            builder = builder.icon(icon);
         }
 
-        content = content.push(self.label);
-
-        CapsuleLabel::padded(content.build(), fg, bg).into_element()
+        builder.into_element()
     }
 }
 

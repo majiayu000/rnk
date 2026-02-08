@@ -20,7 +20,7 @@
 //! }
 //! ```
 
-use crate::components::capsule::CapsuleLabel;
+use crate::components::capsule::CapsuleElementBuilder;
 use crate::components::capsule_variant::CapsuleVariant;
 use crate::core::Element;
 
@@ -78,7 +78,7 @@ impl Highlight {
     pub fn into_element(self) -> Element {
         let (fg, bg) = self.variant.highlight_colors();
 
-        CapsuleLabel::padded(self.text, fg, bg).into_element()
+        CapsuleElementBuilder::new(self.text, fg, bg).into_element()
     }
 }
 
