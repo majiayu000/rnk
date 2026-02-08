@@ -98,16 +98,6 @@ impl Default for Tag {
     }
 }
 
-/// Create a simple tag
-pub fn tag(text: impl Into<String>) -> Element {
-    Tag::new(text).into_element()
-}
-
-/// Create a colored tag
-pub fn tag_colored(text: impl Into<String>, color: Color) -> Element {
-    Tag::new(text).color(color).into_element()
-}
-
 /// Preset tag colors
 impl Tag {
     /// Create a blue tag
@@ -179,11 +169,5 @@ mod tests {
         let _ = Tag::blue("blue").into_element();
         let _ = Tag::green("green").into_element();
         let _ = Tag::red("red").into_element();
-    }
-
-    #[test]
-    fn test_tag_helpers() {
-        let _ = tag("simple");
-        let _ = tag_colored("colored", Color::Cyan);
     }
 }

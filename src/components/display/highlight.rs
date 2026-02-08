@@ -103,31 +103,6 @@ impl Default for Highlight {
     }
 }
 
-/// Create a default highlight
-pub fn highlight(text: impl Into<String>) -> Element {
-    Highlight::new(text).into_element()
-}
-
-/// Create a primary highlight
-pub fn highlight_primary(text: impl Into<String>) -> Element {
-    Highlight::primary(text).into_element()
-}
-
-/// Create a success highlight
-pub fn highlight_success(text: impl Into<String>) -> Element {
-    Highlight::success(text).into_element()
-}
-
-/// Create a warning highlight
-pub fn highlight_warning(text: impl Into<String>) -> Element {
-    Highlight::warning(text).into_element()
-}
-
-/// Create an error highlight
-pub fn highlight_error(text: impl Into<String>) -> Element {
-    Highlight::error(text).into_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,14 +120,5 @@ mod tests {
         let _ = Highlight::warning("W").into_element();
         let _ = Highlight::error("E").into_element();
         let _ = Highlight::info("I").into_element();
-    }
-
-    #[test]
-    fn test_highlight_helpers() {
-        let _ = highlight("Default");
-        let _ = highlight_primary("Primary");
-        let _ = highlight_success("Success");
-        let _ = highlight_warning("Warning");
-        let _ = highlight_error("Error");
     }
 }

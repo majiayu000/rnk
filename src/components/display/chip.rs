@@ -96,16 +96,6 @@ impl Default for Chip {
     }
 }
 
-/// Create a chip
-pub fn chip(label: impl Into<String>) -> Element {
-    Chip::new(label).into_element()
-}
-
-/// Create a selected chip
-pub fn chip_selected(label: impl Into<String>) -> Element {
-    Chip::new(label).selected(true).into_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,11 +124,5 @@ mod tests {
         let _ = Chip::new("Test").into_element();
         let _ = Chip::new("Test").selected(true).into_element();
         let _ = Chip::new("Test").disabled(true).into_element();
-    }
-
-    #[test]
-    fn test_chip_helpers() {
-        let _ = chip("Option");
-        let _ = chip_selected("Selected");
     }
 }
