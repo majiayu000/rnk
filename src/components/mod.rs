@@ -142,13 +142,13 @@ pub mod viewport;
 pub use accordion::{Accordion, AccordionItem};
 pub use alert::{Alert, AlertLevel, alert_error, alert_info, alert_success, alert_warning};
 pub use avatar::{Avatar, AvatarSize, avatar, avatar_initials};
-pub use badge::{Badge, BadgeVariant, badge_error, badge_primary, badge_success, badge_warning};
+pub use badge::{Badge, BadgeVariant};
 pub use barchart::{Bar, BarChart, BarChartOrientation};
 pub use box_component::Box;
 pub use breadcrumb::{Breadcrumb, breadcrumb_from_path};
 pub use calendar::Calendar;
 pub use card::{Card, card, card_full};
-pub use chip::{Chip, chip, chip_selected};
+pub use chip::Chip;
 pub use code_editor::{CodeEditor, Language};
 pub use color_picker::{
     ColorPalette, ColorPicker, ColorPickerState, ColorPickerStyle, color_picker,
@@ -170,10 +170,7 @@ pub use gradient::{Gradient, gradient, rainbow};
 pub use help::{
     Help, HelpMode, HelpStyle, KeyBinding, editor_help, navigation_help, vim_navigation_help,
 };
-pub use highlight::{
-    Highlight, HighlightVariant, highlight, highlight_error, highlight_primary, highlight_success,
-    highlight_warning,
-};
+pub use highlight::{Highlight, HighlightVariant};
 pub use hyperlink::{
     Hyperlink, HyperlinkBuilder, hyperlink, link, set_hyperlinks_supported, supports_hyperlinks,
 };
@@ -217,7 +214,7 @@ pub use status_bar::{StatusBar, status_bar, status_bar_full};
 pub use stepper::{Step, StepStatus, Stepper, StepperOrientation, StepperStyle, stepper};
 pub use table::{Cell, Constraint, Row, Table, TableState};
 pub use tabs::{Tab, Tabs};
-pub use tag::{Tag, tag, tag_colored};
+pub use tag::Tag;
 pub use text::{Line, Span, Text};
 pub use text_input::{TextInputHandle, TextInputOptions, TextInputState, use_text_input};
 pub use theme::{

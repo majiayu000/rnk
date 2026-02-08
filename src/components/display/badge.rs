@@ -93,32 +93,6 @@ impl Default for Badge {
     }
 }
 
-/// Create a primary badge
-pub fn badge_primary(text: impl Into<String>) -> Element {
-    Badge::new(text)
-        .variant(BadgeVariant::Primary)
-        .into_element()
-}
-
-/// Create a success badge
-pub fn badge_success(text: impl Into<String>) -> Element {
-    Badge::new(text)
-        .variant(BadgeVariant::Success)
-        .into_element()
-}
-
-/// Create an error badge
-pub fn badge_error(text: impl Into<String>) -> Element {
-    Badge::new(text).variant(BadgeVariant::Error).into_element()
-}
-
-/// Create a warning badge
-pub fn badge_warning(text: impl Into<String>) -> Element {
-    Badge::new(text)
-        .variant(BadgeVariant::Warning)
-        .into_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,13 +113,5 @@ mod tests {
     fn test_badge_into_element() {
         let badge = Badge::new("Test").variant(BadgeVariant::Primary);
         let _ = badge.into_element();
-    }
-
-    #[test]
-    fn test_badge_helpers() {
-        let _ = badge_primary("1");
-        let _ = badge_success("OK");
-        let _ = badge_error("!");
-        let _ = badge_warning("?");
     }
 }
