@@ -254,11 +254,10 @@ impl Shortcut {
         // Check the key
         match &self.key {
             ShortcutKey::Char(c) => {
-                if input.len() == 1 {
-                    let input_char = input.chars().next().unwrap();
-                    input_char.eq_ignore_ascii_case(c)
-                } else {
-                    false
+                let mut chars = input.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(input_char), None) => input_char.eq_ignore_ascii_case(c),
+                    _ => false,
                 }
             }
             ShortcutKey::F(1) => key.f1,
@@ -409,6 +408,8 @@ mod tests {
         assert!(shortcut.matches("a", &key));
         assert!(shortcut.matches("A", &key));
         assert!(!shortcut.matches("b", &key));
+        assert!(!shortcut.matches("", &key));
+        assert!(!shortcut.matches("ab", &key));
     }
 
     #[test]
