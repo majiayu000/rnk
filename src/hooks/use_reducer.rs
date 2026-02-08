@@ -101,26 +101,18 @@ where
     F: Fn(&S, A) -> S + Send + Sync + 'static,
     I: FnOnce() -> S,
 {
-    let state = use_signal(|| Option::<S>::None);
-    if state.with(|value| value.is_none()) {
-        state.set_silent(Some(init_fn()));
-    }
+    let state = use_signal(init_fn);
 
     let reducer = Arc::new(reducer);
     let state_clone = state.clone();
     let dispatch_fn = Arc::new(move |action: A| {
-        let current = state_clone
-            .get()
-            .expect("use_reducer_lazy: state should be initialized before dispatch");
+        let current = state_clone.get();
         let new_state = reducer(&current, action);
-        state_clone.set(Some(new_state));
+        state_clone.set(new_state);
     });
 
     let dispatch = Dispatch { dispatch_fn };
-    let current = state
-        .get()
-        .expect("use_reducer_lazy: state should be initialized before read");
-    (current, dispatch)
+    (state.get(), dispatch)
 }
 
 #[cfg(test)]
