@@ -400,7 +400,7 @@ impl Output {
 
     /// Push a clip region
     pub fn clip(&mut self, region: ClipRegion) {
-        debug_assert!(
+        assert!(
             region.x1 <= region.x2 && region.y1 <= region.y2,
             "Invalid clip region: min > max"
         );
@@ -409,11 +409,10 @@ impl Output {
 
     /// Pop the current clip region
     pub fn unclip(&mut self) {
-        debug_assert!(
-            !self.clip_stack.is_empty(),
+        assert!(
+            self.clip_stack.pop().is_some(),
             "Output::unclip called with an empty clip stack"
         );
-        self.clip_stack.pop();
     }
 
     /// Convert the buffer to a string with ANSI codes
