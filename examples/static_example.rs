@@ -12,7 +12,7 @@ fn main() -> std::io::Result<()> {
 
 #[derive(Clone)]
 struct LogEntry {
-    id: usize,
+    _id: usize,
     message: String,
     level: LogLevel,
 }
@@ -38,7 +38,11 @@ fn app() -> Element {
         let id = next_id_clone.get();
         next_id_clone.set(id + 1);
         logs_clone.update(|entries| {
-            entries.push(LogEntry { id, message, level });
+            entries.push(LogEntry {
+                _id: id,
+                message,
+                level,
+            });
         });
     };
 

@@ -99,7 +99,7 @@ fn main() {
 
     // Add notifications
     let id1 = state.info("First notification", 1000);
-    let id2 = state.success("Second notification", 1500);
+    let _id2 = state.success("Second notification", 1500);
     let _id3 = state.warning("Third notification", 2000);
 
     println!("After adding 3 notifications:");

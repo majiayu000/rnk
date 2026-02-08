@@ -2,7 +2,7 @@
 //!
 //! Run: cargo run --example textarea_demo
 
-use rnk::components::textarea::{Position, TextArea, TextAreaKeyMap, TextAreaState, TextAreaStyle};
+use rnk::components::textarea::{Position, TextAreaState, TextAreaStyle};
 use rnk::core::{BorderStyle, Color};
 
 fn main() {

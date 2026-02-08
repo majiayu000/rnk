@@ -2,9 +2,7 @@
 //!
 //! Run: cargo run --example viewport_demo
 
-use rnk::components::viewport::{
-    Viewport, ViewportKeyMap, ViewportState, ViewportStyle, handle_viewport_input,
-};
+use rnk::components::viewport::{ViewportState, ViewportStyle};
 use rnk::core::{BorderStyle, Color};
 
 fn main() {
@@ -89,7 +87,7 @@ fn main() {
 
     // Style options
     println!("--- ViewportStyle Options ---");
-    let style = ViewportStyle::new()
+    let _style = ViewportStyle::new()
         .border(BorderStyle::Round)
         .border_color(Color::Cyan)
         .background(Color::Black)

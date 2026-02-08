@@ -3,7 +3,7 @@
 //! Run: cargo run --example help_demo
 
 use rnk::components::{
-    Help, HelpMode, HelpStyle, KeyBinding, editor_help, navigation_help, vim_navigation_help,
+    Help, HelpStyle, KeyBinding, editor_help, navigation_help, vim_navigation_help,
 };
 use rnk::core::Color;
 
