@@ -92,43 +92,6 @@ impl Default for Tag {
     }
 }
 
-/// Preset tag colors
-impl Tag {
-    /// Create a blue tag
-    pub fn blue(text: impl Into<String>) -> Self {
-        Self::new(text).color(Color::White).background(Color::Blue)
-    }
-
-    /// Create a green tag
-    pub fn green(text: impl Into<String>) -> Self {
-        Self::new(text).color(Color::White).background(Color::Green)
-    }
-
-    /// Create a red tag
-    pub fn red(text: impl Into<String>) -> Self {
-        Self::new(text).color(Color::White).background(Color::Red)
-    }
-
-    /// Create a yellow tag
-    pub fn yellow(text: impl Into<String>) -> Self {
-        Self::new(text)
-            .color(Color::Black)
-            .background(Color::Yellow)
-    }
-
-    /// Create a cyan tag
-    pub fn cyan(text: impl Into<String>) -> Self {
-        Self::new(text).color(Color::White).background(Color::Cyan)
-    }
-
-    /// Create a magenta tag
-    pub fn magenta(text: impl Into<String>) -> Self {
-        Self::new(text)
-            .color(Color::White)
-            .background(Color::Magenta)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,8 +123,17 @@ mod tests {
 
     #[test]
     fn test_tag_presets() {
-        let _ = Tag::blue("blue").into_element();
-        let _ = Tag::green("green").into_element();
-        let _ = Tag::red("red").into_element();
+        let _ = Tag::new("blue")
+            .color(Color::White)
+            .background(Color::Blue)
+            .into_element();
+        let _ = Tag::new("green")
+            .color(Color::White)
+            .background(Color::Green)
+            .into_element();
+        let _ = Tag::new("red")
+            .color(Color::White)
+            .background(Color::Red)
+            .into_element();
     }
 }

@@ -49,31 +49,6 @@ impl Highlight {
         self
     }
 
-    /// Create a primary highlight
-    pub fn primary(text: impl Into<String>) -> Self {
-        Self::new(text).variant(HighlightVariant::Primary)
-    }
-
-    /// Create a success highlight
-    pub fn success(text: impl Into<String>) -> Self {
-        Self::new(text).variant(HighlightVariant::Success)
-    }
-
-    /// Create a warning highlight
-    pub fn warning(text: impl Into<String>) -> Self {
-        Self::new(text).variant(HighlightVariant::Warning)
-    }
-
-    /// Create an error highlight
-    pub fn error(text: impl Into<String>) -> Self {
-        Self::new(text).variant(HighlightVariant::Error)
-    }
-
-    /// Create an info highlight
-    pub fn info(text: impl Into<String>) -> Self {
-        Self::new(text).variant(HighlightVariant::Info)
-    }
-
     /// Convert to Element
     pub fn into_element(self) -> Element {
         let (fg, bg) = self.variant.highlight_colors();
@@ -100,10 +75,20 @@ mod tests {
 
     #[test]
     fn test_highlight_variants() {
-        let _ = Highlight::primary("P").into_element();
-        let _ = Highlight::success("S").into_element();
-        let _ = Highlight::warning("W").into_element();
-        let _ = Highlight::error("E").into_element();
-        let _ = Highlight::info("I").into_element();
+        let _ = Highlight::new("P")
+            .variant(HighlightVariant::Primary)
+            .into_element();
+        let _ = Highlight::new("S")
+            .variant(HighlightVariant::Success)
+            .into_element();
+        let _ = Highlight::new("W")
+            .variant(HighlightVariant::Warning)
+            .into_element();
+        let _ = Highlight::new("E")
+            .variant(HighlightVariant::Error)
+            .into_element();
+        let _ = Highlight::new("I")
+            .variant(HighlightVariant::Info)
+            .into_element();
     }
 }
