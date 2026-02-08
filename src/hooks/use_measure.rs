@@ -54,31 +54,14 @@ thread_local! {
     static MEASURE_CONTEXT: std::cell::RefCell<Option<MeasureContext>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Set the current measure context (called by App during render)
-///
-/// # Deprecated
-/// This function uses thread-local state. Prefer using `RuntimeContext` directly
-/// for new code. This API is maintained for backward compatibility.
-#[deprecated(
-    since = "0.17.0",
-    note = "Use RuntimeContext::set_measurement() instead"
-)]
-pub fn set_measure_context(ctx: Option<MeasureContext>) {
+/// Set the current measure context (called by App during render).
+pub(crate) fn set_measure_context(ctx: Option<MeasureContext>) {
     MEASURE_CONTEXT.with(|c| {
         *c.borrow_mut() = ctx;
     });
 }
 
-/// Get the current measure context
-///
-/// # Deprecated
-/// This function uses thread-local state. Prefer using `RuntimeContext` directly
-/// for new code. This API is maintained for backward compatibility.
-#[deprecated(
-    since = "0.17.0",
-    note = "Use RuntimeContext::get_measurement() instead"
-)]
-pub fn get_measure_context() -> Option<MeasureContext> {
+fn get_measure_context() -> Option<MeasureContext> {
     MEASURE_CONTEXT.with(|c| c.borrow().clone())
 }
 

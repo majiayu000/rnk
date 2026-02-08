@@ -122,9 +122,6 @@ impl PasteEvent {
     }
 }
 
-/// Paste handler type
-pub type PasteHandler = Box<dyn Fn(&PasteEvent)>;
-
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -135,13 +132,8 @@ thread_local! {
     static PASTE_HANDLERS: RefCell<Vec<PasteHandlerRc>> = RefCell::new(Vec::new());
 }
 
-/// Register a paste handler
-///
-/// # Deprecated
-/// This function uses thread-local state. Prefer using `RuntimeContext` directly
-/// for new code. This API is maintained for backward compatibility.
-#[deprecated(since = "0.17.0", note = "Use use_paste hook instead")]
-pub fn register_paste_handler<F>(handler: F)
+/// Register a paste handler for the current render pass.
+pub(crate) fn register_paste_handler<F>(handler: F)
 where
     F: Fn(&PasteEvent) + 'static,
 {
@@ -150,16 +142,8 @@ where
     });
 }
 
-/// Clear all paste handlers
-///
-/// # Deprecated
-/// This function uses thread-local state. Prefer using `RuntimeContext` directly
-/// for new code. This API is maintained for backward compatibility.
-#[deprecated(
-    since = "0.17.0",
-    note = "Handlers are automatically cleared on each render"
-)]
-pub fn clear_paste_handlers() {
+/// Clear all paste handlers for the next render pass.
+pub(crate) fn clear_paste_handlers() {
     PASTE_HANDLERS.with(|handlers| {
         handlers.borrow_mut().clear();
     });

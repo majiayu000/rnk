@@ -13,7 +13,7 @@ use crate::hooks::context::with_hooks;
 use crate::hooks::use_app::{AppContext, set_app_context};
 use crate::hooks::use_input::clear_input_handlers;
 use crate::hooks::use_mouse::{clear_mouse_handlers, is_mouse_enabled};
-use crate::hooks::{MeasureContext, set_measure_context};
+use crate::hooks::{MeasureContext, clear_paste_handlers, set_measure_context};
 use crate::layout::LayoutEngine;
 use crate::renderer::{Output, Terminal};
 use crate::runtime::{RuntimeContext, set_current_runtime};
@@ -411,6 +411,7 @@ where
         // Clear input and mouse handlers before render (they'll be re-registered)
         clear_input_handlers();
         clear_mouse_handlers();
+        clear_paste_handlers();
         set_measure_context(None);
 
         // Clear runtime per-frame handler registrations.
