@@ -92,20 +92,6 @@ impl Default for Link {
     }
 }
 
-/// Create a simple link
-pub fn link_styled(text: impl Into<String>, url: impl Into<String>) -> Element {
-    Link::new(text, url).into_element()
-}
-
-/// Create a link with icon
-pub fn link_with_icon(
-    text: impl Into<String>,
-    url: impl Into<String>,
-    icon: impl Into<String>,
-) -> Element {
-    Link::new(text, url).icon(icon).into_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,11 +118,5 @@ mod tests {
         let _ = Link::new("Test", "https://test.com")
             .no_underline()
             .into_element();
-    }
-
-    #[test]
-    fn test_link_helpers() {
-        let _ = link_styled("Link", "https://example.com");
-        let _ = link_with_icon("Link", "https://example.com", ">");
     }
 }

@@ -80,25 +80,6 @@ impl Default for KeyHint {
     }
 }
 
-/// Create a key hint
-pub fn key_hint(key: impl Into<String>, description: impl Into<String>) -> Element {
-    KeyHint::new(key, description).into_element()
-}
-
-/// Create a row of key hints
-pub fn key_hints(hints: Vec<(&str, &str)>) -> Element {
-    let children: Vec<Element> = hints
-        .into_iter()
-        .map(|(key, desc)| KeyHint::new(key, desc).into_element())
-        .collect();
-
-    RnkBox::new()
-        .flex_direction(FlexDirection::Row)
-        .gap(2.0)
-        .children(children)
-        .into_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,15 +94,5 @@ mod tests {
     #[test]
     fn test_key_hint_into_element() {
         let _ = KeyHint::new("Enter", "Select").into_element();
-    }
-
-    #[test]
-    fn test_key_hint_helper() {
-        let _ = key_hint("q", "Quit");
-    }
-
-    #[test]
-    fn test_key_hints_helper() {
-        let _ = key_hints(vec![("q", "Quit"), ("↑↓", "Navigate"), ("Enter", "Select")]);
     }
 }
