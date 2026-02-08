@@ -25,7 +25,6 @@ struct FileStatus {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 enum FileState {
     Modified,
     Added,
@@ -370,6 +369,9 @@ fn commits_panel(commits: &[Commit], selected: usize, active: bool) -> Element {
                             Color::Reset
                         })
                         .into_element(),
+                    Text::new(format!(" {} {}", commit.author, commit.time))
+                        .dim()
+                        .into_element(),
                 ])
                 .into_element(),
         );
@@ -501,6 +503,10 @@ fn mock_unstaged_files() -> Vec<FileStatus> {
             status: FileState::Modified,
         },
         FileStatus {
+            name: "src/legacy.rs".to_string(),
+            status: FileState::Deleted,
+        },
+        FileStatus {
             name: "new_file.rs".to_string(),
             status: FileState::Untracked,
         },
@@ -508,10 +514,16 @@ fn mock_unstaged_files() -> Vec<FileStatus> {
 }
 
 fn mock_staged_files() -> Vec<FileStatus> {
-    vec![FileStatus {
-        name: "src/utils.rs".to_string(),
-        status: FileState::Added,
-    }]
+    vec![
+        FileStatus {
+            name: "src/utils.rs".to_string(),
+            status: FileState::Added,
+        },
+        FileStatus {
+            name: "src/new_name.rs".to_string(),
+            status: FileState::Renamed,
+        },
+    ]
 }
 
 fn mock_commits() -> Vec<Commit> {

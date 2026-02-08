@@ -2,7 +2,7 @@
 //!
 //! Run: cargo run --example tree_demo
 
-use rnk::components::{Tree, TreeNode, TreeState, TreeStyle};
+use rnk::components::{TreeNode, TreeState, TreeStyle};
 
 fn main() {
     println!("=== Tree Component Demo ===\n");

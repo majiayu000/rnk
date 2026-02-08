@@ -58,6 +58,22 @@ fn map_example() -> Cmd<ParentMsg> {
     child_cmd.map(ParentMsg::Child)
 }
 
+fn consume_msg(msg: &Msg) -> usize {
+    match msg {
+        Msg::DataLoaded(items) => items.len(),
+        Msg::LoadError(err) => err.len(),
+        Msg::Tick(value) => *value as usize,
+        Msg::Refresh => 0,
+    }
+}
+
+fn consume_parent(msg: &ParentMsg) -> usize {
+    match msg {
+        ParentMsg::Child(child) => consume_msg(child),
+        ParentMsg::Other => 0,
+    }
+}
+
 fn main() {
     println!("Typed Command Demo - Type-safe message passing\n");
 
@@ -105,6 +121,14 @@ fn main() {
     for msg in msgs {
         println!("   {:?}", msg);
     }
+
+    // Consume all message variants so this example remains warning-free.
+    let _ = consume_msg(&Msg::DataLoaded(vec!["demo".to_string()]));
+    let _ = consume_msg(&Msg::LoadError("oops".to_string()));
+    let _ = consume_msg(&Msg::Tick(1));
+    let _ = consume_msg(&Msg::Refresh);
+    let _ = consume_parent(&ParentMsg::Child(Msg::Refresh));
+    let _ = consume_parent(&ParentMsg::Other);
 
     println!("\nCmd<M> provides type-safe async operations!");
     println!("Use it with the Component trait for TEA-style architecture.");

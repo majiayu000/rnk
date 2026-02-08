@@ -14,7 +14,6 @@ fn app() -> Element {
     let app = use_app();
     let last_key = use_signal(|| String::from("(none)"));
     let key_history = use_signal(|| Vec::<String>::new());
-    let raw_mode = use_signal(|| true);
 
     let last_key_clone = last_key.clone();
     let key_history_clone = key_history.clone();

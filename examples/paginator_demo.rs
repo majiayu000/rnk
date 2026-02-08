@@ -2,7 +2,7 @@
 //!
 //! Run: cargo run --example paginator_demo
 
-use rnk::components::{Paginator, PaginatorState, PaginatorStyle, PaginatorType};
+use rnk::components::{Paginator, PaginatorState, PaginatorStyle};
 
 fn main() {
     println!("=== Paginator Component Demo ===\n");
