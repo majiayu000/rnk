@@ -20,48 +20,15 @@ pub trait Deps {
     fn output(&self) -> Self::Output;
 }
 
-// Implement Deps for ()
-impl Deps for () {
-    type Output = ();
-
-    fn deps_hash(&self) -> u64 {
-        0
-    }
-
-    fn output(&self) -> Self::Output {}
-}
-
-macro_rules! impl_deps_for_tuple {
-    ($($name:ident:$index:tt),+ $(,)?) => {
-        impl<$($name: Hash + Clone),+> Deps for ($($name,)+) {
-            type Output = ($($name,)+);
-
-            fn deps_hash(&self) -> u64 {
-                let mut hasher = DefaultHasher::new();
-                $(self.$index.hash(&mut hasher);)+
-                hasher.finish()
-            }
-
-            fn output(&self) -> Self::Output {
-                ($(self.$index.clone(),)+)
-            }
-        }
-    };
-}
-
-impl_deps_for_tuple!(T1:0, T2:1);
-impl_deps_for_tuple!(T1:0, T2:1, T3:2);
-impl_deps_for_tuple!(T1:0, T2:1, T3:2, T4:3);
-
-// Implement Deps for Vec
-impl<T: Hash + Clone> Deps for Vec<T> {
-    type Output = Vec<T>;
+impl<T> Deps for T
+where
+    T: Hash + Clone,
+{
+    type Output = T;
 
     fn deps_hash(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
-        for item in self {
-            item.hash(&mut hasher);
-        }
+        self.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -69,33 +36,6 @@ impl<T: Hash + Clone> Deps for Vec<T> {
         self.clone()
     }
 }
-
-// Macro to implement Deps for common types
-macro_rules! impl_deps_for_type {
-    ($($t:ty),*) => {
-        $(
-            impl Deps for $t {
-                type Output = $t;
-
-                fn deps_hash(&self) -> u64 {
-                    let mut hasher = DefaultHasher::new();
-                    self.hash(&mut hasher);
-                    hasher.finish()
-                }
-
-                fn output(&self) -> Self::Output {
-                    self.clone()
-                }
-            }
-        )*
-    };
-}
-
-// Implement for common types
-impl_deps_for_type!(i8, i16, i32, i64, i128, isize);
-impl_deps_for_type!(u8, u16, u32, u64, u128, usize);
-impl_deps_for_type!(bool, char);
-impl_deps_for_type!(String);
 
 /// Internal state for use_cmd hook
 #[derive(Clone)]
@@ -217,8 +157,9 @@ mod tests {
 
     #[test]
     fn test_deps_unit() {
-        let deps = ();
-        assert_eq!(deps.deps_hash(), 0);
+        let hash1 = ().deps_hash();
+        let hash2 = ().deps_hash();
+        assert_eq!(hash1, hash2);
     }
 
     #[test]
