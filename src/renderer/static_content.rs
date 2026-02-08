@@ -122,11 +122,6 @@ impl StaticRenderer {
         new_element
     }
 
-    /// Get the number of committed lines
-    #[allow(dead_code)]
-    pub(crate) fn committed_line_count(&self) -> usize {
-        self.committed_lines.len()
-    }
 }
 
 #[cfg(test)]
@@ -137,7 +132,7 @@ mod tests {
     #[test]
     fn test_static_renderer_creation() {
         let renderer = StaticRenderer::new();
-        assert_eq!(renderer.committed_line_count(), 0);
+        assert_eq!(renderer.committed_lines.len(), 0);
     }
 
     #[test]

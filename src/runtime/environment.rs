@@ -127,28 +127,6 @@ pub fn is_tty() -> bool {
     std::io::stdout().is_terminal()
 }
 
-/// Get the terminal size, with fallback values
-///
-/// Returns (80, 24) as fallback when size cannot be determined.
-#[allow(dead_code)]
-pub fn terminal_size() -> (u16, u16) {
-    crossterm::terminal::size().unwrap_or((80, 24))
-}
-
-/// Get the TERM environment variable
-#[allow(dead_code)]
-pub fn term_program() -> Option<String> {
-    std::env::var("TERM_PROGRAM").ok()
-}
-
-/// Check if running in a specific terminal emulator
-#[allow(dead_code)]
-pub fn is_terminal_emulator(name: &str) -> bool {
-    term_program()
-        .map(|t| t.to_lowercase().contains(&name.to_lowercase()))
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,13 +148,6 @@ mod tests {
     #[test]
     fn test_is_tty_returns_bool() {
         let _ = is_tty();
-    }
-
-    #[test]
-    fn test_terminal_size_has_fallback() {
-        let (w, h) = terminal_size();
-        assert!(w > 0);
-        assert!(h > 0);
     }
 
     #[test]

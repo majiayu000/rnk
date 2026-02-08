@@ -98,7 +98,6 @@ impl FocusManager {
     }
 
     /// Unregister a focusable element
-    #[allow(dead_code)]
     pub fn unregister(&mut self, id: usize) {
         if let Some(pos) = self.elements.iter().position(|e| e.id == id) {
             self.elements.remove(pos);
@@ -220,26 +219,6 @@ impl FocusManager {
 // Thread-local storage for focus manager (legacy fallback)
 thread_local! {
     static FOCUS_MANAGER: RefCell<FocusManager> = RefCell::new(FocusManager::new());
-}
-
-/// Set the focus manager (called by App during render)
-///
-/// # Deprecated
-/// This function uses thread-local state. Prefer using `RuntimeContext` directly
-/// for new code. This API is maintained for backward compatibility.
-#[allow(dead_code)]
-#[deprecated(
-    since = "0.17.0",
-    note = "Use RuntimeContext::focus_manager_mut() instead"
-)]
-pub fn with_focus_manager<F, R>(f: F) -> R
-where
-    F: FnOnce() -> R,
-{
-    FOCUS_MANAGER.with(|fm| {
-        fm.borrow_mut().clear();
-    });
-    f()
 }
 
 /// Hook to make a component focusable

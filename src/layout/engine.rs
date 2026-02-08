@@ -18,10 +18,6 @@ pub struct Layout {
 /// Context stored for each node (for text measurement)
 #[derive(Clone)]
 struct NodeContext {
-    #[allow(dead_code)]
-    element_id: Option<ElementId>,
-    #[allow(dead_code)]
-    node_key: Option<NodeKey>,
     text_content: Option<String>,
 }
 
@@ -76,8 +72,6 @@ impl LayoutEngine {
             .collect();
 
         let context = NodeContext {
-            element_id: Some(element.id),
-            node_key: None,
             text_content: element.text_content.clone(),
         };
 
@@ -146,8 +140,6 @@ impl LayoutEngine {
         };
 
         let context = NodeContext {
-            element_id: None,
-            node_key: Some(vnode.key),
             text_content,
         };
 
