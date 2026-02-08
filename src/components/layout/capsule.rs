@@ -26,6 +26,27 @@ pub(crate) struct CapsuleContent {
     parts: Vec<String>,
 }
 
+#[derive(Debug)]
+enum CapsuleElementShape {
+    Padded,
+    Wrapped {
+        left: &'static str,
+        right: &'static str,
+    },
+}
+
+/// Shared element-level builder used by capsule-like components.
+#[derive(Debug)]
+pub(crate) struct CapsuleElementBuilder {
+    text: String,
+    fg: Color,
+    bg: Color,
+    shape: CapsuleElementShape,
+    prefix: Option<String>,
+    icon: Option<String>,
+    suffix: Option<String>,
+}
+
 impl CapsuleLabel {
     pub(crate) fn padded(content: impl Into<String>, fg: Color, bg: Color) -> Self {
         Self {
@@ -84,6 +105,64 @@ impl CapsuleContent {
 
     pub(crate) fn build(self) -> String {
         self.parts.join(" ")
+    }
+}
+
+impl CapsuleElementBuilder {
+    pub(crate) fn new(text: impl Into<String>, fg: Color, bg: Color) -> Self {
+        Self {
+            text: text.into(),
+            fg,
+            bg,
+            shape: CapsuleElementShape::Padded,
+            prefix: None,
+            icon: None,
+            suffix: None,
+        }
+    }
+
+    pub(crate) fn wrapped(mut self, left: &'static str, right: &'static str) -> Self {
+        self.shape = CapsuleElementShape::Wrapped { left, right };
+        self
+    }
+
+    pub(crate) fn prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.prefix = Some(prefix.into());
+        self
+    }
+
+    pub(crate) fn icon(mut self, icon: impl Into<String>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
+    pub(crate) fn suffix(mut self, suffix: impl Into<String>) -> Self {
+        self.suffix = Some(suffix.into());
+        self
+    }
+
+    pub(crate) fn into_element(self) -> Element {
+        let mut content = CapsuleContent::new();
+
+        if let Some(prefix) = self.prefix {
+            content = content.push(prefix);
+        }
+        if let Some(icon) = self.icon {
+            content = content.push(icon);
+        }
+        content = content.push(self.text);
+        if let Some(suffix) = self.suffix {
+            content = content.push(suffix);
+        }
+
+        match self.shape {
+            CapsuleElementShape::Padded => {
+                CapsuleLabel::padded(content.build(), self.fg, self.bg).into_element()
+            }
+            CapsuleElementShape::Wrapped { left, right } => {
+                CapsuleLabel::wrapped(content.build(), self.fg, self.bg, left, right).into_element()
+            }
+        }
     }
 }
 

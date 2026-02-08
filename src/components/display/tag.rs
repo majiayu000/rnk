@@ -21,7 +21,7 @@
 //! }
 //! ```
 
-use crate::components::capsule::{CapsuleContent, CapsuleLabel};
+use crate::components::capsule::CapsuleElementBuilder;
 use crate::core::{Color, Element};
 
 /// A tag component for labels and categories
@@ -72,19 +72,17 @@ impl Tag {
 
     /// Convert to Element
     pub fn into_element(self) -> Element {
-        let mut content = CapsuleContent::new();
+        let mut builder = CapsuleElementBuilder::new(self.text, self.color, self.background);
 
         if let Some(icon) = self.icon {
-            content = content.push(icon);
+            builder = builder.icon(icon);
         }
-
-        content = content.push(self.text);
 
         if self.closable {
-            content = content.push("×");
+            builder = builder.suffix("×");
         }
 
-        CapsuleLabel::padded(content.build(), self.color, self.background).into_element()
+        builder.into_element()
     }
 }
 

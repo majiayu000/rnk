@@ -21,7 +21,7 @@
 //! }
 //! ```
 
-use crate::components::capsule::CapsuleLabel;
+use crate::components::capsule::CapsuleElementBuilder;
 use crate::components::capsule_variant::CapsuleVariant;
 use crate::core::Element;
 
@@ -63,9 +63,11 @@ impl Badge {
         let (fg, bg) = self.variant.badge_colors();
 
         if self.pill {
-            CapsuleLabel::padded(self.text, fg, bg).into_element()
+            CapsuleElementBuilder::new(self.text, fg, bg).into_element()
         } else {
-            CapsuleLabel::wrapped(self.text, fg, bg, "[", "]").into_element()
+            CapsuleElementBuilder::new(self.text, fg, bg)
+                .wrapped("[", "]")
+                .into_element()
         }
     }
 }
