@@ -42,8 +42,8 @@ pub use crate::components::{Box, Spacer, Static, Transform};
 
 pub use crate::components::{
     Cursor, CursorShape, CursorState, CursorStyle, Gradient, Hyperlink, HyperlinkBuilder, Line,
-    Message, MessageRole, Newline, Span, Text, ThinkingBlock, ToolCall, gradient, hyperlink, link,
-    rainbow, set_hyperlinks_supported, supports_hyperlinks,
+    Message, MessageRole, Newline, Span, Text, ThinkingBlock, ToolCall, set_hyperlinks_supported,
+    supports_hyperlinks,
 };
 
 // =============================================================================

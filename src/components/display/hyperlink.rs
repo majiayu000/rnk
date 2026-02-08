@@ -166,32 +166,6 @@ impl Hyperlink {
     }
 }
 
-/// Create a hyperlink string
-///
-/// # Example
-///
-/// ```
-/// use rnk::components::hyperlink;
-///
-/// let link = hyperlink("https://example.com", "Click here");
-/// ```
-pub fn hyperlink(url: &str, text: &str) -> String {
-    Hyperlink::new(url, text).render()
-}
-
-/// Create a hyperlink where URL is the display text
-///
-/// # Example
-///
-/// ```
-/// use rnk::components::link;
-///
-/// let link = link("https://example.com");
-/// ```
-pub fn link(url: &str) -> String {
-    Hyperlink::url(url).render()
-}
-
 /// Builder for creating styled hyperlinks
 #[derive(Debug, Clone)]
 pub struct HyperlinkBuilder {
@@ -337,24 +311,6 @@ mod tests {
         let fallback = link.render_fallback();
 
         assert_eq!(fallback, "https://example.com");
-    }
-
-    #[test]
-    fn test_hyperlink_function() {
-        let _guard = test_lock().lock().unwrap();
-        // Force disable hyperlinks for predictable test
-        set_hyperlinks_supported(false);
-        let result = hyperlink("https://example.com", "Click");
-        assert!(result.contains("Click"));
-        assert!(result.contains("https://example.com"));
-    }
-
-    #[test]
-    fn test_link_function() {
-        let _guard = test_lock().lock().unwrap();
-        set_hyperlinks_supported(false);
-        let result = link("https://example.com");
-        assert_eq!(result, "https://example.com");
     }
 
     #[test]

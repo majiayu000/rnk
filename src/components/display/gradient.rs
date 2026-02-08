@@ -283,16 +283,6 @@ fn ansi256_to_rgb(code: u8) -> (u8, u8, u8) {
     }
 }
 
-/// Apply a rainbow gradient to text
-pub fn rainbow(text: &str) -> String {
-    Gradient::rainbow().render(text)
-}
-
-/// Apply a gradient between two colors to text
-pub fn gradient(text: &str, start: Color, end: Color) -> String {
-    Gradient::from_two(start, end).render(text)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,14 +385,14 @@ mod tests {
     }
 
     #[test]
-    fn test_rainbow_function() {
-        let result = rainbow("Hello");
+    fn test_rainbow_render() {
+        let result = Gradient::rainbow().render("Hello");
         assert!(result.contains("\x1b["));
     }
 
     #[test]
-    fn test_gradient_function() {
-        let result = gradient("Hello", Color::Red, Color::Blue);
+    fn test_gradient_from_two_render() {
+        let result = Gradient::from_two(Color::Red, Color::Blue).render("Hello");
         assert!(result.contains("\x1b["));
     }
 
