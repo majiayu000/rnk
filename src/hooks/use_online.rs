@@ -19,7 +19,7 @@
 //! ```
 
 use crate::hooks::use_signal::use_signal;
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 /// Check if the system has network connectivity
@@ -28,16 +28,13 @@ use std::time::Duration;
 pub fn check_online() -> bool {
     // Try to connect to common DNS servers
     let targets = [
-        ("8.8.8.8", 53),        // Google DNS
-        ("1.1.1.1", 53),        // Cloudflare DNS
-        ("208.67.222.222", 53), // OpenDNS
+        SocketAddr::from(([8, 8, 8, 8], 53)),         // Google DNS
+        SocketAddr::from(([1, 1, 1, 1], 53)),         // Cloudflare DNS
+        SocketAddr::from(([208, 67, 222, 222], 53)), // OpenDNS
     ];
 
-    for (host, port) in targets {
-        if let Ok(stream) = TcpStream::connect_timeout(
-            &format!("{}:{}", host, port).parse().unwrap(),
-            Duration::from_millis(500),
-        ) {
+    for target in targets {
+        if let Ok(stream) = TcpStream::connect_timeout(&target, Duration::from_millis(500)) {
             drop(stream);
             return true;
         }
