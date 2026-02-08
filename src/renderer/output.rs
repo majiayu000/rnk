@@ -124,17 +124,6 @@ impl Output {
         }
     }
 
-    /// Get a mutable reference to a cell at (col, row)
-    #[inline]
-    fn get_mut(&mut self, col: usize, row: usize) -> Option<&mut StyledChar> {
-        if col < self.width as usize && row < self.height as usize {
-            let idx = self.index(col, row);
-            Some(&mut self.grid[idx])
-        } else {
-            None
-        }
-    }
-
     /// Set a cell at (col, row)
     #[inline]
     fn set(&mut self, col: usize, row: usize, value: StyledChar) {
