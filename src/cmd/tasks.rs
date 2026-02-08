@@ -63,7 +63,7 @@ pub struct HttpResponse {
     pub body: String,
 }
 
-impl Cmd {
+impl Cmd<()> {
     /// Create a command that performs an HTTP request
     ///
     /// # Example

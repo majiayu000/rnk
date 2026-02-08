@@ -10,7 +10,7 @@ A React-like declarative terminal UI framework for Rust, inspired by [Ink](https
 
 - **React-like API**: Familiar component model with hooks (`use_signal`, `use_effect`, `use_input`, `use_cmd`)
 - **Command System**: Elm-inspired side effect management for async tasks, timers, file I/O
-- **Type-safe Commands**: `TypedCmd<M>` for compile-time message type checking
+- **Type-safe Commands**: `Cmd<M>` for compile-time message type checking
 - **Declarative Macros**: `row!`, `col!`, `text!` for concise UI building
 - **Declarative UI**: Build TUIs with composable components
 - **Flexbox Layout**: Powered by [Taffy](https://github.com/DioxusLabs/taffy) for flexible layouts
@@ -107,48 +107,29 @@ fn app() -> Element {
 }
 ```
 
-### Type-safe Commands with TypedCmd
+### Type-safe Commands with Cmd<M>
 
 ```rust
 use rnk::prelude::*;
-use rnk::cmd::TypedCmd;
+use rnk::cmd::Cmd;
 use std::time::Duration;
 
 #[derive(Clone, Debug)]
 enum Msg {
     DataLoaded(Vec<String>),
-    Error(String),
     Tick(u64),
 }
 
-fn app() -> Element {
-    let data = use_signal(|| Vec::new());
-    let tick = use_signal(|| 0u64);
+fn load_data() -> Cmd<Msg> {
+    Cmd::perform(|| async { Msg::DataLoaded(vec!["Item 1".into(), "Item 2".into()]) })
+}
 
-    // Type-safe command - compiler ensures callback returns Msg
-    use_cmd_once(move || {
-        TypedCmd::batch(vec![
-            // Async data loading
-            TypedCmd::perform(
-                || async { vec!["Item 1".into(), "Item 2".into()] },
-                Msg::DataLoaded,
-            ),
-            // Periodic tick
-            TypedCmd::tick(Duration::from_secs(1), |_| Msg::Tick(1)),
-        ])
-        .on_msg(move |msg| {
-            match msg {
-                Msg::DataLoaded(items) => data.set(items),
-                Msg::Tick(n) => tick.update(|t| *t += n),
-                Msg::Error(_) => {}
-            }
-        })
-    });
+fn start_tick() -> Cmd<Msg> {
+    Cmd::tick(Duration::from_secs(1), |_| Msg::Tick(1))
+}
 
-    col! {
-        text!("Data: {:?}", data.get()),
-        text!("Ticks: {}", tick.get()),
-    }
+fn init() -> Cmd<Msg> {
+    Cmd::batch(vec![load_data(), start_tick()])
 }
 ```
 
@@ -474,30 +455,18 @@ Cmd::exec_cmd("vim", &["file.txt"], |result| {
 })
 ```
 
-### Type-safe Commands (TypedCmd)
+### Type-safe Commands (Cmd<M>)
 
 ```rust
-use rnk::cmd::TypedCmd;
+use rnk::cmd::Cmd;
 
 #[derive(Clone)]
 enum Msg {
     Loaded(String),
-    Error(String),
 }
 
 // Compiler ensures all callbacks return Msg
-let cmd: TypedCmd<Msg> = TypedCmd::perform(
-    || async { "data".to_string() },
-    Msg::Loaded,
-);
-
-// Handle messages
-cmd.on_msg(|msg| {
-    match msg {
-        Msg::Loaded(data) => { /* handle */ }
-        Msg::Error(err) => { /* handle */ }
-    }
-})
+let cmd: Cmd<Msg> = Cmd::perform(|| async { Msg::Loaded("data".to_string()) });
 ```
 
 ## Declarative Macros
@@ -638,7 +607,7 @@ cargo run --example glm_chat
 ```
 src/
 ├── animation/      # Keyframe animations, easing functions, spring physics
-├── cmd/            # Command system (Cmd, TypedCmd, executor)
+├── cmd/            # Command system (Cmd<M>, executor)
 ├── components/     # 45+ UI components
 ├── core/           # Element, Style, Color primitives
 ├── hooks/          # React-like hooks (use_signal, use_animation, use_transition)
@@ -657,7 +626,7 @@ src/
 | Rendering | Line-level diff | Line-level diff | Line-level diff |
 | Layout | Flexbox (Taffy) | Flexbox (Yoga) | Manual |
 | State | Hooks + Signals | React hooks | Model-Update |
-| Type-safe Cmds | TypedCmd<M> | N/A | N/A |
+| Type-safe Cmds | Cmd<M> | N/A | N/A |
 | Declarative Macros | row!/col!/text! | JSX | N/A |
 | Components | 40+ | ~10 | Bubbles lib |
 | Inline mode | ✓ | ✓ | ✓ |

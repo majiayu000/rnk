@@ -1,12 +1,9 @@
-//! TypedCmd Demo - Type-safe message passing
+//! Typed Command Demo - Type-safe message passing.
 //!
-//! This example demonstrates the TypedCmd system for type-safe
-//! async operations that return typed messages.
+//! This example demonstrates `Cmd<M>` for type-safe async operations
+//! that return typed messages.
 
-use rnk::cmd::{AppMsg, TypedCmd};
-use rnk::components::Text;
-use rnk::core::Element;
-use rnk::{col, row, text};
+use rnk::cmd::{AppMsg, Cmd};
 
 /// Application messages
 #[derive(Debug, Clone)]
@@ -22,8 +19,8 @@ enum Msg {
 }
 
 /// Simulated async data loading
-fn load_data() -> TypedCmd<Msg> {
-    TypedCmd::perform(|| async {
+fn load_data() -> Cmd<Msg> {
+    Cmd::perform(|| async {
         // Simulate async operation
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         Msg::DataLoaded(vec![
@@ -35,15 +32,15 @@ fn load_data() -> TypedCmd<Msg> {
 }
 
 /// Create a timer that produces Tick messages
-fn start_timer(count: u64) -> TypedCmd<Msg> {
-    TypedCmd::tick(std::time::Duration::from_secs(1), move |_| {
+fn start_timer(count: u64) -> Cmd<Msg> {
+    Cmd::tick(std::time::Duration::from_secs(1), move |_| {
         Msg::Tick(count + 1)
     })
 }
 
 /// Batch multiple commands
-fn init_commands() -> TypedCmd<Msg> {
-    TypedCmd::batch(vec![load_data(), start_timer(0)])
+fn init_commands() -> Cmd<Msg> {
+    Cmd::batch(vec![load_data(), start_timer(0)])
 }
 
 /// Map child messages to parent messages
@@ -53,44 +50,43 @@ enum ParentMsg {
     Other,
 }
 
-fn map_example() -> TypedCmd<ParentMsg> {
+fn map_example() -> Cmd<ParentMsg> {
     // Child command produces Msg
-    let child_cmd: TypedCmd<Msg> = load_data();
+    let child_cmd: Cmd<Msg> = load_data();
 
     // Map to parent message type
     child_cmd.map(ParentMsg::Child)
 }
 
 fn main() {
-    println!("TypedCmd Demo - Type-safe message passing\n");
+    println!("Typed Command Demo - Type-safe message passing\n");
 
     // Demonstrate creating various typed commands
     println!("1. Creating a perform command:");
-    let cmd: TypedCmd<Msg> = load_data();
+    let cmd: Cmd<Msg> = load_data();
     println!("   {:?}\n", cmd);
 
     println!("2. Creating a tick command:");
-    let cmd: TypedCmd<Msg> = start_timer(0);
+    let cmd: Cmd<Msg> = start_timer(0);
     println!("   {:?}\n", cmd);
 
     println!("3. Batching commands:");
-    let cmd: TypedCmd<Msg> = init_commands();
+    let cmd: Cmd<Msg> = init_commands();
     println!("   {:?}\n", cmd);
 
     println!("4. Mapping message types:");
-    let cmd: TypedCmd<ParentMsg> = map_example();
+    let cmd: Cmd<ParentMsg> = map_example();
     println!("   {:?}\n", cmd);
 
     println!("5. Sequencing commands:");
-    let cmd: TypedCmd<Msg> = TypedCmd::sequence(vec![
-        TypedCmd::sleep(std::time::Duration::from_millis(100)),
+    let cmd: Cmd<Msg> = Cmd::sequence(vec![
+        Cmd::sleep(std::time::Duration::from_millis(100)),
         load_data(),
     ]);
     println!("   {:?}\n", cmd);
 
     println!("6. Chaining with and_then:");
-    let cmd: TypedCmd<Msg> =
-        TypedCmd::sleep(std::time::Duration::from_millis(50)).and_then(load_data());
+    let cmd: Cmd<Msg> = Cmd::sleep(std::time::Duration::from_millis(50)).and_then(load_data());
     println!("   {:?}\n", cmd);
 
     // Show AppMsg usage
@@ -110,6 +106,6 @@ fn main() {
         println!("   {:?}", msg);
     }
 
-    println!("\nTypedCmd provides type-safe async operations!");
+    println!("\nCmd<M> provides type-safe async operations!");
     println!("Use it with the Component trait for TEA-style architecture.");
 }
