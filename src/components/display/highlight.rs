@@ -21,19 +21,11 @@
 //! ```
 
 use crate::components::capsule::CapsuleLabel;
-use crate::core::{Color, Element};
+use crate::components::capsule_variant::CapsuleVariant;
+use crate::core::Element;
 
-/// Highlight variant
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum HighlightVariant {
-    #[default]
-    Default,
-    Primary,
-    Success,
-    Warning,
-    Error,
-    Info,
-}
+/// Highlight variant.
+pub type HighlightVariant = CapsuleVariant;
 
 /// A highlight component for emphasized text
 #[derive(Debug, Clone)]
@@ -84,14 +76,7 @@ impl Highlight {
 
     /// Convert to Element
     pub fn into_element(self) -> Element {
-        let (fg, bg) = match self.variant {
-            HighlightVariant::Default => (Color::Black, Color::Yellow),
-            HighlightVariant::Primary => (Color::White, Color::Blue),
-            HighlightVariant::Success => (Color::White, Color::Green),
-            HighlightVariant::Warning => (Color::Black, Color::Yellow),
-            HighlightVariant::Error => (Color::White, Color::Red),
-            HighlightVariant::Info => (Color::White, Color::Cyan),
-        };
+        let (fg, bg) = self.variant.highlight_colors();
 
         CapsuleLabel::padded(self.text, fg, bg).into_element()
     }

@@ -15,6 +15,8 @@ mod breadcrumb;
 mod calendar;
 #[path = "display/card.rs"]
 mod card;
+#[path = "display/capsule_variant.rs"]
+mod capsule_variant;
 #[path = "display/chip.rs"]
 mod chip;
 #[path = "display/divider.rs"]
@@ -148,6 +150,7 @@ pub use box_component::Box;
 pub use breadcrumb::{Breadcrumb, breadcrumb_from_path};
 pub use calendar::Calendar;
 pub use card::Card;
+pub use capsule_variant::CapsuleVariant;
 pub use chip::Chip;
 pub use code_editor::{CodeEditor, Language};
 pub use color_picker::{ColorPalette, ColorPicker, ColorPickerState, ColorPickerStyle};
