@@ -2,7 +2,7 @@
 //!
 //! Run: cargo run --example gradient_demo
 
-use rnk::components::{Gradient, gradient, rainbow};
+use rnk::components::Gradient;
 use rnk::core::Color;
 
 fn main() {
@@ -10,13 +10,16 @@ fn main() {
 
     // Rainbow gradient
     println!("Rainbow:");
-    println!("{}\n", rainbow("Hello, World! This is rainbow text!"));
+    println!(
+        "{}\n",
+        Gradient::rainbow().render("Hello, World! This is rainbow text!")
+    );
 
     // Two-color gradient
     println!("Red to Blue:");
     println!(
         "{}\n",
-        gradient("Gradient from red to blue", Color::Red, Color::Blue)
+        Gradient::from_two(Color::Red, Color::Blue).render("Gradient from red to blue")
     );
 
     // Preset gradients

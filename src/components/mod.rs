@@ -161,14 +161,12 @@ pub use empty_state::EmptyState;
 pub use file_picker::{
     FileEntry, FileFilter, FilePicker, FilePickerState, FilePickerStyle, FileType,
 };
-pub use gradient::{Gradient, gradient, rainbow};
+pub use gradient::Gradient;
 pub use help::{
     Help, HelpMode, HelpStyle, KeyBinding, editor_help, navigation_help, vim_navigation_help,
 };
 pub use highlight::{Highlight, HighlightVariant};
-pub use hyperlink::{
-    Hyperlink, HyperlinkBuilder, hyperlink, link, set_hyperlinks_supported, supports_hyperlinks,
-};
+pub use hyperlink::{Hyperlink, HyperlinkBuilder, set_hyperlinks_supported, supports_hyperlinks};
 pub use key_hint::KeyHint;
 pub use line_chart::{LineChart, Series};
 pub use link::Link;

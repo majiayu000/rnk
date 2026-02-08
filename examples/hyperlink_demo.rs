@@ -2,7 +2,7 @@
 //!
 //! Run: cargo run --example hyperlink_demo
 
-use rnk::components::{Hyperlink, HyperlinkBuilder, hyperlink, link, set_hyperlinks_supported};
+use rnk::components::{Hyperlink, HyperlinkBuilder, set_hyperlinks_supported};
 use rnk::core::Color;
 
 fn main() {
@@ -16,12 +16,12 @@ fn main() {
     println!("Simple link:");
     println!(
         "{}\n",
-        hyperlink("https://github.com", "Click here to visit GitHub")
+        Hyperlink::new("https://github.com", "Click here to visit GitHub").render()
     );
 
     // URL as text
     println!("URL as display text:");
-    println!("{}\n", link("https://docs.rs/rnk"));
+    println!("{}\n", Hyperlink::url("https://docs.rs/rnk").render());
 
     // Using Hyperlink struct
     println!("Hyperlink with ID (for multi-line links):");
@@ -60,7 +60,7 @@ fn main() {
     set_hyperlinks_supported(false);
     println!(
         "{}\n",
-        hyperlink("https://github.com/majiayu000/rnk", "rnk repo")
+        Hyperlink::new("https://github.com/majiayu000/rnk", "rnk repo").render()
     );
 
     // Custom fallback
