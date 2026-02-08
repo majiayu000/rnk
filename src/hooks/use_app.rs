@@ -7,6 +7,33 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+struct NoopSink;
+
+impl crate::renderer::registry::AppSink for NoopSink {
+    fn request_render(&self) {}
+
+    fn println(&self, _message: crate::renderer::Printable) {}
+
+    fn enter_alt_screen(&self) {}
+
+    fn exit_alt_screen(&self) {}
+
+    fn is_alt_screen(&self) -> bool {
+        false
+    }
+
+    fn queue_exec(&self, _request: crate::cmd::ExecRequest) {}
+
+    fn request_suspend(&self) {}
+}
+
+fn noop_app_context() -> AppContext {
+    AppContext::new(
+        Arc::new(AtomicBool::new(false)),
+        crate::renderer::RenderHandle::new(Arc::new(NoopSink)),
+    )
+}
+
 /// App context that provides control over the application.
 ///
 /// This is obtained via the `use_app()` hook and provides methods for:
@@ -193,7 +220,7 @@ pub fn get_app_context() -> Option<AppContext> {
 /// });
 /// ```
 pub fn use_app() -> AppContext {
-    get_app_context().expect("use_app must be called within an App context")
+    get_app_context().unwrap_or_else(noop_app_context)
 }
 
 #[cfg(test)]
@@ -252,6 +279,19 @@ mod tests {
             app.exit();
             assert!(exit_flag.load(Ordering::SeqCst));
         });
+    }
+
+    #[test]
+    fn test_use_app_outside_context_is_noop_and_does_not_panic() {
+        crate::runtime::set_current_runtime(None);
+        set_app_context(None);
+
+        let app = use_app();
+        app.request_render();
+        app.enter_alt_screen();
+        app.exit_alt_screen();
+        app.println("noop");
+        app.exit();
     }
 
     fn test_render_handle() -> RenderHandle {
