@@ -249,6 +249,23 @@ struct TransitionStorage {
     handle: TransitionHandle,
 }
 
+fn new_transition_handle(
+    initial: f32,
+    duration: Duration,
+    easing: Easing,
+    render_callback: Option<RenderCallback>,
+) -> TransitionHandle {
+    TransitionHandle {
+        current: Arc::new(RwLock::new(initial)),
+        target: Arc::new(RwLock::new(initial)),
+        instance: Arc::new(RwLock::new(None)),
+        duration,
+        easing,
+        last_tick: Arc::new(RwLock::new(Instant::now())),
+        render_callback,
+    }
+}
+
 /// Create a transition hook for smooth value changes
 ///
 /// Returns a tuple of (current_value, set_function) where setting a new value
@@ -290,35 +307,23 @@ pub fn use_transition_with_easing(
     duration: Duration,
     easing: Easing,
 ) -> TransitionHandle {
-    let ctx = current_context().expect("use_transition must be called within a component");
-    let mut ctx_ref = ctx.write().unwrap();
+    let Some(ctx) = current_context() else {
+        return new_transition_handle(initial, duration, easing, None);
+    };
+    let Ok(mut ctx_ref) = ctx.write() else {
+        return new_transition_handle(initial, duration, easing, None);
+    };
 
     let render_callback = ctx_ref.get_render_callback();
 
     let storage = ctx_ref.use_hook(|| TransitionStorage {
-        handle: TransitionHandle {
-            current: Arc::new(RwLock::new(initial)),
-            target: Arc::new(RwLock::new(initial)),
-            instance: Arc::new(RwLock::new(None)),
-            duration,
-            easing,
-            last_tick: Arc::new(RwLock::new(Instant::now())),
-            render_callback: render_callback.clone(),
-        },
+        handle: new_transition_handle(initial, duration, easing, render_callback.clone()),
     });
 
     storage
         .get::<TransitionStorage>()
         .map(|s| s.handle)
-        .unwrap_or_else(|| TransitionHandle {
-            current: Arc::new(RwLock::new(initial)),
-            target: Arc::new(RwLock::new(initial)),
-            instance: Arc::new(RwLock::new(None)),
-            duration,
-            easing,
-            last_tick: Arc::new(RwLock::new(Instant::now())),
-            render_callback,
-        })
+        .unwrap_or_else(|| new_transition_handle(initial, duration, easing, render_callback))
 }
 
 #[cfg(test)]
@@ -418,5 +423,15 @@ mod tests {
         // Setting to same value should not start transition
         handle.set(50.0);
         assert!(!handle.is_transitioning());
+    }
+
+    #[test]
+    fn test_use_transition_without_context_does_not_panic() {
+        let handle = use_transition(0.0, 100.ms());
+        assert_eq!(handle.get(), 0.0);
+
+        handle.set(100.0);
+        assert!(handle.is_transitioning());
+        assert_eq!(handle.target(), 100.0);
     }
 }
