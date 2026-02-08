@@ -5,8 +5,6 @@
 //! 2. Diff algorithm (only updates changed lines)
 //! 3. Proper output preservation on exit
 
-use std::io::Write;
-
 /// Test that virtual screen buffer stores previous frame
 #[test]
 fn test_virtual_screen_buffer_exists() {
