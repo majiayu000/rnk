@@ -19,6 +19,7 @@
 //! - **Hooks - Effects**: use_effect, use_cmd
 //! - **Hooks - Input**: use_input, use_mouse, use_paste, use_focus
 //! - **Hooks - Utilities**: use_scroll, use_measure, use_app
+//! - **Hooks - Animation**: use_animation, use_transition
 //! - **Rendering**: render, AppBuilder, render_to_string
 
 // =============================================================================
@@ -149,6 +150,15 @@ pub use crate::hooks::{Deps, MemoizedCallback, Signal, use_callback, use_memo, u
 // =============================================================================
 
 pub use crate::hooks::{use_cmd, use_cmd_once, use_effect, use_effect_once};
+
+// =============================================================================
+// Hooks - Animation
+// =============================================================================
+
+pub use crate::hooks::{
+    AnimationHandle, TransitionHandle, use_animation, use_animation_auto, use_transition,
+    use_transition_with_easing,
+};
 
 // =============================================================================
 // Hooks - Input Handling
