@@ -28,8 +28,6 @@
 //! ```
 
 use crate::hooks::use_signal::{Signal, use_signal};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// Debounce a value, only updating after the specified delay
@@ -44,8 +42,6 @@ where
     let last_value = use_signal(|| value.clone());
     let last_delay = use_signal(|| delay);
     let generation = use_signal(|| 0u64);
-    let worker_running = use_signal(|| Arc::new(AtomicBool::new(false)));
-    let worker_flag = worker_running.get();
 
     // Zero-delay debounce should update immediately.
     if delay.is_zero() {
@@ -73,41 +69,24 @@ where
 
     if value_changed || delay_changed {
         generation.update(|g| *g = g.wrapping_add(1));
+        let expected_generation = generation.get();
 
-        if !worker_flag.swap(true, Ordering::AcqRel) {
-            let generation_clone = generation.clone();
-            let last_value_clone = last_value.clone();
-            let last_delay_clone = last_delay.clone();
-            let debounced_clone = debounced.clone();
-            let worker_flag_clone = worker_flag.clone();
+        let generation_clone = generation.clone();
+        let last_value_clone = last_value.clone();
+        let debounced_clone = debounced.clone();
+        let wait = delay;
 
-            std::thread::spawn(move || {
-                loop {
-                    let expected_generation = generation_clone.get();
-                    let wait = last_delay_clone.get();
-                    std::thread::sleep(wait);
+        std::thread::spawn(move || {
+            std::thread::sleep(wait);
 
-                    if generation_clone.get() == expected_generation {
-                        let latest = last_value_clone.get();
-                        if debounced_clone.get() != latest {
-                            debounced_clone.set(latest);
-                        }
-
-                        worker_flag_clone.store(false, Ordering::Release);
-
-                        // If a new update landed while exiting, continue as the worker
-                        // to avoid dropping the pending debounce cycle.
-                        if generation_clone.get() != expected_generation
-                            && !worker_flag_clone.swap(true, Ordering::AcqRel)
-                        {
-                            continue;
-                        }
-
-                        break;
-                    }
+            // Only the latest generation is allowed to commit.
+            if generation_clone.get() == expected_generation {
+                let latest = last_value_clone.get();
+                if debounced_clone.get() != latest {
+                    debounced_clone.set(latest);
                 }
-            });
-        }
+            }
+        });
     }
 
     debounced.get()
