@@ -181,6 +181,18 @@ struct AnimationStorage {
     handle: AnimationHandle,
 }
 
+fn new_animation_handle(
+    animation: Animation,
+    render_callback: Option<RenderCallback>,
+) -> AnimationHandle {
+    let instance = animation.start();
+    AnimationHandle {
+        instance: Arc::new(RwLock::new(instance)),
+        last_tick: Arc::new(RwLock::new(Instant::now())),
+        render_callback,
+    }
+}
+
 /// Create an animation hook
 ///
 /// Returns an `AnimationHandle` that can be used to control the animation
@@ -210,34 +222,26 @@ struct AnimationStorage {
 /// }
 /// ```
 pub fn use_animation(init: impl FnOnce() -> Animation) -> AnimationHandle {
-    let ctx = current_context().expect("use_animation must be called within a component");
-    let mut ctx_ref = ctx.write().unwrap();
-
-    let render_callback = ctx_ref.get_render_callback();
     let animation = init();
+    let Some(ctx) = current_context() else {
+        return new_animation_handle(animation, None);
+    };
+    let Ok(mut ctx_ref) = ctx.write() else {
+        return new_animation_handle(animation, None);
+    };
+    let render_callback = ctx_ref.get_render_callback();
+    let animation_for_hook = animation.clone();
 
     let storage = ctx_ref.use_hook(|| {
-        let instance = animation.start();
         AnimationStorage {
-            handle: AnimationHandle {
-                instance: Arc::new(RwLock::new(instance)),
-                last_tick: Arc::new(RwLock::new(Instant::now())),
-                render_callback: render_callback.clone(),
-            },
+            handle: new_animation_handle(animation_for_hook, render_callback.clone()),
         }
     });
 
     storage
         .get::<AnimationStorage>()
         .map(|s| s.handle)
-        .unwrap_or_else(|| {
-            let instance = animation.start();
-            AnimationHandle {
-                instance: Arc::new(RwLock::new(instance)),
-                last_tick: Arc::new(RwLock::new(Instant::now())),
-                render_callback,
-            }
-        })
+        .unwrap_or_else(|| new_animation_handle(animation, render_callback))
 }
 
 /// Create an animation that starts automatically
@@ -323,5 +327,14 @@ mod tests {
         // Should still be running with progress
         assert!(handle2.is_running());
         assert!(handle2.get() > 0.0);
+    }
+
+    #[test]
+    fn test_use_animation_without_context_does_not_panic() {
+        let handle = use_animation(|| Animation::new().from(0.0).to(10.0).duration(100.ms()));
+        assert_eq!(handle.state(), AnimationState::Idle);
+
+        handle.play();
+        assert!(handle.is_running());
     }
 }
