@@ -388,16 +388,6 @@ impl Default for ColorPicker {
     }
 }
 
-/// Create a color picker
-pub fn color_picker() -> ColorPicker {
-    ColorPicker::new()
-}
-
-/// Create a color picker with a palette
-pub fn color_picker_with_palette(palette: ColorPalette) -> ColorPicker {
-    ColorPicker::new().palette(palette)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,11 +470,5 @@ mod tests {
     fn test_color_to_hex() {
         let hex = ColorPicker::color_to_hex(&Color::Rgb(255, 0, 128));
         assert_eq!(hex, "#FF0080");
-    }
-
-    #[test]
-    fn test_color_picker_helpers() {
-        let _ = color_picker();
-        let _ = color_picker_with_palette(ColorPalette::rainbow());
     }
 }

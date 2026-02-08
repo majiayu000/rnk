@@ -322,11 +322,6 @@ impl<'a> Cursor<'a> {
     }
 }
 
-/// Create a simple cursor with default settings
-pub fn cursor(state: &CursorState) -> Cursor<'_> {
-    Cursor::new(state)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

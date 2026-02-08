@@ -34,7 +34,7 @@ pub use crate::core::{
 // Layout Components
 // =============================================================================
 
-pub use crate::components::{Box, Spacer, Static, Transform, static_output};
+pub use crate::components::{Box, Spacer, Static, Transform};
 
 // =============================================================================
 // Display Components - Text & Content
@@ -42,8 +42,8 @@ pub use crate::components::{Box, Spacer, Static, Transform, static_output};
 
 pub use crate::components::{
     Cursor, CursorShape, CursorState, CursorStyle, Gradient, Hyperlink, HyperlinkBuilder, Line,
-    Message, MessageRole, Newline, Span, Text, ThinkingBlock, ToolCall, cursor, gradient,
-    hyperlink, link, rainbow, set_hyperlinks_supported, supports_hyperlinks,
+    Message, MessageRole, Newline, Span, Text, ThinkingBlock, ToolCall, gradient, hyperlink, link,
+    rainbow, set_hyperlinks_supported, supports_hyperlinks,
 };
 
 // =============================================================================
@@ -64,7 +64,7 @@ pub use crate::components::{
     Confirm, ConfirmState, ConfirmStyle, FileEntry, FileFilter, FilePicker, FilePickerState,
     FilePickerStyle, FileType, MultiSelect, MultiSelectItem, MultiSelectStyle, SelectInput,
     SelectInputStyle, SelectItem, SelectionState, TextInputHandle, TextInputOptions,
-    TextInputState, file_picker, handle_confirm_input, select_input, use_text_input,
+    TextInputState, handle_confirm_input, use_text_input,
 };
 
 // =============================================================================
@@ -75,7 +75,7 @@ pub use crate::components::{
     Dialog, DialogState, Gauge, Modal, ModalAlign, Notification, NotificationBorder,
     NotificationItem, NotificationLevel, NotificationPosition, NotificationState,
     NotificationStyle, Progress, ProgressColors, ProgressSymbols, Spinner, SpinnerBuilder,
-    StopwatchState, TimerState, Toast, notification, toast,
+    StopwatchState, TimerState, Toast,
 };
 
 // =============================================================================

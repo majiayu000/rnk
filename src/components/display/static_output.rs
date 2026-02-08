@@ -84,15 +84,6 @@ where
     }
 }
 
-/// Convenience function for creating Static components
-pub fn static_output<T, F>(items: Vec<T>, render_fn: F) -> Element
-where
-    T: Clone + 'static,
-    F: Fn(&T, usize) -> Element,
-{
-    Static::new(items, render_fn).into_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

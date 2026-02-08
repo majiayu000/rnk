@@ -671,11 +671,6 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-/// Create a file picker
-pub fn file_picker(state: &FilePickerState) -> FilePicker<'_> {
-    FilePicker::new(state)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

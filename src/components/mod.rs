@@ -150,21 +150,16 @@ pub use calendar::Calendar;
 pub use card::Card;
 pub use chip::Chip;
 pub use code_editor::{CodeEditor, Language};
-pub use color_picker::{
-    ColorPalette, ColorPicker, ColorPickerState, ColorPickerStyle, color_picker,
-    color_picker_with_palette,
-};
-pub use command_palette::{
-    Command, CommandPalette, CommandPaletteState, CommandPaletteStyle, command_palette,
-};
+pub use color_picker::{ColorPalette, ColorPicker, ColorPickerState, ColorPickerStyle};
+pub use command_palette::{Command, CommandPalette, CommandPaletteState, CommandPaletteStyle};
 pub use confirm::{ButtonStyle, Confirm, ConfirmState, ConfirmStyle, handle_confirm_input};
-pub use context_menu::{ContextMenu, ContextMenuState, ContextMenuStyle, MenuItem, context_menu};
-pub use cursor::{Cursor, CursorShape, CursorState, CursorStyle, cursor};
+pub use context_menu::{ContextMenu, ContextMenuState, ContextMenuStyle, MenuItem};
+pub use cursor::{Cursor, CursorShape, CursorState, CursorStyle};
 pub use devtools::{DevTools, DevToolsTab};
 pub use divider::{Divider, DividerOrientation, DividerStyle};
 pub use empty_state::EmptyState;
 pub use file_picker::{
-    FileEntry, FileFilter, FilePicker, FilePickerState, FilePickerStyle, FileType, file_picker,
+    FileEntry, FileFilter, FilePicker, FilePickerState, FilePickerStyle, FileType,
 };
 pub use gradient::{Gradient, gradient, rainbow};
 pub use help::{
@@ -189,7 +184,7 @@ pub use navigation::{
 pub use newline::Newline;
 pub use notification::{
     Notification, NotificationBorder, NotificationItem, NotificationLevel, NotificationPosition,
-    NotificationState, NotificationStyle, Toast, notification, toast,
+    NotificationState, NotificationStyle, Toast,
 };
 pub use paginator::{
     Paginator, PaginatorState, PaginatorStyle, PaginatorType, handle_paginator_input,
@@ -200,13 +195,13 @@ pub use quote::{Quote, QuoteStyle};
 pub use rating::{Rating, RatingStyle, RatingSymbols};
 pub use scrollable::{ScrollableBox, fixed_bottom_layout, virtual_scroll_view};
 pub use scrollbar::{Scrollbar, ScrollbarOrientation, ScrollbarSymbols};
-pub use select_input::{SelectInput, SelectInputStyle, SelectItem, select_input};
+pub use select_input::{SelectInput, SelectInputStyle, SelectItem};
 pub use skeleton::{Skeleton, SkeletonVariant};
 pub use spacer::Spacer;
 pub use sparkline::Sparkline;
 pub use spinner::{Spinner, SpinnerBuilder};
 pub use stat::{Stat, Trend};
-pub use static_output::{Static, static_output};
+pub use static_output::Static;
 pub use status_bar::StatusBar;
 pub use stepper::{Step, StepStatus, Stepper, StepperOrientation, StepperStyle};
 pub use table::{Cell, Constraint, Row, Table, TableState};

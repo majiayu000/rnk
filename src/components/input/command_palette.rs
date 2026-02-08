@@ -499,11 +499,6 @@ impl CommandPalette {
     }
 }
 
-/// Create a command palette
-pub fn command_palette(commands: Vec<Command>) -> CommandPalette {
-    CommandPalette::new(commands)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
