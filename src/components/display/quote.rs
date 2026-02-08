@@ -170,16 +170,6 @@ impl Default for Quote {
     }
 }
 
-/// Create a simple quote
-pub fn quote(text: impl Into<String>) -> Element {
-    Quote::new(text).into_element()
-}
-
-/// Create a quote with author
-pub fn quote_with_author(text: impl Into<String>, author: impl Into<String>) -> Element {
-    Quote::new(text).author(author).into_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,11 +191,5 @@ mod tests {
         let _ = Quote::new("Test").style(QuoteStyle::Block).into_element();
         let _ = Quote::new("Test").style(QuoteStyle::Inline).into_element();
         let _ = Quote::new("Test").style(QuoteStyle::Fancy).into_element();
-    }
-
-    #[test]
-    fn test_quote_helpers() {
-        let _ = quote("Simple quote");
-        let _ = quote_with_author("Quote", "Author");
     }
 }

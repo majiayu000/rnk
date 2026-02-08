@@ -388,11 +388,6 @@ impl Stepper {
     }
 }
 
-/// Create a stepper
-pub fn stepper(steps: Vec<Step>) -> Stepper {
-    Stepper::new(steps)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,11 +493,5 @@ mod tests {
         let steps = vec![Step::titled("Step 1"), Step::titled("Step 2")];
         let stepper = Stepper::new(steps).current(0);
         let _ = stepper.into_element();
-    }
-
-    #[test]
-    fn test_stepper_helper() {
-        let s = stepper(vec![Step::titled("Test")]);
-        assert_eq!(s.steps.len(), 1);
     }
 }

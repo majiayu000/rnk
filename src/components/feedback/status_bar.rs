@@ -128,20 +128,6 @@ impl Default for StatusBar {
     }
 }
 
-/// Create a simple status bar
-pub fn status_bar(left: &str, right: &str) -> Element {
-    StatusBar::new().left(left).right(right).into_element()
-}
-
-/// Create a status bar with all three sections
-pub fn status_bar_full(left: &str, center: &str, right: &str) -> Element {
-    StatusBar::new()
-        .left(left)
-        .center(center)
-        .right(right)
-        .into_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,11 +152,5 @@ mod tests {
     #[test]
     fn test_status_bar_into_element() {
         let _ = StatusBar::new().left("Mode").right("100%").into_element();
-    }
-
-    #[test]
-    fn test_status_bar_helpers() {
-        let _ = status_bar("Left", "Right");
-        let _ = status_bar_full("L", "C", "R");
     }
 }

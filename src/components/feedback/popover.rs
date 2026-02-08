@@ -362,16 +362,6 @@ impl Default for Popover {
     }
 }
 
-/// Create a popover
-pub fn popover(trigger: impl Into<String>) -> Popover {
-    Popover::new(trigger)
-}
-
-/// Create a popover with content
-pub fn popover_with_content(trigger: impl Into<String>, content: impl Into<String>) -> Popover {
-    Popover::new(trigger).content(content)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,15 +463,5 @@ mod tests {
         assert_eq!(style.arrow, PopoverArrow::Unicode);
         assert_eq!(style.padding, 2);
         assert_eq!(style.max_width, Some(50));
-    }
-
-    #[test]
-    fn test_popover_helpers() {
-        let p1 = popover("Test");
-        assert_eq!(p1.trigger, "Test");
-
-        let p2 = popover_with_content("Trigger", "Content");
-        assert_eq!(p2.trigger, "Trigger");
-        assert_eq!(p2.content, "Content");
     }
 }

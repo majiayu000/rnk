@@ -128,24 +128,6 @@ impl Default for Card {
     }
 }
 
-/// Create a simple card with title and body
-pub fn card(title: impl Into<String>, body: impl Into<String>) -> Element {
-    Card::new().title(title).body(body).into_element()
-}
-
-/// Create a card with all sections
-pub fn card_full(
-    title: impl Into<String>,
-    body: impl Into<String>,
-    footer: impl Into<String>,
-) -> Element {
-    Card::new()
-        .title(title)
-        .body(body)
-        .footer(footer)
-        .into_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,11 +149,5 @@ mod tests {
     #[test]
     fn test_card_into_element() {
         let _ = Card::new().title("Test").body("Content").into_element();
-    }
-
-    #[test]
-    fn test_card_helpers() {
-        let _ = card("Title", "Body");
-        let _ = card_full("Title", "Body", "Footer");
     }
 }

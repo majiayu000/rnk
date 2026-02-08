@@ -101,16 +101,6 @@ impl Default for EmptyState {
     }
 }
 
-/// Create an empty state with title
-pub fn empty_state(title: impl Into<String>) -> Element {
-    EmptyState::new().title(title).into_element()
-}
-
-/// Create an empty state with icon and title
-pub fn empty_state_with_icon(icon: impl Into<String>, title: impl Into<String>) -> Element {
-    EmptyState::new().icon(icon).title(title).into_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,11 +130,5 @@ mod tests {
             .title("No results")
             .description("Try a different search")
             .into_element();
-    }
-
-    #[test]
-    fn test_empty_state_helpers() {
-        let _ = empty_state("No items");
-        let _ = empty_state_with_icon("📭", "Empty inbox");
     }
 }
