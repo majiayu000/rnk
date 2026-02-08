@@ -95,8 +95,18 @@ where
     F: FnOnce() -> Option<Box<dyn FnOnce() + Send>> + Send + 'static,
     D: Deps + 'static,
 {
-    let ctx = current_context().expect("use_effect must be called within a component");
-    let mut ctx_ref = ctx.write().unwrap();
+    let Some(ctx) = current_context() else {
+        if let Some(cleanup) = effect() {
+            cleanup();
+        }
+        return;
+    };
+    let Ok(mut ctx_ref) = ctx.write() else {
+        if let Some(cleanup) = effect() {
+            cleanup();
+        }
+        return;
+    };
 
     let new_deps_hash = deps.to_hash();
 
@@ -150,8 +160,18 @@ pub fn use_effect_once<F>(effect: F)
 where
     F: FnOnce() -> Option<Box<dyn FnOnce() + Send>> + Send + 'static,
 {
-    let ctx = current_context().expect("use_effect_once must be called within a component");
-    let mut ctx_ref = ctx.write().unwrap();
+    let Some(ctx) = current_context() else {
+        if let Some(cleanup) = effect() {
+            cleanup();
+        }
+        return;
+    };
+    let Ok(mut ctx_ref) = ctx.write() else {
+        if let Some(cleanup) = effect() {
+            cleanup();
+        }
+        return;
+    };
 
     // Use a flag to track if effect has run
     let (storage, effect_slot) = ctx_ref.use_hook_with_index(|| false);
@@ -357,5 +377,44 @@ mod tests {
 
         drop(ctx);
         assert!(*cleanup_ran.lock().unwrap());
+    }
+
+    #[test]
+    fn test_use_effect_outside_context_runs_and_cleans_up_immediately() {
+        let runs = Arc::new(Mutex::new(0usize));
+        let cleanups = Arc::new(Mutex::new(0usize));
+
+        let runs_ref = runs.clone();
+        let cleanups_ref = cleanups.clone();
+        use_effect(
+            move || {
+                *runs_ref.lock().unwrap() += 1;
+                Some(Box::new(move || {
+                    *cleanups_ref.lock().unwrap() += 1;
+                }) as Box<dyn FnOnce() + Send>)
+            },
+            (),
+        );
+
+        assert_eq!(*runs.lock().unwrap(), 1);
+        assert_eq!(*cleanups.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_use_effect_once_outside_context_runs_and_cleans_up_immediately() {
+        let runs = Arc::new(Mutex::new(0usize));
+        let cleanups = Arc::new(Mutex::new(0usize));
+
+        let runs_ref = runs.clone();
+        let cleanups_ref = cleanups.clone();
+        use_effect_once(move || {
+            *runs_ref.lock().unwrap() += 1;
+            Some(Box::new(move || {
+                *cleanups_ref.lock().unwrap() += 1;
+            }) as Box<dyn FnOnce() + Send>)
+        });
+
+        assert_eq!(*runs.lock().unwrap(), 1);
+        assert_eq!(*cleanups.lock().unwrap(), 1);
     }
 }
