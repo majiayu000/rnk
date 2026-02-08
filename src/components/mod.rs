@@ -161,7 +161,7 @@ pub use confirm::{ButtonStyle, Confirm, ConfirmState, ConfirmStyle, handle_confi
 pub use context_menu::{ContextMenu, ContextMenuState, ContextMenuStyle, MenuItem, context_menu};
 pub use cursor::{Cursor, CursorShape, CursorState, CursorStyle, cursor};
 pub use devtools::{DevTools, DevToolsTab};
-pub use divider::{Divider, DividerOrientation, DividerStyle, hr, hr_dashed, hr_label};
+pub use divider::{Divider, DividerOrientation, DividerStyle};
 pub use empty_state::EmptyState;
 pub use file_picker::{
     FileEntry, FileFilter, FilePicker, FilePickerState, FilePickerStyle, FileType, file_picker,
@@ -174,9 +174,9 @@ pub use highlight::{Highlight, HighlightVariant};
 pub use hyperlink::{
     Hyperlink, HyperlinkBuilder, hyperlink, link, set_hyperlinks_supported, supports_hyperlinks,
 };
-pub use key_hint::{KeyHint, key_hint, key_hints};
+pub use key_hint::KeyHint;
 pub use line_chart::{LineChart, Series};
-pub use link::{Link, link_styled, link_with_icon};
+pub use link::Link;
 pub use list::{List, ListItem, ListState};
 pub use markdown::Markdown;
 pub use message::{Message, MessageRole, ThinkingBlock, ToolCall};

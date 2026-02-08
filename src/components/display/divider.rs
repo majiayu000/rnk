@@ -136,23 +136,6 @@ impl Default for Divider {
     }
 }
 
-/// Create a simple horizontal divider
-pub fn hr() -> Element {
-    Divider::horizontal().into_element()
-}
-
-/// Create a horizontal divider with a label
-pub fn hr_label(label: impl Into<String>) -> Element {
-    Divider::horizontal().label(label).into_element()
-}
-
-/// Create a dashed horizontal divider
-pub fn hr_dashed() -> Element {
-    Divider::horizontal()
-        .style(DividerStyle::Dashed)
-        .into_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,12 +163,5 @@ mod tests {
         let _ = Divider::horizontal().into_element();
         let _ = Divider::vertical().into_element();
         let _ = Divider::horizontal().label("Test").into_element();
-    }
-
-    #[test]
-    fn test_divider_helpers() {
-        let _ = hr();
-        let _ = hr_label("Section");
-        let _ = hr_dashed();
     }
 }
