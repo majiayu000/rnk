@@ -404,6 +404,14 @@ impl Output {
         );
     }
 
+    /// Return current clip stack depth.
+    ///
+    /// A non-zero depth after a render pass usually means clip push/pop calls
+    /// are unbalanced in the renderer.
+    pub(crate) fn clip_depth(&self) -> usize {
+        self.clip_stack.len()
+    }
+
     /// Convert the buffer to a string with ANSI codes
     pub fn render(&self) -> String {
         let mut lines: Vec<String> = Vec::new();
@@ -842,5 +850,22 @@ mod tests {
     fn test_unclip_panics_when_stack_is_empty_in_debug() {
         let mut output = Output::new(10, 5);
         output.unclip();
+    }
+
+    #[test]
+    fn test_clip_depth_tracks_push_and_pop() {
+        let mut output = Output::new(10, 5);
+        assert_eq!(output.clip_depth(), 0);
+
+        output.clip(ClipRegion {
+            x1: 0,
+            y1: 0,
+            x2: 5,
+            y2: 5,
+        });
+        assert_eq!(output.clip_depth(), 1);
+
+        output.unclip();
+        assert_eq!(output.clip_depth(), 0);
     }
 }

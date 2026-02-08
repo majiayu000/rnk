@@ -51,7 +51,13 @@ impl TestRenderer {
         engine.compute(element, self.width, self.height);
 
         let mut output = Output::new(self.width, self.height);
+        let clip_depth_before = output.clip_depth();
         render_element_tree(element, &engine, &mut output, 0.0, 0.0);
+        assert_eq!(
+            output.clip_depth(),
+            clip_depth_before,
+            "test renderer left an unbalanced clip stack"
+        );
         output.render()
     }
 

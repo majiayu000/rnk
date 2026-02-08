@@ -15,7 +15,13 @@ pub(crate) fn render_element(
     offset_x: f32,
     offset_y: f32,
 ) {
+    let clip_depth_before = output.clip_depth();
     render_element_tree(element, layout_engine, output, offset_x, offset_y);
+    assert_eq!(
+        output.clip_depth(),
+        clip_depth_before,
+        "render_element left an unbalanced clip stack"
+    );
 }
 
 #[cfg(test)]
