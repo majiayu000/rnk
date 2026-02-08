@@ -141,13 +141,14 @@ struct SignalStorage<T> {
 /// count.set(count.get() + 1);
 /// ```
 pub fn use_signal<T: Clone + Send + Sync + 'static>(init: impl FnOnce() -> T) -> Signal<T> {
-    let ctx = current_context().expect("use_signal must be called within a component");
-    let mut ctx_ref = ctx.write().unwrap();
-
-    let render_callback = ctx_ref.get_render_callback();
-
-    // Use a wrapper that can be cloned
     let init_value = init();
+    let Some(ctx) = current_context() else {
+        return Signal::new(init_value, None);
+    };
+    let Ok(mut ctx_ref) = ctx.write() else {
+        return Signal::new(init_value, None);
+    };
+    let render_callback = ctx_ref.get_render_callback();
 
     let storage = ctx_ref.use_hook(|| SignalStorage {
         signal: Signal::new(init_value.clone(), render_callback.clone()),
@@ -240,6 +241,14 @@ mod tests {
             assert_eq!(count.get(), 10);
             assert_eq!(name.get(), "Bob");
         });
+    }
+
+    #[test]
+    fn test_use_signal_without_context_does_not_panic() {
+        let signal = use_signal(|| 7i32);
+        assert_eq!(signal.get(), 7);
+        signal.set(9);
+        assert_eq!(signal.get(), 9);
     }
 
     #[test]
