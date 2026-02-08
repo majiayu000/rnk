@@ -493,15 +493,22 @@ impl ScrollHandle {
 pub fn use_scroll() -> ScrollHandle {
     use crate::hooks::context::current_context;
 
-    let ctx = current_context().expect("use_scroll must be called within a render context");
-    let mut ctx_ref = ctx.write().unwrap();
+    let Some(ctx) = current_context() else {
+        return ScrollHandle {
+            state: Arc::new(RwLock::new(ScrollState::new())),
+        };
+    };
+    let Ok(mut ctx_ref) = ctx.write() else {
+        return ScrollHandle {
+            state: Arc::new(RwLock::new(ScrollState::new())),
+        };
+    };
 
     // Use the hook API to get or create scroll state
     let storage = ctx_ref.use_hook(|| Arc::new(RwLock::new(ScrollState::new())));
     let state = storage
         .get::<Arc<RwLock<ScrollState>>>()
-        .expect("scroll state should be the correct type")
-        .clone();
+        .unwrap_or_else(|| Arc::new(RwLock::new(ScrollState::new())));
 
     ScrollHandle { state }
 }
@@ -509,6 +516,8 @@ pub fn use_scroll() -> ScrollHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hooks::context::{HookContext, with_hooks};
+    use std::sync::{Arc, RwLock};
 
     #[test]
     fn test_scroll_state_basic() {
@@ -612,5 +621,27 @@ mod tests {
         state.scroll_to_bottom();
         assert!(state.can_scroll_up());
         assert!(!state.can_scroll_down());
+    }
+
+    #[test]
+    fn test_use_scroll_without_context_does_not_panic() {
+        let scroll = use_scroll();
+        scroll.set_content_size(100, 50);
+        scroll.set_viewport_size(80, 10);
+        scroll.scroll_down(7);
+        assert_eq!(scroll.offset_y(), 7);
+    }
+
+    #[test]
+    fn test_use_scroll_preserves_state_in_context() {
+        let ctx = Arc::new(RwLock::new(HookContext::new()));
+
+        let scroll1 = with_hooks(ctx.clone(), use_scroll);
+        scroll1.set_content_size(100, 50);
+        scroll1.set_viewport_size(80, 10);
+        scroll1.scroll_down(9);
+
+        let scroll2 = with_hooks(ctx, use_scroll);
+        assert_eq!(scroll2.offset_y(), 9);
     }
 }
