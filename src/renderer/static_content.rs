@@ -50,7 +50,13 @@ impl StaticRenderer {
                 let render_width = (layout.width as u16).max(1);
                 let render_height = (layout.height as u16).max(1);
                 let mut output = Output::new(render_width, render_height);
+                let clip_depth_before = output.clip_depth();
                 render_element_tree(element, &engine, &mut output, 0.0, 0.0);
+                assert_eq!(
+                    output.clip_depth(),
+                    clip_depth_before,
+                    "static content render left an unbalanced clip stack"
+                );
 
                 let rendered = output.render();
                 for line in rendered.lines() {

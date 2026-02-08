@@ -107,7 +107,13 @@ impl RenderHelper {
 
         // Render to output buffer
         let mut output = Output::new(render_width, content_height);
+        let clip_depth_before = output.clip_depth();
         render_element_tree(element, &engine, &mut output, 0.0, 0.0);
+        assert_eq!(
+            output.clip_depth(),
+            clip_depth_before,
+            "render_to_string left an unbalanced clip stack"
+        );
 
         let rendered = output.render();
 
@@ -203,7 +209,13 @@ impl RenderHelper {
         let content_height = height.max(1);
 
         let mut output = Output::new(render_width, content_height);
+        let clip_depth_before = output.clip_depth();
         render_element_tree(element, &engine, &mut output, 0.0, 0.0);
+        assert_eq!(
+            output.clip_depth(),
+            clip_depth_before,
+            "render_to_string_raw left an unbalanced clip stack"
+        );
 
         output.render()
     }
