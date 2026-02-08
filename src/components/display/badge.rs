@@ -22,20 +22,11 @@
 //! ```
 
 use crate::components::capsule::CapsuleLabel;
-use crate::core::{Color, Element};
+use crate::components::capsule_variant::CapsuleVariant;
+use crate::core::Element;
 
-/// Badge variant for different styles
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum BadgeVariant {
-    #[default]
-    Default,
-    Primary,
-    Secondary,
-    Success,
-    Warning,
-    Error,
-    Info,
-}
+/// Badge variant for different styles.
+pub type BadgeVariant = CapsuleVariant;
 
 /// A badge component for displaying status or counts
 #[derive(Debug, Clone)]
@@ -69,15 +60,7 @@ impl Badge {
 
     /// Convert to Element
     pub fn into_element(self) -> Element {
-        let (fg, bg) = match self.variant {
-            BadgeVariant::Default => (Color::White, Color::Ansi256(240)),
-            BadgeVariant::Primary => (Color::White, Color::Blue),
-            BadgeVariant::Secondary => (Color::White, Color::Ansi256(245)),
-            BadgeVariant::Success => (Color::White, Color::Green),
-            BadgeVariant::Warning => (Color::Black, Color::Yellow),
-            BadgeVariant::Error => (Color::White, Color::Red),
-            BadgeVariant::Info => (Color::White, Color::Cyan),
-        };
+        let (fg, bg) = self.variant.badge_colors();
 
         if self.pill {
             CapsuleLabel::padded(self.text, fg, bg).into_element()
