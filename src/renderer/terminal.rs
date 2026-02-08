@@ -46,16 +46,6 @@ mod ansi {
         }
     }
 
-    /// Move cursor down n lines
-    #[allow(dead_code)]
-    pub fn cursor_down(n: u16) -> String {
-        if n == 0 {
-            String::new()
-        } else {
-            format!("\x1b[{}B", n)
-        }
-    }
-
     /// Erase from cursor to end of line
     pub fn erase_end_of_line() -> &'static str {
         "\x1b[K"
@@ -64,24 +54,6 @@ mod ansi {
     /// Erase entire line
     pub fn erase_line() -> &'static str {
         "\x1b[2K"
-    }
-
-    /// Erase n lines (moves up and clears each line)
-    #[allow(dead_code)]
-    pub fn erase_lines(n: usize) -> String {
-        if n == 0 {
-            return String::new();
-        }
-
-        let mut result = String::new();
-        for i in 0..n {
-            if i > 0 {
-                result.push_str("\x1b[1A"); // Move up
-            }
-            result.push_str("\x1b[2K"); // Erase line
-            result.push_str("\x1b[G"); // Move to column 0
-        }
-        result
     }
 
     /// Erase entire screen
@@ -97,18 +69,6 @@ mod ansi {
     /// Show cursor
     pub fn show_cursor() -> &'static str {
         "\x1b[?25h"
-    }
-
-    /// Save cursor position
-    #[allow(dead_code)]
-    pub fn save_cursor() -> &'static str {
-        "\x1b[s"
-    }
-
-    /// Restore cursor position
-    #[allow(dead_code)]
-    pub fn restore_cursor() -> &'static str {
-        "\x1b[u"
     }
 
     /// Enter alternate screen buffer (like vim, less)

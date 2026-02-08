@@ -108,10 +108,6 @@ impl FromIterator<Element> for Children {
     }
 }
 
-/// Text transformation function type
-#[allow(dead_code)]
-pub type TextTransform = Box<dyn Fn(&str) -> String + Send + Sync>;
-
 /// Span and Line types (re-exported from components::text)
 /// We use a simplified version here to avoid circular dependencies
 pub use crate::components::text::Line;
