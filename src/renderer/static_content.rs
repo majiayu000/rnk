@@ -127,7 +127,6 @@ impl StaticRenderer {
 
         new_element
     }
-
 }
 
 #[cfg(test)]

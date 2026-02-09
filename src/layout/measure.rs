@@ -23,7 +23,11 @@ pub fn display_width(text: &str) -> usize {
 pub fn measure_text(text: &str) -> (usize, usize) {
     let lines: Vec<&str> = text.lines().collect();
     let height = lines.len().max(1);
-    let width = lines.iter().map(|line| line.width()).max().unwrap_or(0);
+    let width = lines
+        .iter()
+        .map(|line| measure_text_width(line))
+        .max()
+        .unwrap_or(0);
     (width, height)
 }
 
@@ -206,7 +210,7 @@ pub fn truncate_middle(text: &str, max_width: usize, ellipsis: &str) -> String {
 
 /// Pad text to a specific width
 pub fn pad_text(text: &str, width: usize, align: TextAlign) -> String {
-    let text_width = text.width();
+    let text_width = measure_text_width(text);
 
     if text_width >= width {
         return text.to_string();

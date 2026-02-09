@@ -21,8 +21,8 @@
 //! ```
 
 use crate::cmd::Cmd;
-use crate::hooks::use_effect::use_effect;
 use crate::hooks::use_cmd::use_cmd_once;
+use crate::hooks::use_effect::use_effect;
 use std::time::Duration;
 
 /// Run a callback at regular intervals
@@ -53,10 +53,12 @@ where
             let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
             let cb = callback.clone();
 
-            let handle = std::thread::spawn(move || loop {
-                match stop_rx.recv_timeout(delay) {
-                    Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => cb(),
+            let handle = std::thread::spawn(move || {
+                loop {
+                    match stop_rx.recv_timeout(delay) {
+                        Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => cb(),
+                    }
                 }
             });
 
@@ -87,8 +89,10 @@ where
 mod tests {
     use super::*;
     use crate::hooks::context::{HookContext, with_hooks};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, RwLock};
 
     #[test]
     fn test_use_interval_compiles() {
@@ -120,7 +124,7 @@ mod tests {
 
     #[test]
     fn test_use_interval_runs_repeatedly() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
         let count = Arc::new(AtomicUsize::new(0));
         let count_clone = count.clone();
 
@@ -143,7 +147,7 @@ mod tests {
 
     #[test]
     fn test_use_interval_when_toggle_stops_ticks() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
         let count = Arc::new(AtomicUsize::new(0));
 
         let count_clone = count.clone();

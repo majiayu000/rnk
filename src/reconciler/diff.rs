@@ -161,14 +161,8 @@ pub fn diff_children(
     parent_key: NodeKey,
     patches: &mut Vec<Patch>,
 ) {
-    // Build key maps for efficient lookup
+    // Build key map for efficient lookup
     let old_key_map: std::collections::HashMap<_, _> = old_children
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (key_identity(&c.key), i))
-        .collect();
-
-    let _new_key_map: std::collections::HashMap<_, _> = new_children
         .iter()
         .enumerate()
         .map(|(i, c)| (key_identity(&c.key), i))

@@ -133,7 +133,6 @@ impl TestRenderer {
 
         Ok(())
     }
-
 }
 
 impl Default for TestRenderer {

@@ -28,8 +28,8 @@ use std::time::Duration;
 pub fn check_online() -> bool {
     // Try to connect to common DNS servers
     let targets = [
-        SocketAddr::from(([8, 8, 8, 8], 53)),         // Google DNS
-        SocketAddr::from(([1, 1, 1, 1], 53)),         // Cloudflare DNS
+        SocketAddr::from(([8, 8, 8, 8], 53)),        // Google DNS
+        SocketAddr::from(([1, 1, 1, 1], 53)),        // Cloudflare DNS
         SocketAddr::from(([208, 67, 222, 222], 53)), // OpenDNS
     ];
 

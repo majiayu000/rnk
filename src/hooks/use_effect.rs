@@ -58,7 +58,7 @@ where
         }
         return;
     };
-    let Ok(mut ctx_ref) = ctx.write() else {
+    let Ok(mut ctx_ref) = ctx.try_borrow_mut() else {
         if let Some(cleanup) = effect() {
             cleanup();
         }
@@ -123,7 +123,7 @@ where
         }
         return;
     };
-    let Ok(mut ctx_ref) = ctx.write() else {
+    let Ok(mut ctx_ref) = ctx.try_borrow_mut() else {
         if let Some(cleanup) = effect() {
             cleanup();
         }
@@ -149,7 +149,9 @@ where
 mod tests {
     use super::*;
     use crate::hooks::context::{HookContext, with_hooks};
-    use std::sync::{Arc, Mutex, RwLock};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn test_deps_hash() {
@@ -181,7 +183,7 @@ mod tests {
 
     #[test]
     fn test_use_effect_runs() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
         let effect_ran = Arc::new(Mutex::new(false));
 
         let effect_ran_clone = effect_ran.clone();
@@ -200,7 +202,7 @@ mod tests {
 
     #[test]
     fn test_use_effect_with_deps() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
         let run_count = Arc::new(Mutex::new(0));
 
         // First render with deps = 1
@@ -245,7 +247,7 @@ mod tests {
 
     #[test]
     fn test_use_effect_unit_deps_runs_every_render() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
         let run_count = Arc::new(Mutex::new(0));
 
         let run_count_clone = run_count.clone();
@@ -275,7 +277,7 @@ mod tests {
 
     #[test]
     fn test_use_effect_cleanup() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
         let cleanup_ran = Arc::new(Mutex::new(false));
 
         // First render - effect with cleanup
@@ -305,7 +307,7 @@ mod tests {
 
     #[test]
     fn test_use_effect_does_not_cleanup_when_deps_unchanged() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
         let cleanup_count = Arc::new(Mutex::new(0usize));
 
         let cleanup_count_clone = cleanup_count.clone();
@@ -332,7 +334,7 @@ mod tests {
     #[test]
     fn test_use_effect_once_cleanup_runs_on_drop() {
         let cleanup_ran = Arc::new(Mutex::new(false));
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         let cleanup_ran_clone = cleanup_ran.clone();
         with_hooks(ctx.clone(), || {

@@ -9,6 +9,18 @@ use crate::layout::LayoutEngine;
 use crate::renderer::Output;
 use crate::renderer::output::ClipRegion;
 
+/// Clamp a float to u16 range, treating negative values as 0.
+#[inline]
+fn clamp_to_u16(v: f32) -> u16 {
+    if v <= 0.0 {
+        0
+    } else if v >= u16::MAX as f32 {
+        u16::MAX
+    } else {
+        v as u16
+    }
+}
+
 /// Render an element tree into the provided output buffer.
 pub(crate) fn render_element_tree(
     element: &Element,
@@ -23,10 +35,10 @@ pub(crate) fn render_element_tree(
 
     let layout = layout_engine.get_layout(element.id).unwrap_or_default();
 
-    let x = (offset_x + layout.x) as u16;
-    let y = (offset_y + layout.y) as u16;
-    let width = layout.width as u16;
-    let height = layout.height as u16;
+    let x = clamp_to_u16(offset_x + layout.x);
+    let y = clamp_to_u16(offset_y + layout.y);
+    let width = clamp_to_u16(layout.width);
+    let height = clamp_to_u16(layout.height);
 
     if element.style.background_color.is_some() {
         output.fill_rect(x, y, width, height, ' ', &element.style);

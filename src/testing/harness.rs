@@ -23,7 +23,8 @@
 use crate::core::Element;
 use crate::hooks::context::{HookContext, with_hooks};
 use crate::testing::TestRenderer;
-use std::sync::{Arc, RwLock};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// Test harness for interactive component testing
 pub struct TestHarness<F>
@@ -33,7 +34,7 @@ where
     /// Component function
     component: F,
     /// Hook context for state persistence
-    context: Arc<RwLock<HookContext>>,
+    context: Rc<RefCell<HookContext>>,
     /// Test renderer
     renderer: TestRenderer,
     /// Last rendered output
@@ -51,7 +52,7 @@ where
 
     /// Create a test harness with custom terminal size
     pub fn with_size(component: F, width: u16, height: u16) -> Self {
-        let context = Arc::new(RwLock::new(HookContext::new()));
+        let context = Rc::new(RefCell::new(HookContext::new()));
         let renderer = TestRenderer::new(width, height);
 
         let mut harness = Self {

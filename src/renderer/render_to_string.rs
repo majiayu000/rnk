@@ -158,7 +158,7 @@ impl RenderHelper {
             for line in lines {
                 let line_text: String = line.spans.iter().map(|s| s.content.as_str()).collect();
                 let wrapped = wrap_text(&line_text, available_width as usize);
-                total_lines += wrapped.len();
+                total_lines += wrapped.lines().count().max(1);
             }
             height = height.max(total_lines as u16);
         }
@@ -166,7 +166,7 @@ impl RenderHelper {
         // Check text_content with wrapping
         if let Some(text) = &element.text_content {
             let wrapped = wrap_text(text, available_width as usize);
-            height = height.max(wrapped.len() as u16);
+            height = height.max(wrapped.lines().count().max(1) as u16);
         }
 
         // Add border height
