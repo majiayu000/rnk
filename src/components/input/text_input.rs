@@ -144,7 +144,7 @@ impl TextInputState {
 }
 
 /// Options for TextInput
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct TextInputOptions {
     /// Placeholder text when empty
     pub placeholder: Option<String>,
@@ -164,12 +164,24 @@ pub struct TextInputOptions {
     pub cursor_color: Option<Color>,
 }
 
+impl Default for TextInputOptions {
+    fn default() -> Self {
+        Self {
+            placeholder: None,
+            mask: false,
+            mask_char: '*',
+            max_length: 0,
+            focus: UseFocusOptions::default(),
+            color: None,
+            placeholder_color: None,
+            cursor_color: None,
+        }
+    }
+}
+
 impl TextInputOptions {
     pub fn new() -> Self {
-        Self {
-            mask_char: '*',
-            ..Default::default()
-        }
+        Self::default()
     }
 
     pub fn placeholder(mut self, text: impl Into<String>) -> Self {

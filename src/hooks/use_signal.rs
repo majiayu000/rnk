@@ -144,7 +144,7 @@ pub fn use_signal<T: Clone + Send + Sync + 'static>(init: impl FnOnce() -> T) ->
     let Some(ctx) = current_context() else {
         return Signal::new(init(), None);
     };
-    let Ok(mut ctx_ref) = ctx.write() else {
+    let Ok(mut ctx_ref) = ctx.try_borrow_mut() else {
         return Signal::new(init(), None);
     };
     let render_callback = ctx_ref.get_render_callback();
@@ -154,8 +154,7 @@ pub fn use_signal<T: Clone + Send + Sync + 'static>(init: impl FnOnce() -> T) ->
         signal: Signal::new(
             init_fn
                 .take()
-                .expect("use_signal initializer should be available on first render")(
-            ),
+                .expect("use_signal initializer should be available on first render")(),
             render_callback.clone(),
         ),
     });
@@ -178,6 +177,8 @@ pub fn use_signal<T: Clone + Send + Sync + 'static>(init: impl FnOnce() -> T) ->
 mod tests {
     use super::*;
     use crate::hooks::context::{HookContext, with_hooks};
+    use std::cell::RefCell;
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
@@ -213,7 +214,7 @@ mod tests {
 
     #[test]
     fn test_use_signal_in_context() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         // First render
         let signal1 = with_hooks(ctx.clone(), || use_signal(|| 0i32));
@@ -231,7 +232,7 @@ mod tests {
 
     #[test]
     fn test_use_signal_initializer_runs_once_in_hook_context() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
         let init_calls = Arc::new(AtomicUsize::new(0));
 
         let calls = init_calls.clone();
@@ -255,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_multiple_signals() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         with_hooks(ctx.clone(), || {
             let count = use_signal(|| 0i32);

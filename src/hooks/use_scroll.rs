@@ -498,7 +498,7 @@ pub fn use_scroll() -> ScrollHandle {
             state: Arc::new(RwLock::new(ScrollState::new())),
         };
     };
-    let Ok(mut ctx_ref) = ctx.write() else {
+    let Ok(mut ctx_ref) = ctx.try_borrow_mut() else {
         return ScrollHandle {
             state: Arc::new(RwLock::new(ScrollState::new())),
         };
@@ -517,7 +517,8 @@ pub fn use_scroll() -> ScrollHandle {
 mod tests {
     use super::*;
     use crate::hooks::context::{HookContext, with_hooks};
-    use std::sync::{Arc, RwLock};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     #[test]
     fn test_scroll_state_basic() {
@@ -634,7 +635,7 @@ mod tests {
 
     #[test]
     fn test_use_scroll_preserves_state_in_context() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         let scroll1 = with_hooks(ctx.clone(), use_scroll);
         scroll1.set_content_size(100, 50);

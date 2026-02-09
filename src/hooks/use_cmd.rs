@@ -87,7 +87,7 @@ where
         let _ = f(deps.output());
         return;
     };
-    let Ok(mut ctx_ref) = ctx.write() else {
+    let Ok(mut ctx_ref) = ctx.try_borrow_mut() else {
         let _ = f(deps.output());
         return;
     };
@@ -153,6 +153,8 @@ where
 mod tests {
     use super::*;
     use crate::hooks::context::{HookContext, with_hooks};
+    use std::cell::RefCell;
+    use std::rc::Rc;
     use std::sync::{Arc, RwLock};
 
     #[test]
@@ -215,7 +217,7 @@ mod tests {
 
     #[test]
     fn test_use_cmd_executes_on_first_render() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
         let cmd_executed = Arc::new(RwLock::new(false));
 
         {
@@ -231,12 +233,12 @@ mod tests {
         // The command function was executed
         assert!(*cmd_executed.read().unwrap());
         // And a command was queued
-        assert_eq!(ctx.write().unwrap().take_cmds().len(), 1);
+        assert_eq!(ctx.borrow_mut().take_cmds().len(), 1);
     }
 
     #[test]
     fn test_use_cmd_executes_on_deps_change() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
         let execution_count = Arc::new(RwLock::new(0));
 
         // First render
@@ -251,7 +253,7 @@ mod tests {
         }
 
         assert_eq!(*execution_count.read().unwrap(), 1);
-        ctx.write().unwrap().take_cmds(); // Clear commands
+        ctx.borrow_mut().take_cmds(); // Clear commands
 
         // Second render - same deps
         {
@@ -282,7 +284,7 @@ mod tests {
 
     #[test]
     fn test_use_cmd_receives_correct_value() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
         let received_value = Arc::new(RwLock::new(0));
 
         {
@@ -300,20 +302,20 @@ mod tests {
 
     #[test]
     fn test_use_cmd_queues_command() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         with_hooks(ctx.clone(), || {
             use_cmd((), |_| Cmd::perform(|| async {}));
         });
 
-        let cmds = ctx.write().unwrap().take_cmds();
+        let cmds = ctx.borrow_mut().take_cmds();
         assert_eq!(cmds.len(), 1);
         assert!(matches!(cmds[0], Cmd::Perform { .. }));
     }
 
     #[test]
     fn test_use_cmd_once() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
         let execution_count = Arc::new(RwLock::new(0));
 
         // First render
@@ -328,7 +330,7 @@ mod tests {
         }
 
         assert_eq!(*execution_count.read().unwrap(), 1);
-        ctx.write().unwrap().take_cmds();
+        ctx.borrow_mut().take_cmds();
 
         // Second render - should not execute
         {
@@ -346,7 +348,7 @@ mod tests {
 
     #[test]
     fn test_use_cmd_with_tuple_deps() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
         let execution_count = Arc::new(RwLock::new(0));
 
         // First render
@@ -361,7 +363,7 @@ mod tests {
         }
 
         assert_eq!(*execution_count.read().unwrap(), 1);
-        ctx.write().unwrap().take_cmds();
+        ctx.borrow_mut().take_cmds();
 
         // Same deps
         {
@@ -392,7 +394,7 @@ mod tests {
 
     #[test]
     fn test_use_cmd_multiple_in_same_render() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         with_hooks(ctx.clone(), || {
             use_cmd(1, |_| Cmd::perform(|| async {}));
@@ -400,7 +402,7 @@ mod tests {
             use_cmd(3, |_| Cmd::none());
         });
 
-        let cmds = ctx.write().unwrap().take_cmds();
+        let cmds = ctx.borrow_mut().take_cmds();
         assert_eq!(cmds.len(), 3);
     }
 

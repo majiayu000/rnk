@@ -216,7 +216,7 @@ impl CmdExecutor {
                 runtime.spawn(async move {
                     tokio::time::sleep(duration).await;
                     let timestamp = Instant::now();
-                    let _ = msg_fn(timestamp);
+                    msg_fn(timestamp);
                     if notify_render {
                         render_handle.request();
                     }
@@ -226,7 +226,7 @@ impl CmdExecutor {
             Cmd::Every { duration, msg_fn } => {
                 runtime.spawn(async move {
                     if duration.is_zero() {
-                        let _ = msg_fn(Instant::now());
+                        msg_fn(Instant::now());
                         if notify_render {
                             render_handle.request();
                         }
@@ -258,7 +258,7 @@ impl CmdExecutor {
                     tokio::time::sleep(wait_duration).await;
 
                     let timestamp = Instant::now();
-                    let _ = msg_fn(timestamp);
+                    msg_fn(timestamp);
                     if notify_render {
                         render_handle.request();
                     }
@@ -272,7 +272,7 @@ impl CmdExecutor {
                 queue_exec_request(ExecRequest {
                     config,
                     callback: Box::new(move |result| {
-                        let _ = msg_fn(result);
+                        msg_fn(result);
                     }),
                 });
                 // Note: render notification will happen after the process completes
@@ -398,7 +398,7 @@ impl CmdExecutor {
                 runtime.spawn(async move {
                     tokio::time::sleep(duration).await;
                     let timestamp = Instant::now();
-                    let _ = msg_fn(timestamp);
+                    msg_fn(timestamp);
                     let _ = completion.send(());
                 });
             }
@@ -406,7 +406,7 @@ impl CmdExecutor {
             Cmd::Every { duration, msg_fn } => {
                 runtime.spawn(async move {
                     if duration.is_zero() {
-                        let _ = msg_fn(Instant::now());
+                        msg_fn(Instant::now());
                         let _ = completion.send(());
                         return;
                     }
@@ -429,7 +429,7 @@ impl CmdExecutor {
                     tokio::time::sleep(wait_duration).await;
 
                     let timestamp = Instant::now();
-                    let _ = msg_fn(timestamp);
+                    msg_fn(timestamp);
                     let _ = completion.send(());
                 });
             }
@@ -438,7 +438,7 @@ impl CmdExecutor {
                 // For execute_with_completion, we execute synchronously
                 // since we need to wait for the result anyway
                 let result = execute_process_sync(&config);
-                let _ = msg_fn(result);
+                msg_fn(result);
                 let _ = completion.send(());
             }
 

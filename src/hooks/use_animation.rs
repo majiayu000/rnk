@@ -226,16 +226,14 @@ pub fn use_animation(init: impl FnOnce() -> Animation) -> AnimationHandle {
     let Some(ctx) = current_context() else {
         return new_animation_handle(animation, None);
     };
-    let Ok(mut ctx_ref) = ctx.write() else {
+    let Ok(mut ctx_ref) = ctx.try_borrow_mut() else {
         return new_animation_handle(animation, None);
     };
     let render_callback = ctx_ref.get_render_callback();
     let animation_for_hook = animation.clone();
 
-    let storage = ctx_ref.use_hook(|| {
-        AnimationStorage {
-            handle: new_animation_handle(animation_for_hook, render_callback.clone()),
-        }
+    let storage = ctx_ref.use_hook(|| AnimationStorage {
+        handle: new_animation_handle(animation_for_hook, render_callback.clone()),
     });
 
     storage
@@ -271,6 +269,8 @@ mod tests {
     use super::*;
     use crate::animation::{DurationExt, Easing};
     use crate::hooks::context::{HookContext, with_hooks};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     #[test]
     fn test_animation_handle_basic() {
@@ -295,7 +295,7 @@ mod tests {
 
     #[test]
     fn test_use_animation_in_context() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         let handle = with_hooks(ctx.clone(), || {
             use_animation(|| Animation::new().from(0.0).to(100.0).duration(100.ms()))
@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn test_animation_persistence() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         // First render - create animation
         let handle1 = with_hooks(ctx.clone(), || {

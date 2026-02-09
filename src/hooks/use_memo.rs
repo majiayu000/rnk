@@ -58,7 +58,7 @@ where
     let Some(ctx) = current_context() else {
         return compute();
     };
-    let Ok(mut ctx_ref) = ctx.write() else {
+    let Ok(mut ctx_ref) = ctx.try_borrow_mut() else {
         return compute();
     };
 
@@ -164,7 +164,7 @@ where
     let Some(ctx) = current_context() else {
         return MemoizedCallback::new(callback);
     };
-    let Ok(mut ctx_ref) = ctx.write() else {
+    let Ok(mut ctx_ref) = ctx.try_borrow_mut() else {
         return MemoizedCallback::new(callback);
     };
 
@@ -208,11 +208,13 @@ where
 mod tests {
     use super::*;
     use crate::hooks::context::{HookContext, with_hooks};
+    use std::cell::RefCell;
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn test_use_memo_basic() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         // First render
         let result = with_hooks(ctx.clone(), || use_memo(|| 42, "deps1"));
@@ -227,7 +229,7 @@ mod tests {
 
     #[test]
     fn test_use_memo_with_tuple_deps() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         let result = with_hooks(ctx.clone(), || use_memo(|| vec![1, 2, 3], (1, "a", true)));
 
@@ -241,7 +243,7 @@ mod tests {
 
     #[test]
     fn test_use_memo_recomputes_when_deps_change() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
         let compute_calls = Arc::new(AtomicUsize::new(0));
 
         let calls = compute_calls.clone();
@@ -285,7 +287,7 @@ mod tests {
     #[test]
     fn test_use_callback_basic() {
         // Use a fresh context for this test
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         // Define a reusable callback type
         let multiply_by_2 = |x: i32| x * 2;
@@ -304,7 +306,7 @@ mod tests {
     #[test]
     fn test_use_callback_deps_change() {
         // Use a fresh context for this test
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         // Use function pointers which have the same type
         fn multiply(x: i32) -> i32 {
@@ -324,7 +326,7 @@ mod tests {
 
     #[test]
     fn test_use_callback_with_closure() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
         let multiplier = 10;
 
         let cb = with_hooks(ctx.clone(), || {
@@ -338,7 +340,7 @@ mod tests {
     fn test_use_callback_same_fn_type() {
         // This test demonstrates that use_callback works correctly
         // when the same function type is used across renders
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         // Use function pointers which have the same type
         fn double(x: i32) -> i32 {

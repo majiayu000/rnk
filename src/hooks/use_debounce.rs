@@ -159,7 +159,8 @@ where
 mod tests {
     use super::*;
     use crate::hooks::context::{HookContext, with_hooks};
-    use std::sync::{Arc, RwLock};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     #[test]
     fn test_use_debounce_compiles() {
@@ -187,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_use_debounce_updates_after_delay() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         let first = with_hooks(ctx.clone(), || {
             use_debounce("a".to_string(), Duration::from_millis(30))
@@ -209,7 +210,7 @@ mod tests {
 
     #[test]
     fn test_use_debounce_respects_updated_delay_for_pending_value() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         let first = with_hooks(ctx.clone(), || {
             use_debounce("a".to_string(), Duration::from_millis(100))

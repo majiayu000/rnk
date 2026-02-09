@@ -139,9 +139,7 @@ impl LayoutEngine {
             _ => None,
         };
 
-        let context = NodeContext {
-            text_content,
-        };
+        let context = NodeContext { text_content };
 
         // Create node
         let node_id = if vnode.is_text() {
@@ -308,18 +306,20 @@ impl LayoutEngine {
         }
 
         if let Some(&parent_id) = self.vnode_map.get(&parent_key) {
-            let mut children: Vec<_> = self.taffy.children(parent_id).unwrap_or_default();
+            let old_children: Vec<_> = self.taffy.children(parent_id).unwrap_or_default();
 
-            // Apply moves
+            // Build the new order by placing each old child at its target position.
+            // `moves` contains (from, to) pairs where `from` is the index in the
+            // old array and `to` is the desired index in the new array.
+            let mut new_children = old_children.clone();
             for &(from, to) in moves {
-                if from < children.len() && to < children.len() {
-                    let child = children.remove(from);
-                    children.insert(to, child);
+                if from < old_children.len() && to < new_children.len() {
+                    new_children[to] = old_children[from];
                 }
             }
 
             // Set new children order
-            if self.taffy.set_children(parent_id, &children).is_ok() {
+            if self.taffy.set_children(parent_id, &new_children).is_ok() {
                 return true;
             }
         }

@@ -1,6 +1,8 @@
 //! Hook context management
 
 use std::any::Any;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::{Arc, RwLock};
 
 // Import Cmd type for command queue
@@ -204,42 +206,55 @@ impl Drop for HookContext {
 
 // Thread-local storage for the current hook context
 thread_local! {
-    static CURRENT_CONTEXT: std::cell::RefCell<Option<Arc<RwLock<HookContext>>>> = const { std::cell::RefCell::new(None) };
+    static CURRENT_CONTEXT: RefCell<Option<Rc<RefCell<HookContext>>>> = const { RefCell::new(None) };
 }
 
 /// Get the current hook context
-pub fn current_context() -> Option<Arc<RwLock<HookContext>>> {
+pub fn current_context() -> Option<Rc<RefCell<HookContext>>> {
     CURRENT_CONTEXT.with(|ctx| ctx.borrow().clone())
 }
 
 /// Run a function with a hook context
-pub fn with_hooks<F, R>(ctx: Arc<RwLock<HookContext>>, f: F) -> R
+pub fn with_hooks<F, R>(ctx: Rc<RefCell<HookContext>>, f: F) -> R
 where
     F: FnOnce() -> R,
 {
+    // Save the previous context so nested calls work correctly
+    let prev = current_context();
+
     // Set the current context
     CURRENT_CONTEXT.with(|current| {
         *current.borrow_mut() = Some(ctx.clone());
     });
 
     // Begin render
-    if let Ok(mut guard) = ctx.write() {
-        guard.begin_render();
+    ctx.borrow_mut().begin_render();
+
+    // Use a guard to ensure context is restored on panic
+    struct HooksGuard {
+        prev: Option<Rc<RefCell<HookContext>>>,
     }
+    impl Drop for HooksGuard {
+        fn drop(&mut self) {
+            CURRENT_CONTEXT.with(|current| {
+                *current.borrow_mut() = self.prev.take();
+            });
+        }
+    }
+    let guard = HooksGuard { prev };
 
     // Run the function
     let result = f();
 
     // End render and run effects
-    if let Ok(mut guard) = ctx.write() {
-        guard.end_render();
-        guard.run_effects();
+    {
+        let mut ctx_ref = ctx.borrow_mut();
+        ctx_ref.end_render();
+        ctx_ref.run_effects();
     }
 
-    // Clear the current context
-    CURRENT_CONTEXT.with(|current| {
-        *current.borrow_mut() = None;
-    });
+    // Restore the previous context
+    drop(guard);
 
     result
 }
@@ -288,11 +303,11 @@ mod tests {
 
     #[test]
     fn test_with_hooks() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         let result = with_hooks(ctx.clone(), || {
             let ctx = current_context().unwrap();
-            let hook = ctx.write().unwrap().use_hook(|| 42i32);
+            let hook = ctx.borrow_mut().use_hook(|| 42i32);
             hook.get::<i32>().unwrap()
         });
 
@@ -302,12 +317,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "Hook order violation")]
     fn test_hook_order_violation() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         // First render - establish hook order
         with_hooks(ctx.clone(), || {
             let ctx = current_context().unwrap();
-            let mut guard = ctx.write().unwrap();
+            let mut guard = ctx.borrow_mut();
             let _ = guard.use_hook(|| 42i32);
             let _ = guard.use_hook(|| "hello".to_string());
         });
@@ -315,7 +330,7 @@ mod tests {
         // Second render - violate hook order by using different types
         with_hooks(ctx.clone(), || {
             let ctx = current_context().unwrap();
-            let mut guard = ctx.write().unwrap();
+            let mut guard = ctx.borrow_mut();
             // This should panic because we're using String where i32 was expected
             let _ = guard.use_hook(|| "wrong type".to_string());
         });

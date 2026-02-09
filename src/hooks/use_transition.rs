@@ -310,7 +310,7 @@ pub fn use_transition_with_easing(
     let Some(ctx) = current_context() else {
         return new_transition_handle(initial, duration, easing, None);
     };
-    let Ok(mut ctx_ref) = ctx.write() else {
+    let Ok(mut ctx_ref) = ctx.try_borrow_mut() else {
         return new_transition_handle(initial, duration, easing, None);
     };
 
@@ -331,6 +331,8 @@ mod tests {
     use super::*;
     use crate::animation::DurationExt;
     use crate::hooks::context::{HookContext, with_hooks};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     #[test]
     fn test_transition_handle_basic() {
@@ -385,7 +387,7 @@ mod tests {
 
     #[test]
     fn test_use_transition_in_context() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         let handle = with_hooks(ctx.clone(), || use_transition(0.0, 100.ms()));
 
@@ -396,7 +398,7 @@ mod tests {
 
     #[test]
     fn test_transition_persistence() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
         // First render
         let handle1 = with_hooks(ctx.clone(), || use_transition(0.0, 100.ms()));

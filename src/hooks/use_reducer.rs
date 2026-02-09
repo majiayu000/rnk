@@ -119,8 +119,9 @@ where
 mod tests {
     use super::*;
     use crate::hooks::context::{HookContext, with_hooks};
+    use std::cell::RefCell;
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, RwLock};
 
     #[derive(Clone, PartialEq, Debug)]
     struct TestState {
@@ -143,10 +144,11 @@ mod tests {
 
     #[test]
     fn test_use_reducer_updates_state() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
 
-        let (state, dispatch) =
-            with_hooks(ctx.clone(), || use_reducer(TestState { value: 0 }, test_reducer));
+        let (state, dispatch) = with_hooks(ctx.clone(), || {
+            use_reducer(TestState { value: 0 }, test_reducer)
+        });
         assert_eq!(state.value, 0);
 
         dispatch.dispatch(TestAction::Add(3));
@@ -159,7 +161,7 @@ mod tests {
 
     #[test]
     fn test_use_reducer_lazy_initializes_once_and_updates_state() {
-        let ctx = Arc::new(RwLock::new(HookContext::new()));
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
         let init_calls = Arc::new(AtomicUsize::new(0));
 
         let calls = init_calls.clone();

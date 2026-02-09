@@ -68,8 +68,11 @@ impl Chip {
             (Color::White, Color::Ansi256(240))
         };
 
-        let mut builder = CapsuleElementBuilder::new(self.label, fg, bg)
-            .prefix(if self.selected { "●" } else { "○" });
+        let mut builder = CapsuleElementBuilder::new(self.label, fg, bg).prefix(if self.selected {
+            "●"
+        } else {
+            "○"
+        });
 
         if let Some(icon) = self.icon {
             builder = builder.icon(icon);

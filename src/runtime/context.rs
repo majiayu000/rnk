@@ -20,8 +20,8 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
 
 use crate::cmd::Cmd;
 use crate::hooks::context::{HookContext, HookStorage};
@@ -42,7 +42,7 @@ pub type MouseHandlerFn = Rc<dyn Fn(&Mouse)>;
 /// It replaces the previous scattered thread-local and global state.
 pub struct RuntimeContext {
     /// Hook state for the component tree
-    hook_context: Arc<RwLock<HookContext>>,
+    hook_context: Rc<RefCell<HookContext>>,
 
     /// Input handlers registered via use_input
     input_handlers: Vec<InputHandlerFn>,
@@ -76,7 +76,7 @@ impl RuntimeContext {
     /// Create a new runtime context
     pub fn new() -> Self {
         Self {
-            hook_context: Arc::new(RwLock::new(HookContext::new())),
+            hook_context: Rc::new(RefCell::new(HookContext::new())),
             input_handlers: Vec::new(),
             mouse_handlers: Vec::new(),
             mouse_enabled: false,
@@ -92,7 +92,7 @@ impl RuntimeContext {
     /// Create a runtime context with app control
     pub fn with_app_control(exit_flag: Arc<AtomicBool>, render_handle: RenderHandle) -> Self {
         Self {
-            hook_context: Arc::new(RwLock::new(HookContext::new())),
+            hook_context: Rc::new(RefCell::new(HookContext::new())),
             input_handlers: Vec::new(),
             mouse_handlers: Vec::new(),
             mouse_enabled: false,
@@ -117,29 +117,17 @@ impl RuntimeContext {
     /// Begin a render cycle
     pub fn begin_render(&mut self) {
         self.prepare_render();
-        let mut hook_ctx = self
-            .hook_context
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        hook_ctx.begin_render();
+        self.hook_context.borrow_mut().begin_render();
     }
 
     /// End a render cycle
     pub fn end_render(&mut self) {
-        let mut hook_ctx = self
-            .hook_context
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        hook_ctx.end_render();
+        self.hook_context.borrow_mut().end_render();
     }
 
     /// Run effects after render
     pub fn run_effects(&mut self) {
-        let mut hook_ctx = self
-            .hook_context
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        hook_ctx.run_effects();
+        self.hook_context.borrow_mut().run_effects();
     }
 
     /// Get or create a hook at the current index
@@ -147,54 +135,34 @@ impl RuntimeContext {
         &mut self,
         init: F,
     ) -> HookStorage {
-        let mut hook_ctx = self
-            .hook_context
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        hook_ctx.use_hook(init)
+        self.hook_context.borrow_mut().use_hook(init)
     }
 
     /// Queue a command to execute after render
     pub fn queue_cmd(&mut self, cmd: Cmd) {
-        let mut hook_ctx = self
-            .hook_context
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        hook_ctx.queue_cmd(cmd);
+        self.hook_context.borrow_mut().queue_cmd(cmd);
     }
 
     /// Take all queued commands
     pub fn take_cmds(&mut self) -> Vec<Cmd> {
-        let mut hook_ctx = self
-            .hook_context
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        hook_ctx.take_cmds()
+        self.hook_context.borrow_mut().take_cmds()
     }
 
     /// Set the render callback for hooks
     pub fn set_render_callback(&mut self, callback: crate::hooks::context::RenderCallback) {
-        let mut hook_ctx = self
-            .hook_context
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        hook_ctx.set_render_callback(callback);
+        self.hook_context.borrow_mut().set_render_callback(callback);
     }
 
     /// Request a re-render
     pub fn request_render(&self) {
-        let hook_ctx = self
-            .hook_context
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        hook_ctx.request_render();
+        self.hook_context.borrow().request_render();
         if let Some(handle) = &self.render_handle {
             handle.request_render();
         }
     }
 
     /// Get the shared hook context used by `with_hooks`.
-    pub fn hook_context(&self) -> Arc<RwLock<HookContext>> {
+    pub fn hook_context(&self) -> Rc<RefCell<HookContext>> {
         self.hook_context.clone()
     }
 
@@ -377,13 +345,26 @@ pub fn with_runtime<F, R>(ctx: Rc<RefCell<RuntimeContext>>, f: F) -> R
 where
     F: FnOnce() -> R,
 {
+    // Save the previous context so nested calls work correctly
+    let prev = current_runtime();
+
     // Set the current context
     set_current_runtime(Some(ctx.clone()));
 
     // Begin render
     ctx.borrow_mut().begin_render();
 
-    // Run the function
+    // Run the function (use a guard to ensure cleanup on panic)
+    struct RuntimeGuard {
+        prev: Option<Rc<RefCell<RuntimeContext>>>,
+    }
+    impl Drop for RuntimeGuard {
+        fn drop(&mut self) {
+            set_current_runtime(self.prev.take());
+        }
+    }
+    let guard = RuntimeGuard { prev };
+
     let result = f();
 
     // End render
@@ -392,8 +373,9 @@ where
     // Run effects
     ctx.borrow_mut().run_effects();
 
-    // Clear the current context
-    set_current_runtime(None);
+    // Restore the previous context (guard handles this on drop, but
+    // we do it explicitly here so the guard doesn't double-restore)
+    drop(guard);
 
     result
 }
