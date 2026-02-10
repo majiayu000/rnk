@@ -2,7 +2,7 @@
 
 use crate::core::{Element, ElementId, ElementType, NodeKey, Props, VNode, VNodeType};
 use crate::layout::measure::measure_text_width;
-use crate::reconciler::{Patch, PatchType};
+use crate::reconciler::Patch;
 use std::collections::HashMap;
 use taffy::{AvailableSpace, NodeId, TaffyTree};
 
@@ -190,35 +190,29 @@ impl LayoutEngine {
         let mut needs_recompute = false;
 
         for patch in patches {
-            match patch.patch_type {
-                PatchType::Create => {
-                    if let (Some(new_node), Some(parent_key)) = (&patch.new_node, patch.parent) {
-                        if self.create_vnode(new_node, parent_key).is_some() {
-                            needs_recompute = true;
-                        }
-                    }
-                }
-                PatchType::Update => {
-                    if let Some(new_props) = &patch.new_props {
-                        if self.update_node_props(patch.key, new_props) {
-                            needs_recompute = true;
-                        }
-                    }
-                }
-                PatchType::Remove => {
-                    if self.remove_node(patch.key) {
+            match patch {
+                Patch::Create { node, parent, .. } => {
+                    if self.create_vnode(node, *parent).is_some() {
                         needs_recompute = true;
                     }
                 }
-                PatchType::Replace => {
-                    if let Some(new_node) = &patch.new_node {
-                        if self.replace_node(patch.key, new_node) {
-                            needs_recompute = true;
-                        }
+                Patch::Update { key, new_props, .. } => {
+                    if self.update_node_props(*key, new_props) {
+                        needs_recompute = true;
                     }
                 }
-                PatchType::Reorder => {
-                    if self.reorder_children(patch.key, &patch.moves) {
+                Patch::Remove { key } => {
+                    if self.remove_node(*key) {
+                        needs_recompute = true;
+                    }
+                }
+                Patch::Replace { key, node, .. } => {
+                    if self.replace_node(*key, node) {
+                        needs_recompute = true;
+                    }
+                }
+                Patch::Reorder { parent, moves } => {
+                    if self.reorder_children(*parent, moves) {
                         needs_recompute = true;
                     }
                 }

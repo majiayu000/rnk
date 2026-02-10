@@ -291,13 +291,13 @@ where
     }
 
     /// Handle terminal control commands
-    fn handle_terminal_cmd(&mut self, cmd: crate::cmd::Cmd) -> std::io::Result<()> {
-        use crate::cmd::Cmd;
+    fn handle_terminal_cmd(&mut self, cmd: crate::cmd::TerminalCmd) -> std::io::Result<()> {
+        use crate::cmd::TerminalCmd;
         use crossterm::{cursor, execute, terminal as ct};
         use std::io::stdout;
 
         match cmd {
-            Cmd::ClearScreen => {
+            TerminalCmd::ClearScreen => {
                 if self.terminal.is_alt_screen() {
                     execute!(
                         stdout(),
@@ -308,50 +308,48 @@ where
                     self.terminal.clear()?;
                 }
             }
-            Cmd::HideCursor => {
+            TerminalCmd::HideCursor => {
                 execute!(stdout(), cursor::Hide)?;
             }
-            Cmd::ShowCursor => {
+            TerminalCmd::ShowCursor => {
                 execute!(stdout(), cursor::Show)?;
             }
-            Cmd::SetWindowTitle(title) => {
+            TerminalCmd::SetWindowTitle(title) => {
                 execute!(stdout(), ct::SetTitle(&title))?;
             }
-            Cmd::WindowSize => {
+            TerminalCmd::WindowSize => {
                 // This triggers a resize check on next render
                 self.last_width = 0;
                 self.last_height = 0;
             }
-            Cmd::EnterAltScreen => {
+            TerminalCmd::EnterAltScreen => {
                 if !self.terminal.is_alt_screen() {
                     self.terminal.switch_to_alt_screen()?;
                     self.runtime.set_alt_screen_state(true);
                     self.terminal.repaint();
                 }
             }
-            Cmd::ExitAltScreen => {
+            TerminalCmd::ExitAltScreen => {
                 if self.terminal.is_alt_screen() {
                     self.terminal.switch_to_inline()?;
                     self.runtime.set_alt_screen_state(false);
                     self.terminal.repaint();
                 }
             }
-            Cmd::EnableMouse => {
+            TerminalCmd::EnableMouse => {
                 crate::hooks::use_mouse::set_mouse_enabled(true);
                 execute!(stdout(), crossterm::event::EnableMouseCapture)?;
             }
-            Cmd::DisableMouse => {
+            TerminalCmd::DisableMouse => {
                 crate::hooks::use_mouse::set_mouse_enabled(false);
                 execute!(stdout(), crossterm::event::DisableMouseCapture)?;
             }
-            Cmd::EnableBracketedPaste => {
+            TerminalCmd::EnableBracketedPaste => {
                 execute!(stdout(), crossterm::event::EnableBracketedPaste)?;
             }
-            Cmd::DisableBracketedPaste => {
+            TerminalCmd::DisableBracketedPaste => {
                 execute!(stdout(), crossterm::event::DisableBracketedPaste)?;
             }
-            // Other Cmd variants are handled by the executor
-            _ => {}
         }
         Ok(())
     }

@@ -5,104 +5,74 @@
 
 use crate::core::{NodeKey, Props, VNode, VNodeType};
 
-/// Type of patch operation
-#[derive(Debug, Clone, PartialEq)]
-pub enum PatchType {
-    /// Create a new node
-    Create,
-    /// Update an existing node's props
-    Update,
-    /// Remove a node
-    Remove,
-    /// Replace a node entirely (different type)
-    Replace,
-    /// Reorder children
-    Reorder,
-}
-
 /// A patch representing a change to apply to the tree
 #[derive(Debug, Clone)]
-pub struct Patch {
-    /// Type of patch operation
-    pub patch_type: PatchType,
-    /// Target node key
-    pub key: NodeKey,
-    /// Parent node key (for Create operations)
-    pub parent: Option<NodeKey>,
-    /// Old props (for Update operations)
-    pub old_props: Option<Props>,
-    /// New props (for Create/Update operations)
-    pub new_props: Option<Props>,
-    /// New node (for Create/Replace operations)
-    pub new_node: Option<VNode>,
-    /// Child reorder moves: (from_index, to_index)
-    pub moves: Vec<(usize, usize)>,
+pub enum Patch {
+    /// Create a new node under a parent
+    Create {
+        key: NodeKey,
+        parent: NodeKey,
+        props: Props,
+        node: VNode,
+    },
+    /// Update an existing node's props
+    Update {
+        key: NodeKey,
+        old_props: Props,
+        new_props: Props,
+    },
+    /// Remove a node
+    Remove { key: NodeKey },
+    /// Replace a node entirely (different type)
+    Replace {
+        key: NodeKey,
+        new_props: Props,
+        node: VNode,
+    },
+    /// Reorder children of a parent node
+    Reorder {
+        parent: NodeKey,
+        moves: Vec<(usize, usize)>,
+    },
 }
 
 impl Patch {
     /// Create a "create node" patch
     pub fn create(node: VNode, parent: NodeKey) -> Self {
-        Self {
-            patch_type: PatchType::Create,
+        Patch::Create {
             key: node.key,
-            parent: Some(parent),
-            old_props: None,
-            new_props: Some(node.props.clone()),
-            new_node: Some(node),
-            moves: Vec::new(),
+            parent,
+            props: node.props.clone(),
+            node,
         }
     }
 
     /// Create an "update props" patch
     pub fn update(key: NodeKey, old_props: Props, new_props: Props) -> Self {
-        Self {
-            patch_type: PatchType::Update,
+        Patch::Update {
             key,
-            parent: None,
-            old_props: Some(old_props),
-            new_props: Some(new_props),
-            new_node: None,
-            moves: Vec::new(),
+            old_props,
+            new_props,
         }
     }
 
     /// Create a "remove node" patch
     pub fn remove(key: NodeKey) -> Self {
-        Self {
-            patch_type: PatchType::Remove,
-            key,
-            parent: None,
-            old_props: None,
-            new_props: None,
-            new_node: None,
-            moves: Vec::new(),
-        }
+        Patch::Remove { key }
     }
 
     /// Create a "replace node" patch
     pub fn replace(old_key: NodeKey, new_node: VNode) -> Self {
-        Self {
-            patch_type: PatchType::Replace,
+        Patch::Replace {
             key: old_key,
-            parent: None,
-            old_props: None,
-            new_props: Some(new_node.props.clone()),
-            new_node: Some(new_node),
-            moves: Vec::new(),
+            new_props: new_node.props.clone(),
+            node: new_node,
         }
     }
 
     /// Create a "reorder children" patch
     pub fn reorder(parent: NodeKey, moves: Vec<(usize, usize)>) -> Self {
-        Self {
-            patch_type: PatchType::Reorder,
-            key: parent,
-            parent: None,
-            old_props: None,
-            new_props: None,
-            new_node: None,
-            moves,
-        }
+        Patch::Reorder { parent, moves }
     }
 }
 
@@ -271,7 +241,7 @@ mod tests {
             patches.is_empty()
                 || patches
                     .iter()
-                    .all(|p| p.patch_type == PatchType::Update && p.old_props == p.new_props)
+                    .all(|p| matches!(p, Patch::Update { old_props, new_props, .. } if old_props == new_props))
         );
     }
 
@@ -283,7 +253,7 @@ mod tests {
 
         let patches = diff(&old, &new);
         assert_eq!(patches.len(), 1);
-        assert_eq!(patches[0].patch_type, PatchType::Replace);
+        assert!(matches!(patches[0], Patch::Replace { .. }));
     }
 
     #[test]
@@ -300,7 +270,7 @@ mod tests {
 
         let patches = diff(&old, &new);
         assert_eq!(patches.len(), 1);
-        assert_eq!(patches[0].patch_type, PatchType::Update);
+        assert!(matches!(patches[0], Patch::Update { .. }));
     }
 
     #[test]
@@ -311,7 +281,7 @@ mod tests {
         new = new.child(VNode::text("New child"));
 
         let patches = diff(&old, &new);
-        assert!(patches.iter().any(|p| p.patch_type == PatchType::Create));
+        assert!(patches.iter().any(|p| matches!(p, Patch::Create { .. })));
     }
 
     #[test]
@@ -321,7 +291,7 @@ mod tests {
         new.key = old.key;
 
         let patches = diff(&old, &new);
-        assert!(patches.iter().any(|p| p.patch_type == PatchType::Remove));
+        assert!(patches.iter().any(|p| matches!(p, Patch::Remove { .. })));
     }
 
     #[test]
@@ -331,7 +301,7 @@ mod tests {
 
         let patches = diff(&old, &new);
         assert_eq!(patches.len(), 1);
-        assert_eq!(patches[0].patch_type, PatchType::Replace);
+        assert!(matches!(patches[0], Patch::Replace { .. }));
     }
 
     #[test]
@@ -350,8 +320,8 @@ mod tests {
 
         let patches = diff(&old, &new);
         // Should detect reordering
-        let has_reorder = patches.iter().any(|p| p.patch_type == PatchType::Reorder);
-        let has_creates = patches.iter().any(|p| p.patch_type == PatchType::Create);
+        let has_reorder = patches.iter().any(|p| matches!(p, Patch::Reorder { .. }));
+        let has_creates = patches.iter().any(|p| matches!(p, Patch::Create { .. }));
         // Either reorder or create patches should exist
         assert!(has_reorder || has_creates);
     }
@@ -362,9 +332,7 @@ mod tests {
         let parent = NodeKey::root();
 
         let patch = Patch::create(node.clone(), parent);
-        assert_eq!(patch.patch_type, PatchType::Create);
-        assert_eq!(patch.parent, Some(parent));
-        assert!(patch.new_node.is_some());
+        assert!(matches!(patch, Patch::Create { parent: p, .. } if p == parent));
     }
 
     #[test]

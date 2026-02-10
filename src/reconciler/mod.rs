@@ -6,5 +6,5 @@
 mod diff;
 mod registry;
 
-pub use diff::{Patch, PatchType, diff, diff_children};
+pub use diff::{Patch, diff, diff_children};
 pub use registry::{ComponentInstance, ComponentRegistry};

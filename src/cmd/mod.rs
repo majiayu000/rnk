@@ -20,7 +20,7 @@ mod exec;
 mod executor;
 mod tasks;
 
-pub use core::{AppMsg, BoxedMsg, Cmd};
+pub use core::{AppMsg, BoxedMsg, Cmd, TerminalCmd};
 pub use exec::{ExecConfig, ExecResult};
 pub use executor::{CmdExecutor, RenderHandle, run_exec_process};
 pub use tasks::{HttpRequest, HttpResponse, ProcessOutput};
