@@ -63,6 +63,36 @@ impl std::fmt::Debug for BoxedMsg {
     }
 }
 
+/// Terminal control commands.
+///
+/// These are simple, stateless commands that control terminal behavior.
+/// They don't carry message types and are handled directly by the renderer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalCmd {
+    /// Clear the terminal screen.
+    ClearScreen,
+    /// Hide the terminal cursor.
+    HideCursor,
+    /// Show the terminal cursor.
+    ShowCursor,
+    /// Set the terminal window title.
+    SetWindowTitle(String),
+    /// Request the current window size.
+    WindowSize,
+    /// Enter alternate screen buffer.
+    EnterAltScreen,
+    /// Exit alternate screen buffer.
+    ExitAltScreen,
+    /// Enable mouse support.
+    EnableMouse,
+    /// Disable mouse support.
+    DisableMouse,
+    /// Enable bracketed paste mode.
+    EnableBracketedPaste,
+    /// Disable bracketed paste mode.
+    DisableBracketedPaste,
+}
+
 /// Unified command type.
 ///
 /// - `Cmd<()>`: side-effect commands used by runtime/hooks.
@@ -111,38 +141,8 @@ where
         msg_fn: Box<dyn FnOnce(ExecResult) -> M + Send + 'static>,
     },
 
-    /// Clear the terminal screen.
-    ClearScreen,
-
-    /// Hide the terminal cursor.
-    HideCursor,
-
-    /// Show the terminal cursor.
-    ShowCursor,
-
-    /// Set the terminal window title.
-    SetWindowTitle(String),
-
-    /// Request the current window size.
-    WindowSize,
-
-    /// Enter alternate screen buffer.
-    EnterAltScreen,
-
-    /// Exit alternate screen buffer.
-    ExitAltScreen,
-
-    /// Enable mouse support.
-    EnableMouse,
-
-    /// Disable mouse support.
-    DisableMouse,
-
-    /// Enable bracketed paste mode.
-    EnableBracketedPaste,
-
-    /// Disable bracketed paste mode.
-    DisableBracketedPaste,
+    /// Terminal control command.
+    Terminal(TerminalCmd),
 }
 
 impl<M> Cmd<M>
@@ -245,57 +245,57 @@ where
 
     /// Clear the terminal screen.
     pub fn clear_screen() -> Self {
-        Cmd::ClearScreen
+        Cmd::Terminal(TerminalCmd::ClearScreen)
     }
 
     /// Hide the terminal cursor.
     pub fn hide_cursor() -> Self {
-        Cmd::HideCursor
+        Cmd::Terminal(TerminalCmd::HideCursor)
     }
 
     /// Show the terminal cursor.
     pub fn show_cursor() -> Self {
-        Cmd::ShowCursor
+        Cmd::Terminal(TerminalCmd::ShowCursor)
     }
 
     /// Set the terminal window title.
     pub fn set_window_title(title: impl Into<String>) -> Self {
-        Cmd::SetWindowTitle(title.into())
+        Cmd::Terminal(TerminalCmd::SetWindowTitle(title.into()))
     }
 
     /// Request the current window size.
     pub fn window_size() -> Self {
-        Cmd::WindowSize
+        Cmd::Terminal(TerminalCmd::WindowSize)
     }
 
     /// Enter alternate screen buffer.
     pub fn enter_alt_screen() -> Self {
-        Cmd::EnterAltScreen
+        Cmd::Terminal(TerminalCmd::EnterAltScreen)
     }
 
     /// Exit alternate screen buffer.
     pub fn exit_alt_screen() -> Self {
-        Cmd::ExitAltScreen
+        Cmd::Terminal(TerminalCmd::ExitAltScreen)
     }
 
     /// Enable mouse support.
     pub fn enable_mouse() -> Self {
-        Cmd::EnableMouse
+        Cmd::Terminal(TerminalCmd::EnableMouse)
     }
 
     /// Disable mouse support.
     pub fn disable_mouse() -> Self {
-        Cmd::DisableMouse
+        Cmd::Terminal(TerminalCmd::DisableMouse)
     }
 
     /// Enable bracketed paste mode.
     pub fn enable_bracketed_paste() -> Self {
-        Cmd::EnableBracketedPaste
+        Cmd::Terminal(TerminalCmd::EnableBracketedPaste)
     }
 
     /// Disable bracketed paste mode.
     pub fn disable_bracketed_paste() -> Self {
-        Cmd::DisableBracketedPaste
+        Cmd::Terminal(TerminalCmd::DisableBracketedPaste)
     }
 
     /// Chain this command with another command.
@@ -352,17 +352,7 @@ where
                 config,
                 msg_fn: Box::new(move |r| f(msg_fn(r))),
             },
-            Cmd::ClearScreen => Cmd::ClearScreen,
-            Cmd::HideCursor => Cmd::HideCursor,
-            Cmd::ShowCursor => Cmd::ShowCursor,
-            Cmd::SetWindowTitle(title) => Cmd::SetWindowTitle(title),
-            Cmd::WindowSize => Cmd::WindowSize,
-            Cmd::EnterAltScreen => Cmd::EnterAltScreen,
-            Cmd::ExitAltScreen => Cmd::ExitAltScreen,
-            Cmd::EnableMouse => Cmd::EnableMouse,
-            Cmd::DisableMouse => Cmd::DisableMouse,
-            Cmd::EnableBracketedPaste => Cmd::EnableBracketedPaste,
-            Cmd::DisableBracketedPaste => Cmd::DisableBracketedPaste,
+            Cmd::Terminal(tc) => Cmd::Terminal(tc),
         }
     }
 }
@@ -393,19 +383,7 @@ where
             Cmd::Exec { config, .. } => {
                 f.debug_struct("Cmd::Exec").field("config", config).finish()
             }
-            Cmd::ClearScreen => write!(f, "Cmd::ClearScreen"),
-            Cmd::HideCursor => write!(f, "Cmd::HideCursor"),
-            Cmd::ShowCursor => write!(f, "Cmd::ShowCursor"),
-            Cmd::SetWindowTitle(title) => {
-                f.debug_tuple("Cmd::SetWindowTitle").field(title).finish()
-            }
-            Cmd::WindowSize => write!(f, "Cmd::WindowSize"),
-            Cmd::EnterAltScreen => write!(f, "Cmd::EnterAltScreen"),
-            Cmd::ExitAltScreen => write!(f, "Cmd::ExitAltScreen"),
-            Cmd::EnableMouse => write!(f, "Cmd::EnableMouse"),
-            Cmd::DisableMouse => write!(f, "Cmd::DisableMouse"),
-            Cmd::EnableBracketedPaste => write!(f, "Cmd::EnableBracketedPaste"),
-            Cmd::DisableBracketedPaste => write!(f, "Cmd::DisableBracketedPaste"),
+            Cmd::Terminal(tc) => write!(f, "Cmd::Terminal({:?})", tc),
         }
     }
 }
@@ -488,21 +466,45 @@ mod tests {
 
     #[test]
     fn test_terminal_cmd_variants_exist() {
-        assert!(matches!(Cmd::<()>::clear_screen(), Cmd::ClearScreen));
-        assert!(matches!(Cmd::<()>::hide_cursor(), Cmd::HideCursor));
-        assert!(matches!(Cmd::<()>::show_cursor(), Cmd::ShowCursor));
-        assert!(matches!(Cmd::<()>::window_size(), Cmd::WindowSize));
-        assert!(matches!(Cmd::<()>::enter_alt_screen(), Cmd::EnterAltScreen));
-        assert!(matches!(Cmd::<()>::exit_alt_screen(), Cmd::ExitAltScreen));
-        assert!(matches!(Cmd::<()>::enable_mouse(), Cmd::EnableMouse));
-        assert!(matches!(Cmd::<()>::disable_mouse(), Cmd::DisableMouse));
+        assert!(matches!(
+            Cmd::<()>::clear_screen(),
+            Cmd::Terminal(TerminalCmd::ClearScreen)
+        ));
+        assert!(matches!(
+            Cmd::<()>::hide_cursor(),
+            Cmd::Terminal(TerminalCmd::HideCursor)
+        ));
+        assert!(matches!(
+            Cmd::<()>::show_cursor(),
+            Cmd::Terminal(TerminalCmd::ShowCursor)
+        ));
+        assert!(matches!(
+            Cmd::<()>::window_size(),
+            Cmd::Terminal(TerminalCmd::WindowSize)
+        ));
+        assert!(matches!(
+            Cmd::<()>::enter_alt_screen(),
+            Cmd::Terminal(TerminalCmd::EnterAltScreen)
+        ));
+        assert!(matches!(
+            Cmd::<()>::exit_alt_screen(),
+            Cmd::Terminal(TerminalCmd::ExitAltScreen)
+        ));
+        assert!(matches!(
+            Cmd::<()>::enable_mouse(),
+            Cmd::Terminal(TerminalCmd::EnableMouse)
+        ));
+        assert!(matches!(
+            Cmd::<()>::disable_mouse(),
+            Cmd::Terminal(TerminalCmd::DisableMouse)
+        ));
         assert!(matches!(
             Cmd::<()>::enable_bracketed_paste(),
-            Cmd::EnableBracketedPaste
+            Cmd::Terminal(TerminalCmd::EnableBracketedPaste)
         ));
         assert!(matches!(
             Cmd::<()>::disable_bracketed_paste(),
-            Cmd::DisableBracketedPaste
+            Cmd::Terminal(TerminalCmd::DisableBracketedPaste)
         ));
     }
 

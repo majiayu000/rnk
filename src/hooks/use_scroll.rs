@@ -189,6 +189,29 @@ pub struct ScrollHandle {
     state: Arc<RwLock<ScrollState>>,
 }
 
+macro_rules! try_read {
+    ($(#[doc = $doc:literal])* $fn_name:ident -> $ret:ty, $method:ident $(, $arg:ident : $arg_ty:ty)*) => {
+        $(#[doc = $doc])*
+        pub fn $fn_name(&self $(, $arg: $arg_ty)*) -> Option<$ret> {
+            self.state.read().ok().map(|g| g.$method($($arg),*))
+        }
+    };
+}
+
+macro_rules! try_write {
+    ($(#[doc = $doc:literal])* $fn_name:ident, $method:ident $(, $arg:ident : $arg_ty:ty)*) => {
+        $(#[doc = $doc])*
+        pub fn $fn_name(&self $(, $arg: $arg_ty)*) -> bool {
+            if let Ok(mut guard) = self.state.write() {
+                guard.$method($($arg),*);
+                true
+            } else {
+                false
+            }
+        }
+    };
+}
+
 impl ScrollHandle {
     /// Get the current scroll state
     pub fn get(&self) -> ScrollState {
@@ -309,155 +332,90 @@ impl ScrollHandle {
         self.state.read().ok().map(|g| g.offset_x)
     }
 
-    /// Try to set content size, returning false if lock is poisoned
-    pub fn try_set_content_size(&self, width: usize, height: usize) -> bool {
-        if let Ok(mut guard) = self.state.write() {
-            guard.set_content_size(width, height);
-            true
-        } else {
-            false
-        }
-    }
+    try_write!(
+        /// Try to set content size, returning false if lock is poisoned
+        try_set_content_size, set_content_size, width: usize, height: usize
+    );
 
-    /// Try to set viewport size, returning false if lock is poisoned
-    pub fn try_set_viewport_size(&self, width: usize, height: usize) -> bool {
-        if let Ok(mut guard) = self.state.write() {
-            guard.set_viewport_size(width, height);
-            true
-        } else {
-            false
-        }
-    }
+    try_write!(
+        /// Try to set viewport size, returning false if lock is poisoned
+        try_set_viewport_size, set_viewport_size, width: usize, height: usize
+    );
 
-    /// Try to scroll up, returning false if lock is poisoned
-    pub fn try_scroll_up(&self, lines: usize) -> bool {
-        if let Ok(mut guard) = self.state.write() {
-            guard.scroll_up(lines);
-            true
-        } else {
-            false
-        }
-    }
+    try_write!(
+        /// Try to scroll up, returning false if lock is poisoned
+        try_scroll_up, scroll_up, lines: usize
+    );
 
-    /// Try to scroll down, returning false if lock is poisoned
-    pub fn try_scroll_down(&self, lines: usize) -> bool {
-        if let Ok(mut guard) = self.state.write() {
-            guard.scroll_down(lines);
-            true
-        } else {
-            false
-        }
-    }
+    try_write!(
+        /// Try to scroll down, returning false if lock is poisoned
+        try_scroll_down, scroll_down, lines: usize
+    );
 
-    /// Try to scroll left, returning false if lock is poisoned
-    pub fn try_scroll_left(&self, cols: usize) -> bool {
-        if let Ok(mut guard) = self.state.write() {
-            guard.scroll_left(cols);
-            true
-        } else {
-            false
-        }
-    }
+    try_write!(
+        /// Try to scroll left, returning false if lock is poisoned
+        try_scroll_left, scroll_left, cols: usize
+    );
 
-    /// Try to scroll right, returning false if lock is poisoned
-    pub fn try_scroll_right(&self, cols: usize) -> bool {
-        if let Ok(mut guard) = self.state.write() {
-            guard.scroll_right(cols);
-            true
-        } else {
-            false
-        }
-    }
+    try_write!(
+        /// Try to scroll right, returning false if lock is poisoned
+        try_scroll_right, scroll_right, cols: usize
+    );
 
-    /// Try to scroll to specific Y position, returning false if lock is poisoned
-    pub fn try_scroll_to_y(&self, offset: usize) -> bool {
-        if let Ok(mut guard) = self.state.write() {
-            guard.scroll_to_y(offset);
-            true
-        } else {
-            false
-        }
-    }
+    try_write!(
+        /// Try to scroll to specific Y position, returning false if lock is poisoned
+        try_scroll_to_y, scroll_to_y, offset: usize
+    );
 
-    /// Try to scroll to specific X position, returning false if lock is poisoned
-    pub fn try_scroll_to_x(&self, offset: usize) -> bool {
-        if let Ok(mut guard) = self.state.write() {
-            guard.scroll_to_x(offset);
-            true
-        } else {
-            false
-        }
-    }
+    try_write!(
+        /// Try to scroll to specific X position, returning false if lock is poisoned
+        try_scroll_to_x, scroll_to_x, offset: usize
+    );
 
-    /// Try to scroll to top, returning false if lock is poisoned
-    pub fn try_scroll_to_top(&self) -> bool {
-        if let Ok(mut guard) = self.state.write() {
-            guard.scroll_to_top();
-            true
-        } else {
-            false
-        }
-    }
+    try_write!(
+        /// Try to scroll to top, returning false if lock is poisoned
+        try_scroll_to_top, scroll_to_top
+    );
 
-    /// Try to scroll to bottom, returning false if lock is poisoned
-    pub fn try_scroll_to_bottom(&self) -> bool {
-        if let Ok(mut guard) = self.state.write() {
-            guard.scroll_to_bottom();
-            true
-        } else {
-            false
-        }
-    }
+    try_write!(
+        /// Try to scroll to bottom, returning false if lock is poisoned
+        try_scroll_to_bottom, scroll_to_bottom
+    );
 
-    /// Try to page up, returning false if lock is poisoned
-    pub fn try_page_up(&self) -> bool {
-        if let Ok(mut guard) = self.state.write() {
-            guard.page_up();
-            true
-        } else {
-            false
-        }
-    }
+    try_write!(
+        /// Try to page up, returning false if lock is poisoned
+        try_page_up, page_up
+    );
 
-    /// Try to page down, returning false if lock is poisoned
-    pub fn try_page_down(&self) -> bool {
-        if let Ok(mut guard) = self.state.write() {
-            guard.page_down();
-            true
-        } else {
-            false
-        }
-    }
+    try_write!(
+        /// Try to page down, returning false if lock is poisoned
+        try_page_down, page_down
+    );
 
-    /// Try to scroll to make an item visible, returning false if lock is poisoned
-    pub fn try_scroll_to_item(&self, index: usize) -> bool {
-        if let Ok(mut guard) = self.state.write() {
-            guard.scroll_to_item(index);
-            true
-        } else {
-            false
-        }
-    }
+    try_write!(
+        /// Try to scroll to make an item visible, returning false if lock is poisoned
+        try_scroll_to_item, scroll_to_item, index: usize
+    );
 
-    /// Try to check if can scroll up, returning None if lock is poisoned
-    pub fn try_can_scroll_up(&self) -> Option<bool> {
-        self.state.read().ok().map(|g| g.can_scroll_up())
-    }
+    try_read!(
+        /// Try to check if can scroll up, returning None if lock is poisoned
+        try_can_scroll_up -> bool, can_scroll_up
+    );
 
-    /// Try to check if can scroll down, returning None if lock is poisoned
-    pub fn try_can_scroll_down(&self) -> Option<bool> {
-        self.state.read().ok().map(|g| g.can_scroll_down())
-    }
+    try_read!(
+        /// Try to check if can scroll down, returning None if lock is poisoned
+        try_can_scroll_down -> bool, can_scroll_down
+    );
 
-    /// Try to get vertical scroll percentage, returning None if lock is poisoned
-    pub fn try_scroll_percent_y(&self) -> Option<f32> {
-        self.state.read().ok().map(|g| g.scroll_percent_y())
-    }
+    try_read!(
+        /// Try to get vertical scroll percentage, returning None if lock is poisoned
+        try_scroll_percent_y -> f32, scroll_percent_y
+    );
 
-    /// Try to get visible range, returning None if lock is poisoned
-    pub fn try_visible_range(&self) -> Option<(usize, usize)> {
-        self.state.read().ok().map(|g| g.visible_range())
-    }
+    try_read!(
+        /// Try to get visible range, returning None if lock is poisoned
+        try_visible_range -> (usize, usize), visible_range
+    );
 }
 
 /// Hook to manage scroll state

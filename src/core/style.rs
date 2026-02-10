@@ -307,7 +307,7 @@ impl From<i32> for Edges {
 }
 
 /// Complete style definition
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Style {
     // Display
     pub display: Display,
@@ -379,15 +379,63 @@ pub struct Style {
     pub is_static: bool,
 }
 
+impl Default for Style {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Style {
     pub fn new() -> Self {
         Self {
+            display: Display::default(),
+            position: Position::default(),
+            top: None,
+            right: None,
+            bottom: None,
+            left: None,
+            flex_direction: FlexDirection::default(),
+            flex_wrap: false,
+            flex_grow: 0.0,
             flex_shrink: 1.0,
+            flex_basis: Dimension::default(),
+            align_items: AlignItems::default(),
+            align_self: AlignSelf::default(),
+            justify_content: JustifyContent::default(),
+            padding: Edges::default(),
+            margin: Edges::default(),
+            gap: 0.0,
+            row_gap: None,
+            column_gap: None,
+            width: Dimension::default(),
+            height: Dimension::default(),
+            min_width: Dimension::default(),
+            min_height: Dimension::default(),
+            max_width: Dimension::default(),
+            max_height: Dimension::default(),
+            border_style: BorderStyle::default(),
+            border_color: None,
+            border_top_color: None,
+            border_right_color: None,
+            border_bottom_color: None,
+            border_left_color: None,
+            border_dim: false,
             border_top: true,
             border_bottom: true,
             border_left: true,
             border_right: true,
-            ..Default::default()
+            color: None,
+            background_color: None,
+            bold: false,
+            italic: false,
+            underline: false,
+            strikethrough: false,
+            dim: false,
+            inverse: false,
+            text_wrap: TextWrap::default(),
+            overflow_x: Overflow::default(),
+            overflow_y: Overflow::default(),
+            is_static: false,
         }
     }
 
@@ -836,6 +884,11 @@ mod tests {
         assert_eq!(style.flex_direction, FlexDirection::Row);
         assert_eq!(style.flex_shrink, 1.0);
         assert_eq!(style.display, Display::Flex);
+    }
+
+    #[test]
+    fn test_new_equals_default() {
+        assert_eq!(Style::new(), Style::default());
     }
 
     #[test]

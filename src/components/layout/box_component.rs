@@ -5,6 +5,50 @@ use crate::core::{
     FlexDirection, JustifyContent, Overflow, Position, Style,
 };
 
+/// Generate a Box style setter that directly assigns a value.
+macro_rules! style_setter {
+    ($(#[doc = $doc:literal])* $fn_name:ident($value_ty:ty) => $field:ident) => {
+        $(#[doc = $doc])*
+        pub fn $fn_name(mut self, value: $value_ty) -> Self {
+            self.style.$field = value;
+            self
+        }
+    };
+}
+
+/// Generate a Box style setter that uses `impl Into<T>`.
+macro_rules! style_setter_into {
+    ($(#[doc = $doc:literal])* $fn_name:ident($value_ty:ty) => $field:ident) => {
+        $(#[doc = $doc])*
+        pub fn $fn_name(mut self, value: impl Into<$value_ty>) -> Self {
+            self.style.$field = value.into();
+            self
+        }
+    };
+}
+
+/// Generate a Box style setter that wraps the value in `Some()`.
+macro_rules! style_setter_some {
+    ($(#[doc = $doc:literal])* $fn_name:ident($value_ty:ty) => $field:ident) => {
+        $(#[doc = $doc])*
+        pub fn $fn_name(mut self, value: $value_ty) -> Self {
+            self.style.$field = Some(value);
+            self
+        }
+    };
+}
+
+/// Generate a Box style setter for a sub-field (e.g., `padding.top`).
+macro_rules! style_setter_sub {
+    ($(#[doc = $doc:literal])* $fn_name:ident($value_ty:ty) => $parent:ident . $field:ident) => {
+        $(#[doc = $doc])*
+        pub fn $fn_name(mut self, value: $value_ty) -> Self {
+            self.style.$parent.$field = value;
+            self
+        }
+    };
+}
+
 /// Box component builder
 #[derive(Debug, Clone, Default)]
 pub struct Box {
@@ -35,11 +79,8 @@ impl Box {
 
     // === Display ===
 
-    /// Set display type
-    pub fn display(mut self, display: Display) -> Self {
-        self.style.display = display;
-        self
-    }
+    style_setter!(/// Set display type
+        display(Display) => display);
 
     /// Hide this element (display: none)
     pub fn hidden(mut self) -> Self {
@@ -55,29 +96,14 @@ impl Box {
 
     // === Flexbox properties ===
 
-    /// Set flex direction
-    pub fn flex_direction(mut self, direction: FlexDirection) -> Self {
-        self.style.flex_direction = direction;
-        self
-    }
-
-    /// Set flex wrap
-    pub fn flex_wrap(mut self, wrap: bool) -> Self {
-        self.style.flex_wrap = wrap;
-        self
-    }
-
-    /// Set flex grow
-    pub fn flex_grow(mut self, grow: f32) -> Self {
-        self.style.flex_grow = grow;
-        self
-    }
-
-    /// Set flex shrink
-    pub fn flex_shrink(mut self, shrink: f32) -> Self {
-        self.style.flex_shrink = shrink;
-        self
-    }
+    style_setter!(/// Set flex direction
+        flex_direction(FlexDirection) => flex_direction);
+    style_setter!(/// Set flex wrap
+        flex_wrap(bool) => flex_wrap);
+    style_setter!(/// Set flex grow
+        flex_grow(f32) => flex_grow);
+    style_setter!(/// Set flex shrink
+        flex_shrink(f32) => flex_shrink);
 
     /// Set flex (shorthand for grow and shrink)
     pub fn flex(mut self, value: f32) -> Self {
@@ -86,61 +112,27 @@ impl Box {
         self
     }
 
-    /// Set flex basis
-    pub fn flex_basis(mut self, basis: impl Into<Dimension>) -> Self {
-        self.style.flex_basis = basis.into();
-        self
-    }
-
-    /// Set align items
-    pub fn align_items(mut self, align: AlignItems) -> Self {
-        self.style.align_items = align;
-        self
-    }
-
-    /// Set align self
-    pub fn align_self(mut self, align: AlignSelf) -> Self {
-        self.style.align_self = align;
-        self
-    }
-
-    /// Set justify content
-    pub fn justify_content(mut self, justify: JustifyContent) -> Self {
-        self.style.justify_content = justify;
-        self
-    }
+    style_setter_into!(/// Set flex basis
+        flex_basis(Dimension) => flex_basis);
+    style_setter!(/// Set align items
+        align_items(AlignItems) => align_items);
+    style_setter!(/// Set align self
+        align_self(AlignSelf) => align_self);
+    style_setter!(/// Set justify content
+        justify_content(JustifyContent) => justify_content);
 
     // === Spacing ===
 
-    /// Set padding (all sides)
-    pub fn padding(mut self, value: impl Into<Edges>) -> Self {
-        self.style.padding = value.into();
-        self
-    }
-
-    /// Set padding top
-    pub fn padding_top(mut self, value: f32) -> Self {
-        self.style.padding.top = value;
-        self
-    }
-
-    /// Set padding right
-    pub fn padding_right(mut self, value: f32) -> Self {
-        self.style.padding.right = value;
-        self
-    }
-
-    /// Set padding bottom
-    pub fn padding_bottom(mut self, value: f32) -> Self {
-        self.style.padding.bottom = value;
-        self
-    }
-
-    /// Set padding left
-    pub fn padding_left(mut self, value: f32) -> Self {
-        self.style.padding.left = value;
-        self
-    }
+    style_setter_into!(/// Set padding (all sides)
+        padding(Edges) => padding);
+    style_setter_sub!(/// Set padding top
+        padding_top(f32) => padding.top);
+    style_setter_sub!(/// Set padding right
+        padding_right(f32) => padding.right);
+    style_setter_sub!(/// Set padding bottom
+        padding_bottom(f32) => padding.bottom);
+    style_setter_sub!(/// Set padding left
+        padding_left(f32) => padding.left);
 
     /// Set horizontal padding (left and right)
     pub fn padding_x(mut self, value: f32) -> Self {
@@ -156,35 +148,16 @@ impl Box {
         self
     }
 
-    /// Set margin (all sides)
-    pub fn margin(mut self, value: impl Into<Edges>) -> Self {
-        self.style.margin = value.into();
-        self
-    }
-
-    /// Set margin top
-    pub fn margin_top(mut self, value: f32) -> Self {
-        self.style.margin.top = value;
-        self
-    }
-
-    /// Set margin right
-    pub fn margin_right(mut self, value: f32) -> Self {
-        self.style.margin.right = value;
-        self
-    }
-
-    /// Set margin bottom
-    pub fn margin_bottom(mut self, value: f32) -> Self {
-        self.style.margin.bottom = value;
-        self
-    }
-
-    /// Set margin left
-    pub fn margin_left(mut self, value: f32) -> Self {
-        self.style.margin.left = value;
-        self
-    }
+    style_setter_into!(/// Set margin (all sides)
+        margin(Edges) => margin);
+    style_setter_sub!(/// Set margin top
+        margin_top(f32) => margin.top);
+    style_setter_sub!(/// Set margin right
+        margin_right(f32) => margin.right);
+    style_setter_sub!(/// Set margin bottom
+        margin_bottom(f32) => margin.bottom);
+    style_setter_sub!(/// Set margin left
+        margin_left(f32) => margin.left);
 
     /// Set horizontal margin (left and right)
     pub fn margin_x(mut self, value: f32) -> Self {
@@ -200,105 +173,44 @@ impl Box {
         self
     }
 
-    /// Set gap between children
-    pub fn gap(mut self, value: f32) -> Self {
-        self.style.gap = value;
-        self
-    }
-
-    /// Set column gap
-    pub fn column_gap(mut self, value: f32) -> Self {
-        self.style.column_gap = Some(value);
-        self
-    }
-
-    /// Set row gap
-    pub fn row_gap(mut self, value: f32) -> Self {
-        self.style.row_gap = Some(value);
-        self
-    }
+    style_setter!(/// Set gap between children
+        gap(f32) => gap);
+    style_setter_some!(/// Set column gap
+        column_gap(f32) => column_gap);
+    style_setter_some!(/// Set row gap
+        row_gap(f32) => row_gap);
 
     // === Size ===
 
-    /// Set width
-    pub fn width(mut self, value: impl Into<Dimension>) -> Self {
-        self.style.width = value.into();
-        self
-    }
-
-    /// Set height
-    pub fn height(mut self, value: impl Into<Dimension>) -> Self {
-        self.style.height = value.into();
-        self
-    }
-
-    /// Set min width
-    pub fn min_width(mut self, value: impl Into<Dimension>) -> Self {
-        self.style.min_width = value.into();
-        self
-    }
-
-    /// Set min height
-    pub fn min_height(mut self, value: impl Into<Dimension>) -> Self {
-        self.style.min_height = value.into();
-        self
-    }
-
-    /// Set max width
-    pub fn max_width(mut self, value: impl Into<Dimension>) -> Self {
-        self.style.max_width = value.into();
-        self
-    }
-
-    /// Set max height
-    pub fn max_height(mut self, value: impl Into<Dimension>) -> Self {
-        self.style.max_height = value.into();
-        self
-    }
+    style_setter_into!(/// Set width
+        width(Dimension) => width);
+    style_setter_into!(/// Set height
+        height(Dimension) => height);
+    style_setter_into!(/// Set min width
+        min_width(Dimension) => min_width);
+    style_setter_into!(/// Set min height
+        min_height(Dimension) => min_height);
+    style_setter_into!(/// Set max width
+        max_width(Dimension) => max_width);
+    style_setter_into!(/// Set max height
+        max_height(Dimension) => max_height);
 
     // === Border ===
 
-    /// Set border style
-    pub fn border_style(mut self, style: BorderStyle) -> Self {
-        self.style.border_style = style;
-        self
-    }
-
-    /// Set border color (all sides)
-    pub fn border_color(mut self, color: Color) -> Self {
-        self.style.border_color = Some(color);
-        self
-    }
-
-    /// Set top border color
-    pub fn border_top_color(mut self, color: Color) -> Self {
-        self.style.border_top_color = Some(color);
-        self
-    }
-
-    /// Set right border color
-    pub fn border_right_color(mut self, color: Color) -> Self {
-        self.style.border_right_color = Some(color);
-        self
-    }
-
-    /// Set bottom border color
-    pub fn border_bottom_color(mut self, color: Color) -> Self {
-        self.style.border_bottom_color = Some(color);
-        self
-    }
-
-    /// Set left border color
-    pub fn border_left_color(mut self, color: Color) -> Self {
-        self.style.border_left_color = Some(color);
-        self
-    }
-
-    /// Set border dim
-    pub fn border_dim(mut self, dim: bool) -> Self {
-        self.style.border_dim = dim;
-        self
-    }
+    style_setter!(/// Set border style
+        border_style(BorderStyle) => border_style);
+    style_setter_some!(/// Set border color (all sides)
+        border_color(Color) => border_color);
+    style_setter_some!(/// Set top border color
+        border_top_color(Color) => border_top_color);
+    style_setter_some!(/// Set right border color
+        border_right_color(Color) => border_right_color);
+    style_setter_some!(/// Set bottom border color
+        border_bottom_color(Color) => border_bottom_color);
+    style_setter_some!(/// Set left border color
+        border_left_color(Color) => border_left_color);
+    style_setter!(/// Set border dim
+        border_dim(bool) => border_dim);
 
     /// Set border on specific sides
     pub fn border(mut self, top: bool, right: bool, bottom: bool, left: bool) -> Self {
@@ -331,17 +243,10 @@ impl Box {
         self
     }
 
-    /// Set horizontal overflow
-    pub fn overflow_x(mut self, overflow: Overflow) -> Self {
-        self.style.overflow_x = overflow;
-        self
-    }
-
-    /// Set vertical overflow
-    pub fn overflow_y(mut self, overflow: Overflow) -> Self {
-        self.style.overflow_y = overflow;
-        self
-    }
+    style_setter!(/// Set horizontal overflow
+        overflow_x(Overflow) => overflow_x);
+    style_setter!(/// Set vertical overflow
+        overflow_y(Overflow) => overflow_y);
 
     // === Scroll Offset ===
 
@@ -366,11 +271,8 @@ impl Box {
 
     // === Positioning ===
 
-    /// Set position type
-    pub fn position(mut self, position: Position) -> Self {
-        self.style.position = position;
-        self
-    }
+    style_setter!(/// Set position type
+        position(Position) => position);
 
     /// Set position to absolute
     pub fn position_absolute(mut self) -> Self {
@@ -378,29 +280,14 @@ impl Box {
         self
     }
 
-    /// Set top position
-    pub fn top(mut self, value: f32) -> Self {
-        self.style.top = Some(value);
-        self
-    }
-
-    /// Set right position
-    pub fn right(mut self, value: f32) -> Self {
-        self.style.right = Some(value);
-        self
-    }
-
-    /// Set bottom position
-    pub fn bottom(mut self, value: f32) -> Self {
-        self.style.bottom = Some(value);
-        self
-    }
-
-    /// Set left position
-    pub fn left(mut self, value: f32) -> Self {
-        self.style.left = Some(value);
-        self
-    }
+    style_setter_some!(/// Set top position
+        top(f32) => top);
+    style_setter_some!(/// Set right position
+        right(f32) => right);
+    style_setter_some!(/// Set bottom position
+        bottom(f32) => bottom);
+    style_setter_some!(/// Set left position
+        left(f32) => left);
 
     // === Children ===
 

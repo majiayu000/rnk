@@ -425,59 +425,9 @@ impl Output {
     /// Convert the buffer to a string with ANSI codes
     pub fn render(&self) -> String {
         self.assert_no_active_clips("render");
-        let mut lines: Vec<String> = Vec::new();
-
-        for row_idx in 0..self.height as usize {
-            // First, find the last non-space, non-placeholder character
-            // This determines where meaningful content ends
-            let mut last_content_idx = 0;
-            for (i, cell) in self.row_iter(row_idx).enumerate() {
-                // Consider any non-default-space character as content
-                // A space with styling (color, bg, etc) is still content
-                if cell.ch != '\0' && (cell.ch != ' ' || cell.has_style()) {
-                    last_content_idx = i + 1;
-                }
-            }
-
-            let mut line = String::new();
-            let mut current_style: Option<StyledChar> = None;
-
-            for (i, cell) in self.row_iter(row_idx).enumerate() {
-                // Stop at trailing whitespace (unstyled spaces at the end)
-                if i >= last_content_idx {
-                    break;
-                }
-
-                // Skip wide character continuation placeholders
-                if cell.ch == '\0' {
-                    continue;
-                }
-
-                // Check if we need to change style
-                let need_style_change = match &current_style {
-                    None => cell.has_style(),
-                    Some(prev) => !cell.same_style(prev),
-                };
-
-                if need_style_change {
-                    // Only reset if we had a previous style (not for first styled char)
-                    if current_style.is_some() {
-                        line.push_str("\x1b[0m");
-                    }
-                    self.apply_style(&mut line, cell);
-                    current_style = Some(cell.clone());
-                }
-
-                line.push(cell.ch);
-            }
-
-            // Reset at end of line
-            if current_style.is_some() {
-                line.push_str("\x1b[0m");
-            }
-
-            lines.push(line);
-        }
+        let mut lines: Vec<String> = (0..self.height as usize)
+            .map(|row_idx| self.render_row(row_idx))
+            .collect();
 
         // Remove trailing empty lines
         while lines.last().map(|l| l.is_empty()).unwrap_or(false) {
@@ -494,50 +444,9 @@ impl Output {
     /// that strips trailing empty lines.
     pub fn render_fixed_height(&self) -> String {
         self.assert_no_active_clips("render_fixed_height");
-        let mut lines: Vec<String> = Vec::new();
-
-        for row_idx in 0..self.height as usize {
-            let mut last_content_idx = 0;
-            for (i, cell) in self.row_iter(row_idx).enumerate() {
-                if cell.ch != '\0' && (cell.ch != ' ' || cell.has_style()) {
-                    last_content_idx = i + 1;
-                }
-            }
-
-            let mut line = String::new();
-            let mut current_style: Option<StyledChar> = None;
-
-            for (i, cell) in self.row_iter(row_idx).enumerate() {
-                if i >= last_content_idx {
-                    break;
-                }
-
-                if cell.ch == '\0' {
-                    continue;
-                }
-
-                let need_style_change = match &current_style {
-                    None => cell.has_style(),
-                    Some(prev) => !cell.same_style(prev),
-                };
-
-                if need_style_change {
-                    if current_style.is_some() {
-                        line.push_str("\x1b[0m");
-                    }
-                    self.apply_style(&mut line, cell);
-                    current_style = Some(cell.clone());
-                }
-
-                line.push(cell.ch);
-            }
-
-            if current_style.is_some() {
-                line.push_str("\x1b[0m");
-            }
-
-            lines.push(line);
-        }
+        let lines: Vec<String> = (0..self.height as usize)
+            .map(|row_idx| self.render_row(row_idx))
+            .collect();
 
         // NOTE: Unlike render(), we do NOT strip trailing empty lines here
         // This preserves the exact line count for fixed-height layouts

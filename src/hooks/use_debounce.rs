@@ -28,12 +28,17 @@
 //! ```
 
 use crate::hooks::use_signal::{Signal, use_signal};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// Debounce a value, only updating after the specified delay
 ///
 /// Returns the debounced value that only updates after `delay` has passed
 /// since the last change to `value`.
+///
+/// Uses channel-based cancellation: when a new value arrives, the old timer
+/// thread is immediately unblocked via a dropped sender, so it exits without
+/// waiting for the full delay.
 pub fn use_debounce<T>(value: T, delay: Duration) -> T
 where
     T: Clone + PartialEq + Send + Sync + 'static,
@@ -41,7 +46,7 @@ where
     let debounced = use_signal(|| value.clone());
     let last_value = use_signal(|| value.clone());
     let last_delay = use_signal(|| delay);
-    let generation = use_signal(|| 0u64);
+    let cancel_tx: Signal<Option<mpsc::Sender<()>>> = use_signal(|| None);
 
     // Zero-delay debounce should update immediately.
     if delay.is_zero() {
@@ -68,22 +73,28 @@ where
     }
 
     if value_changed || delay_changed {
-        generation.update(|g| *g = g.wrapping_add(1));
-        let expected_generation = generation.get();
+        // Create a new channel. Storing the new tx drops the old one,
+        // which immediately unblocks the old timer thread's recv_timeout
+        // with a Disconnected error, causing it to exit.
+        let (tx, rx) = mpsc::channel::<()>();
+        cancel_tx.set(Some(tx));
 
-        let generation_clone = generation.clone();
         let last_value_clone = last_value.clone();
         let debounced_clone = debounced.clone();
         let wait = delay;
 
         std::thread::spawn(move || {
-            std::thread::sleep(wait);
-
-            // Only the latest generation is allowed to commit.
-            if generation_clone.get() == expected_generation {
-                let latest = last_value_clone.get();
-                if debounced_clone.get() != latest {
-                    debounced_clone.set(latest);
+            match rx.recv_timeout(wait) {
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // Delay expired naturally — commit the value.
+                    let latest = last_value_clone.get();
+                    if debounced_clone.get() != latest {
+                        debounced_clone.set(latest);
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) | Ok(()) => {
+                    // Sender was dropped (newer change arrived) or explicit
+                    // cancel signal — discard this timer.
                 }
             }
         });
