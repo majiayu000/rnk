@@ -104,55 +104,47 @@ fn render_border(element: &Element, output: &mut Output, x: u16, y: u16, width: 
     let h = border_char(h);
     let v = border_char(v);
 
-    let mut base_style = element.style.clone();
-    base_style.dim = element.style.border_dim;
-
-    let mut top_style = base_style.clone();
-    top_style.color = element.style.get_border_top_color();
-
-    let mut right_style = base_style.clone();
-    right_style.color = element.style.get_border_right_color();
-
-    let mut bottom_style = base_style.clone();
-    bottom_style.color = element.style.get_border_bottom_color();
-
-    let mut left_style = base_style.clone();
-    left_style.color = element.style.get_border_left_color();
+    let mut style = element.style.clone();
+    style.dim = element.style.border_dim;
 
     if element.style.border_top && height > 0 && width > 0 {
-        output.write_char(x, y, tl, &top_style);
+        style.color = element.style.get_border_top_color();
+        output.write_char(x, y, tl, &style);
         if width > 2 {
             for col in (x + 1)..(x + width - 1) {
-                output.write_char(col, y, h, &top_style);
+                output.write_char(col, y, h, &style);
             }
         }
         if width > 1 {
-            output.write_char(x + width - 1, y, tr, &top_style);
+            output.write_char(x + width - 1, y, tr, &style);
         }
     }
 
     if element.style.border_bottom && height > 1 && width > 0 {
+        style.color = element.style.get_border_bottom_color();
         let bottom_y = y + height - 1;
-        output.write_char(x, bottom_y, bl, &bottom_style);
+        output.write_char(x, bottom_y, bl, &style);
         if width > 2 {
             for col in (x + 1)..(x + width - 1) {
-                output.write_char(col, bottom_y, h, &bottom_style);
+                output.write_char(col, bottom_y, h, &style);
             }
         }
         if width > 1 {
-            output.write_char(x + width - 1, bottom_y, br, &bottom_style);
+            output.write_char(x + width - 1, bottom_y, br, &style);
         }
     }
 
     if element.style.border_left && height > 1 {
+        style.color = element.style.get_border_left_color();
         for row in (y + 1)..(y + height - 1) {
-            output.write_char(x, row, v, &left_style);
+            output.write_char(x, row, v, &style);
         }
     }
 
     if element.style.border_right && width > 1 && height > 1 {
+        style.color = element.style.get_border_right_color();
         for row in (y + 1)..(y + height - 1) {
-            output.write_char(x + width - 1, row, v, &right_style);
+            output.write_char(x + width - 1, row, v, &style);
         }
     }
 }

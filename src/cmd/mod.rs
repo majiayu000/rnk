@@ -22,7 +22,7 @@ mod tasks;
 
 pub use core::{AppMsg, BoxedMsg, Cmd, TerminalCmd};
 pub use exec::{ExecConfig, ExecResult};
-pub use executor::{CmdExecutor, RenderHandle, run_exec_process};
+pub use executor::{CmdExecutor, CmdRenderNotifier, run_exec_process};
 pub use tasks::{HttpRequest, HttpResponse, ProcessOutput};
 
 pub(crate) use exec::ExecRequest;

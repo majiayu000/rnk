@@ -2,6 +2,8 @@
 //!
 //! Provides customizable key bindings for viewport scrolling and navigation.
 
+pub use crate::components::keymap::{KeyBinding, KeyType, Modifiers};
+
 /// Key binding configuration for viewport navigation
 #[derive(Debug, Clone)]
 pub struct ViewportKeyMap {
@@ -34,137 +36,9 @@ pub struct ViewportKeyMap {
     pub goto_right: Vec<KeyBinding>,
 }
 
-/// A single key binding
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeyBinding {
-    /// The key character or special key
-    pub key: KeyType,
-    /// Required modifier keys
-    pub modifiers: Modifiers,
-}
-
-/// Type of key
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum KeyType {
-    /// Regular character
-    Char(char),
-    /// Up arrow
-    Up,
-    /// Down arrow
-    Down,
-    /// Left arrow
-    Left,
-    /// Right arrow
-    Right,
-    /// Page Up
-    PageUp,
-    /// Page Down
-    PageDown,
-    /// Home
-    Home,
-    /// End
-    End,
-    /// Space
-    Space,
-    /// Enter
-    Enter,
-    /// Escape
-    Escape,
-}
-
-/// Modifier key flags
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Modifiers {
-    pub ctrl: bool,
-    pub alt: bool,
-    pub shift: bool,
-}
-
-impl Modifiers {
-    pub const NONE: Self = Self {
-        ctrl: false,
-        alt: false,
-        shift: false,
-    };
-
-    pub const CTRL: Self = Self {
-        ctrl: true,
-        alt: false,
-        shift: false,
-    };
-
-    pub const ALT: Self = Self {
-        ctrl: false,
-        alt: true,
-        shift: false,
-    };
-
-    pub const SHIFT: Self = Self {
-        ctrl: false,
-        alt: false,
-        shift: true,
-    };
-}
-
-impl KeyBinding {
-    /// Create a new key binding
-    pub fn new(key: KeyType, modifiers: Modifiers) -> Self {
-        Self { key, modifiers }
-    }
-
-    /// Create a key binding for a character without modifiers
-    pub fn char(c: char) -> Self {
-        Self::new(KeyType::Char(c), Modifiers::NONE)
-    }
-
-    /// Create a key binding with Ctrl modifier
-    pub fn ctrl(c: char) -> Self {
-        Self::new(KeyType::Char(c), Modifiers::CTRL)
-    }
-
-    /// Create a key binding for a special key
-    pub fn special(key: KeyType) -> Self {
-        Self::new(key, Modifiers::NONE)
-    }
-
-    /// Check if this binding matches the given input
-    pub fn matches(&self, input: &str, key: &crate::hooks::Key) -> bool {
-        // Check modifiers
-        if self.modifiers.ctrl != key.ctrl
-            || self.modifiers.alt != key.alt
-            || self.modifiers.shift != key.shift
-        {
-            return false;
-        }
-
-        // Check key type
-        match &self.key {
-            KeyType::Char(c) => {
-                if input.len() == 1 {
-                    input.starts_with(*c)
-                } else {
-                    false
-                }
-            }
-            KeyType::Up => key.up_arrow,
-            KeyType::Down => key.down_arrow,
-            KeyType::Left => key.left_arrow,
-            KeyType::Right => key.right_arrow,
-            KeyType::PageUp => key.page_up,
-            KeyType::PageDown => key.page_down,
-            KeyType::Home => key.home,
-            KeyType::End => key.end,
-            KeyType::Space => key.space,
-            KeyType::Enter => key.return_key,
-            KeyType::Escape => key.escape,
-        }
-    }
-}
-
 impl Default for ViewportKeyMap {
     fn default() -> Self {
         Self {
-            // Vertical navigation
             up: vec![KeyBinding::special(KeyType::Up), KeyBinding::char('k')],
             down: vec![KeyBinding::special(KeyType::Down), KeyBinding::char('j')],
             page_up: vec![KeyBinding::special(KeyType::PageUp), KeyBinding::ctrl('b')],
@@ -177,8 +51,6 @@ impl Default for ViewportKeyMap {
             half_page_down: vec![KeyBinding::ctrl('d')],
             goto_top: vec![KeyBinding::special(KeyType::Home), KeyBinding::char('g')],
             goto_bottom: vec![KeyBinding::special(KeyType::End), KeyBinding::char('G')],
-
-            // Horizontal navigation
             left: vec![KeyBinding::special(KeyType::Left), KeyBinding::char('h')],
             right: vec![KeyBinding::special(KeyType::Right), KeyBinding::char('l')],
             goto_left: vec![KeyBinding::char('0')],
@@ -249,68 +121,27 @@ impl ViewportKeyMap {
 
     /// Check which action matches the input, if any
     pub fn match_action(&self, input: &str, key: &crate::hooks::Key) -> Option<ViewportAction> {
-        // Check each action's bindings
-        for binding in &self.up {
-            if binding.matches(input, key) {
-                return Some(ViewportAction::ScrollUp);
+        let checks: &[(&[KeyBinding], ViewportAction)] = &[
+            (&self.up, ViewportAction::ScrollUp),
+            (&self.down, ViewportAction::ScrollDown),
+            (&self.page_up, ViewportAction::PageUp),
+            (&self.page_down, ViewportAction::PageDown),
+            (&self.half_page_up, ViewportAction::HalfPageUp),
+            (&self.half_page_down, ViewportAction::HalfPageDown),
+            (&self.goto_top, ViewportAction::GotoTop),
+            (&self.goto_bottom, ViewportAction::GotoBottom),
+            (&self.left, ViewportAction::ScrollLeft),
+            (&self.right, ViewportAction::ScrollRight),
+            (&self.goto_left, ViewportAction::GotoLeft),
+            (&self.goto_right, ViewportAction::GotoRight),
+        ];
+        for (bindings, action) in checks {
+            for binding in *bindings {
+                if binding.matches(input, key) {
+                    return Some(*action);
+                }
             }
         }
-        for binding in &self.down {
-            if binding.matches(input, key) {
-                return Some(ViewportAction::ScrollDown);
-            }
-        }
-        for binding in &self.page_up {
-            if binding.matches(input, key) {
-                return Some(ViewportAction::PageUp);
-            }
-        }
-        for binding in &self.page_down {
-            if binding.matches(input, key) {
-                return Some(ViewportAction::PageDown);
-            }
-        }
-        for binding in &self.half_page_up {
-            if binding.matches(input, key) {
-                return Some(ViewportAction::HalfPageUp);
-            }
-        }
-        for binding in &self.half_page_down {
-            if binding.matches(input, key) {
-                return Some(ViewportAction::HalfPageDown);
-            }
-        }
-        for binding in &self.goto_top {
-            if binding.matches(input, key) {
-                return Some(ViewportAction::GotoTop);
-            }
-        }
-        for binding in &self.goto_bottom {
-            if binding.matches(input, key) {
-                return Some(ViewportAction::GotoBottom);
-            }
-        }
-        for binding in &self.left {
-            if binding.matches(input, key) {
-                return Some(ViewportAction::ScrollLeft);
-            }
-        }
-        for binding in &self.right {
-            if binding.matches(input, key) {
-                return Some(ViewportAction::ScrollRight);
-            }
-        }
-        for binding in &self.goto_left {
-            if binding.matches(input, key) {
-                return Some(ViewportAction::GotoLeft);
-            }
-        }
-        for binding in &self.goto_right {
-            if binding.matches(input, key) {
-                return Some(ViewportAction::GotoRight);
-            }
-        }
-
         None
     }
 }

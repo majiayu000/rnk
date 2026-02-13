@@ -227,7 +227,6 @@ pub fn use_app() -> AppContext {
 mod tests {
     use super::*;
     use crate::renderer::RenderHandle;
-    use crate::renderer::registry::AppSink;
 
     #[test]
     fn test_app_context_exit() {
@@ -295,26 +294,6 @@ mod tests {
     }
 
     fn test_render_handle() -> RenderHandle {
-        struct NoopSink;
-
-        impl AppSink for NoopSink {
-            fn request_render(&self) {}
-
-            fn println(&self, _message: crate::renderer::Printable) {}
-
-            fn enter_alt_screen(&self) {}
-
-            fn exit_alt_screen(&self) {}
-
-            fn is_alt_screen(&self) -> bool {
-                false
-            }
-
-            fn queue_exec(&self, _request: crate::cmd::ExecRequest) {}
-
-            fn request_suspend(&self) {}
-        }
-
-        RenderHandle::new(Arc::new(NoopSink))
+        RenderHandle::new(Arc::new(super::NoopSink))
     }
 }

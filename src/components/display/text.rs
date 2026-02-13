@@ -391,32 +391,9 @@ impl Text {
         if is_simple {
             // Simple text: use text_content for backward compatibility
             element.text_content = Some(self.lines[0].spans[0].content.clone());
-            // Copy span style to element style
+            // Merge span style into element style (span takes precedence)
             let span_style = &self.lines[0].spans[0].style;
-            if span_style.color.is_some() {
-                element.style.color = span_style.color;
-            }
-            if span_style.background_color.is_some() {
-                element.style.background_color = span_style.background_color;
-            }
-            if span_style.bold {
-                element.style.bold = true;
-            }
-            if span_style.italic {
-                element.style.italic = true;
-            }
-            if span_style.underline {
-                element.style.underline = true;
-            }
-            if span_style.strikethrough {
-                element.style.strikethrough = true;
-            }
-            if span_style.dim {
-                element.style.dim = true;
-            }
-            if span_style.inverse {
-                element.style.inverse = true;
-            }
+            element.style = element.style.merge(span_style);
         } else {
             // Rich text: concatenate plain text for layout measurement
             let mut full_text = String::new();

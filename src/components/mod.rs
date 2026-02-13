@@ -3,6 +3,7 @@
 mod display;
 mod feedback;
 mod input;
+pub mod keymap;
 mod layout;
 
 // Existing nested modules

@@ -261,17 +261,8 @@ impl Output {
                 break;
             }
 
-            let char_width = ch.width().unwrap_or(1);
-
-            // Handle wide character at buffer boundary - skip if it won't fit
-            if char_width == 2 && col + 1 >= width {
-                // Wide char would extend past buffer, write a space instead
-                self.set(col, row, StyledChar::with_style(' ', style));
-                col += 1;
-                continue;
-            }
-
             // Check clip region
+            let char_width = ch.width().unwrap_or(1);
             if let Some(clip) = self.clip_stack.last()
                 && !clip.contains(col as u16, row as u16)
             {
@@ -279,43 +270,7 @@ impl Output {
                 continue;
             }
 
-            // Handle overwriting wide character's second half (placeholder)
-            // If current position is a placeholder '\0', we're breaking a wide char
-            if let Some(cell) = self.get(col, row) {
-                if cell.ch == '\0' && col > 0 {
-                    // Clear the first half of the broken wide char
-                    self.set(col - 1, row, StyledChar::new(' '));
-                }
-            }
-
-            // Handle overwriting wide character's first half
-            // If current position has a wide char, its placeholder will be orphaned
-            if let Some(cell) = self.get(col, row) {
-                let old_char_width = cell.ch.width().unwrap_or(1);
-                if old_char_width == 2 && col + 1 < width {
-                    // Clear the orphaned placeholder
-                    self.set(col + 1, row, StyledChar::new(' '));
-                }
-            }
-
-            self.set(col, row, StyledChar::with_style(ch, style));
-
-            // For wide characters (width=2), mark the next cell as a placeholder
-            if char_width == 2 && col + 1 < width {
-                // Check if we're about to overwrite another wide char's first half
-                if let Some(next_cell) = self.get(col + 1, row) {
-                    if next_cell.ch != '\0' {
-                        let next_char_width = next_cell.ch.width().unwrap_or(1);
-                        if next_char_width == 2 && col + 2 < width {
-                            // Clear the placeholder of the wide char we're overwriting
-                            self.set(col + 2, row, StyledChar::new(' '));
-                        }
-                    }
-                }
-                // Use a special marker for wide char continuation
-                self.set(col + 1, row, StyledChar::new('\0'));
-            }
-
+            self.write_char_at(col, row, ch, style);
             col += char_width;
         }
     }
@@ -324,28 +279,32 @@ impl Output {
     pub fn write_char(&mut self, x: u16, y: u16, ch: char, style: &Style) {
         let col = x as usize;
         let row = y as usize;
-        let width = self.width as usize;
 
-        if row >= self.height as usize || col >= width {
+        if row >= self.height as usize || col >= self.width as usize {
             return;
         }
 
         // Mark row as dirty before any modifications
         self.mark_dirty(row);
 
-        let char_width = ch.width().unwrap_or(1);
-
-        // Handle wide character at buffer boundary - skip if it won't fit
-        if char_width == 2 && col + 1 >= width {
-            // Wide char would extend past buffer, write a space instead
-            self.set(col, row, StyledChar::with_style(' ', style));
-            return;
-        }
-
         // Check clip region
         if let Some(clip) = self.clip_stack.last()
             && !clip.contains(x, y)
         {
+            return;
+        }
+
+        self.write_char_at(col, row, ch, style);
+    }
+
+    /// Core character placement logic handling wide-char boundaries and placeholders
+    fn write_char_at(&mut self, col: usize, row: usize, ch: char, style: &Style) {
+        let width = self.width as usize;
+        let char_width = ch.width().unwrap_or(1);
+
+        // Handle wide character at buffer boundary - skip if it won't fit
+        if char_width == 2 && col + 1 >= width {
+            self.set(col, row, StyledChar::with_style(' ', style));
             return;
         }
 
@@ -368,11 +327,12 @@ impl Output {
 
         // For wide characters (width=2), mark the next cell as a placeholder
         if char_width == 2 && col + 1 < width {
-            // Handle overwriting the next position's wide char if any
             if let Some(next_cell) = self.get(col + 1, row) {
-                let next_char_width = next_cell.ch.width().unwrap_or(1);
-                if next_char_width == 2 && col + 2 < width {
-                    self.set(col + 2, row, StyledChar::new(' '));
+                if next_cell.ch != '\0' {
+                    let next_char_width = next_cell.ch.width().unwrap_or(1);
+                    if next_char_width == 2 && col + 2 < width {
+                        self.set(col + 2, row, StyledChar::new(' '));
+                    }
                 }
             }
             self.set(col + 1, row, StyledChar::new('\0'));
@@ -497,39 +457,7 @@ impl Output {
     }
 
     fn color_to_ansi(&self, color: Color, background: bool, codes: &mut Vec<u8>) {
-        let base = if background { 40 } else { 30 };
-
-        match color {
-            Color::Reset => {}
-            Color::Black => codes.push(base),
-            Color::Red => codes.push(base + 1),
-            Color::Green => codes.push(base + 2),
-            Color::Yellow => codes.push(base + 3),
-            Color::Blue => codes.push(base + 4),
-            Color::Magenta => codes.push(base + 5),
-            Color::Cyan => codes.push(base + 6),
-            Color::White => codes.push(base + 7),
-            Color::BrightBlack => codes.push(base + 60),
-            Color::BrightRed => codes.push(base + 61),
-            Color::BrightGreen => codes.push(base + 62),
-            Color::BrightYellow => codes.push(base + 63),
-            Color::BrightBlue => codes.push(base + 64),
-            Color::BrightMagenta => codes.push(base + 65),
-            Color::BrightCyan => codes.push(base + 66),
-            Color::BrightWhite => codes.push(base + 67),
-            Color::Ansi256(n) => {
-                codes.push(if background { 48 } else { 38 });
-                codes.push(5);
-                codes.push(n);
-            }
-            Color::Rgb(r, g, b) => {
-                codes.push(if background { 48 } else { 38 });
-                codes.push(2);
-                codes.push(r);
-                codes.push(g);
-                codes.push(b);
-            }
-        }
+        color.push_ansi_codes(background, codes);
     }
 }
 

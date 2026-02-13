@@ -85,37 +85,7 @@ struct RenderHelper;
 
 impl RenderHelper {
     fn render_element_to_string_impl(&self, element: &Element, width: u16, trim: bool) -> String {
-        let mut engine = LayoutEngine::new();
-
-        // Use the passed width directly for layout computation
-        // This respects the caller's intended width (e.g., terminal width)
-        let layout_width = width;
-
-        // Calculate actual height considering text wrapping
-        let height = self.calculate_element_height(element, layout_width, &mut engine);
-
-        // Compute layout with the specified width
-        engine.compute(element, layout_width, height.max(1000));
-
-        // Get layout dimensions (layout is used to confirm computation completed)
-        let _layout = engine.get_layout(element.id).unwrap_or_default();
-        // IMPORTANT: Use the full layout_width for the output buffer, not the computed root width.
-        // Taffy computes child positions relative to the container width (layout_width),
-        // so we need the output buffer to match this width for correct positioning.
-        let render_width = layout_width;
-        let content_height = height.max(1);
-
-        // Render to output buffer
-        let mut output = Output::new(render_width, content_height);
-        let clip_depth_before = output.clip_depth();
-        render_element_tree(element, &engine, &mut output, 0.0, 0.0);
-        assert_eq!(
-            output.clip_depth(),
-            clip_depth_before,
-            "render_to_string left an unbalanced clip stack"
-        );
-
-        let rendered = output.render();
+        let rendered = self.render_to_output(element, width);
 
         // Normalize line endings to LF and trim trailing spaces if requested
         // output.render() uses CRLF for raw mode, but render_to_string should use LF
@@ -131,6 +101,32 @@ impl RenderHelper {
         } else {
             normalized
         }
+    }
+
+    fn render_element_to_string_raw(&self, element: &Element, width: u16) -> String {
+        self.render_to_output(element, width)
+    }
+
+    fn render_to_output(&self, element: &Element, width: u16) -> String {
+        let mut engine = LayoutEngine::new();
+        let layout_width = width;
+        let height = self.calculate_element_height(element, layout_width, &mut engine);
+        engine.compute(element, layout_width, height.max(1000));
+
+        let _layout = engine.get_layout(element.id).unwrap_or_default();
+        let render_width = layout_width;
+        let content_height = height.max(1);
+
+        let mut output = Output::new(render_width, content_height);
+        let clip_depth_before = output.clip_depth();
+        render_element_tree(element, &engine, &mut output, 0.0, 0.0);
+        assert_eq!(
+            output.clip_depth(),
+            clip_depth_before,
+            "render_to_string left an unbalanced clip stack"
+        );
+
+        output.render()
     }
 
     fn calculate_element_height(
@@ -196,28 +192,6 @@ impl RenderHelper {
         }
 
         height
-    }
-
-    fn render_element_to_string_raw(&self, element: &Element, width: u16) -> String {
-        let mut engine = LayoutEngine::new();
-        let layout_width = width;
-        let height = self.calculate_element_height(element, layout_width, &mut engine);
-        engine.compute(element, layout_width, height.max(1000));
-
-        let _layout = engine.get_layout(element.id).unwrap_or_default();
-        let render_width = layout_width;
-        let content_height = height.max(1);
-
-        let mut output = Output::new(render_width, content_height);
-        let clip_depth_before = output.clip_depth();
-        render_element_tree(element, &engine, &mut output, 0.0, 0.0);
-        assert_eq!(
-            output.clip_depth(),
-            clip_depth_before,
-            "render_to_string_raw left an unbalanced clip stack"
-        );
-
-        output.render()
     }
 }
 

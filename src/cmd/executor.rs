@@ -18,11 +18,11 @@ use tokio::sync::mpsc;
 /// This is a lightweight, cloneable handle that can be passed to
 /// async tasks to request UI re-renders when they complete.
 #[derive(Clone)]
-pub struct RenderHandle {
+pub struct CmdRenderNotifier {
     tx: mpsc::UnboundedSender<()>,
 }
 
-impl RenderHandle {
+impl CmdRenderNotifier {
     /// Create a new render handle
     pub fn new(tx: mpsc::UnboundedSender<()>) -> Self {
         Self { tx }
@@ -62,7 +62,7 @@ impl RenderHandle {
 /// ```
 pub struct CmdExecutor {
     runtime: Option<Arc<tokio::runtime::Runtime>>,
-    render_handle: RenderHandle,
+    render_handle: CmdRenderNotifier,
 }
 
 impl CmdExecutor {
@@ -85,7 +85,7 @@ impl CmdExecutor {
 
         Self {
             runtime: Some(Arc::new(runtime)),
-            render_handle: RenderHandle::new(render_tx),
+            render_handle: CmdRenderNotifier::new(render_tx),
         }
     }
 
@@ -115,36 +115,83 @@ impl CmdExecutor {
     /// executor.shutdown();
     /// ```
     pub fn execute(&self, cmd: Cmd) {
-        self.execute_internal(cmd, true);
+        self.execute_cmd(cmd, None, true);
     }
 
-    /// Internal execute method with optional render notification
-    fn execute_internal(&self, cmd: Cmd, notify_render: bool) {
+    /// Unified command execution with optional completion signaling
+    ///
+    /// When `completion` is `Some`, signals it on completion (used by Sequence).
+    /// When `completion` is `None` and `notify_render` is true, requests a render.
+    fn execute_cmd(
+        &self,
+        cmd: Cmd,
+        completion: Option<tokio::sync::oneshot::Sender<()>>,
+        notify_render: bool,
+    ) {
         let runtime = self.runtime.as_ref().expect("executor was shutdown");
         let render_handle = self.render_handle.clone();
 
+        /// Signal completion or optionally request render
+        macro_rules! finish {
+            ($completion:expr, $notify:expr, $handle:expr) => {
+                if let Some(tx) = $completion {
+                    let _ = tx.send(());
+                } else if $notify {
+                    $handle.request();
+                }
+            };
+        }
+
         match cmd {
             Cmd::None => {
-                // No-op, don't notify render
+                finish!(completion, false, render_handle);
             }
 
             Cmd::Batch(cmds) => {
-                // Execute all commands in parallel (no ordering guarantees)
-                for cmd in cmds {
-                    self.execute_internal(cmd, false);
-                }
-                // Only notify once for the entire batch
-                if notify_render {
-                    render_handle.request();
+                if completion.is_some() {
+                    // With completion: wait for all sub-commands
+                    let runtime_clone = Arc::clone(runtime);
+                    let render_handle_clone = render_handle.clone();
+
+                    runtime.spawn(async move {
+                        let mut handles = Vec::with_capacity(cmds.len());
+
+                        for cmd in cmds {
+                            let rt = Arc::clone(&runtime_clone);
+                            let rh = render_handle_clone.clone();
+
+                            let handle = tokio::spawn(async move {
+                                let temp = CmdExecutor {
+                                    runtime: Some(rt),
+                                    render_handle: rh,
+                                };
+                                let (tx, rx) = tokio::sync::oneshot::channel();
+                                temp.execute_cmd(cmd, Some(tx), false);
+                                let _ = rx.await;
+                            });
+                            handles.push(handle);
+                        }
+
+                        for handle in handles {
+                            let _ = handle.await;
+                        }
+
+                        finish!(completion, false, render_handle_clone);
+                    });
+                } else {
+                    // Without completion: fire-and-forget sub-commands
+                    for cmd in cmds {
+                        self.execute_cmd(cmd, None, false);
+                    }
+                    if notify_render {
+                        render_handle.request();
+                    }
                 }
             }
 
             Cmd::Sequence(cmds) => {
-                // Execute commands sequentially (in order)
                 if cmds.is_empty() {
-                    if notify_render {
-                        render_handle.request();
-                    }
+                    finish!(completion, notify_render, render_handle);
                     return;
                 }
 
@@ -153,61 +200,51 @@ impl CmdExecutor {
 
                 runtime.spawn(async move {
                     for cmd in cmds {
-                        // Create a temporary executor for each command
-                        let temp_executor = CmdExecutor {
+                        let temp = CmdExecutor {
                             runtime: Some(Arc::clone(&runtime_clone)),
                             render_handle: render_handle_clone.clone(),
                         };
-
-                        // Execute and wait for completion using a oneshot channel
                         let (tx, rx) = tokio::sync::oneshot::channel();
-                        temp_executor.execute_with_completion(cmd, tx);
-
-                        // Wait for this command to complete before starting next
+                        temp.execute_cmd(cmd, Some(tx), false);
                         let _ = rx.await;
                     }
 
-                    // Notify render after all commands complete
-                    if notify_render {
-                        render_handle_clone.request();
-                    }
+                    finish!(completion, notify_render, render_handle_clone);
                 });
             }
 
             Cmd::Perform { future } => {
                 runtime.spawn(async move {
                     future.await;
-                    if notify_render {
-                        render_handle.request();
-                    }
+                    finish!(completion, notify_render, render_handle);
                 });
             }
 
             Cmd::Sleep { duration, then } => {
-                // Clone the runtime Arc for the spawned task
                 let runtime_clone = Arc::clone(runtime);
                 let render_handle_clone = render_handle.clone();
 
                 runtime.spawn(async move {
                     tokio::time::sleep(duration).await;
 
-                    // Execute the 'then' command
                     match *then {
                         Cmd::None => {
-                            // If 'then' is None, still notify if requested
-                            if notify_render {
-                                render_handle_clone.request();
+                            finish!(completion, notify_render, render_handle_clone);
+                        }
+                        other => {
+                            let temp = CmdExecutor {
+                                runtime: Some(runtime_clone),
+                                render_handle: render_handle_clone.clone(),
+                            };
+                            if completion.is_some() {
+                                let (tx, rx) = tokio::sync::oneshot::channel();
+                                temp.execute_cmd(other, Some(tx), false);
+                                let _ = rx.await;
+                                finish!(completion, false, render_handle_clone);
+                            } else {
+                                temp.execute_cmd(other, None, notify_render);
                             }
                         }
-                        other => {
-                            // Create a temporary executor to execute the 'then' command
-                            let temp_executor = CmdExecutor {
-                                runtime: Some(runtime_clone),
-                                render_handle: render_handle_clone,
-                            };
-
-                            temp_executor.execute_internal(other, notify_render);
-                        }
                     }
                 });
             }
@@ -217,9 +254,7 @@ impl CmdExecutor {
                     tokio::time::sleep(duration).await;
                     let timestamp = Instant::now();
                     msg_fn(timestamp);
-                    if notify_render {
-                        render_handle.request();
-                    }
+                    finish!(completion, notify_render, render_handle);
                 });
             }
 
@@ -227,15 +262,10 @@ impl CmdExecutor {
                 runtime.spawn(async move {
                     if duration.is_zero() {
                         msg_fn(Instant::now());
-                        if notify_render {
-                            render_handle.request();
-                        }
+                        finish!(completion, notify_render, render_handle);
                         return;
                     }
 
-                    // Calculate time until next aligned boundary
-                    // For example, if duration is 1 second and current time is 12:34:56.789,
-                    // we want to wait until 12:34:57.000
                     let now = std::time::SystemTime::now();
                     let since_epoch = now
                         .duration_since(std::time::UNIX_EPOCH)
@@ -243,11 +273,7 @@ impl CmdExecutor {
 
                     let duration_nanos = duration.as_nanos() as u64;
                     let since_epoch_nanos = since_epoch.as_nanos() as u64;
-
-                    // Calculate how far we are into the current interval
                     let remainder = since_epoch_nanos % duration_nanos;
-
-                    // Calculate time until next boundary
                     let wait_nanos = if remainder == 0 {
                         duration_nanos
                     } else {
@@ -259,181 +285,29 @@ impl CmdExecutor {
 
                     let timestamp = Instant::now();
                     msg_fn(timestamp);
-                    if notify_render {
-                        render_handle.request();
-                    }
+                    finish!(completion, notify_render, render_handle);
                 });
             }
 
             Cmd::Exec { config, msg_fn } => {
-                // Queue the exec request for the event loop to handle
-                // The event loop will suspend the terminal, run the process,
-                // and resume the terminal when done
-                queue_exec_request(ExecRequest {
-                    config,
-                    callback: Box::new(move |result| {
-                        msg_fn(result);
-                    }),
-                });
-                // Note: render notification will happen after the process completes
-            }
-
-            // Terminal control commands - these are handled by the renderer
-            // and just need to trigger a render
-            Cmd::Terminal(tc) => {
-                crate::renderer::registry::queue_terminal_cmd(tc);
-                if notify_render {
-                    render_handle.request();
+                if completion.is_some() {
+                    // Synchronous execution for completion tracking
+                    let result = execute_process_sync(&config);
+                    msg_fn(result);
+                    finish!(completion, false, render_handle);
+                } else {
+                    queue_exec_request(ExecRequest {
+                        config,
+                        callback: Box::new(move |result| {
+                            msg_fn(result);
+                        }),
+                    });
                 }
             }
-        }
-    }
 
-    /// Execute a command and signal completion via a oneshot channel
-    fn execute_with_completion(&self, cmd: Cmd, completion: tokio::sync::oneshot::Sender<()>) {
-        let runtime = self.runtime.as_ref().expect("executor was shutdown");
-        let render_handle = self.render_handle.clone();
-
-        match cmd {
-            Cmd::None => {
-                let _ = completion.send(());
-            }
-
-            Cmd::Batch(cmds) => {
-                // Execute all commands in parallel and wait for all to complete
-                let runtime_clone = Arc::clone(runtime);
-                let render_handle_clone = render_handle.clone();
-
-                runtime.spawn(async move {
-                    let mut handles = Vec::with_capacity(cmds.len());
-
-                    for cmd in cmds {
-                        let rt = Arc::clone(&runtime_clone);
-                        let rh = render_handle_clone.clone();
-
-                        let handle = tokio::spawn(async move {
-                            let temp_executor = CmdExecutor {
-                                runtime: Some(rt),
-                                render_handle: rh,
-                            };
-                            let (tx, rx) = tokio::sync::oneshot::channel();
-                            temp_executor.execute_with_completion(cmd, tx);
-                            let _ = rx.await;
-                        });
-                        handles.push(handle);
-                    }
-
-                    // Wait for all to complete
-                    for handle in handles {
-                        let _ = handle.await;
-                    }
-
-                    let _ = completion.send(());
-                });
-            }
-
-            Cmd::Sequence(cmds) => {
-                let runtime_clone = Arc::clone(runtime);
-                let render_handle_clone = render_handle.clone();
-
-                runtime.spawn(async move {
-                    for cmd in cmds {
-                        let temp_executor = CmdExecutor {
-                            runtime: Some(Arc::clone(&runtime_clone)),
-                            render_handle: render_handle_clone.clone(),
-                        };
-                        let (tx, rx) = tokio::sync::oneshot::channel();
-                        temp_executor.execute_with_completion(cmd, tx);
-                        let _ = rx.await;
-                    }
-                    let _ = completion.send(());
-                });
-            }
-
-            Cmd::Perform { future } => {
-                runtime.spawn(async move {
-                    future.await;
-                    let _ = completion.send(());
-                });
-            }
-
-            Cmd::Sleep { duration, then } => {
-                let runtime_clone = Arc::clone(runtime);
-                let render_handle_clone = render_handle.clone();
-
-                runtime.spawn(async move {
-                    tokio::time::sleep(duration).await;
-
-                    match *then {
-                        Cmd::None => {
-                            let _ = completion.send(());
-                        }
-                        other => {
-                            let temp_executor = CmdExecutor {
-                                runtime: Some(runtime_clone),
-                                render_handle: render_handle_clone,
-                            };
-                            let (tx, rx) = tokio::sync::oneshot::channel();
-                            temp_executor.execute_with_completion(other, tx);
-                            let _ = rx.await;
-                            let _ = completion.send(());
-                        }
-                    }
-                });
-            }
-
-            Cmd::Tick { duration, msg_fn } => {
-                runtime.spawn(async move {
-                    tokio::time::sleep(duration).await;
-                    let timestamp = Instant::now();
-                    msg_fn(timestamp);
-                    let _ = completion.send(());
-                });
-            }
-
-            Cmd::Every { duration, msg_fn } => {
-                runtime.spawn(async move {
-                    if duration.is_zero() {
-                        msg_fn(Instant::now());
-                        let _ = completion.send(());
-                        return;
-                    }
-
-                    let now = std::time::SystemTime::now();
-                    let since_epoch = now
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default();
-
-                    let duration_nanos = duration.as_nanos() as u64;
-                    let since_epoch_nanos = since_epoch.as_nanos() as u64;
-                    let remainder = since_epoch_nanos % duration_nanos;
-                    let wait_nanos = if remainder == 0 {
-                        duration_nanos
-                    } else {
-                        duration_nanos - remainder
-                    };
-
-                    let wait_duration = std::time::Duration::from_nanos(wait_nanos);
-                    tokio::time::sleep(wait_duration).await;
-
-                    let timestamp = Instant::now();
-                    msg_fn(timestamp);
-                    let _ = completion.send(());
-                });
-            }
-
-            Cmd::Exec { config, msg_fn } => {
-                // For execute_with_completion, we execute synchronously
-                // since we need to wait for the result anyway
-                let result = execute_process_sync(&config);
-                msg_fn(result);
-                let _ = completion.send(());
-            }
-
-            // Terminal control commands - these are handled immediately
             Cmd::Terminal(tc) => {
                 crate::renderer::registry::queue_terminal_cmd(tc);
-                let _ = completion.send(());
+                finish!(completion, notify_render, render_handle);
             }
         }
     }
@@ -442,7 +316,7 @@ impl CmdExecutor {
     ///
     /// This is useful for passing to long-running tasks that need
     /// to trigger re-renders.
-    pub fn render_handle(&self) -> RenderHandle {
+    pub fn render_handle(&self) -> CmdRenderNotifier {
         self.render_handle.clone()
     }
 
