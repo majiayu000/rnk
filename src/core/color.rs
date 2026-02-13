@@ -158,27 +158,7 @@ impl Color {
     /// assert_eq!(Color::Rgb(255, 0, 0).to_ansi_fg(), "\x1b[38;2;255;0;0m");
     /// ```
     pub fn to_ansi_fg(&self) -> String {
-        match self {
-            Color::Rgb(r, g, b) => format!("\x1b[38;2;{};{};{}m", r, g, b),
-            Color::Ansi256(code) => format!("\x1b[38;5;{}m", code),
-            Color::Reset => "\x1b[0m".to_string(),
-            Color::Black => "\x1b[30m".to_string(),
-            Color::Red => "\x1b[31m".to_string(),
-            Color::Green => "\x1b[32m".to_string(),
-            Color::Yellow => "\x1b[33m".to_string(),
-            Color::Blue => "\x1b[34m".to_string(),
-            Color::Magenta => "\x1b[35m".to_string(),
-            Color::Cyan => "\x1b[36m".to_string(),
-            Color::White => "\x1b[37m".to_string(),
-            Color::BrightBlack => "\x1b[90m".to_string(),
-            Color::BrightRed => "\x1b[91m".to_string(),
-            Color::BrightGreen => "\x1b[92m".to_string(),
-            Color::BrightYellow => "\x1b[93m".to_string(),
-            Color::BrightBlue => "\x1b[94m".to_string(),
-            Color::BrightMagenta => "\x1b[95m".to_string(),
-            Color::BrightCyan => "\x1b[96m".to_string(),
-            Color::BrightWhite => "\x1b[97m".to_string(),
-        }
+        self.to_ansi(false)
     }
 
     /// Convert to ANSI background escape code
@@ -192,26 +172,69 @@ impl Color {
     /// assert_eq!(Color::Rgb(255, 0, 0).to_ansi_bg(), "\x1b[48;2;255;0;0m");
     /// ```
     pub fn to_ansi_bg(&self) -> String {
+        self.to_ansi(true)
+    }
+
+    fn to_ansi(self, background: bool) -> String {
+        let base: u8 = if background { 40 } else { 30 };
+        let ext: u8 = if background { 48 } else { 38 };
         match self {
-            Color::Rgb(r, g, b) => format!("\x1b[48;2;{};{};{}m", r, g, b),
-            Color::Ansi256(code) => format!("\x1b[48;5;{}m", code),
+            Color::Rgb(r, g, b) => format!("\x1b[{};2;{};{};{}m", ext, r, g, b),
+            Color::Ansi256(code) => format!("\x1b[{};5;{}m", ext, code),
             Color::Reset => "\x1b[0m".to_string(),
-            Color::Black => "\x1b[40m".to_string(),
-            Color::Red => "\x1b[41m".to_string(),
-            Color::Green => "\x1b[42m".to_string(),
-            Color::Yellow => "\x1b[43m".to_string(),
-            Color::Blue => "\x1b[44m".to_string(),
-            Color::Magenta => "\x1b[45m".to_string(),
-            Color::Cyan => "\x1b[46m".to_string(),
-            Color::White => "\x1b[47m".to_string(),
-            Color::BrightBlack => "\x1b[100m".to_string(),
-            Color::BrightRed => "\x1b[101m".to_string(),
-            Color::BrightGreen => "\x1b[102m".to_string(),
-            Color::BrightYellow => "\x1b[103m".to_string(),
-            Color::BrightBlue => "\x1b[104m".to_string(),
-            Color::BrightMagenta => "\x1b[105m".to_string(),
-            Color::BrightCyan => "\x1b[106m".to_string(),
-            Color::BrightWhite => "\x1b[107m".to_string(),
+            Color::Black => format!("\x1b[{}m", base),
+            Color::Red => format!("\x1b[{}m", base + 1),
+            Color::Green => format!("\x1b[{}m", base + 2),
+            Color::Yellow => format!("\x1b[{}m", base + 3),
+            Color::Blue => format!("\x1b[{}m", base + 4),
+            Color::Magenta => format!("\x1b[{}m", base + 5),
+            Color::Cyan => format!("\x1b[{}m", base + 6),
+            Color::White => format!("\x1b[{}m", base + 7),
+            Color::BrightBlack => format!("\x1b[{}m", base + 60),
+            Color::BrightRed => format!("\x1b[{}m", base + 61),
+            Color::BrightGreen => format!("\x1b[{}m", base + 62),
+            Color::BrightYellow => format!("\x1b[{}m", base + 63),
+            Color::BrightBlue => format!("\x1b[{}m", base + 64),
+            Color::BrightMagenta => format!("\x1b[{}m", base + 65),
+            Color::BrightCyan => format!("\x1b[{}m", base + 66),
+            Color::BrightWhite => format!("\x1b[{}m", base + 67),
+        }
+    }
+
+    /// Push ANSI color codes into a `Vec<u8>` for batch SGR sequence building.
+    pub(crate) fn push_ansi_codes(&self, background: bool, codes: &mut Vec<u8>) {
+        let base: u8 = if background { 40 } else { 30 };
+        let ext: u8 = if background { 48 } else { 38 };
+        match self {
+            Color::Reset => {}
+            Color::Black => codes.push(base),
+            Color::Red => codes.push(base + 1),
+            Color::Green => codes.push(base + 2),
+            Color::Yellow => codes.push(base + 3),
+            Color::Blue => codes.push(base + 4),
+            Color::Magenta => codes.push(base + 5),
+            Color::Cyan => codes.push(base + 6),
+            Color::White => codes.push(base + 7),
+            Color::BrightBlack => codes.push(base + 60),
+            Color::BrightRed => codes.push(base + 61),
+            Color::BrightGreen => codes.push(base + 62),
+            Color::BrightYellow => codes.push(base + 63),
+            Color::BrightBlue => codes.push(base + 64),
+            Color::BrightMagenta => codes.push(base + 65),
+            Color::BrightCyan => codes.push(base + 66),
+            Color::BrightWhite => codes.push(base + 67),
+            Color::Ansi256(n) => {
+                codes.push(ext);
+                codes.push(5);
+                codes.push(*n);
+            }
+            Color::Rgb(r, g, b) => {
+                codes.push(ext);
+                codes.push(2);
+                codes.push(*r);
+                codes.push(*g);
+                codes.push(*b);
+            }
         }
     }
 }

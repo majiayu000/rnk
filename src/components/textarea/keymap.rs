@@ -2,6 +2,8 @@
 //!
 //! Provides customizable key bindings for text editing operations.
 
+pub use crate::components::keymap::{KeyBinding, KeyType, Modifiers};
+
 /// Key binding configuration for textarea
 #[derive(Debug, Clone)]
 pub struct TextAreaKeyMap {
@@ -70,168 +72,13 @@ pub struct TextAreaKeyMap {
     pub tab: Vec<KeyBinding>,
 }
 
-/// A single key binding
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeyBinding {
-    /// The key character or special key
-    pub key: KeyType,
-    /// Required modifier keys
-    pub modifiers: Modifiers,
-}
-
-/// Type of key
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum KeyType {
-    /// Regular character
-    Char(char),
-    /// Up arrow
-    Up,
-    /// Down arrow
-    Down,
-    /// Left arrow
-    Left,
-    /// Right arrow
-    Right,
-    /// Home
-    Home,
-    /// End
-    End,
-    /// Page Up
-    PageUp,
-    /// Page Down
-    PageDown,
-    /// Backspace
-    Backspace,
-    /// Delete
-    Delete,
-    /// Enter
-    Enter,
-    /// Tab
-    Tab,
-    /// Escape
-    Escape,
-    /// Space
-    Space,
-}
-
-/// Modifier key flags
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Modifiers {
-    pub ctrl: bool,
-    pub alt: bool,
-    pub shift: bool,
-}
-
-impl Modifiers {
-    pub const NONE: Self = Self {
-        ctrl: false,
-        alt: false,
-        shift: false,
-    };
-
-    pub const CTRL: Self = Self {
-        ctrl: true,
-        alt: false,
-        shift: false,
-    };
-
-    pub const ALT: Self = Self {
-        ctrl: false,
-        alt: true,
-        shift: false,
-    };
-
-    pub const SHIFT: Self = Self {
-        ctrl: false,
-        alt: false,
-        shift: true,
-    };
-
-    pub const CTRL_SHIFT: Self = Self {
-        ctrl: true,
-        alt: false,
-        shift: true,
-    };
-}
-
-impl KeyBinding {
-    /// Create a new key binding
-    pub fn new(key: KeyType, modifiers: Modifiers) -> Self {
-        Self { key, modifiers }
-    }
-
-    /// Create a key binding for a character without modifiers
-    pub fn char(c: char) -> Self {
-        Self::new(KeyType::Char(c), Modifiers::NONE)
-    }
-
-    /// Create a key binding with Ctrl modifier
-    pub fn ctrl(c: char) -> Self {
-        Self::new(KeyType::Char(c), Modifiers::CTRL)
-    }
-
-    /// Create a key binding with Alt modifier
-    pub fn alt(c: char) -> Self {
-        Self::new(KeyType::Char(c), Modifiers::ALT)
-    }
-
-    /// Create a key binding for a special key
-    pub fn special(key: KeyType) -> Self {
-        Self::new(key, Modifiers::NONE)
-    }
-
-    /// Create a key binding for a special key with Ctrl
-    pub fn ctrl_special(key: KeyType) -> Self {
-        Self::new(key, Modifiers::CTRL)
-    }
-
-    /// Check if this binding matches the given input
-    pub fn matches(&self, input: &str, key: &crate::hooks::Key) -> bool {
-        // Check modifiers
-        if self.modifiers.ctrl != key.ctrl
-            || self.modifiers.alt != key.alt
-            || self.modifiers.shift != key.shift
-        {
-            return false;
-        }
-
-        // Check key type
-        match &self.key {
-            KeyType::Char(c) => {
-                if input.len() == 1 {
-                    input.starts_with(*c)
-                } else {
-                    false
-                }
-            }
-            KeyType::Up => key.up_arrow,
-            KeyType::Down => key.down_arrow,
-            KeyType::Left => key.left_arrow,
-            KeyType::Right => key.right_arrow,
-            KeyType::Home => key.home,
-            KeyType::End => key.end,
-            KeyType::PageUp => key.page_up,
-            KeyType::PageDown => key.page_down,
-            KeyType::Backspace => key.backspace,
-            KeyType::Delete => key.delete,
-            KeyType::Enter => key.return_key,
-            KeyType::Tab => key.tab,
-            KeyType::Escape => key.escape,
-            KeyType::Space => key.space,
-        }
-    }
-}
-
 impl Default for TextAreaKeyMap {
     fn default() -> Self {
         Self {
-            // Cursor movement
             left: vec![KeyBinding::special(KeyType::Left)],
             right: vec![KeyBinding::special(KeyType::Right)],
             up: vec![KeyBinding::special(KeyType::Up)],
             down: vec![KeyBinding::special(KeyType::Down)],
-
-            // Word navigation
             word_left: vec![
                 KeyBinding::ctrl_special(KeyType::Left),
                 KeyBinding::alt('b'),
@@ -240,16 +87,10 @@ impl Default for TextAreaKeyMap {
                 KeyBinding::ctrl_special(KeyType::Right),
                 KeyBinding::alt('f'),
             ],
-
-            // Line navigation
             line_start: vec![KeyBinding::special(KeyType::Home), KeyBinding::ctrl('a')],
             line_end: vec![KeyBinding::special(KeyType::End), KeyBinding::ctrl('e')],
-
-            // Document navigation
             doc_start: vec![KeyBinding::ctrl_special(KeyType::Home)],
             doc_end: vec![KeyBinding::ctrl_special(KeyType::End)],
-
-            // Deletion
             delete_before: vec![KeyBinding::special(KeyType::Backspace)],
             delete_after: vec![KeyBinding::special(KeyType::Delete)],
             delete_word_before: vec![
@@ -258,23 +99,15 @@ impl Default for TextAreaKeyMap {
             ],
             delete_word_after: vec![KeyBinding::ctrl_special(KeyType::Delete)],
             delete_line: vec![KeyBinding::ctrl('k')],
-
-            // Selection
             select_all: vec![KeyBinding::ctrl('a')],
-
-            // Clipboard
             copy: vec![KeyBinding::ctrl('c')],
             cut: vec![KeyBinding::ctrl('x')],
             paste: vec![KeyBinding::ctrl('v')],
-
-            // Undo/Redo
             undo: vec![KeyBinding::ctrl('z')],
             redo: vec![
                 KeyBinding::ctrl('y'),
                 KeyBinding::new(KeyType::Char('z'), Modifiers::CTRL_SHIFT),
             ],
-
-            // Special
             newline: vec![KeyBinding::special(KeyType::Enter)],
             tab: vec![KeyBinding::special(KeyType::Tab)],
         }
@@ -347,135 +180,38 @@ impl TextAreaKeyMap {
 
     /// Check which action matches the input, if any
     pub fn match_action(&self, input: &str, key: &crate::hooks::Key) -> Option<TextAreaAction> {
-        // Check each action's bindings (order matters for priority)
-
-        // Movement
-        for binding in &self.left {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::MoveLeft);
+        let checks: &[(&[KeyBinding], TextAreaAction)] = &[
+            (&self.left, TextAreaAction::MoveLeft),
+            (&self.right, TextAreaAction::MoveRight),
+            (&self.up, TextAreaAction::MoveUp),
+            (&self.down, TextAreaAction::MoveDown),
+            (&self.word_left, TextAreaAction::MoveWordLeft),
+            (&self.word_right, TextAreaAction::MoveWordRight),
+            (&self.line_start, TextAreaAction::MoveToLineStart),
+            (&self.line_end, TextAreaAction::MoveToLineEnd),
+            (&self.doc_start, TextAreaAction::MoveToStart),
+            (&self.doc_end, TextAreaAction::MoveToEnd),
+            (&self.delete_before, TextAreaAction::DeleteBefore),
+            (&self.delete_after, TextAreaAction::DeleteAfter),
+            (&self.delete_word_before, TextAreaAction::DeleteWordBefore),
+            (&self.delete_word_after, TextAreaAction::DeleteWordAfter),
+            (&self.delete_line, TextAreaAction::DeleteLine),
+            (&self.select_all, TextAreaAction::SelectAll),
+            (&self.copy, TextAreaAction::Copy),
+            (&self.cut, TextAreaAction::Cut),
+            (&self.paste, TextAreaAction::Paste),
+            (&self.undo, TextAreaAction::Undo),
+            (&self.redo, TextAreaAction::Redo),
+            (&self.newline, TextAreaAction::InsertNewline),
+            (&self.tab, TextAreaAction::InsertTab),
+        ];
+        for (bindings, action) in checks {
+            for binding in *bindings {
+                if binding.matches(input, key) {
+                    return Some(*action);
+                }
             }
         }
-        for binding in &self.right {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::MoveRight);
-            }
-        }
-        for binding in &self.up {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::MoveUp);
-            }
-        }
-        for binding in &self.down {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::MoveDown);
-            }
-        }
-        for binding in &self.word_left {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::MoveWordLeft);
-            }
-        }
-        for binding in &self.word_right {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::MoveWordRight);
-            }
-        }
-        for binding in &self.line_start {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::MoveToLineStart);
-            }
-        }
-        for binding in &self.line_end {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::MoveToLineEnd);
-            }
-        }
-        for binding in &self.doc_start {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::MoveToStart);
-            }
-        }
-        for binding in &self.doc_end {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::MoveToEnd);
-            }
-        }
-
-        // Deletion
-        for binding in &self.delete_before {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::DeleteBefore);
-            }
-        }
-        for binding in &self.delete_after {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::DeleteAfter);
-            }
-        }
-        for binding in &self.delete_word_before {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::DeleteWordBefore);
-            }
-        }
-        for binding in &self.delete_word_after {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::DeleteWordAfter);
-            }
-        }
-        for binding in &self.delete_line {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::DeleteLine);
-            }
-        }
-
-        // Selection
-        for binding in &self.select_all {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::SelectAll);
-            }
-        }
-
-        // Clipboard
-        for binding in &self.copy {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::Copy);
-            }
-        }
-        for binding in &self.cut {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::Cut);
-            }
-        }
-        for binding in &self.paste {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::Paste);
-            }
-        }
-
-        // Undo/Redo
-        for binding in &self.undo {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::Undo);
-            }
-        }
-        for binding in &self.redo {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::Redo);
-            }
-        }
-
-        // Special
-        for binding in &self.newline {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::InsertNewline);
-            }
-        }
-        for binding in &self.tab {
-            if binding.matches(input, key) {
-                return Some(TextAreaAction::InsertTab);
-            }
-        }
-
         None
     }
 }
@@ -483,7 +219,6 @@ impl TextAreaKeyMap {
 /// Actions that can be performed on a textarea
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextAreaAction {
-    // Movement
     MoveLeft,
     MoveRight,
     MoveUp,
@@ -494,27 +229,17 @@ pub enum TextAreaAction {
     MoveToLineEnd,
     MoveToStart,
     MoveToEnd,
-
-    // Deletion
     DeleteBefore,
     DeleteAfter,
     DeleteWordBefore,
     DeleteWordAfter,
     DeleteLine,
-
-    // Selection
     SelectAll,
-
-    // Clipboard
     Copy,
     Cut,
     Paste,
-
-    // Undo/Redo
     Undo,
     Redo,
-
-    // Special
     InsertNewline,
     InsertTab,
 }

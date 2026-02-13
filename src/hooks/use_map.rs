@@ -117,12 +117,11 @@ where
 
     /// Get or insert a default value
     pub fn get_or_insert(&self, key: K, default: V) -> V {
-        if let Some(v) = self.get(&key) {
-            v
-        } else {
-            self.insert(key.clone(), default.clone());
-            default
-        }
+        let mut result = default.clone();
+        self.signal.update(|m| {
+            result = m.entry(key).or_insert(default).clone();
+        });
+        result
     }
 
     /// Merge another map into this one

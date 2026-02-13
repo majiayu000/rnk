@@ -28,17 +28,19 @@
 
 use crate::hooks::use_signal::{Signal, use_signal};
 
+/// Internal state for history tracking
+#[derive(Clone)]
+struct HistoryState<T> {
+    past: Vec<T>,
+    present: T,
+    future: Vec<T>,
+    max_size: usize,
+}
+
 /// Handle for history operations
 #[derive(Clone)]
 pub struct HistoryHandle<T> {
-    /// Past states (for undo)
-    past: Signal<Vec<T>>,
-    /// Current state
-    present: Signal<T>,
-    /// Future states (for redo)
-    future: Signal<Vec<T>>,
-    /// Maximum history size
-    max_size: usize,
+    signal: Signal<HistoryState<T>>,
 }
 
 impl<T> HistoryHandle<T>
@@ -47,115 +49,98 @@ where
 {
     /// Get the current value
     pub fn get(&self) -> T {
-        self.present.get()
+        self.signal.with(|s| s.present.clone())
     }
 
     /// Push a new state (clears redo history)
     pub fn push(&self, value: T) {
-        // Save current to past
-        let current = self.present.get();
-        self.past.update(|past| {
-            past.push(current);
-            // Limit history size
-            while past.len() > self.max_size {
-                past.remove(0);
+        self.signal.update(|s| {
+            s.past.push(s.present.clone());
+            while s.past.len() > s.max_size {
+                s.past.remove(0);
             }
+            s.present = value;
+            s.future.clear();
         });
-
-        // Set new present
-        self.present.set(value);
-
-        // Clear future (redo history)
-        self.future.update(|f| f.clear());
     }
 
     /// Undo to previous state
     pub fn undo(&self) -> bool {
-        let past = self.past.get();
-        if past.is_empty() {
-            return false;
-        }
-
-        // Move current to future
-        let current = self.present.get();
-        self.future.update(|f| f.push(current));
-
-        // Pop from past to present
-        self.past.update(|p| {
-            if let Some(prev) = p.pop() {
-                self.present.set(prev);
+        let mut success = false;
+        self.signal.update(|s| {
+            if let Some(prev) = s.past.pop() {
+                s.future.push(s.present.clone());
+                s.present = prev;
+                success = true;
             }
         });
-
-        true
+        success
     }
 
     /// Redo to next state
     pub fn redo(&self) -> bool {
-        let future = self.future.get();
-        if future.is_empty() {
-            return false;
-        }
-
-        // Move current to past
-        let current = self.present.get();
-        self.past.update(|p| p.push(current));
-
-        // Pop from future to present
-        self.future.update(|f| {
-            if let Some(next) = f.pop() {
-                self.present.set(next);
+        let mut success = false;
+        self.signal.update(|s| {
+            if let Some(next) = s.future.pop() {
+                s.past.push(s.present.clone());
+                s.present = next;
+                success = true;
             }
         });
-
-        true
+        success
     }
 
     /// Check if undo is available
     pub fn can_undo(&self) -> bool {
-        !self.past.get().is_empty()
+        self.signal.with(|s| !s.past.is_empty())
     }
 
     /// Check if redo is available
     pub fn can_redo(&self) -> bool {
-        !self.future.get().is_empty()
+        self.signal.with(|s| !s.future.is_empty())
     }
 
     /// Get the number of undo steps available
     pub fn undo_count(&self) -> usize {
-        self.past.get().len()
+        self.signal.with(|s| s.past.len())
     }
 
     /// Get the number of redo steps available
     pub fn redo_count(&self) -> usize {
-        self.future.get().len()
+        self.signal.with(|s| s.future.len())
     }
 
     /// Clear all history
     pub fn clear(&self) {
-        self.past.update(|p| p.clear());
-        self.future.update(|f| f.clear());
+        self.signal.update(|s| {
+            s.past.clear();
+            s.future.clear();
+        });
     }
 
     /// Reset to initial state and clear history
     pub fn reset(&self, value: T) {
-        self.present.set(value);
-        self.past.update(|p| p.clear());
-        self.future.update(|f| f.clear());
+        self.signal.update(|s| {
+            s.present = value;
+            s.past.clear();
+            s.future.clear();
+        });
     }
 
     /// Go to a specific point in history (0 = oldest)
     pub fn go_to(&self, index: usize) {
-        let past = self.past.get();
-        let past_len = past.len();
-
-        if index < past_len {
-            // Going back in history
-            let steps = past_len - index;
-            for _ in 0..steps {
-                self.undo();
+        self.signal.update(|s| {
+            let past_len = s.past.len();
+            if index < past_len {
+                let steps = past_len - index;
+                for _ in 0..steps {
+                    if let Some(prev) = s.past.pop() {
+                        s.future.push(s.present.clone());
+                        s.present = prev;
+                    }
+                }
             }
-        }
+        });
     }
 }
 
@@ -172,16 +157,14 @@ pub fn use_history_with_size<T>(initial: T, max_size: usize) -> HistoryHandle<T>
 where
     T: Clone + Send + Sync + 'static,
 {
-    let past = use_signal(Vec::new);
-    let present = use_signal(|| initial);
-    let future = use_signal(Vec::new);
-
-    HistoryHandle {
-        past,
-        present,
-        future,
+    let signal = use_signal(|| HistoryState {
+        past: Vec::new(),
+        present: initial,
+        future: Vec::new(),
         max_size,
-    }
+    });
+
+    HistoryHandle { signal }
 }
 
 #[cfg(test)]
