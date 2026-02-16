@@ -119,6 +119,7 @@ pub use crate::renderer::{
     ModeSwitch,
     Printable,
     RenderHandle,
+    RenderOptions,
     // Alt screen control
     enter_alt_screen,
     exit_alt_screen,
@@ -135,6 +136,8 @@ pub use crate::renderer::{
     render_to_string,
     render_to_string_auto,
     render_to_string_no_trim,
+    render_to_string_raw,
+    render_to_string_with_options,
     // Cross-thread APIs
     request_render,
 };
