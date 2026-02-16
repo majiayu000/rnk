@@ -47,8 +47,7 @@ impl TestRenderer {
 
     /// Render element and return string with ANSI codes
     pub fn render_to_ansi(&self, element: &Element) -> String {
-        let mut engine = LayoutEngine::new();
-        engine.compute(element, self.width, self.height);
+        let engine = self.compute_layout(element);
 
         let mut output = Output::new(self.width, self.height);
         let clip_depth_before = output.clip_depth();
@@ -63,16 +62,19 @@ impl TestRenderer {
 
     /// Get computed layouts for all elements
     pub fn get_layouts(&self, element: &Element) -> HashMap<ElementId, Layout> {
-        let mut engine = LayoutEngine::new();
-        engine.compute(element, self.width, self.height);
-        engine.get_all_layouts()
+        self.compute_layout(element).get_all_layouts()
     }
 
     /// Get layout for a specific element
     pub fn get_layout(&self, element: &Element) -> Option<Layout> {
+        self.compute_layout(element).get_layout(element.id)
+    }
+
+    /// Compute layout for an element tree
+    fn compute_layout(&self, element: &Element) -> LayoutEngine {
         let mut engine = LayoutEngine::new();
         engine.compute(element, self.width, self.height);
-        engine.get_layout(element.id)
+        engine
     }
 
     /// Validate layout constraints
