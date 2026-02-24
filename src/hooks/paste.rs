@@ -122,41 +122,22 @@ impl PasteEvent {
     }
 }
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
-/// Internal paste handler type
-type PasteHandlerRc = Rc<dyn Fn(&PasteEvent)>;
-
-thread_local! {
-    static PASTE_HANDLERS: RefCell<Vec<PasteHandlerRc>> = RefCell::new(Vec::new());
-}
-
-/// Register a paste handler for the current render pass.
+/// Register a paste handler for the current render pass (requires RuntimeContext).
 pub(crate) fn register_paste_handler<F>(handler: F)
 where
     F: Fn(&PasteEvent) + 'static,
 {
-    PASTE_HANDLERS.with(|handlers| {
-        handlers.borrow_mut().push(Rc::new(handler));
-    });
-}
-
-/// Clear all paste handlers for the next render pass.
-pub(crate) fn clear_paste_handlers() {
-    PASTE_HANDLERS.with(|handlers| {
-        handlers.borrow_mut().clear();
-    });
+    if let Some(ctx) = crate::runtime::current_runtime() {
+        ctx.borrow_mut().register_paste_handler(handler);
+    }
 }
 
 /// Dispatch a paste event to all handlers
 pub fn dispatch_paste(content: &str) {
     let event = PasteEvent::new(content);
-    PASTE_HANDLERS.with(|handlers| {
-        for handler in handlers.borrow().iter() {
-            handler(&event);
-        }
-    });
+    if let Some(ctx) = crate::runtime::current_runtime() {
+        ctx.borrow().dispatch_paste(&event);
+    }
 }
 
 /// Hook to handle paste events
@@ -234,7 +215,12 @@ mod tests {
 
     #[test]
     fn test_paste_handler_dispatch() {
-        clear_paste_handlers();
+        use crate::runtime::{RuntimeContext, set_current_runtime};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let ctx = Rc::new(RefCell::new(RuntimeContext::new()));
+        set_current_runtime(Some(ctx.clone()));
 
         let received = Rc::new(RefCell::new(String::new()));
         let received_clone = received.clone();
@@ -247,12 +233,17 @@ mod tests {
 
         assert_eq!(*received.borrow(), "test paste");
 
-        clear_paste_handlers();
+        set_current_runtime(None);
     }
 
     #[test]
     fn test_multiple_paste_handlers() {
-        clear_paste_handlers();
+        use crate::runtime::{RuntimeContext, set_current_runtime};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let ctx = Rc::new(RefCell::new(RuntimeContext::new()));
+        set_current_runtime(Some(ctx.clone()));
 
         let count = Rc::new(RefCell::new(0));
         let count1 = count.clone();
@@ -270,6 +261,6 @@ mod tests {
 
         assert_eq!(*count.borrow(), 2);
 
-        clear_paste_handlers();
+        set_current_runtime(None);
     }
 }

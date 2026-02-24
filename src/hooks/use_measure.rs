@@ -49,43 +49,25 @@ impl MeasureContext {
     }
 }
 
-// Thread-local storage for the measure context
-thread_local! {
-    static MEASURE_CONTEXT: std::cell::RefCell<Option<MeasureContext>> = const { std::cell::RefCell::new(None) };
-}
-
-/// Set the current measure context (called by App during render).
-pub(crate) fn set_measure_context(ctx: Option<MeasureContext>) {
-    MEASURE_CONTEXT.with(|c| {
-        *c.borrow_mut() = ctx;
-    });
-}
-
-fn get_measure_context() -> Option<MeasureContext> {
-    MEASURE_CONTEXT.with(|c| c.borrow().clone())
-}
+// Measure context is now stored in RuntimeContext.
+// The legacy thread-local MEASURE_CONTEXT has been removed.
 
 /// Measure an element by its ID
 ///
 /// Returns the dimensions (width, height) of the element after layout.
 /// This must be called during or after the render phase when layout
 /// has been computed.
-///
-/// # Example
-///
-/// ```ignore
-/// let element = Box::new()
-///     .width(20)
-///     .height(10)
-///     .into_element();
-///
-/// // After rendering...
-/// if let Some(dims) = measure_element(element.id) {
-///     println!("Size: {}x{}", dims.width, dims.height);
-/// }
-/// ```
 pub fn measure_element(element_id: ElementId) -> Option<Dimensions> {
-    get_measure_context().and_then(|ctx| ctx.measure(element_id))
+    if let Some(ctx) = crate::runtime::current_runtime() {
+        ctx.borrow()
+            .get_measurement_dims(element_id)
+            .map(|(w, h)| Dimensions {
+                width: w,
+                height: h,
+            })
+    } else {
+        None
+    }
 }
 
 /// Hook to create a ref-like pattern for measuring elements

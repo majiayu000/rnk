@@ -10,10 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::cmd::{Cmd, CmdExecutor, ExecRequest, run_exec_process};
 use crate::core::Element;
 use crate::hooks::context::with_hooks;
-use crate::hooks::use_app::{AppContext, set_app_context};
-use crate::hooks::use_input::clear_input_handlers;
-use crate::hooks::use_mouse::{clear_mouse_handlers, is_mouse_enabled};
-use crate::hooks::{MeasureContext, clear_paste_handlers, set_measure_context};
+use crate::hooks::use_mouse::is_mouse_enabled;
 use crate::layout::LayoutEngine;
 use crate::renderer::{Output, Terminal};
 use crate::runtime::{RuntimeContext, set_current_runtime};
@@ -38,7 +35,6 @@ where
     options: AppOptions,
     should_exit: Arc<AtomicBool>,
     runtime: Arc<AppRuntime>,
-    render_handle: RenderHandle,
     /// Static content renderer for inline mode
     static_renderer: StaticRenderer,
     /// Last known terminal width (for detecting width decreases)
@@ -116,7 +112,6 @@ where
             options,
             should_exit,
             runtime,
-            render_handle,
             static_renderer: StaticRenderer::new(),
             last_width: initial_width,
             last_height: initial_height,
@@ -406,30 +401,15 @@ where
     }
 
     fn render_frame(&mut self) -> std::io::Result<()> {
-        // Clear input and mouse handlers before render (they'll be re-registered)
-        clear_input_handlers();
-        clear_mouse_handlers();
-        clear_paste_handlers();
-        set_measure_context(None);
-
         // Clear runtime per-frame handler registrations.
         self.runtime_context.borrow_mut().prepare_render();
 
         // Get terminal size
         let (width, height) = Terminal::size()?;
 
-        // Set up app context for use_app hook
-        set_app_context(Some(AppContext::new(
-            self.should_exit.clone(),
-            self.render_handle.clone(),
-        )));
-
         // Build element tree with hooks context
         let hook_context = self.runtime_context.borrow().hook_context();
         let root = with_hooks(hook_context, || (self.component)());
-
-        // Clear app context after render
-        set_app_context(None);
 
         // Execute any queued commands from hooks
         let cmds = self.runtime_context.borrow_mut().take_cmds();
@@ -458,9 +438,9 @@ where
         self.layout_engine.compute(&dynamic_root, width, height);
 
         // Update measure context with latest layouts
-        let mut measure_ctx = MeasureContext::new();
-        measure_ctx.set_layouts(self.layout_engine.get_all_layouts());
-        set_measure_context(Some(measure_ctx));
+        self.runtime_context
+            .borrow_mut()
+            .set_measure_layouts(self.layout_engine.get_all_layouts());
 
         // Get the actual content size from layout
         let root_layout = self

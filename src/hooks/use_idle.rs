@@ -20,29 +20,27 @@
 
 use crate::hooks::use_interval::use_interval;
 use crate::hooks::use_signal::use_signal;
-use std::cell::RefCell;
-use std::time::{Duration, Instant};
-
-thread_local! {
-    /// Last activity timestamp
-    static LAST_ACTIVITY: RefCell<Instant> = RefCell::new(Instant::now());
-}
-
-const IDLE_POLL_INTERVAL: Duration = Duration::from_secs(1);
+use std::time::Duration;
 
 /// Record user activity
 ///
 /// Call this when user input is detected to reset the idle timer.
 pub fn record_activity() {
-    LAST_ACTIVITY.with(|last| {
-        *last.borrow_mut() = Instant::now();
-    });
+    if let Some(ctx) = crate::runtime::current_runtime() {
+        ctx.borrow_mut().record_activity();
+    }
 }
 
 /// Get the duration since last activity
 pub fn idle_duration() -> Duration {
-    LAST_ACTIVITY.with(|last| last.borrow().elapsed())
+    if let Some(ctx) = crate::runtime::current_runtime() {
+        ctx.borrow().idle_duration()
+    } else {
+        Duration::ZERO
+    }
 }
+
+const IDLE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Check if user has been idle for at least the given duration
 pub fn is_idle(threshold: Duration) -> bool {
@@ -150,33 +148,50 @@ impl IdleConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::{RuntimeContext, set_current_runtime};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn with_runtime<F: FnOnce()>(f: F) {
+        let ctx = Rc::new(RefCell::new(RuntimeContext::new()));
+        set_current_runtime(Some(ctx));
+        f();
+        set_current_runtime(None);
+    }
 
     #[test]
     fn test_record_activity() {
-        record_activity();
-        let duration = idle_duration();
-        assert!(duration < Duration::from_secs(1));
+        with_runtime(|| {
+            record_activity();
+            let duration = idle_duration();
+            assert!(duration < Duration::from_secs(1));
+        });
     }
 
     #[test]
     fn test_idle_duration() {
-        record_activity();
-        let duration = idle_duration();
-        assert!(duration.as_millis() < 100);
+        with_runtime(|| {
+            record_activity();
+            let duration = idle_duration();
+            assert!(duration.as_millis() < 100);
+        });
     }
 
     #[test]
     fn test_is_idle() {
-        record_activity();
-        assert!(!is_idle(Duration::from_secs(1)));
-        // Can't easily test true case without sleeping
+        with_runtime(|| {
+            record_activity();
+            assert!(!is_idle(Duration::from_secs(1)));
+        });
     }
 
     #[test]
     fn test_idle_state() {
-        record_activity();
-        let state = IdleState::new(Duration::from_secs(60));
-        assert!(!state.is_idle);
+        with_runtime(|| {
+            record_activity();
+            let state = IdleState::new(Duration::from_secs(60));
+            assert!(!state.is_idle);
+        });
     }
 
     #[test]
@@ -195,6 +210,14 @@ mod tests {
         assert_eq!(config.threshold, Duration::from_secs(30));
         assert!(config.repeat);
         assert_eq!(config.repeat_interval, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_idle_without_runtime() {
+        set_current_runtime(None);
+        // Should return Duration::ZERO, not panic
+        assert_eq!(idle_duration(), Duration::ZERO);
+        assert!(!is_idle(Duration::from_secs(1)));
     }
 
     #[test]

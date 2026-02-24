@@ -144,50 +144,23 @@ impl Key {
 /// Input handler type (boxed, for public use)
 pub type InputHandler = Box<dyn Fn(&str, &Key)>;
 
-/// Input handlers storage (global for the app)
-use std::cell::RefCell;
-use std::rc::Rc;
-
-/// Internal input handler type (reference-counted for storage)
-type InputHandlerRc = Rc<dyn Fn(&str, &Key)>;
-
-thread_local! {
-    static INPUT_HANDLERS: RefCell<Vec<InputHandlerRc>> = RefCell::new(Vec::new());
-}
-
-/// Register an input handler (legacy thread-local storage)
+/// Register an input handler (requires RuntimeContext)
 pub fn register_input_handler<F>(handler: F)
 where
     F: Fn(&str, &Key) + 'static,
 {
-    // Try to use RuntimeContext first, fall back to thread-local
     if let Some(ctx) = crate::runtime::current_runtime() {
         ctx.borrow_mut().register_input_handler(handler);
-    } else {
-        INPUT_HANDLERS.with(|handlers| {
-            handlers.borrow_mut().push(Rc::new(handler));
-        });
     }
 }
 
-/// Clear all input handlers
-pub fn clear_input_handlers() {
-    INPUT_HANDLERS.with(|handlers| {
-        handlers.borrow_mut().clear();
-    });
-}
+/// Clear all input handlers (no-op, clearing is handled by RuntimeContext::prepare_render)
+pub fn clear_input_handlers() {}
 
 /// Dispatch input to all handlers
 pub fn dispatch_input(input: &str, key: &Key) {
-    // Try RuntimeContext first, fall back to thread-local
     if let Some(ctx) = crate::runtime::current_runtime() {
         ctx.borrow().dispatch_input(input, key);
-    } else {
-        INPUT_HANDLERS.with(|handlers| {
-            for handler in handlers.borrow().iter() {
-                handler(input, key);
-            }
-        });
     }
 }
 
@@ -301,37 +274,6 @@ mod tests {
     }
 
     #[test]
-    fn test_dispatch_input_legacy() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
-
-        clear_input_handlers();
-
-        let received = Rc::new(RefCell::new(String::new()));
-        let received_clone = received.clone();
-
-        // Use thread-local directly for this test
-        INPUT_HANDLERS.with(|handlers| {
-            handlers
-                .borrow_mut()
-                .push(Rc::new(move |input: &str, _key: &Key| {
-                    *received_clone.borrow_mut() = input.to_string();
-                }));
-        });
-
-        // Dispatch using thread-local
-        INPUT_HANDLERS.with(|handlers| {
-            for handler in handlers.borrow().iter() {
-                handler("test", &Key::default());
-            }
-        });
-
-        assert_eq!(*received.borrow(), "test");
-
-        clear_input_handlers();
-    }
-
-    #[test]
     fn test_dispatch_input_with_runtime() {
         use crate::runtime::{RuntimeContext, with_runtime};
         use std::cell::RefCell;
@@ -350,5 +292,12 @@ mod tests {
         // Dispatch within the context
         ctx.borrow().dispatch_input("hello", &Key::default());
         assert_eq!(*received.borrow(), "hello");
+    }
+
+    #[test]
+    fn test_dispatch_input_without_runtime_is_noop() {
+        // Without RuntimeContext, dispatch is a no-op and should not panic
+        crate::runtime::set_current_runtime(None);
+        dispatch_input("test", &Key::default());
     }
 }

@@ -45,15 +45,7 @@ where
         self.signal.get()
     }
 
-    /// Get the number of entries
-    pub fn len(&self) -> usize {
-        self.signal.with(|m| m.len())
-    }
-
-    /// Check if the map is empty
-    pub fn is_empty(&self) -> bool {
-        self.signal.with(|m| m.is_empty())
-    }
+    impl_collection_handle!(HashMap<K, V>);
 
     /// Get a value by key
     pub fn get(&self, key: &K) -> Option<V> {
@@ -81,16 +73,6 @@ where
     /// Check if a key exists
     pub fn contains_key(&self, key: &K) -> bool {
         self.signal.with(|m| m.contains_key(key))
-    }
-
-    /// Clear all entries
-    pub fn clear(&self) {
-        self.signal.update(|m| m.clear());
-    }
-
-    /// Set the entire map
-    pub fn set(&self, map: HashMap<K, V>) {
-        self.signal.set(map);
     }
 
     /// Get all keys

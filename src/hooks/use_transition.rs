@@ -4,6 +4,7 @@
 
 use crate::animation::{Animation, AnimationInstance, Easing, FillMode};
 use crate::hooks::context::{RenderCallback, current_context};
+use crate::hooks::lock_utils::{read_or_recover, write_or_recover};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -22,12 +23,12 @@ pub struct TransitionHandle {
 impl TransitionHandle {
     /// Get the current value
     pub fn get(&self) -> f32 {
-        if let Some(ref instance) = *self.instance.read().unwrap() {
+        if let Some(ref instance) = *read_or_recover(&self.instance) {
             if instance.is_running() {
                 return instance.get();
             }
         }
-        *self.current.read().unwrap()
+        *read_or_recover(&self.current)
     }
 
     /// Get the current value as i32
@@ -42,18 +43,18 @@ impl TransitionHandle {
 
     /// Get the target value
     pub fn target(&self) -> f32 {
-        *self.target.read().unwrap()
+        *read_or_recover(&self.target)
     }
 
     /// Set a new target value and start transitioning
     pub fn set(&self, value: f32) {
         let current = self.get();
-        *self.target.write().unwrap() = value;
+        *write_or_recover(&self.target) = value;
 
         if (current - value).abs() < 0.001 {
             // Already at target, no transition needed
-            *self.current.write().unwrap() = value;
-            *self.instance.write().unwrap() = None;
+            *write_or_recover(&self.current) = value;
+            *write_or_recover(&self.instance) = None;
             return;
         }
 
@@ -68,25 +69,23 @@ impl TransitionHandle {
         let mut instance = anim.start();
         instance.play();
 
-        *self.instance.write().unwrap() = Some(instance);
-        *self.last_tick.write().unwrap() = Instant::now();
+        *write_or_recover(&self.instance) = Some(instance);
+        *write_or_recover(&self.last_tick) = Instant::now();
 
         self.trigger_render();
     }
 
     /// Set value immediately without transition
     pub fn set_immediate(&self, value: f32) {
-        *self.current.write().unwrap() = value;
-        *self.target.write().unwrap() = value;
-        *self.instance.write().unwrap() = None;
+        *write_or_recover(&self.current) = value;
+        *write_or_recover(&self.target) = value;
+        *write_or_recover(&self.instance) = None;
         self.trigger_render();
     }
 
     /// Check if currently transitioning
     pub fn is_transitioning(&self) -> bool {
-        self.instance
-            .read()
-            .unwrap()
+        read_or_recover(&self.instance)
             .as_ref()
             .is_some_and(|i| i.is_running())
     }
@@ -95,20 +94,20 @@ impl TransitionHandle {
     pub fn tick(&self) {
         let now = Instant::now();
         let delta = {
-            let mut last = self.last_tick.write().unwrap();
+            let mut last = write_or_recover(&self.last_tick);
             let delta = now.duration_since(*last);
             *last = now;
             delta
         };
 
-        let mut instance_guard = self.instance.write().unwrap();
+        let mut instance_guard = write_or_recover(&self.instance);
         if let Some(ref mut instance) = *instance_guard {
             let was_running = instance.is_running();
             instance.tick(delta);
 
             if instance.is_completed() {
                 // Update current to final value
-                *self.current.write().unwrap() = *self.target.read().unwrap();
+                *write_or_recover(&self.current) = *read_or_recover(&self.target);
                 *instance_guard = None;
             } else if was_running && instance.is_running() {
                 drop(instance_guard);
@@ -138,15 +137,7 @@ impl TransitionHandle {
         self.current.read().ok().map(|g| *g)
     }
 
-    /// Try to get the current value as i32, returning None if lock is poisoned
-    pub fn try_get_i32(&self) -> Option<i32> {
-        self.try_get().map(|v| v.round() as i32)
-    }
-
-    /// Try to get the current value as usize, returning None if lock is poisoned
-    pub fn try_get_usize(&self) -> Option<usize> {
-        self.try_get().map(|v| v.round().max(0.0) as usize)
-    }
+    impl_try_get_conversions!();
 
     /// Try to get the target value, returning None if lock is poisoned
     pub fn try_target(&self) -> Option<f32> {

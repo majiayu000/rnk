@@ -181,29 +181,18 @@ impl AppContext {
     }
 }
 
-// Thread-local storage for the current app context (legacy fallback)
-thread_local! {
-    static APP_CONTEXT: std::cell::RefCell<Option<AppContext>> = const { std::cell::RefCell::new(None) };
-}
-
-/// Set the current app context (called by App during render)
-pub fn set_app_context(ctx: Option<AppContext>) {
-    APP_CONTEXT.with(|c| {
-        *c.borrow_mut() = ctx;
-    });
-}
+// App context is now obtained exclusively from RuntimeContext.
+// The legacy thread-local APP_CONTEXT has been removed.
 
 /// Get the current app context
 pub fn get_app_context() -> Option<AppContext> {
-    // Try RuntimeContext first, fall back to thread-local
     if let Some(ctx) = crate::runtime::current_runtime() {
         let borrowed = ctx.borrow();
         if let Some(handle) = borrowed.render_handle() {
             return Some(AppContext::new(borrowed.exit_flag(), handle.clone()));
         }
     }
-
-    APP_CONTEXT.with(|c| c.borrow().clone())
+    None
 }
 
 /// Hook to access app control functions
@@ -239,26 +228,6 @@ mod tests {
     }
 
     #[test]
-    fn test_set_get_app_context_legacy() {
-        let exit_flag = Arc::new(AtomicBool::new(false));
-        let ctx = AppContext::new(exit_flag.clone(), test_render_handle());
-
-        set_app_context(Some(ctx));
-
-        // Clear any runtime context to test legacy path
-        crate::runtime::set_current_runtime(None);
-
-        let retrieved = APP_CONTEXT.with(|c| c.borrow().clone());
-        assert!(retrieved.is_some());
-
-        retrieved.unwrap().exit();
-        assert!(exit_flag.load(Ordering::SeqCst));
-
-        // Clean up
-        set_app_context(None);
-    }
-
-    #[test]
     fn test_app_context_with_runtime() {
         use crate::runtime::{RuntimeContext, with_runtime};
         use std::cell::RefCell;
@@ -283,7 +252,6 @@ mod tests {
     #[test]
     fn test_use_app_outside_context_is_noop_and_does_not_panic() {
         crate::runtime::set_current_runtime(None);
-        set_app_context(None);
 
         let app = use_app();
         app.request_render();

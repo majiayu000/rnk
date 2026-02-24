@@ -374,7 +374,7 @@ impl Output {
     }
 
     fn assert_no_active_clips(&self, method: &str) {
-        assert!(
+        debug_assert!(
             self.clip_stack.is_empty(),
             "Output::{} called with an unbalanced clip stack (depth={})",
             method,

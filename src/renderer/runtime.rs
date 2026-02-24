@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
-use crate::hooks::use_input::{clear_input_handlers, dispatch_key_event};
+use crate::hooks::use_input::dispatch_key_event;
 use crate::hooks::use_mouse::dispatch_mouse_event;
 use crate::renderer::Terminal;
 
@@ -116,9 +116,6 @@ impl EventLoop {
             }
         }
 
-        // Clean up input handlers
-        clear_input_handlers();
-
         Ok(())
     }
 
@@ -149,12 +146,18 @@ impl EventLoop {
                 // Dispatch to input handlers
                 dispatch_key_event(&key_event);
 
+                // Record user activity for idle detection
+                crate::hooks::record_activity();
+
                 // Request re-render after input
                 self.runtime.request_render();
             }
             Event::Mouse(mouse_event) => {
                 // Dispatch to mouse handlers
                 dispatch_mouse_event(&mouse_event);
+
+                // Record user activity for idle detection
+                crate::hooks::record_activity();
 
                 // Request re-render after mouse event
                 self.runtime.request_render();
@@ -184,8 +187,8 @@ impl EventLoop {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hooks::use_input::{clear_input_handlers, register_input_handler};
-    use crate::hooks::use_mouse::{clear_mouse_handlers, register_mouse_handler};
+    use crate::hooks::use_input::register_input_handler;
+    use crate::hooks::use_mouse::register_mouse_handler;
     use crate::renderer::frame_rate::FrameRateConfig;
     use crate::renderer::registry::{AppRuntime, AppSink, ModeSwitch, Printable};
     use crossterm::event::{KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
@@ -241,10 +244,17 @@ mod tests {
 
     #[test]
     fn test_event_loop_key_dispatch_requests_render() {
+        use crate::runtime::{RuntimeContext, set_current_runtime};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
         let runtime = AppRuntime::new(false);
         runtime.clear_render_request();
         let should_exit = Arc::new(AtomicBool::new(false));
         let mut event_loop = create_event_loop(runtime.clone(), should_exit);
+
+        let rt_ctx = Rc::new(RefCell::new(RuntimeContext::new()));
+        set_current_runtime(Some(rt_ctx.clone()));
 
         let hit = Arc::new(AtomicBool::new(false));
         let hit_clone = hit.clone();
@@ -260,15 +270,22 @@ mod tests {
         assert!(hit.load(Ordering::SeqCst));
         assert!(runtime.render_requested());
 
-        clear_input_handlers();
+        set_current_runtime(None);
     }
 
     #[test]
     fn test_event_loop_ignores_key_release_events() {
+        use crate::runtime::{RuntimeContext, set_current_runtime};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
         let runtime = AppRuntime::new(false);
         runtime.clear_render_request();
         let should_exit = Arc::new(AtomicBool::new(false));
         let mut event_loop = create_event_loop(runtime.clone(), should_exit);
+
+        let rt_ctx = Rc::new(RefCell::new(RuntimeContext::new()));
+        set_current_runtime(Some(rt_ctx.clone()));
 
         let hit = Arc::new(AtomicBool::new(false));
         let hit_clone = hit.clone();
@@ -283,15 +300,22 @@ mod tests {
         assert!(!hit.load(Ordering::SeqCst));
         assert!(!runtime.render_requested());
 
-        clear_input_handlers();
+        set_current_runtime(None);
     }
 
     #[test]
     fn test_event_loop_mouse_dispatch_requests_render() {
+        use crate::runtime::{RuntimeContext, set_current_runtime};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
         let runtime = AppRuntime::new(false);
         runtime.clear_render_request();
         let should_exit = Arc::new(AtomicBool::new(false));
         let mut event_loop = create_event_loop(runtime.clone(), should_exit);
+
+        let rt_ctx = Rc::new(RefCell::new(RuntimeContext::new()));
+        set_current_runtime(Some(rt_ctx.clone()));
 
         let hit = Arc::new(AtomicBool::new(false));
         let hit_clone = hit.clone();
@@ -310,7 +334,7 @@ mod tests {
         assert!(hit.load(Ordering::SeqCst));
         assert!(runtime.render_requested());
 
-        clear_mouse_handlers();
+        set_current_runtime(None);
     }
 
     #[test]

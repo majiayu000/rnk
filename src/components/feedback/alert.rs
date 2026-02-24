@@ -22,7 +22,7 @@
 //! }
 //! ```
 
-use crate::components::status::{StatusLevel, status_style};
+use crate::components::status::{StatusLevel, impl_status_level_from, status_style};
 use crate::components::{Box as RnkBox, Text};
 use crate::core::{BorderStyle, Color, Element, FlexDirection};
 
@@ -36,16 +36,7 @@ pub enum AlertLevel {
     Error,
 }
 
-impl From<AlertLevel> for StatusLevel {
-    fn from(level: AlertLevel) -> Self {
-        match level {
-            AlertLevel::Info => StatusLevel::Info,
-            AlertLevel::Success => StatusLevel::Success,
-            AlertLevel::Warning => StatusLevel::Warning,
-            AlertLevel::Error => StatusLevel::Error,
-        }
-    }
-}
+impl_status_level_from!(AlertLevel);
 
 /// An alert component
 #[derive(Debug, Clone)]

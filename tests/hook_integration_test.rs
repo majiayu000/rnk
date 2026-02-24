@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 
 #[tokio::test]
 async fn test_use_cmd_queues_and_executes() {
-    let ctx = Arc::new(std::sync::RwLock::new(HookContext::new()));
+    let ctx = Rc::new(RefCell::new(HookContext::new()));
     let executed = Arc::new(AtomicBool::new(false));
     let executed_clone = executed.clone();
 
@@ -28,7 +28,7 @@ async fn test_use_cmd_queues_and_executes() {
         rnk::components::Text::new("ok").into_element()
     });
 
-    let cmds = ctx.write().unwrap().take_cmds();
+    let cmds = ctx.borrow_mut().take_cmds();
     assert!(!cmds.is_empty());
 
     let (tx, mut rx) = mpsc::unbounded_channel();

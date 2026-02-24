@@ -57,15 +57,11 @@ fn detect_screen_reader() -> bool {
     false
 }
 
-// Thread-local cache for screen reader status
-thread_local! {
-    static SCREEN_READER_ENABLED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-}
-
 /// Hook to check if a screen reader is enabled
 ///
 /// Returns true if accessibility tools are detected.
-/// The result is cached for performance.
+/// When a RuntimeContext is available, the result is cached there.
+/// Otherwise falls back to direct detection.
 ///
 /// # Example
 ///
@@ -78,67 +74,80 @@ thread_local! {
 /// }
 /// ```
 pub fn use_is_screen_reader_enabled() -> bool {
-    SCREEN_READER_ENABLED.with(|cached| {
-        if let Some(value) = cached.get() {
-            value
-        } else {
-            let detected = detect_screen_reader();
-            cached.set(Some(detected));
-            detected
-        }
-    })
+    if let Some(ctx) = crate::runtime::current_runtime() {
+        ctx.borrow().is_screen_reader_enabled()
+    } else {
+        detect_screen_reader()
+    }
 }
 
 /// Manually set screen reader status (for testing or override)
 pub fn set_screen_reader_enabled(enabled: bool) {
-    SCREEN_READER_ENABLED.with(|cached| {
-        cached.set(Some(enabled));
-    });
+    if let Some(ctx) = crate::runtime::current_runtime() {
+        ctx.borrow_mut().set_screen_reader_enabled(enabled);
+    }
 }
 
-/// Clear cached screen reader status (forces re-detection)
+/// Clear cached screen reader status (forces re-detection on next call)
 pub fn clear_screen_reader_cache() {
-    SCREEN_READER_ENABLED.with(|cached| {
-        cached.set(None);
-    });
+    if let Some(ctx) = crate::runtime::current_runtime() {
+        ctx.borrow_mut()
+            .set_screen_reader_enabled(detect_screen_reader());
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::{RuntimeContext, set_current_runtime};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     #[test]
     fn test_screen_reader_detection() {
-        // Clear cache first
-        clear_screen_reader_cache();
+        let ctx = Rc::new(RefCell::new(RuntimeContext::new()));
+        set_current_runtime(Some(ctx.clone()));
 
         // Should return false in normal test environment
         let result = use_is_screen_reader_enabled();
-        // Result depends on environment, just verify it doesn't panic
         let _ = result;
+
+        set_current_runtime(None);
     }
 
     #[test]
     fn test_manual_override() {
+        let ctx = Rc::new(RefCell::new(RuntimeContext::new()));
+        set_current_runtime(Some(ctx.clone()));
+
         set_screen_reader_enabled(true);
         assert!(use_is_screen_reader_enabled());
 
         set_screen_reader_enabled(false);
         assert!(!use_is_screen_reader_enabled());
 
-        // Clean up
-        clear_screen_reader_cache();
+        set_current_runtime(None);
     }
 
     #[test]
     fn test_caching() {
+        let ctx = Rc::new(RefCell::new(RuntimeContext::new()));
+        set_current_runtime(Some(ctx.clone()));
+
         clear_screen_reader_cache();
 
-        // First call detects
         let first = use_is_screen_reader_enabled();
-        // Second call uses cache
         let second = use_is_screen_reader_enabled();
 
         assert_eq!(first, second);
+
+        set_current_runtime(None);
+    }
+
+    #[test]
+    fn test_without_runtime_falls_back() {
+        set_current_runtime(None);
+        // Should not panic, falls back to detect_screen_reader()
+        let _ = use_is_screen_reader_enabled();
     }
 }

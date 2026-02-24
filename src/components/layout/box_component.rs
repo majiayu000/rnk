@@ -292,8 +292,8 @@ impl Box {
     // === Children ===
 
     /// Add a child element
-    pub fn child(mut self, element: Element) -> Self {
-        self.children.push(element);
+    pub fn child(mut self, element: impl Into<Element>) -> Self {
+        self.children.push(element.into());
         self
     }
 

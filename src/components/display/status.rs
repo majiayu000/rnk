@@ -20,6 +20,24 @@ pub struct StatusStyle {
     pub bg: Color,
 }
 
+/// Generate `From<$Level> for StatusLevel` for enums with identical Info/Success/Warning/Error variants.
+macro_rules! impl_status_level_from {
+    ($level_type:ty) => {
+        impl From<$level_type> for StatusLevel {
+            fn from(level: $level_type) -> Self {
+                match level {
+                    <$level_type>::Info => StatusLevel::Info,
+                    <$level_type>::Success => StatusLevel::Success,
+                    <$level_type>::Warning => StatusLevel::Warning,
+                    <$level_type>::Error => StatusLevel::Error,
+                }
+            }
+        }
+    };
+}
+
+pub(crate) use impl_status_level_from;
+
 /// Get shared style data for a status level.
 pub fn status_style(level: StatusLevel) -> StatusStyle {
     match level {

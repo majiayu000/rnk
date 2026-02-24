@@ -1,7 +1,52 @@
 //! Hooks system for reactive state management
 
+/// Generate try_get_i32/try_get_usize conversion methods.
+/// Requires the type to have a `try_get(&self) -> Option<f32>` method.
+/// Used by AnimationHandle and TransitionHandle.
+macro_rules! impl_try_get_conversions {
+    () => {
+        /// Try to get the current value as i32, returning None if lock is poisoned
+        pub fn try_get_i32(&self) -> Option<i32> {
+            self.try_get().map(|v| v.round() as i32)
+        }
+
+        /// Try to get the current value as usize, returning None if lock is poisoned
+        pub fn try_get_usize(&self) -> Option<usize> {
+            self.try_get().map(|v| v.round().max(0.0) as usize)
+        }
+    };
+}
+
+/// Generate common collection handle methods (len, is_empty, clear, set).
+/// Used by ListHandle, MapHandle, and SetHandle to avoid duplication.
+macro_rules! impl_collection_handle {
+    ($collection_type:ty) => {
+        /// Get the number of elements
+        pub fn len(&self) -> usize {
+            self.signal.with(|s| s.len())
+        }
+
+        /// Check if empty
+        pub fn is_empty(&self) -> bool {
+            self.signal.with(|s| s.is_empty())
+        }
+
+        /// Clear all elements
+        pub fn clear(&self) {
+            self.signal.update(|s| s.clear());
+        }
+
+        /// Replace the entire collection
+        pub fn set(&self, value: $collection_type) {
+            self.signal.set(value);
+        }
+    };
+}
+
 pub mod context;
-mod paste;
+pub mod deps;
+pub(crate) mod lock_utils;
+pub(crate) mod paste;
 mod use_accessibility;
 mod use_animation;
 pub(crate) mod use_app;
@@ -53,13 +98,13 @@ pub use use_signal::{Signal, use_signal};
 pub use use_toggle::{ToggleHandle, use_toggle, use_toggle_off, use_toggle_on};
 
 // === Side Effects ===
+pub use deps::DepsHash;
 pub use use_async::{AsyncHandle, AsyncState, use_async_state, use_async_state_with};
 pub use use_cmd::{Deps, use_cmd, use_cmd_once};
 pub use use_effect::{use_effect, use_effect_once};
 pub use use_transition::{TransitionHandle, use_transition, use_transition_with_easing};
 
 // === Input & Focus ===
-pub(crate) use paste::clear_paste_handlers;
 pub use paste::{
     BracketedPasteGuard, PasteEvent, disable_bracketed_paste, dispatch_paste,
     enable_bracketed_paste, is_bracketed_paste_enabled, use_paste,
@@ -94,7 +139,6 @@ pub use use_interval::{use_interval, use_interval_when, use_timeout};
 pub use use_accessibility::{
     clear_screen_reader_cache, set_screen_reader_enabled, use_is_screen_reader_enabled,
 };
-pub(crate) use use_measure::set_measure_context;
 pub use use_measure::{Dimensions, MeasureContext, MeasureRef, measure_element, use_measure};
 pub use use_media_query::{
     Breakpoint, MediaQuery, use_breakpoint, use_breakpoint_down, use_breakpoint_only,
@@ -115,4 +159,4 @@ pub use use_window_title::{
 
 // === Context ===
 pub use context::{HookContext, current_context, with_hooks};
-pub use use_app::{AppContext, get_app_context, set_app_context, use_app};
+pub use use_app::{AppContext, get_app_context, use_app};

@@ -2,6 +2,19 @@
 
 use crate::core::Color;
 
+/// Generate `impl From<LocalEnum> for taffy::TaffyEnum` for enums with matching variant names.
+macro_rules! impl_taffy_from {
+    ($local:ident => $taffy:ty { $($variant:ident),+ $(,)? }) => {
+        impl From<$local> for $taffy {
+            fn from(v: $local) -> Self {
+                match v {
+                    $( $local::$variant => <$taffy>::$variant, )+
+                }
+            }
+        }
+    };
+}
+
 /// Flex direction
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FlexDirection {
@@ -12,16 +25,9 @@ pub enum FlexDirection {
     ColumnReverse,
 }
 
-impl From<FlexDirection> for taffy::FlexDirection {
-    fn from(dir: FlexDirection) -> Self {
-        match dir {
-            FlexDirection::Row => taffy::FlexDirection::Row,
-            FlexDirection::Column => taffy::FlexDirection::Column,
-            FlexDirection::RowReverse => taffy::FlexDirection::RowReverse,
-            FlexDirection::ColumnReverse => taffy::FlexDirection::ColumnReverse,
-        }
-    }
-}
+impl_taffy_from!(FlexDirection => taffy::FlexDirection {
+    Row, Column, RowReverse, ColumnReverse,
+});
 
 /// Align items
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -34,17 +40,9 @@ pub enum AlignItems {
     Baseline,
 }
 
-impl From<AlignItems> for taffy::AlignItems {
-    fn from(align: AlignItems) -> Self {
-        match align {
-            AlignItems::Stretch => taffy::AlignItems::Stretch,
-            AlignItems::FlexStart => taffy::AlignItems::FlexStart,
-            AlignItems::FlexEnd => taffy::AlignItems::FlexEnd,
-            AlignItems::Center => taffy::AlignItems::Center,
-            AlignItems::Baseline => taffy::AlignItems::Baseline,
-        }
-    }
-}
+impl_taffy_from!(AlignItems => taffy::AlignItems {
+    Stretch, FlexStart, FlexEnd, Center, Baseline,
+});
 
 /// Align self
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -83,18 +81,9 @@ pub enum JustifyContent {
     SpaceEvenly,
 }
 
-impl From<JustifyContent> for taffy::JustifyContent {
-    fn from(justify: JustifyContent) -> Self {
-        match justify {
-            JustifyContent::FlexStart => taffy::JustifyContent::FlexStart,
-            JustifyContent::FlexEnd => taffy::JustifyContent::FlexEnd,
-            JustifyContent::Center => taffy::JustifyContent::Center,
-            JustifyContent::SpaceBetween => taffy::JustifyContent::SpaceBetween,
-            JustifyContent::SpaceAround => taffy::JustifyContent::SpaceAround,
-            JustifyContent::SpaceEvenly => taffy::JustifyContent::SpaceEvenly,
-        }
-    }
-}
+impl_taffy_from!(JustifyContent => taffy::JustifyContent {
+    FlexStart, FlexEnd, Center, SpaceBetween, SpaceAround, SpaceEvenly,
+});
 
 /// Display type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -104,14 +93,7 @@ pub enum Display {
     None,
 }
 
-impl From<Display> for taffy::Display {
-    fn from(display: Display) -> Self {
-        match display {
-            Display::Flex => taffy::Display::Flex,
-            Display::None => taffy::Display::None,
-        }
-    }
-}
+impl_taffy_from!(Display => taffy::Display { Flex, None });
 
 /// Position type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -121,14 +103,7 @@ pub enum Position {
     Absolute,
 }
 
-impl From<Position> for taffy::Position {
-    fn from(pos: Position) -> Self {
-        match pos {
-            Position::Relative => taffy::Position::Relative,
-            Position::Absolute => taffy::Position::Absolute,
-        }
-    }
-}
+impl_taffy_from!(Position => taffy::Position { Relative, Absolute });
 
 /// Overflow behavior
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -139,15 +114,7 @@ pub enum Overflow {
     Scroll,
 }
 
-impl From<Overflow> for taffy::Overflow {
-    fn from(overflow: Overflow) -> Self {
-        match overflow {
-            Overflow::Visible => taffy::Overflow::Visible,
-            Overflow::Hidden => taffy::Overflow::Hidden,
-            Overflow::Scroll => taffy::Overflow::Scroll,
-        }
-    }
-}
+impl_taffy_from!(Overflow => taffy::Overflow { Visible, Hidden, Scroll });
 
 /// Text wrapping behavior
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -223,23 +190,19 @@ impl From<Dimension> for taffy::Dimension {
     }
 }
 
-impl From<u16> for Dimension {
-    fn from(v: u16) -> Self {
-        Dimension::Points(v as f32)
-    }
+macro_rules! impl_numeric_from {
+    ($target:ident :: $variant:ident, $($num:ty),+ $(,)?) => {
+        $(
+            impl From<$num> for $target {
+                fn from(v: $num) -> Self {
+                    $target::$variant(v as f32)
+                }
+            }
+        )+
+    };
 }
 
-impl From<i32> for Dimension {
-    fn from(v: i32) -> Self {
-        Dimension::Points(v as f32)
-    }
-}
-
-impl From<f32> for Dimension {
-    fn from(v: f32) -> Self {
-        Dimension::Points(v)
-    }
-}
+impl_numeric_from!(Dimension::Points, u16, i32, f32);
 
 /// Edge values for padding/margin
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -288,23 +251,19 @@ impl Edges {
     }
 }
 
-impl From<f32> for Edges {
-    fn from(v: f32) -> Self {
-        Edges::all(v)
-    }
+macro_rules! impl_edges_from {
+    ($($num:ty),+ $(,)?) => {
+        $(
+            impl From<$num> for Edges {
+                fn from(v: $num) -> Self {
+                    Edges::all(v as f32)
+                }
+            }
+        )+
+    };
 }
 
-impl From<u16> for Edges {
-    fn from(v: u16) -> Self {
-        Edges::all(v as f32)
-    }
-}
-
-impl From<i32> for Edges {
-    fn from(v: i32) -> Self {
-        Edges::all(v as f32)
-    }
-}
+impl_edges_from!(f32, u16, i32);
 
 /// Complete style definition
 #[derive(Debug, Clone, PartialEq)]

@@ -4,17 +4,13 @@
 //! dependencies change, integrating the Hook system with the Command system.
 
 use super::context::current_context;
+use super::deps::DepsHash;
 use crate::cmd::Cmd;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 
 /// Trait for types that can be used as hook dependencies
-pub trait Deps {
+pub trait Deps: DepsHash {
     /// Output type returned when getting the dependency values
     type Output;
-
-    /// Calculate hash of the dependencies
-    fn deps_hash(&self) -> u64;
 
     /// Get the dependency values
     fn output(&self) -> Self::Output;
@@ -22,15 +18,9 @@ pub trait Deps {
 
 impl<T> Deps for T
 where
-    T: Hash + Clone,
+    T: DepsHash + Clone,
 {
     type Output = T;
-
-    fn deps_hash(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.hash(&mut hasher);
-        hasher.finish()
-    }
 
     fn output(&self) -> Self::Output {
         self.clone()

@@ -1,6 +1,5 @@
 //! Focus management hooks
 
-use std::cell::RefCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Unique focus ID generator
@@ -216,11 +215,6 @@ impl FocusManager {
     }
 }
 
-// Thread-local storage for focus manager (legacy fallback)
-thread_local! {
-    static FOCUS_MANAGER: RefCell<FocusManager> = RefCell::new(FocusManager::new());
-}
-
 /// Hook to make a component focusable
 ///
 /// # Example
@@ -238,82 +232,44 @@ thread_local! {
 pub fn use_focus(options: UseFocusOptions) -> FocusState {
     use crate::hooks::use_signal;
 
-    #[derive(Clone, Copy)]
-    struct FocusRegistration {
-        id: usize,
-        use_runtime: bool,
-    }
-
     let registration = use_signal(|| {
         if let Some(ctx) = crate::runtime::current_runtime() {
-            let id = ctx.borrow_mut().focus_manager_mut().register(
+            ctx.borrow_mut().focus_manager_mut().register(
                 options.id.clone(),
                 options.is_active,
                 options.auto_focus,
-            );
-            FocusRegistration {
-                id,
-                use_runtime: true,
-            }
+            )
         } else {
-            let id = FOCUS_MANAGER.with(|fm| {
-                fm.borrow_mut()
-                    .register(options.id.clone(), options.is_active, options.auto_focus)
-            });
-            FocusRegistration {
-                id,
-                use_runtime: false,
-            }
+            0 // no-op ID when no runtime
         }
     });
 
-    let registration = registration.get();
+    let id = registration.get();
 
     // Update metadata when options change
-    if registration.use_runtime {
-        if let Some(ctx) = crate::runtime::current_runtime() {
-            ctx.borrow_mut().focus_manager_mut().update(
-                registration.id,
-                options.id.clone(),
-                options.is_active,
-                options.auto_focus,
-            );
-        }
-    } else {
-        FOCUS_MANAGER.with(|fm| {
-            fm.borrow_mut().update(
-                registration.id,
-                options.id.clone(),
-                options.is_active,
-                options.auto_focus,
-            );
-        });
+    if let Some(ctx) = crate::runtime::current_runtime() {
+        ctx.borrow_mut().focus_manager_mut().update(
+            id,
+            options.id.clone(),
+            options.is_active,
+            options.auto_focus,
+        );
     }
 
     // Unregister on unmount
     crate::hooks::use_effect_once({
         move || {
             Some(Box::new(move || {
-                if registration.use_runtime {
-                    if let Some(ctx) = crate::runtime::current_runtime() {
-                        ctx.borrow_mut()
-                            .focus_manager_mut()
-                            .unregister(registration.id);
-                    }
-                } else {
-                    FOCUS_MANAGER.with(|fm| fm.borrow_mut().unregister(registration.id));
+                if let Some(ctx) = crate::runtime::current_runtime() {
+                    ctx.borrow_mut().focus_manager_mut().unregister(id);
                 }
             }))
         }
     });
 
-    let is_focused = if registration.use_runtime {
-        crate::runtime::current_runtime()
-            .map(|ctx| ctx.borrow().focus_manager().is_focused(registration.id))
-            .unwrap_or(false)
-    } else {
-        FOCUS_MANAGER.with(|fm| fm.borrow().is_focused(registration.id))
-    };
+    let is_focused = crate::runtime::current_runtime()
+        .map(|ctx| ctx.borrow().focus_manager().is_focused(id))
+        .unwrap_or(false);
 
     FocusState { is_focused }
 }
@@ -344,8 +300,6 @@ impl FocusManagerHandle {
     pub fn focus_next(&self) {
         if let Some(ctx) = crate::runtime::current_runtime() {
             ctx.borrow_mut().focus_manager_mut().focus_next();
-        } else {
-            FOCUS_MANAGER.with(|fm| fm.borrow_mut().focus_next());
         }
     }
 
@@ -353,8 +307,6 @@ impl FocusManagerHandle {
     pub fn focus_previous(&self) {
         if let Some(ctx) = crate::runtime::current_runtime() {
             ctx.borrow_mut().focus_manager_mut().focus_previous();
-        } else {
-            FOCUS_MANAGER.with(|fm| fm.borrow_mut().focus_previous());
         }
     }
 
@@ -362,8 +314,6 @@ impl FocusManagerHandle {
     pub fn focus(&self, id: &str) {
         if let Some(ctx) = crate::runtime::current_runtime() {
             ctx.borrow_mut().focus_manager_mut().focus(id);
-        } else {
-            FOCUS_MANAGER.with(|fm| fm.borrow_mut().focus(id));
         }
     }
 
@@ -373,8 +323,6 @@ impl FocusManagerHandle {
             ctx.borrow_mut()
                 .focus_manager_mut()
                 .enable_focus(id, enabled);
-        } else {
-            FOCUS_MANAGER.with(|fm| fm.borrow_mut().enable_focus(id, enabled));
         }
     }
 }
@@ -455,6 +403,7 @@ mod tests {
     #[test]
     fn test_focus_with_runtime() {
         use crate::runtime::{RuntimeContext, with_runtime};
+        use std::cell::RefCell;
         use std::rc::Rc;
 
         let ctx = Rc::new(RefCell::new(RuntimeContext::new()));

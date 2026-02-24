@@ -1,8 +1,6 @@
 //! Mouse input handling hook
 
 use crossterm::event::{MouseButton as CrosstermMouseButton, MouseEvent, MouseEventKind};
-use std::cell::RefCell;
-use std::rc::Rc;
 
 /// Mouse button
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,70 +129,41 @@ impl Mouse {
 /// Mouse handler type
 pub type MouseHandler = Box<dyn Fn(&Mouse)>;
 
-/// Internal mouse handler type (reference-counted for storage)
-type MouseHandlerRc = Rc<dyn Fn(&Mouse)>;
-
-thread_local! {
-    static MOUSE_HANDLERS: RefCell<Vec<MouseHandlerRc>> = RefCell::new(Vec::new());
-    static MOUSE_ENABLED: RefCell<bool> = const { RefCell::new(false) };
-}
-
-/// Register a mouse handler
+/// Register a mouse handler (requires RuntimeContext)
 pub fn register_mouse_handler<F>(handler: F)
 where
     F: Fn(&Mouse) + 'static,
 {
-    // Try to use RuntimeContext first, fall back to thread-local
     if let Some(ctx) = crate::runtime::current_runtime() {
         ctx.borrow_mut().register_mouse_handler(handler);
-    } else {
-        MOUSE_HANDLERS.with(|handlers| {
-            handlers.borrow_mut().push(Rc::new(handler));
-        });
-        set_mouse_enabled(true);
     }
 }
 
-/// Clear all mouse handlers
-pub fn clear_mouse_handlers() {
-    MOUSE_HANDLERS.with(|handlers| {
-        handlers.borrow_mut().clear();
-    });
-}
+/// Clear all mouse handlers (no-op, clearing is handled by RuntimeContext::prepare_render)
+pub fn clear_mouse_handlers() {}
 
 /// Dispatch mouse event to all handlers
 pub fn dispatch_mouse_event(event: &MouseEvent) {
     let mouse = Mouse::from_event(event);
 
-    // Try RuntimeContext first, fall back to thread-local
     if let Some(ctx) = crate::runtime::current_runtime() {
         ctx.borrow().dispatch_mouse(&mouse);
-    } else {
-        MOUSE_HANDLERS.with(|handlers| {
-            for handler in handlers.borrow().iter() {
-                handler(&mouse);
-            }
-        });
     }
 }
 
 /// Check if mouse mode should be enabled
 pub fn is_mouse_enabled() -> bool {
-    // Try RuntimeContext first, fall back to thread-local
     if let Some(ctx) = crate::runtime::current_runtime() {
         ctx.borrow().is_mouse_enabled()
     } else {
-        MOUSE_ENABLED.with(|enabled| *enabled.borrow())
+        false
     }
 }
 
 /// Set mouse enabled state
 pub fn set_mouse_enabled(enabled: bool) {
-    // Try RuntimeContext first, fall back to thread-local
     if let Some(ctx) = crate::runtime::current_runtime() {
         ctx.borrow_mut().set_mouse_enabled(enabled);
-    } else {
-        MOUSE_ENABLED.with(|e| *e.borrow_mut() = enabled);
     }
 }
 
@@ -271,13 +240,10 @@ mod tests {
     }
 
     #[test]
-    fn test_mouse_enabled_legacy() {
-        // Test thread-local fallback
-        MOUSE_ENABLED.with(|e| *e.borrow_mut() = false);
-        assert!(!MOUSE_ENABLED.with(|e| *e.borrow()));
-        MOUSE_ENABLED.with(|e| *e.borrow_mut() = true);
-        assert!(MOUSE_ENABLED.with(|e| *e.borrow()));
-        MOUSE_ENABLED.with(|e| *e.borrow_mut() = false); // Reset
+    fn test_mouse_enabled_default() {
+        // Without RuntimeContext, mouse is disabled by default
+        crate::runtime::set_current_runtime(None);
+        assert!(!is_mouse_enabled());
     }
 
     #[test]

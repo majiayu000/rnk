@@ -4,6 +4,7 @@
 
 use crate::animation::{Animation, AnimationInstance, AnimationState};
 use crate::hooks::context::{RenderCallback, current_context};
+use crate::hooks::lock_utils::{read_or_recover, write_or_recover};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
@@ -18,68 +19,68 @@ pub struct AnimationHandle {
 impl AnimationHandle {
     /// Get the current animated value
     pub fn get(&self) -> f32 {
-        self.instance.read().unwrap().get()
+        read_or_recover(&self.instance).get()
     }
 
     /// Get the current value as i32
     pub fn get_i32(&self) -> i32 {
-        self.instance.read().unwrap().get_i32()
+        read_or_recover(&self.instance).get_i32()
     }
 
     /// Get the current value as usize
     pub fn get_usize(&self) -> usize {
-        self.instance.read().unwrap().get_usize()
+        read_or_recover(&self.instance).get_usize()
     }
 
     /// Start or resume the animation
     pub fn play(&self) {
-        self.instance.write().unwrap().play();
+        write_or_recover(&self.instance).play();
         self.trigger_render();
     }
 
     /// Pause the animation
     pub fn pause(&self) {
-        self.instance.write().unwrap().pause();
+        write_or_recover(&self.instance).pause();
     }
 
     /// Reset the animation to the beginning
     pub fn reset(&self) {
-        self.instance.write().unwrap().reset();
+        write_or_recover(&self.instance).reset();
         self.trigger_render();
     }
 
     /// Check if the animation is running
     pub fn is_running(&self) -> bool {
-        self.instance.read().unwrap().is_running()
+        read_or_recover(&self.instance).is_running()
     }
 
     /// Check if the animation has completed
     pub fn is_completed(&self) -> bool {
-        self.instance.read().unwrap().is_completed()
+        read_or_recover(&self.instance).is_completed()
     }
 
     /// Get the current animation state
     pub fn state(&self) -> AnimationState {
-        self.instance.read().unwrap().state()
+        read_or_recover(&self.instance).state()
     }
 
     /// Get the animation progress (0.0 to 1.0)
     pub fn progress(&self) -> f32 {
-        self.instance.read().unwrap().progress()
+        read_or_recover(&self.instance).progress()
     }
 
     /// Tick the animation (called internally by the framework)
     pub fn tick(&self) {
         let now = Instant::now();
         let delta = {
-            let mut last = self.last_tick.write().unwrap();
+            let mut last = write_or_recover(&self.last_tick);
             let delta = now.duration_since(*last);
             *last = now;
             delta
         };
 
         let was_running = self.is_running();
-        self.instance.write().unwrap().tick(delta);
+        write_or_recover(&self.instance).tick(delta);
 
         // Only trigger render if animation is still running
         if was_running && self.is_running() {
@@ -102,15 +103,7 @@ impl AnimationHandle {
         self.instance.read().ok().map(|g| g.get())
     }
 
-    /// Try to get the current value as i32, returning None if lock is poisoned
-    pub fn try_get_i32(&self) -> Option<i32> {
-        self.instance.read().ok().map(|g| g.get_i32())
-    }
-
-    /// Try to get the current value as usize, returning None if lock is poisoned
-    pub fn try_get_usize(&self) -> Option<usize> {
-        self.instance.read().ok().map(|g| g.get_usize())
-    }
+    impl_try_get_conversions!();
 
     /// Try to start or resume the animation, returning false if lock is poisoned
     pub fn try_play(&self) -> bool {
@@ -167,7 +160,7 @@ impl AnimationHandle {
 
 impl std::fmt::Debug for AnimationHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let instance = self.instance.read().unwrap();
+        let instance = read_or_recover(&self.instance);
         f.debug_struct("AnimationHandle")
             .field("value", &instance.get())
             .field("state", &instance.state())

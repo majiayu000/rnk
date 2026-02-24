@@ -199,13 +199,13 @@ impl Snapshot {
     }
 }
 
-/// Golden file testing for snapshot comparisons
-pub struct GoldenTest {
+/// Golden file testing for string snapshot comparisons
+pub struct StringSnapshot {
     name: String,
     directory: String,
 }
 
-impl GoldenTest {
+impl StringSnapshot {
     /// Create a new golden test with default directory
     pub fn new(name: impl Into<String>) -> Self {
         Self {

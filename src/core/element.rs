@@ -244,6 +244,20 @@ impl Default for Element {
     }
 }
 
+/// Implement `From<T> for Element` for types that have `into_element(self) -> Element`.
+#[macro_export]
+macro_rules! impl_into_element {
+    ($($ty:ty),* $(,)?) => {
+        $(
+            impl From<$ty> for $crate::core::Element {
+                fn from(c: $ty) -> Self {
+                    c.into_element()
+                }
+            }
+        )*
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4,15 +4,8 @@
 //! of callbacks by caching values based on dependencies.
 
 use crate::hooks::context::current_context;
-use std::hash::{Hash, Hasher};
+use crate::hooks::deps::DepsHash;
 use std::sync::{Arc, RwLock};
-
-/// Compute a hash for dependency tracking
-fn compute_deps_hash<D: Hash>(deps: &D) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    deps.hash(&mut hasher);
-    hasher.finish()
-}
 
 /// Internal storage for memoized values
 #[derive(Clone)]
@@ -52,7 +45,7 @@ struct MemoStorage<T> {
 pub fn use_memo<T, D, F>(compute: F, deps: D) -> T
 where
     T: Clone + Send + Sync + 'static,
-    D: Hash,
+    D: DepsHash,
     F: FnOnce() -> T,
 {
     let Some(ctx) = current_context() else {
@@ -62,7 +55,7 @@ where
         return compute();
     };
 
-    let new_hash = compute_deps_hash(&deps);
+    let new_hash = deps.deps_hash();
 
     // Use an Option wrapper so the init closure does not consume `compute`.
     // This allows recomputing immediately when dependencies change.
@@ -159,7 +152,7 @@ struct CallbackStorage<F> {
 pub fn use_callback<F, D>(callback: F, deps: D) -> MemoizedCallback<F>
 where
     F: Clone + Send + Sync + 'static,
-    D: Hash,
+    D: DepsHash,
 {
     let Some(ctx) = current_context() else {
         return MemoizedCallback::new(callback);
@@ -168,7 +161,7 @@ where
         return MemoizedCallback::new(callback);
     };
 
-    let new_hash = compute_deps_hash(&deps);
+    let new_hash = deps.deps_hash();
 
     // Store the deps hash separately
     let hash_storage = ctx_ref.use_hook(|| new_hash);

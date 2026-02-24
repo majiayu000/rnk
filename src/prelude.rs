@@ -146,7 +146,9 @@ pub use crate::renderer::{
 // Hooks - State Management
 // =============================================================================
 
-pub use crate::hooks::{Deps, MemoizedCallback, Signal, use_callback, use_memo, use_signal};
+pub use crate::hooks::{
+    Deps, DepsHash, MemoizedCallback, Signal, use_callback, use_memo, use_signal,
+};
 
 // =============================================================================
 // Hooks - Side Effects
@@ -168,10 +170,9 @@ pub use crate::hooks::{
 // =============================================================================
 
 pub use crate::hooks::{
-    BracketedPasteGuard, Key, Mouse, MouseAction, MouseButton, PasteEvent, clear_mouse_handlers,
-    disable_bracketed_paste, dispatch_mouse_event, dispatch_paste, enable_bracketed_paste,
-    is_bracketed_paste_enabled, is_mouse_enabled, set_mouse_enabled, use_input, use_mouse,
-    use_paste,
+    BracketedPasteGuard, Key, Mouse, MouseAction, MouseButton, PasteEvent, disable_bracketed_paste,
+    dispatch_paste, enable_bracketed_paste, is_bracketed_paste_enabled, is_mouse_enabled,
+    use_input, use_mouse, use_paste,
 };
 
 // =============================================================================

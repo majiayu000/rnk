@@ -8,15 +8,53 @@ use crate::layout::LayoutEngine;
 use crate::renderer::tree_renderer::render_element_tree;
 use crate::renderer::{Output, Terminal};
 
+/// Options for controlling render-to-string behavior.
+#[derive(Debug, Clone)]
+pub struct RenderOptions {
+    /// Whether to trim trailing whitespace from each line (default: true)
+    pub trim: bool,
+    /// Whether to normalize CRLF to LF (default: true).
+    /// Set to false for raw terminal mode where CRLF is needed.
+    pub normalize_line_endings: bool,
+}
+
+impl Default for RenderOptions {
+    fn default() -> Self {
+        Self {
+            trim: true,
+            normalize_line_endings: true,
+        }
+    }
+}
+
+/// Render an element to a string with full control over options.
+pub fn render_to_string_with_options(
+    element: &Element,
+    width: u16,
+    options: &RenderOptions,
+) -> String {
+    let raw = RenderHelper.render_to_output(element, width);
+
+    if !options.normalize_line_endings {
+        return raw;
+    }
+
+    let normalized = raw.replace("\r\n", "\n");
+
+    if options.trim {
+        normalized
+            .lines()
+            .map(|line| line.trim_end())
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        normalized
+    }
+}
+
 /// Render an element to a string with specified width.
 ///
-/// This is useful for rendering elements outside the runtime,
-/// such as in CLI tools or for testing.
-///
-/// # Arguments
-///
-/// * `element` - The element to render
-/// * `width` - The maximum width for rendering
+/// Trims trailing whitespace and normalizes line endings to LF.
 ///
 /// # Example
 ///
@@ -32,19 +70,19 @@ use crate::renderer::{Output, Terminal};
 /// println!("{}", output);
 /// ```
 pub fn render_to_string(element: &Element, width: u16) -> String {
-    render_to_string_impl(element, width, true)
+    render_to_string_with_options(element, width, &RenderOptions::default())
 }
 
 /// Render an element to a string without trimming trailing spaces.
-///
-/// This is useful when you need to preserve exact spacing.
-///
-/// # Arguments
-///
-/// * `element` - The element to render
-/// * `width` - The maximum width for rendering
 pub fn render_to_string_no_trim(element: &Element, width: u16) -> String {
-    render_to_string_impl(element, width, false)
+    render_to_string_with_options(
+        element,
+        width,
+        &RenderOptions {
+            trim: false,
+            ..Default::default()
+        },
+    )
 }
 
 /// Render an element to a string with CRLF line endings for raw mode.
@@ -52,13 +90,17 @@ pub fn render_to_string_no_trim(element: &Element, width: u16) -> String {
 /// Use this when writing to a terminal in raw mode, where `\n` alone
 /// does not perform a carriage return.
 pub fn render_to_string_raw(element: &Element, width: u16) -> String {
-    let helper = RenderHelper;
-    helper.render_element_to_string_raw(element, width)
+    render_to_string_with_options(
+        element,
+        width,
+        &RenderOptions {
+            trim: false,
+            normalize_line_endings: false,
+        },
+    )
 }
 
 /// Render an element to a string with automatic width detection.
-///
-/// This detects the terminal width and uses it for rendering.
 ///
 /// # Example
 ///
@@ -74,39 +116,10 @@ pub fn render_to_string_auto(element: &Element) -> String {
     render_to_string(element, width)
 }
 
-/// Internal implementation for rendering element to string
-fn render_to_string_impl(element: &Element, width: u16, trim: bool) -> String {
-    let helper = RenderHelper;
-    helper.render_element_to_string_impl(element, width, trim)
-}
-
 /// Helper struct for rendering elements outside the app runtime
 struct RenderHelper;
 
 impl RenderHelper {
-    fn render_element_to_string_impl(&self, element: &Element, width: u16, trim: bool) -> String {
-        let rendered = self.render_to_output(element, width);
-
-        // Normalize line endings to LF and trim trailing spaces if requested
-        // output.render() uses CRLF for raw mode, but render_to_string should use LF
-        let normalized = rendered.replace("\r\n", "\n");
-
-        // Trim trailing spaces from each line if requested
-        if trim {
-            normalized
-                .lines()
-                .map(|line| line.trim_end())
-                .collect::<Vec<_>>()
-                .join("\n")
-        } else {
-            normalized
-        }
-    }
-
-    fn render_element_to_string_raw(&self, element: &Element, width: u16) -> String {
-        self.render_to_output(element, width)
-    }
-
     fn render_to_output(&self, element: &Element, width: u16) -> String {
         let mut engine = LayoutEngine::new();
         let layout_width = width;
@@ -120,7 +133,7 @@ impl RenderHelper {
         let mut output = Output::new(render_width, content_height);
         let clip_depth_before = output.clip_depth();
         render_element_tree(element, &engine, &mut output, 0.0, 0.0);
-        assert_eq!(
+        debug_assert_eq!(
             output.clip_depth(),
             clip_depth_before,
             "render_to_string left an unbalanced clip stack"

@@ -19,6 +19,53 @@
 
 use crate::core::{Color, Element, ElementType, Style, TextWrap};
 
+/// Generate chainable style setter methods for a type with a `style: Style` field.
+/// Each method takes `mut self`, sets the style field, and returns `self`.
+macro_rules! style_setters {
+    // Color setter: fn name(mut self, color: Color) -> Self
+    (color $name:ident => $field:ident, $doc:literal) => {
+        #[doc = $doc]
+        pub fn $name(mut self, color: Color) -> Self {
+            self.style.$field = Some(color);
+            self
+        }
+    };
+    // Bool setter: fn name(mut self) -> Self
+    (bool $name:ident => $field:ident, $doc:literal) => {
+        #[doc = $doc]
+        pub fn $name(mut self) -> Self {
+            self.style.$field = true;
+            self
+        }
+    };
+}
+
+/// Generate chainable style methods for Text that also propagate to child spans.
+/// Color methods only propagate when the span doesn't already have that color set.
+/// Bool methods propagate unconditionally.
+macro_rules! text_style_setters {
+    (color $name:ident => $field:ident, $doc:literal) => {
+        #[doc = $doc]
+        pub fn $name(mut self, color: Color) -> Self {
+            self.style.$field = Some(color);
+            self.for_each_span_mut(|span| {
+                if span.style.$field.is_none() {
+                    span.style.$field = Some(color);
+                }
+            });
+            self
+        }
+    };
+    (bool $name:ident => $field:ident, $doc:literal) => {
+        #[doc = $doc]
+        pub fn $name(mut self) -> Self {
+            self.style.$field = true;
+            self.for_each_span_mut(|span| span.style.$field = true);
+            self
+        }
+    };
+}
+
 /// A styled text fragment
 ///
 /// Span represents a piece of text with its own styling.
@@ -56,62 +103,23 @@ impl Span {
 
     // === Style methods (chainable) ===
 
-    /// Set text color
-    pub fn color(mut self, color: Color) -> Self {
-        self.style.color = Some(color);
-        self
-    }
+    style_setters!(color color => color, "Set text color");
+    style_setters!(color background => background_color, "Set background color");
+    style_setters!(bool bold => bold, "Set bold");
+    style_setters!(bool italic => italic, "Set italic");
+    style_setters!(bool underline => underline, "Set underline");
+    style_setters!(bool strikethrough => strikethrough, "Set strikethrough");
+    style_setters!(bool dim => dim, "Set dim");
+    style_setters!(bool inverse => inverse, "Set inverse");
 
     /// Set foreground color (alias for color)
     pub fn fg(self, color: Color) -> Self {
         self.color(color)
     }
 
-    /// Set background color
-    pub fn background(mut self, color: Color) -> Self {
-        self.style.background_color = Some(color);
-        self
-    }
-
     /// Set background color (alias)
     pub fn bg(self, color: Color) -> Self {
         self.background(color)
-    }
-
-    /// Set bold
-    pub fn bold(mut self) -> Self {
-        self.style.bold = true;
-        self
-    }
-
-    /// Set italic
-    pub fn italic(mut self) -> Self {
-        self.style.italic = true;
-        self
-    }
-
-    /// Set underline
-    pub fn underline(mut self) -> Self {
-        self.style.underline = true;
-        self
-    }
-
-    /// Set strikethrough
-    pub fn strikethrough(mut self) -> Self {
-        self.style.strikethrough = true;
-        self
-    }
-
-    /// Set dim
-    pub fn dim(mut self) -> Self {
-        self.style.dim = true;
-        self
-    }
-
-    /// Set inverse
-    pub fn inverse(mut self) -> Self {
-        self.style.inverse = true;
-        self
     }
 
     /// Get the display width of this span
@@ -274,73 +282,18 @@ impl Text {
 
     // === Text styles (applied as default to all spans) ===
 
-    /// Set text color
-    pub fn color(mut self, color: Color) -> Self {
-        self.style.color = Some(color);
-        self.for_each_span_mut(|span| {
-            if span.style.color.is_none() {
-                span.style.color = Some(color);
-            }
-        });
-        self
-    }
-
-    /// Set background color
-    pub fn background(mut self, color: Color) -> Self {
-        self.style.background_color = Some(color);
-        self.for_each_span_mut(|span| {
-            if span.style.background_color.is_none() {
-                span.style.background_color = Some(color);
-            }
-        });
-        self
-    }
+    text_style_setters!(color color => color, "Set text color");
+    text_style_setters!(color background => background_color, "Set background color");
+    text_style_setters!(bool bold => bold, "Set bold");
+    text_style_setters!(bool italic => italic, "Set italic");
+    text_style_setters!(bool underline => underline, "Set underline");
+    text_style_setters!(bool strikethrough => strikethrough, "Set strikethrough");
+    text_style_setters!(bool dim => dim, "Set dim (less bright)");
+    text_style_setters!(bool inverse => inverse, "Set inverse (swap foreground and background)");
 
     /// Alias for background
     pub fn bg(self, color: Color) -> Self {
         self.background(color)
-    }
-
-    /// Set bold
-    pub fn bold(mut self) -> Self {
-        self.style.bold = true;
-        self.for_each_span_mut(|span| span.style.bold = true);
-        self
-    }
-
-    /// Set italic
-    pub fn italic(mut self) -> Self {
-        self.style.italic = true;
-        self.for_each_span_mut(|span| span.style.italic = true);
-        self
-    }
-
-    /// Set underline
-    pub fn underline(mut self) -> Self {
-        self.style.underline = true;
-        self.for_each_span_mut(|span| span.style.underline = true);
-        self
-    }
-
-    /// Set strikethrough
-    pub fn strikethrough(mut self) -> Self {
-        self.style.strikethrough = true;
-        self.for_each_span_mut(|span| span.style.strikethrough = true);
-        self
-    }
-
-    /// Set dim (less bright)
-    pub fn dim(mut self) -> Self {
-        self.style.dim = true;
-        self.for_each_span_mut(|span| span.style.dim = true);
-        self
-    }
-
-    /// Set inverse (swap foreground and background)
-    pub fn inverse(mut self) -> Self {
-        self.style.inverse = true;
-        self.for_each_span_mut(|span| span.style.inverse = true);
-        self
     }
 
     /// Set text wrap behavior

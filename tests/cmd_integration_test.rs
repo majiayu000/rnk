@@ -8,6 +8,8 @@
 
 use rnk::cmd::{Cmd, CmdExecutor, HttpRequest};
 use rnk::hooks::{HookContext, use_cmd, with_hooks};
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -230,8 +232,7 @@ async fn test_process_spawn_integration() {
 /// Verifies: Hook dependency tracking + command queueing
 #[test]
 fn test_use_cmd_hook_integration() {
-    use std::sync::RwLock;
-    let ctx = Arc::new(RwLock::new(HookContext::new()));
+    let ctx = Rc::new(RefCell::new(HookContext::new()));
     let execution_count = Arc::new(AtomicU32::new(0));
 
     // First render - should execute
@@ -247,7 +248,7 @@ fn test_use_cmd_hook_integration() {
     }
 
     assert_eq!(execution_count.load(Ordering::SeqCst), 1);
-    let cmds = ctx.write().unwrap().take_cmds();
+    let cmds = ctx.borrow_mut().take_cmds();
     assert_eq!(cmds.len(), 1);
 
     // Second render - same deps, should not execute
@@ -262,7 +263,7 @@ fn test_use_cmd_hook_integration() {
     }
 
     assert_eq!(execution_count.load(Ordering::SeqCst), 1); // Still 1
-    let cmds = ctx.write().unwrap().take_cmds();
+    let cmds = ctx.borrow_mut().take_cmds();
     assert_eq!(cmds.len(), 0); // No new commands
 
     // Third render - different deps, should execute
@@ -278,7 +279,7 @@ fn test_use_cmd_hook_integration() {
     }
 
     assert_eq!(execution_count.load(Ordering::SeqCst), 2);
-    let cmds = ctx.write().unwrap().take_cmds();
+    let cmds = ctx.borrow_mut().take_cmds();
     assert_eq!(cmds.len(), 1);
 }
 

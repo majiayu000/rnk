@@ -1,25 +1,8 @@
 //! Effect hook for side effects
 
 use crate::hooks::context::{Effect, current_context};
+use crate::hooks::deps::DepsHash;
 use std::any::TypeId;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-
-/// Trait for types that can be used as effect dependencies
-pub trait Deps {
-    fn to_hash(&self) -> u64;
-}
-
-impl<T> Deps for T
-where
-    T: Hash,
-{
-    fn to_hash(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.hash(&mut hasher);
-        hasher.finish()
-    }
-}
 
 /// Storage for effect state
 #[derive(Clone)]
@@ -50,7 +33,7 @@ struct EffectStorage {
 pub fn use_effect<F, D>(effect: F, deps: D)
 where
     F: FnOnce() -> Option<Box<dyn FnOnce() + Send>> + Send + 'static,
-    D: Deps + 'static,
+    D: DepsHash + 'static,
 {
     let Some(ctx) = current_context() else {
         if let Some(cleanup) = effect() {
@@ -65,7 +48,7 @@ where
         return;
     };
 
-    let new_deps_hash = deps.to_hash();
+    let new_deps_hash = deps.deps_hash();
 
     // Get or create effect storage
     let (storage, effect_slot) = ctx_ref.use_hook_with_index(|| EffectStorage {
@@ -159,25 +142,31 @@ mod tests {
         let deps2 = (1i32, 2i32);
         let deps3 = (1i32, 3i32);
 
-        assert_eq!(deps1.to_hash(), deps2.to_hash());
-        assert_ne!(deps1.to_hash(), deps3.to_hash());
+        assert_eq!(deps1.deps_hash(), deps2.deps_hash());
+        assert_ne!(deps1.deps_hash(), deps3.deps_hash());
     }
 
     #[test]
     fn test_deps_hash_tuple_arity() {
-        assert_eq!((1i32,).to_hash(), (1i32,).to_hash());
-        assert_ne!((1i32,).to_hash(), (2i32,).to_hash());
-
-        assert_eq!((1i32, 2i32, 3i32).to_hash(), (1i32, 2i32, 3i32).to_hash());
-        assert_ne!((1i32, 2i32, 3i32).to_hash(), (1i32, 2i32, 4i32).to_hash());
+        assert_eq!((1i32,).deps_hash(), (1i32,).deps_hash());
+        assert_ne!((1i32,).deps_hash(), (2i32,).deps_hash());
 
         assert_eq!(
-            (1i32, 2i32, 3i32, 4i32).to_hash(),
-            (1i32, 2i32, 3i32, 4i32).to_hash()
+            (1i32, 2i32, 3i32).deps_hash(),
+            (1i32, 2i32, 3i32).deps_hash()
         );
         assert_ne!(
-            (1i32, 2i32, 3i32, 4i32).to_hash(),
-            (1i32, 2i32, 3i32, 5i32).to_hash()
+            (1i32, 2i32, 3i32).deps_hash(),
+            (1i32, 2i32, 4i32).deps_hash()
+        );
+
+        assert_eq!(
+            (1i32, 2i32, 3i32, 4i32).deps_hash(),
+            (1i32, 2i32, 3i32, 4i32).deps_hash()
+        );
+        assert_ne!(
+            (1i32, 2i32, 3i32, 4i32).deps_hash(),
+            (1i32, 2i32, 3i32, 5i32).deps_hash()
         );
     }
 

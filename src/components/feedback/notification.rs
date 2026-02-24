@@ -2,7 +2,7 @@
 //!
 //! Provides toast-style notifications with auto-dismiss and various styles.
 
-use crate::components::status::{StatusLevel, status_style};
+use crate::components::status::{StatusLevel, impl_status_level_from, status_style};
 use crate::components::{Box, Text};
 use crate::core::{AlignItems, Color, Element, FlexDirection, JustifyContent};
 
@@ -37,16 +37,7 @@ impl NotificationLevel {
     }
 }
 
-impl From<NotificationLevel> for StatusLevel {
-    fn from(level: NotificationLevel) -> Self {
-        match level {
-            NotificationLevel::Info => StatusLevel::Info,
-            NotificationLevel::Success => StatusLevel::Success,
-            NotificationLevel::Warning => StatusLevel::Warning,
-            NotificationLevel::Error => StatusLevel::Error,
-        }
-    }
-}
+impl_status_level_from!(NotificationLevel);
 
 /// Position for notification display
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

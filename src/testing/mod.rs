@@ -24,5 +24,5 @@ mod renderer;
 pub use assertions::*;
 pub use generators::*;
 pub use golden::*;
-pub use harness::{GoldenTest, Snapshot, TestHarness};
+pub use harness::{Snapshot, StringSnapshot, TestHarness};
 pub use renderer::{LayoutError, TestRenderer, display_width, strip_ansi_codes};

@@ -1,6 +1,7 @@
 //! Signal hook for reactive state management
 
 use crate::hooks::context::{RenderCallback, current_context};
+use crate::hooks::lock_utils::{read_or_recover, write_or_recover};
 use std::sync::{Arc, RwLock};
 
 /// A reactive signal that triggers re-renders when updated
@@ -24,7 +25,7 @@ impl<T> Signal<T> {
     where
         T: Clone,
     {
-        self.value.read().unwrap().clone()
+        read_or_recover(&self.value).clone()
     }
 
     /// Get a read lock guard, avoiding clone (useful for large data structures)
@@ -32,7 +33,7 @@ impl<T> Signal<T> {
     /// # Panics
     /// Panics if the lock is poisoned. Use `try_get_ref()` for non-panicking version.
     pub fn get_ref(&self) -> std::sync::RwLockReadGuard<'_, T> {
-        self.value.read().unwrap()
+        read_or_recover(&self.value)
     }
 
     /// Try to get a clone of the value, returning None if lock is poisoned
@@ -50,7 +51,7 @@ impl<T> Signal<T> {
 
     /// Get a reference to the current value
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        f(&self.value.read().unwrap())
+        f(&read_or_recover(&self.value))
     }
 
     /// Try to get a reference to the current value, returning None if lock is poisoned
@@ -60,7 +61,7 @@ impl<T> Signal<T> {
 
     /// Set a new value and trigger re-render
     pub fn set(&self, value: T) {
-        *self.value.write().unwrap() = value;
+        *write_or_recover(&self.value) = value;
         self.trigger_render();
     }
 
@@ -77,7 +78,7 @@ impl<T> Signal<T> {
 
     /// Update the value using a function and trigger re-render
     pub fn update(&self, f: impl FnOnce(&mut T)) {
-        f(&mut self.value.write().unwrap());
+        f(&mut write_or_recover(&self.value));
         self.trigger_render();
     }
 
@@ -94,7 +95,7 @@ impl<T> Signal<T> {
 
     /// Modify the value without triggering re-render
     pub fn set_silent(&self, value: T) {
-        *self.value.write().unwrap() = value;
+        *write_or_recover(&self.value) = value;
     }
 
     /// Try to modify the value without triggering re-render, returning false if lock is poisoned
@@ -116,13 +117,13 @@ impl<T> Signal<T> {
 
 impl<T: std::fmt::Display> std::fmt::Display for Signal<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.value.read().unwrap())
+        write!(f, "{}", read_or_recover(&self.value))
     }
 }
 
 impl<T: std::fmt::Debug> std::fmt::Debug for Signal<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Signal({:?})", self.value.read().unwrap())
+        write!(f, "Signal({:?})", read_or_recover(&self.value))
     }
 }
 

@@ -81,6 +81,8 @@ impl CmdExecutor {
             .thread_name("rnk-cmd-executor")
             .enable_all()
             .build()
+            // Safety: Tokio runtime creation only fails if the OS cannot spawn threads
+            // (e.g., resource exhaustion). This is unrecoverable at app startup.
             .expect("Failed to create Tokio runtime");
 
         Self {
@@ -128,6 +130,8 @@ impl CmdExecutor {
         completion: Option<tokio::sync::oneshot::Sender<()>>,
         notify_render: bool,
     ) {
+        // Safety: `runtime` is only set to None in `shutdown()`. Callers must not
+        // invoke `execute_inner` after shutdown; this is enforced by the App lifecycle.
         let runtime = self.runtime.as_ref().expect("executor was shutdown");
         let render_handle = self.render_handle.clone();
 

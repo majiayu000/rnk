@@ -40,15 +40,7 @@ where
         self.signal.get()
     }
 
-    /// Get the length of the list
-    pub fn len(&self) -> usize {
-        self.signal.with(|v| v.len())
-    }
-
-    /// Check if the list is empty
-    pub fn is_empty(&self) -> bool {
-        self.signal.with(|v| v.is_empty())
-    }
+    impl_collection_handle!(Vec<T>);
 
     /// Push an item to the end
     pub fn push(&self, item: T) {
@@ -82,16 +74,6 @@ where
             }
         });
         result
-    }
-
-    /// Clear all items
-    pub fn clear(&self) {
-        self.signal.update(|v| v.clear());
-    }
-
-    /// Set the entire list
-    pub fn set(&self, items: Vec<T>) {
-        self.signal.set(items);
     }
 
     /// Get an item at the given index

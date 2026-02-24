@@ -22,9 +22,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use crate::cmd::Cmd;
 use crate::hooks::context::{HookContext, HookStorage};
+use crate::hooks::paste::PasteEvent;
 use crate::hooks::use_focus::FocusManager;
 use crate::hooks::use_input::Key;
 use crate::hooks::use_mouse::Mouse;
@@ -35,6 +37,9 @@ pub type InputHandlerFn = Rc<dyn Fn(&str, &Key)>;
 
 /// Mouse handler function type
 pub type MouseHandlerFn = Rc<dyn Fn(&Mouse)>;
+
+/// Paste handler function type
+pub type PasteHandlerFn = Rc<dyn Fn(&PasteEvent)>;
 
 /// Unified runtime context for an rnk application
 ///
@@ -65,8 +70,14 @@ pub struct RuntimeContext {
     /// Whether screen reader mode is enabled
     screen_reader_enabled: bool,
 
+    /// Paste handlers registered via use_paste
+    paste_handlers: Vec<PasteHandlerFn>,
+
+    /// Last user activity timestamp for idle detection
+    last_activity: Instant,
+
     /// Measured element dimensions (element_id -> (width, height))
-    measurements: std::collections::HashMap<u64, (u16, u16)>,
+    measurements: std::collections::HashMap<crate::core::ElementId, (u16, u16)>,
 
     /// Shared frame rate statistics
     frame_rate_stats: Option<Arc<SharedFrameRateStats>>,
@@ -84,6 +95,8 @@ impl RuntimeContext {
             exit_flag: Arc::new(AtomicBool::new(false)),
             render_handle: None,
             screen_reader_enabled: false,
+            paste_handlers: Vec::new(),
+            last_activity: Instant::now(),
             measurements: std::collections::HashMap::new(),
             frame_rate_stats: None,
         }
@@ -100,6 +113,8 @@ impl RuntimeContext {
             exit_flag,
             render_handle: Some(render_handle),
             screen_reader_enabled: false,
+            paste_handlers: Vec::new(),
+            last_activity: Instant::now(),
             measurements: std::collections::HashMap::new(),
             frame_rate_stats: None,
         }
@@ -107,10 +122,11 @@ impl RuntimeContext {
 
     // === Hook Context Methods ===
 
-    /// Clear per-render input/mouse registrations.
+    /// Clear per-render input/mouse/paste registrations.
     pub fn prepare_render(&mut self) {
         self.input_handlers.clear();
         self.mouse_handlers.clear();
+        self.paste_handlers.clear();
         self.mouse_enabled = false;
     }
 
@@ -216,6 +232,40 @@ impl RuntimeContext {
         self.mouse_enabled = enabled;
     }
 
+    // === Paste Handler Methods ===
+
+    /// Register a paste handler
+    pub fn register_paste_handler<F>(&mut self, handler: F)
+    where
+        F: Fn(&PasteEvent) + 'static,
+    {
+        self.paste_handlers.push(Rc::new(handler));
+    }
+
+    /// Dispatch paste event to all handlers
+    pub fn dispatch_paste(&self, event: &PasteEvent) {
+        for handler in &self.paste_handlers {
+            handler(event);
+        }
+    }
+
+    /// Get the number of registered paste handlers
+    pub fn paste_handler_count(&self) -> usize {
+        self.paste_handlers.len()
+    }
+
+    // === Idle Tracking Methods ===
+
+    /// Record user activity (resets idle timer)
+    pub fn record_activity(&mut self) {
+        self.last_activity = Instant::now();
+    }
+
+    /// Get the duration since last activity
+    pub fn idle_duration(&self) -> Duration {
+        self.last_activity.elapsed()
+    }
+
     // === Focus Manager Methods ===
 
     /// Get mutable access to the focus manager
@@ -294,13 +344,32 @@ impl RuntimeContext {
     // === Measurement Methods ===
 
     /// Store a measurement for an element
-    pub fn set_measurement(&mut self, element_id: u64, width: u16, height: u16) {
+    pub fn set_measurement(&mut self, element_id: crate::core::ElementId, width: u16, height: u16) {
         self.measurements.insert(element_id, (width, height));
     }
 
     /// Get a measurement for an element
-    pub fn get_measurement(&self, element_id: u64) -> Option<(u16, u16)> {
+    pub fn get_measurement(&self, element_id: crate::core::ElementId) -> Option<(u16, u16)> {
         self.measurements.get(&element_id).copied()
+    }
+
+    /// Replace all measurements (called by renderer after layout)
+    pub fn set_measure_layouts(
+        &mut self,
+        layouts: std::collections::HashMap<crate::core::ElementId, crate::layout::Layout>,
+    ) {
+        self.measurements.clear();
+        for (id, layout) in layouts {
+            self.measurements
+                .insert(id, (layout.width as u16, layout.height as u16));
+        }
+    }
+
+    /// Get measurement as Dimensions (width, height as f32)
+    pub fn get_measurement_dims(&self, element_id: crate::core::ElementId) -> Option<(f32, f32)> {
+        self.measurements
+            .get(&element_id)
+            .map(|&(w, h)| (w as f32, h as f32))
     }
 
     // === Frame Rate Stats Methods ===
@@ -433,11 +502,13 @@ mod tests {
 
     #[test]
     fn test_runtime_context_measurements() {
+        use crate::core::ElementId;
         let mut ctx = RuntimeContext::new();
-        assert!(ctx.get_measurement(1).is_none());
+        let id = ElementId::new();
+        assert!(ctx.get_measurement(id).is_none());
 
-        ctx.set_measurement(1, 80, 24);
-        assert_eq!(ctx.get_measurement(1), Some((80, 24)));
+        ctx.set_measurement(id, 80, 24);
+        assert_eq!(ctx.get_measurement(id), Some((80, 24)));
     }
 
     #[test]

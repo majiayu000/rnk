@@ -41,15 +41,7 @@ where
         self.signal.get()
     }
 
-    /// Get the number of elements
-    pub fn len(&self) -> usize {
-        self.signal.with(|s| s.len())
-    }
-
-    /// Check if the set is empty
-    pub fn is_empty(&self) -> bool {
-        self.signal.with(|s| s.is_empty())
-    }
+    impl_collection_handle!(HashSet<T>);
 
     /// Insert an element
     pub fn insert(&self, value: T) -> bool {
@@ -87,16 +79,6 @@ where
             }
         });
         is_present
-    }
-
-    /// Clear all elements
-    pub fn clear(&self) {
-        self.signal.update(|s| s.clear());
-    }
-
-    /// Set the entire set
-    pub fn set(&self, set: HashSet<T>) {
-        self.signal.set(set);
     }
 
     /// Get all elements as a Vec
