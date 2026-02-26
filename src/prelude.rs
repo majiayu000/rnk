@@ -35,7 +35,7 @@ pub use crate::core::{
 // Layout Components
 // =============================================================================
 
-pub use crate::components::{Box, Spacer, Static, Transform};
+pub use crate::components::{Box, Box as LayoutBox, Spacer, Static, Transform};
 
 // =============================================================================
 // Display Components - Text & Content
@@ -147,14 +147,17 @@ pub use crate::renderer::{
 // =============================================================================
 
 pub use crate::hooks::{
-    Deps, DepsHash, MemoizedCallback, Signal, use_callback, use_memo, use_signal,
+    Context, Deps, DepsHash, MemoizedCallback, RefHandle, Signal, StateSetter, create_context,
+    use_callback, use_context, use_memo, use_ref, use_signal, use_state, with_context,
 };
 
 // =============================================================================
 // Hooks - Side Effects
 // =============================================================================
 
-pub use crate::hooks::{use_cmd, use_cmd_once, use_effect, use_effect_once};
+pub use crate::hooks::{
+    use_cmd, use_cmd_once, use_effect, use_effect_once, use_layout_effect, use_layout_effect_once,
+};
 
 // =============================================================================
 // Hooks - Animation
@@ -170,9 +173,9 @@ pub use crate::hooks::{
 // =============================================================================
 
 pub use crate::hooks::{
-    BracketedPasteGuard, Key, Mouse, MouseAction, MouseButton, PasteEvent, disable_bracketed_paste,
-    dispatch_paste, enable_bracketed_paste, is_bracketed_paste_enabled, is_mouse_enabled,
-    use_input, use_mouse, use_paste,
+    BracketedPasteGuard, Key, KeyCodeKind, MediaKeyKind, Mouse, MouseAction, MouseButton,
+    PasteEvent, disable_bracketed_paste, dispatch_paste, enable_bracketed_paste,
+    is_bracketed_paste_enabled, is_mouse_enabled, use_input, use_mouse, use_paste,
 };
 
 // =============================================================================
@@ -189,7 +192,7 @@ pub use crate::hooks::{
 
 pub use crate::hooks::{
     Dimensions, MeasureContext, MeasureRef, ScrollHandle, ScrollState, measure_element,
-    use_measure, use_scroll,
+    measure_element_by_key, use_measure, use_scroll,
 };
 
 // =============================================================================
@@ -202,3 +205,39 @@ pub use crate::hooks::{
     use_app, use_frame_rate, use_is_screen_reader_enabled, use_stderr, use_stdin, use_stdout,
     use_window_title, use_window_title_fn,
 };
+
+// =============================================================================
+// Lite Prelude (Low-Conflict Imports)
+// =============================================================================
+
+/// A minimal import set for users who want less namespace pollution.
+///
+/// ```ignore
+/// use rnk::prelude::lite::*;
+/// ```
+pub mod lite {
+    pub use crate::components::{Box as LayoutBox, Spacer, Text};
+    pub use crate::core::{Color, Element, FlexDirection, Style};
+    pub use crate::hooks::{Key, use_app, use_effect, use_input, use_signal};
+    pub use crate::renderer::{render, render_to_string};
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_layout_box_alias_compiles() {
+        use super::*;
+        let _element = LayoutBox::new()
+            .child(Text::new("ok").into_element())
+            .into_element();
+    }
+
+    #[test]
+    fn test_lite_prelude_compiles() {
+        use super::lite::*;
+        let _element = LayoutBox::new()
+            .child(Text::new("lite").into_element())
+            .into_element();
+        let _style = Style::new().fg(Color::Green);
+    }
+}

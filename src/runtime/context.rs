@@ -25,6 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::cmd::Cmd;
+use crate::components::Theme;
 use crate::hooks::context::{HookContext, HookStorage};
 use crate::hooks::paste::PasteEvent;
 use crate::hooks::use_focus::FocusManager;
@@ -69,6 +70,8 @@ pub struct RuntimeContext {
 
     /// Whether screen reader mode is enabled
     screen_reader_enabled: bool,
+    /// Whether screen reader state has been initialized/detected
+    screen_reader_initialized: bool,
 
     /// Paste handlers registered via use_paste
     paste_handlers: Vec<PasteHandlerFn>,
@@ -78,9 +81,14 @@ pub struct RuntimeContext {
 
     /// Measured element dimensions (element_id -> (width, height))
     measurements: std::collections::HashMap<crate::core::ElementId, (u16, u16)>,
+    /// Measured element dimensions by user key (key -> (width, height))
+    measurements_by_key: std::collections::HashMap<String, (u16, u16)>,
 
     /// Shared frame rate statistics
     frame_rate_stats: Option<Arc<SharedFrameRateStats>>,
+
+    /// Current theme for this runtime (isolated per app/runtime context)
+    theme: Theme,
 }
 
 impl RuntimeContext {
@@ -95,10 +103,13 @@ impl RuntimeContext {
             exit_flag: Arc::new(AtomicBool::new(false)),
             render_handle: None,
             screen_reader_enabled: false,
+            screen_reader_initialized: false,
             paste_handlers: Vec::new(),
             last_activity: Instant::now(),
             measurements: std::collections::HashMap::new(),
+            measurements_by_key: std::collections::HashMap::new(),
             frame_rate_stats: None,
+            theme: Theme::dark(),
         }
     }
 
@@ -113,10 +124,13 @@ impl RuntimeContext {
             exit_flag,
             render_handle: Some(render_handle),
             screen_reader_enabled: false,
+            screen_reader_initialized: false,
             paste_handlers: Vec::new(),
             last_activity: Instant::now(),
             measurements: std::collections::HashMap::new(),
+            measurements_by_key: std::collections::HashMap::new(),
             frame_rate_stats: None,
+            theme: Theme::dark(),
         }
     }
 
@@ -336,9 +350,15 @@ impl RuntimeContext {
         self.screen_reader_enabled
     }
 
+    /// Whether the screen reader status has been initialized.
+    pub fn is_screen_reader_initialized(&self) -> bool {
+        self.screen_reader_initialized
+    }
+
     /// Set screen reader mode
     pub fn set_screen_reader_enabled(&mut self, enabled: bool) {
         self.screen_reader_enabled = enabled;
+        self.screen_reader_initialized = true;
     }
 
     // === Measurement Methods ===
@@ -359,9 +379,30 @@ impl RuntimeContext {
         layouts: std::collections::HashMap<crate::core::ElementId, crate::layout::Layout>,
     ) {
         self.measurements.clear();
+        self.measurements_by_key.clear();
         for (id, layout) in layouts {
             self.measurements
                 .insert(id, (layout.width as u16, layout.height as u16));
+        }
+    }
+
+    /// Replace all measurements with optional key-indexed measurements.
+    pub fn set_measure_layouts_with_keys(
+        &mut self,
+        layouts: std::collections::HashMap<crate::core::ElementId, crate::layout::Layout>,
+        keyed_layouts: std::collections::HashMap<String, crate::layout::Layout>,
+    ) {
+        self.measurements.clear();
+        self.measurements_by_key.clear();
+
+        for (id, layout) in layouts {
+            self.measurements
+                .insert(id, (layout.width as u16, layout.height as u16));
+        }
+
+        for (key, layout) in keyed_layouts {
+            self.measurements_by_key
+                .insert(key, (layout.width as u16, layout.height as u16));
         }
     }
 
@@ -369,6 +410,13 @@ impl RuntimeContext {
     pub fn get_measurement_dims(&self, element_id: crate::core::ElementId) -> Option<(f32, f32)> {
         self.measurements
             .get(&element_id)
+            .map(|&(w, h)| (w as f32, h as f32))
+    }
+
+    /// Get measurement by user key as Dimensions (width, height as f32)
+    pub fn get_measurement_by_key_dims(&self, key: &str) -> Option<(f32, f32)> {
+        self.measurements_by_key
+            .get(key)
             .map(|&(w, h)| (w as f32, h as f32))
     }
 
@@ -382,6 +430,18 @@ impl RuntimeContext {
     /// Get the shared frame rate stats
     pub fn frame_rate_stats(&self) -> Option<&Arc<SharedFrameRateStats>> {
         self.frame_rate_stats.as_ref()
+    }
+
+    // === Theme Methods ===
+
+    /// Set the current theme for this runtime.
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme;
+    }
+
+    /// Get the current theme for this runtime.
+    pub fn theme(&self) -> Theme {
+        self.theme.clone()
     }
 }
 
@@ -420,9 +480,6 @@ where
     // Set the current context
     set_current_runtime(Some(ctx.clone()));
 
-    // Begin render
-    ctx.borrow_mut().begin_render();
-
     // Run the function (use a guard to ensure cleanup on panic)
     struct RuntimeGuard {
         prev: Option<Rc<RefCell<RuntimeContext>>>,
@@ -434,13 +491,11 @@ where
     }
     let guard = RuntimeGuard { prev };
 
-    let result = f();
-
-    // End render
-    ctx.borrow_mut().end_render();
-
-    // Run effects
-    ctx.borrow_mut().run_effects();
+    // Keep runtime + hook lifecycle aligned so closures that run under
+    // with_runtime can safely use hook APIs when needed.
+    ctx.borrow_mut().prepare_render();
+    let hook_context = ctx.borrow().hook_context();
+    let result = crate::hooks::context::with_hooks(hook_context, f);
 
     // Restore the previous context (guard handles this on drop, but
     // we do it explicitly here so the guard doesn't double-restore)
@@ -509,6 +564,44 @@ mod tests {
 
         ctx.set_measurement(id, 80, 24);
         assert_eq!(ctx.get_measurement(id), Some((80, 24)));
+    }
+
+    #[test]
+    fn test_runtime_context_measurements_by_key() {
+        use crate::core::ElementId;
+        use crate::layout::Layout;
+        use std::collections::HashMap;
+
+        let mut ctx = RuntimeContext::new();
+        let id = ElementId::new();
+        let mut by_id = HashMap::new();
+        by_id.insert(
+            id,
+            Layout {
+                x: 0.0,
+                y: 0.0,
+                width: 42.0,
+                height: 9.0,
+            },
+        );
+
+        let mut by_key = HashMap::new();
+        by_key.insert(
+            "main-panel".to_string(),
+            Layout {
+                x: 0.0,
+                y: 0.0,
+                width: 42.0,
+                height: 9.0,
+            },
+        );
+
+        ctx.set_measure_layouts_with_keys(by_id, by_key);
+        assert_eq!(ctx.get_measurement(id), Some((42, 9)));
+        assert_eq!(
+            ctx.get_measurement_by_key_dims("main-panel"),
+            Some((42.0, 9.0))
+        );
     }
 
     #[test]

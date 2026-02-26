@@ -16,7 +16,11 @@ pub(crate) struct AppId(u64);
 
 impl AppId {
     pub(crate) fn new() -> Self {
-        Self(APP_ID_COUNTER.fetch_add(1, Ordering::SeqCst))
+        if let Some(id) = take_recycled_app_id() {
+            id
+        } else {
+            Self(next_fresh_app_id())
+        }
     }
 
     pub(crate) fn from_raw(raw: u64) -> Option<Self> {
@@ -29,6 +33,30 @@ impl AppId {
 }
 
 static APP_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+static RECYCLED_APP_IDS: OnceLock<Mutex<Vec<u64>>> = OnceLock::new();
+
+fn recycled_app_ids() -> &'static Mutex<Vec<u64>> {
+    RECYCLED_APP_IDS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn take_recycled_app_id() -> Option<AppId> {
+    let mut ids = recycled_app_ids().lock().ok()?;
+    ids.pop().and_then(AppId::from_raw)
+}
+
+fn recycle_app_id(id: AppId) {
+    if let Ok(mut ids) = recycled_app_ids().lock() {
+        ids.push(id.raw());
+    }
+}
+
+fn next_fresh_app_id() -> u64 {
+    APP_ID_COUNTER
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+            current.checked_add(1).filter(|next| *next != 0)
+        })
+        .unwrap_or_else(|_| panic!("AppId counter exhausted; cannot allocate more app IDs"))
+}
 
 // === Printable ===
 
@@ -74,6 +102,7 @@ pub(crate) trait AppSink: Send + Sync {
     fn exit_alt_screen(&self);
     fn is_alt_screen(&self) -> bool;
     fn queue_exec(&self, request: ExecRequest);
+    fn queue_terminal_cmd(&self, cmd: TerminalCmd);
     fn request_suspend(&self);
 }
 
@@ -97,6 +126,7 @@ pub(crate) struct AppRuntime {
     mode_switch_request: Mutex<Option<ModeSwitch>>,
     alt_screen_state: Arc<AtomicBool>,
     exec_queue: Mutex<Vec<ExecRequest>>,
+    terminal_cmd_queue: Mutex<Vec<TerminalCmd>>,
     suspend_request: AtomicBool,
 }
 
@@ -109,6 +139,7 @@ impl AppRuntime {
             mode_switch_request: Mutex::new(None),
             alt_screen_state: Arc::new(AtomicBool::new(alternate_screen)),
             exec_queue: Mutex::new(Vec::new()),
+            terminal_cmd_queue: Mutex::new(Vec::new()),
             suspend_request: AtomicBool::new(false),
         })
     }
@@ -159,6 +190,21 @@ impl AppRuntime {
 
     pub(crate) fn take_exec_requests(&self) -> Vec<ExecRequest> {
         match self.exec_queue.lock() {
+            Ok(mut queue) => std::mem::take(&mut *queue),
+            Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
+        }
+    }
+
+    pub(crate) fn queue_terminal_cmd(&self, cmd: TerminalCmd) {
+        match self.terminal_cmd_queue.lock() {
+            Ok(mut queue) => queue.push(cmd),
+            Err(poisoned) => poisoned.into_inner().push(cmd),
+        }
+        self.request_render();
+    }
+
+    pub(crate) fn take_terminal_cmds(&self) -> Vec<TerminalCmd> {
+        match self.terminal_cmd_queue.lock() {
             Ok(mut queue) => std::mem::take(&mut *queue),
             Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
         }
@@ -215,6 +261,10 @@ impl AppSink for AppRuntime {
         AppRuntime::queue_exec(self, request);
     }
 
+    fn queue_terminal_cmd(&self, cmd: TerminalCmd) {
+        AppRuntime::queue_terminal_cmd(self, cmd);
+    }
+
     fn request_suspend(&self) {
         self.request_suspend();
     }
@@ -266,9 +316,12 @@ fn unregister_app(id: AppId) {
     if let Ok(mut registry) = registry().lock() {
         registry.remove(&id);
     }
+
     if AppId::from_raw(CURRENT_APP.load(Ordering::SeqCst)) == Some(id) {
         set_current_app(None);
     }
+
+    recycle_app_id(id);
 }
 
 // === Public APIs ===
@@ -417,30 +470,13 @@ pub(crate) fn queue_exec_request(request: ExecRequest) {
     }
 }
 
-// Global terminal command queue
-static TERMINAL_CMD_QUEUE: OnceLock<Mutex<Vec<TerminalCmd>>> = OnceLock::new();
-
-fn terminal_cmd_queue() -> &'static Mutex<Vec<TerminalCmd>> {
-    TERMINAL_CMD_QUEUE.get_or_init(|| Mutex::new(Vec::new()))
-}
-
 /// Queue a terminal control command.
 ///
 /// This is used internally by the Cmd system to queue terminal commands
 /// like ClearScreen, HideCursor, ShowCursor, etc.
 pub(crate) fn queue_terminal_cmd(cmd: TerminalCmd) {
-    if let Ok(mut queue) = terminal_cmd_queue().lock() {
-        queue.push(cmd);
-    }
-    // Request a render to process the command
-    request_render();
-}
-
-/// Take all queued terminal commands.
-pub(crate) fn take_terminal_cmds() -> Vec<TerminalCmd> {
-    match terminal_cmd_queue().lock() {
-        Ok(mut queue) => std::mem::take(&mut *queue),
-        Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
+    if let Some(sink) = current_app_sink() {
+        sink.queue_terminal_cmd(cmd);
     }
 }
 
@@ -521,7 +557,6 @@ mod tests {
         let id1 = AppId::new();
         let id2 = AppId::new();
         assert_ne!(id1, id2);
-        assert!(id2.raw() > id1.raw());
     }
 
     #[test]
@@ -626,6 +661,21 @@ mod tests {
         // Should no longer be able to get current app
         let sink2 = current_app_sink();
         assert!(sink2.is_none());
+    }
+
+    #[test]
+    fn test_app_id_recycled_after_unregister() {
+        let runtime1 = AppRuntime::new(false);
+        let id1 = runtime1.id();
+        let guard1 = register_app(runtime1);
+        drop(guard1);
+
+        let runtime2 = AppRuntime::new(false);
+        let id2 = runtime2.id();
+        let guard2 = register_app(runtime2);
+        drop(guard2);
+
+        assert_eq!(id1, id2);
     }
 
     #[test]

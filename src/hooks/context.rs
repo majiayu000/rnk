@@ -211,7 +211,9 @@ thread_local! {
 
 /// Get the current hook context
 pub fn current_context() -> Option<Rc<RefCell<HookContext>>> {
-    CURRENT_CONTEXT.with(|ctx| ctx.borrow().clone())
+    CURRENT_CONTEXT
+        .with(|ctx| ctx.borrow().clone())
+        .or_else(|| crate::runtime::current_runtime().map(|rt| rt.borrow().hook_context()))
 }
 
 /// Run a function with a hook context
@@ -312,6 +314,23 @@ mod tests {
         });
 
         assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn test_current_context_falls_back_to_runtime() {
+        use crate::runtime::{RuntimeContext, set_current_runtime};
+
+        let runtime = Rc::new(RefCell::new(RuntimeContext::new()));
+        set_current_runtime(Some(runtime.clone()));
+
+        // No explicit with_hooks context set: should resolve from runtime.
+        let resolved = current_context();
+        assert!(resolved.is_some());
+
+        let expected = runtime.borrow().hook_context();
+        assert!(Rc::ptr_eq(&resolved.unwrap(), &expected));
+
+        set_current_runtime(None);
     }
 
     #[test]

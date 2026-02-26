@@ -7,22 +7,22 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::cmd::{Cmd, CmdExecutor, ExecRequest, run_exec_process};
-use crate::core::Element;
-use crate::hooks::context::with_hooks;
+use crate::cmd::{Cmd, CmdExecutor};
+use crate::core::{Element, VNode};
 use crate::hooks::use_mouse::is_mouse_enabled;
 use crate::layout::LayoutEngine;
-use crate::renderer::{Output, Terminal};
-use crate::runtime::{RuntimeContext, set_current_runtime};
+use crate::renderer::Terminal;
+use crate::runtime::{RuntimeContext, set_current_runtime, with_runtime};
 use tokio::sync::mpsc;
 
 use super::builder::{AppOptions, CancelToken};
-use super::element_renderer::render_element;
 use super::filter::FilterChain;
-use super::registry::{AppRuntime, AppSink, ModeSwitch, Printable, RenderHandle, register_app};
-use super::render_to_string::render_to_string;
+use super::pipeline::RenderPipeline;
+use super::registry::{AppRuntime, AppSink, RenderHandle, register_app};
 use super::runtime::EventLoop;
+use super::runtime_bridge::RuntimeBridge;
 use super::static_content::StaticRenderer;
+use super::terminal_controller::TerminalController;
 
 /// Application state
 pub struct App<F>
@@ -51,6 +51,8 @@ where
     cmd_render_rx: Option<mpsc::UnboundedReceiver<()>>,
     /// Unified runtime context for input/mouse/focus/stats
     runtime_context: Rc<RefCell<RuntimeContext>>,
+    /// Previous VNode snapshot for incremental reconciliation.
+    previous_vnode: Option<VNode>,
 }
 
 impl<F> App<F>
@@ -120,6 +122,7 @@ where
             cmd_executor,
             cmd_render_rx: Some(cmd_render_rx),
             runtime_context,
+            previous_vnode: None,
         }
     }
 
@@ -177,28 +180,15 @@ where
         // Run event loop with render callback (handle suspend/resume)
         loop {
             event_loop.run(|| {
-                // Handle exec requests first (they suspend the terminal)
-                let exec_requests = self.runtime.take_exec_requests();
-                for request in exec_requests {
-                    self.handle_exec_request(request)?;
-                }
-
-                // Handle terminal control commands
-                let terminal_cmds = crate::renderer::registry::take_terminal_cmds();
-                for cmd in terminal_cmds {
-                    self.handle_terminal_cmd(cmd)?;
-                }
-
-                // Handle mode switch requests (access runtime directly)
-                if let Some(mode_switch) = self.runtime.take_mode_switch_request() {
-                    self.handle_mode_switch(mode_switch)?;
-                }
-
-                // Handle println messages (access runtime directly)
-                let messages = self.runtime.take_println_messages();
-                if !messages.is_empty() {
-                    self.handle_println_messages(&messages)?;
-                }
+                RuntimeBridge::handle_exec_requests(&mut self.terminal, &self.runtime)?;
+                RuntimeBridge::handle_terminal_commands(
+                    &mut self.terminal,
+                    &self.runtime,
+                    &mut self.last_width,
+                    &mut self.last_height,
+                )?;
+                RuntimeBridge::handle_mode_switch_request(&mut self.terminal, &self.runtime)?;
+                RuntimeBridge::handle_println_messages(&mut self.terminal, &self.runtime)?;
 
                 // Handle resize
                 let (width, height) = Terminal::size()?;
@@ -228,47 +218,6 @@ where
         Ok(())
     }
 
-    /// Handle mode switch request
-    fn handle_mode_switch(&mut self, mode_switch: ModeSwitch) -> std::io::Result<()> {
-        match mode_switch {
-            ModeSwitch::EnterAltScreen => {
-                if !self.terminal.is_alt_screen() {
-                    self.terminal.switch_to_alt_screen()?;
-                    self.runtime.set_alt_screen_state(true);
-                    self.terminal.repaint();
-                }
-            }
-            ModeSwitch::ExitAltScreen => {
-                if self.terminal.is_alt_screen() {
-                    self.terminal.switch_to_inline()?;
-                    self.runtime.set_alt_screen_state(false);
-                    self.terminal.repaint();
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Handle exec request - suspend TUI, run external process, resume TUI
-    fn handle_exec_request(&mut self, request: ExecRequest) -> std::io::Result<()> {
-        // Suspend the terminal
-        self.terminal.suspend()?;
-
-        // Execute the external process
-        let result = run_exec_process(&request.config);
-
-        // Resume the terminal
-        self.terminal.resume()?;
-
-        // Call the callback with the result
-        (request.callback)(result);
-
-        // Request re-render
-        self.runtime.request_render();
-
-        Ok(())
-    }
-
     /// Handle app suspend request (Ctrl+Z or use_app::suspend)
     #[cfg(unix)]
     fn handle_suspend(&mut self) -> std::io::Result<()> {
@@ -285,131 +234,23 @@ where
         Ok(())
     }
 
-    /// Handle terminal control commands
-    fn handle_terminal_cmd(&mut self, cmd: crate::cmd::TerminalCmd) -> std::io::Result<()> {
-        use crate::cmd::TerminalCmd;
-        use crossterm::{cursor, execute, terminal as ct};
-        use std::io::stdout;
-
-        match cmd {
-            TerminalCmd::ClearScreen => {
-                if self.terminal.is_alt_screen() {
-                    execute!(
-                        stdout(),
-                        ct::Clear(ct::ClearType::All),
-                        cursor::MoveTo(0, 0)
-                    )?;
-                } else {
-                    self.terminal.clear()?;
-                }
-            }
-            TerminalCmd::HideCursor => {
-                execute!(stdout(), cursor::Hide)?;
-            }
-            TerminalCmd::ShowCursor => {
-                execute!(stdout(), cursor::Show)?;
-            }
-            TerminalCmd::SetWindowTitle(title) => {
-                execute!(stdout(), ct::SetTitle(&title))?;
-            }
-            TerminalCmd::WindowSize => {
-                // This triggers a resize check on next render
-                self.last_width = 0;
-                self.last_height = 0;
-            }
-            TerminalCmd::EnterAltScreen => {
-                if !self.terminal.is_alt_screen() {
-                    self.terminal.switch_to_alt_screen()?;
-                    self.runtime.set_alt_screen_state(true);
-                    self.terminal.repaint();
-                }
-            }
-            TerminalCmd::ExitAltScreen => {
-                if self.terminal.is_alt_screen() {
-                    self.terminal.switch_to_inline()?;
-                    self.runtime.set_alt_screen_state(false);
-                    self.terminal.repaint();
-                }
-            }
-            TerminalCmd::EnableMouse => {
-                crate::hooks::use_mouse::set_mouse_enabled(true);
-                execute!(stdout(), crossterm::event::EnableMouseCapture)?;
-            }
-            TerminalCmd::DisableMouse => {
-                crate::hooks::use_mouse::set_mouse_enabled(false);
-                execute!(stdout(), crossterm::event::DisableMouseCapture)?;
-            }
-            TerminalCmd::EnableBracketedPaste => {
-                execute!(stdout(), crossterm::event::EnableBracketedPaste)?;
-            }
-            TerminalCmd::DisableBracketedPaste => {
-                execute!(stdout(), crossterm::event::DisableBracketedPaste)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Handle println messages (like Bubbletea's Println)
-    fn handle_println_messages(&mut self, messages: &[Printable]) -> std::io::Result<()> {
-        // Println only works in inline mode
-        if self.terminal.is_alt_screen() {
-            return Ok(());
-        }
-
-        // Get terminal width for rendering elements
-        let (width, _) = Terminal::size().unwrap_or((80, 24));
-
-        for message in messages {
-            match message {
-                Printable::Text(text) => {
-                    // Simple text - print directly
-                    self.terminal.println(text)?;
-                }
-                Printable::Element(element) => {
-                    // Render element to string first
-                    let rendered = render_to_string(element, width);
-                    self.terminal.println(&rendered)?;
-                }
-            }
-        }
-
-        // Force repaint after println
-        self.terminal.repaint();
-
-        Ok(())
-    }
-
     /// Handle terminal resize events
     fn handle_resize(&mut self, new_width: u16, new_height: u16) {
-        use crossterm::cursor::MoveTo;
-        use crossterm::execute;
-        use crossterm::terminal::{Clear, ClearType};
-        use std::io::stdout;
-
-        if new_width != self.last_width || new_height != self.last_height {
-            if self.terminal.is_alt_screen() {
-                // Fullscreen mode: clear entire screen
-                let _ = execute!(stdout(), MoveTo(0, 0), Clear(ClearType::All));
-            }
-            // Inline mode: just repaint (clear_inline_content will handle cleanup)
-            // Don't use Clear(ClearType::All) as it destroys scrollback content
-            self.terminal.repaint();
-        }
-
-        self.last_width = new_width;
-        self.last_height = new_height;
+        TerminalController::handle_resize(
+            &mut self.terminal,
+            &mut self.last_width,
+            &mut self.last_height,
+            new_width,
+            new_height,
+        );
     }
 
     fn render_frame(&mut self) -> std::io::Result<()> {
-        // Clear runtime per-frame handler registrations.
-        self.runtime_context.borrow_mut().prepare_render();
-
         // Get terminal size
         let (width, height) = Terminal::size()?;
 
-        // Build element tree with hooks context
-        let hook_context = self.runtime_context.borrow().hook_context();
-        let root = with_hooks(hook_context, || (self.component)());
+        // Build element tree under a unified runtime+hook lifecycle.
+        let root = with_runtime(self.runtime_context.clone(), || (self.component)());
 
         // Execute any queued commands from hooks
         let cmds = self.runtime_context.borrow_mut().take_cmds();
@@ -434,28 +275,15 @@ where
         // Filter out static elements from the tree for dynamic rendering
         let dynamic_root = self.static_renderer.filter_static_elements(&root);
 
-        // Compute layout for dynamic content
-        self.layout_engine.compute(&dynamic_root, width, height);
+        let rendered = RenderPipeline::render_dynamic_frame(
+            &dynamic_root,
+            width,
+            height,
+            &mut self.layout_engine,
+            &self.runtime_context,
+            &mut self.previous_vnode,
+        );
 
-        // Update measure context with latest layouts
-        self.runtime_context
-            .borrow_mut()
-            .set_measure_layouts(self.layout_engine.get_all_layouts());
-
-        // Get the actual content size from layout
-        let root_layout = self
-            .layout_engine
-            .get_layout(dynamic_root.id)
-            .unwrap_or_default();
-        let content_width = (root_layout.width as u16).max(1).min(width);
-        let render_height = (root_layout.height as u16).max(1).min(height);
-
-        // Render to output buffer
-        let mut output = Output::new(content_width, render_height);
-        render_element(&dynamic_root, &self.layout_engine, &mut output, 0.0, 0.0);
-
-        // Write to terminal
-        let rendered = output.render();
         self.terminal.render(&rendered)
     }
 
@@ -468,6 +296,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::Element;
     use crate::renderer::registry::{is_alt_screen, render_handle};
 
     #[test]
@@ -482,5 +311,25 @@ mod tests {
 
         assert!(render_handle().is_none());
         assert_eq!(is_alt_screen(), None);
+    }
+
+    #[test]
+    fn test_exit_sets_should_exit_flag() {
+        let app = App::new(|| Element::text("ok"));
+        assert!(!app.should_exit.load(Ordering::SeqCst));
+
+        app.exit();
+
+        assert!(app.should_exit.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_exit_updates_runtime_context_exit_state() {
+        let app = App::new(|| Element::text("ok"));
+        assert!(!app.runtime_context.borrow().should_exit());
+
+        app.exit();
+
+        assert!(app.runtime_context.borrow().should_exit());
     }
 }

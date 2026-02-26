@@ -75,7 +75,13 @@ fn detect_screen_reader() -> bool {
 /// ```
 pub fn use_is_screen_reader_enabled() -> bool {
     if let Some(ctx) = crate::runtime::current_runtime() {
-        ctx.borrow().is_screen_reader_enabled()
+        if ctx.borrow().is_screen_reader_initialized() {
+            return ctx.borrow().is_screen_reader_enabled();
+        }
+
+        let detected = detect_screen_reader();
+        ctx.borrow_mut().set_screen_reader_enabled(detected);
+        detected
     } else {
         detect_screen_reader()
     }
@@ -125,6 +131,18 @@ mod tests {
 
         set_screen_reader_enabled(false);
         assert!(!use_is_screen_reader_enabled());
+
+        set_current_runtime(None);
+    }
+
+    #[test]
+    fn test_runtime_auto_initializes_on_first_read() {
+        let ctx = Rc::new(RefCell::new(RuntimeContext::new()));
+        set_current_runtime(Some(ctx.clone()));
+
+        assert!(!ctx.borrow().is_screen_reader_initialized());
+        let _ = use_is_screen_reader_enabled();
+        assert!(ctx.borrow().is_screen_reader_initialized());
 
         set_current_runtime(None);
     }

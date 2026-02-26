@@ -88,34 +88,5 @@ harness = false
 name = "hooks"
 harness = false
 
-[[example]]
-name = "hello"
-path = "examples/hello.rs"
-
-[[example]]
-name = "counter"
-path = "examples/counter.rs"
-
-[[example]]
-name = "glm_chat"
-path = "examples/glm_chat.rs"
-
-[[example]]
-name = "render_api_demo"
-path = "examples/render_api_demo.rs"
-
-[[example]]
-name = "streaming_demo"
-path = "examples/streaming_demo.rs"
-
-[[example]]
-name = "rnk_top"
-path = "examples/rnk_top.rs"
-
-[[example]]
-name = "rnk_git"
-path = "examples/rnk_git.rs"
-
-[[example]]
-name = "rnk_chat"
-path = "examples/rnk_chat.rs"
+# Examples are discovered automatically from examples/*.rs.
+# Keep Cargo.toml free of explicit [[example]] entries to avoid drift.

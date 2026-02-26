@@ -13,7 +13,14 @@ pub struct ElementId(u64);
 impl ElementId {
     /// Create a new unique element ID
     pub fn new() -> Self {
-        Self(ELEMENT_ID_COUNTER.fetch_add(1, Ordering::SeqCst))
+        let id = ELEMENT_ID_COUNTER
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+                current.checked_add(1).filter(|next| *next != 0)
+            })
+            .unwrap_or_else(|_| {
+                panic!("ElementId counter exhausted; cannot allocate more element IDs")
+            });
+        Self(id)
     }
 
     /// Get the root element ID

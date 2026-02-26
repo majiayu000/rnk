@@ -2,7 +2,7 @@
 
 use crate::core::{Element, ElementId, ElementType, NodeKey, Props, VNode, VNodeType};
 use crate::layout::measure::measure_text_width;
-use crate::reconciler::Patch;
+use crate::reconciler::{Patch, diff};
 use std::collections::HashMap;
 use taffy::{AvailableSpace, NodeId, TaffyTree};
 
@@ -13,6 +13,17 @@ pub struct Layout {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+}
+
+/// Outcome of an incremental layout computation.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IncrementalLayoutOutcome {
+    /// Whether diff/patch path was used.
+    pub used_reconciler: bool,
+    /// Number of generated patches for this frame.
+    pub patch_count: usize,
+    /// Whether incremental path failed and full rebuild was used.
+    pub fallback_full_rebuild: bool,
 }
 
 /// Context stored for each node (for text measurement)
@@ -113,6 +124,52 @@ impl LayoutEngine {
         }
     }
 
+    /// Compute layout from an `Element` tree using reconciler diff/patch when possible.
+    ///
+    /// Returns the current frame VNode snapshot plus incremental execution metadata.
+    pub fn compute_element_incremental(
+        &mut self,
+        root: &Element,
+        previous_vnode: Option<&VNode>,
+        width: u16,
+        height: u16,
+    ) -> (VNode, IncrementalLayoutOutcome) {
+        let mut element_key_map = HashMap::new();
+        let current_vnode = self
+            .element_to_vnode(root, "root", 0, &mut element_key_map)
+            .unwrap_or_else(VNode::root);
+
+        self.last_width = width;
+        self.last_height = height;
+
+        let mut outcome = IncrementalLayoutOutcome::default();
+
+        let can_use_incremental = previous_vnode.is_some() && self.has_tree();
+        if can_use_incremental {
+            let prev = previous_vnode.expect("checked is_some");
+            let patches = diff(prev, &current_vnode);
+            outcome.patch_count = patches.len();
+            outcome.used_reconciler = true;
+
+            if patches.is_empty() {
+                self.recompute_layout();
+                self.sync_element_node_map(&element_key_map);
+                return (current_vnode, outcome);
+            }
+
+            if self.apply_patches(&patches) {
+                self.sync_element_node_map(&element_key_map);
+                return (current_vnode, outcome);
+            }
+        }
+
+        // Fallback path: no previous tree or incremental update failed.
+        self.compute_vnode(&current_vnode, width, height);
+        self.sync_element_node_map(&element_key_map);
+        outcome.fallback_full_rebuild = can_use_incremental;
+        (current_vnode, outcome)
+    }
+
     // ==================== VNode-based Layout ====================
 
     /// Build layout tree from VNode tree
@@ -157,6 +214,67 @@ impl LayoutEngine {
 
         self.vnode_map.insert(vnode.key, node_id);
         Some(node_id)
+    }
+
+    fn element_to_vnode(
+        &self,
+        element: &Element,
+        parent_path: &str,
+        index: usize,
+        element_key_map: &mut HashMap<ElementId, NodeKey>,
+    ) -> Option<VNode> {
+        if element.element_type == ElementType::VirtualText {
+            return None;
+        }
+
+        let node_type = match element.element_type {
+            ElementType::Root => VNodeType::Root,
+            ElementType::Box => VNodeType::Box,
+            ElementType::Text => VNodeType::Text(element.text_content.clone().unwrap_or_default()),
+            ElementType::VirtualText => return None,
+        };
+
+        let mut props = Props::with_style(element.style.clone());
+        props.key = element.key.clone();
+        props.scroll_offset_x = element.scroll_offset_x;
+        props.scroll_offset_y = element.scroll_offset_y;
+
+        let mut vnode = VNode::new(node_type, props).with_index(index);
+
+        if element.element_type == ElementType::Root {
+            vnode.key = NodeKey::root();
+        } else {
+            let type_id = vnode.node_type.type_id();
+            let synthetic_key = if let Some(user_key) = &element.key {
+                format!("{parent_path}#key:{user_key}")
+            } else {
+                format!("{parent_path}@idx:{index}:type:{:?}", element.element_type)
+            };
+            vnode.key = NodeKey::with_key(&synthetic_key, type_id, index);
+        }
+
+        element_key_map.insert(element.id, vnode.key);
+
+        let node_path = format!("{parent_path}/{index}");
+        vnode.children = element
+            .children
+            .iter()
+            .enumerate()
+            .filter_map(|(child_idx, child)| {
+                self.element_to_vnode(child, &node_path, child_idx, element_key_map)
+            })
+            .collect();
+
+        Some(vnode)
+    }
+
+    fn sync_element_node_map(&mut self, element_key_map: &HashMap<ElementId, NodeKey>) {
+        self.node_map.clear();
+        for (element_id, key) in element_key_map {
+            if let Some(node_id) = self.vnode_map.get(key).copied() {
+                self.node_map.insert(*element_id, node_id);
+            }
+        }
     }
 
     /// Compute layout for VNode tree
@@ -527,6 +645,115 @@ mod tests {
         assert!(engine.has_tree());
         let layout = engine.get_vnode_layout(root.key);
         assert!(layout.is_some());
+    }
+
+    #[test]
+    fn test_compute_element_incremental_maps_layouts() {
+        let mut engine = LayoutEngine::new();
+
+        let mut root = Element::root();
+        let root_id = root.id;
+
+        let mut left = Element::box_element();
+        let left_id = left.id;
+        let left_text = Element::text("L");
+        let left_text_id = left_text.id;
+        left.add_child(left_text);
+
+        let mut right = Element::box_element();
+        let right_id = right.id;
+        let right_text = Element::text("R");
+        let right_text_id = right_text.id;
+        right.add_child(right_text);
+
+        root.add_child(left);
+        root.add_child(right);
+
+        let (_vnode, outcome) = engine.compute_element_incremental(&root, None, 80, 24);
+        assert!(!outcome.used_reconciler);
+        assert!(engine.get_layout(root_id).is_some());
+        assert!(engine.get_layout(left_id).is_some());
+        assert!(engine.get_layout(left_text_id).is_some());
+        assert!(engine.get_layout(right_id).is_some());
+        assert!(engine.get_layout(right_text_id).is_some());
+    }
+
+    #[test]
+    fn test_compute_element_incremental_uses_reconciler_on_next_frame() {
+        let mut engine = LayoutEngine::new();
+
+        let mut first = Element::root();
+        let mut box_a = Element::box_element();
+        box_a.add_child(Element::text("A"));
+        first.add_child(box_a);
+
+        let (previous_vnode, first_outcome) =
+            engine.compute_element_incremental(&first, None, 80, 24);
+        assert!(!first_outcome.used_reconciler);
+
+        let mut second = Element::root();
+        let mut box_b = Element::box_element();
+        box_b.add_child(Element::text("B"));
+        second.add_child(box_b);
+        let second_root_id = second.id;
+
+        let (_current_vnode, second_outcome) =
+            engine.compute_element_incremental(&second, Some(&previous_vnode), 80, 24);
+        assert!(second_outcome.used_reconciler);
+        assert!(engine.get_layout(second_root_id).is_some());
+    }
+
+    #[test]
+    fn test_incremental_layout_avoids_key_collision_across_branches() {
+        let mut engine = LayoutEngine::new();
+
+        let mut root = Element::root();
+
+        let mut left = Element::box_element();
+        let left_text = Element::text("left").with_key("item");
+        let left_text_id = left_text.id;
+        left.add_child(left_text);
+
+        let mut right = Element::box_element();
+        let right_text = Element::text("right").with_key("item");
+        let right_text_id = right_text.id;
+        right.add_child(right_text);
+
+        root.add_child(left);
+        root.add_child(right);
+
+        let (_vnode, _outcome) = engine.compute_element_incremental(&root, None, 80, 24);
+
+        assert!(engine.get_layout(left_text_id).is_some());
+        assert!(engine.get_layout(right_text_id).is_some());
+    }
+
+    #[test]
+    fn test_incremental_layout_keyed_reorder_no_fallback() {
+        let mut engine = LayoutEngine::new();
+
+        let mut first = Element::root();
+        first.add_child(Element::box_element().with_key("a"));
+        first.add_child(Element::box_element().with_key("b"));
+        let (previous_vnode, first_outcome) =
+            engine.compute_element_incremental(&first, None, 80, 24);
+        assert!(!first_outcome.used_reconciler);
+
+        let mut second = Element::root();
+        let second_a = Element::box_element().with_key("a");
+        let second_a_id = second_a.id;
+        let second_b = Element::box_element().with_key("b");
+        let second_b_id = second_b.id;
+        second.add_child(second_b);
+        second.add_child(second_a);
+
+        let (_current_vnode, second_outcome) =
+            engine.compute_element_incremental(&second, Some(&previous_vnode), 80, 24);
+
+        assert!(second_outcome.used_reconciler);
+        assert!(!second_outcome.fallback_full_rebuild);
+        assert!(engine.get_layout(second_a_id).is_some());
+        assert!(engine.get_layout(second_b_id).is_some());
     }
 
     #[test]

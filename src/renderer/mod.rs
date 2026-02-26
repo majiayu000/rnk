@@ -35,11 +35,14 @@ pub(crate) mod element_renderer;
 mod filter;
 mod frame_rate;
 mod output;
+pub(crate) mod pipeline;
 pub(crate) mod registry;
 pub(crate) mod render_to_string;
 pub(crate) mod runtime;
+pub(crate) mod runtime_bridge;
 pub(crate) mod static_content;
 mod terminal;
+pub(crate) mod terminal_controller;
 pub(crate) mod tree_renderer;
 
 // Core App type

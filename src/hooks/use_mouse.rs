@@ -186,6 +186,10 @@ pub fn use_mouse<F>(handler: F)
 where
     F: Fn(&Mouse) + 'static,
 {
+    // Reserve a hook slot so use_mouse obeys hook ordering constraints.
+    if let Some(ctx) = crate::hooks::context::current_context() {
+        ctx.borrow_mut().use_hook(|| ());
+    }
     register_mouse_handler(handler);
 }
 
@@ -275,5 +279,25 @@ mod tests {
         };
         ctx.borrow().dispatch_mouse(&mouse);
         assert!(*clicked.borrow());
+    }
+
+    #[test]
+    #[should_panic(expected = "Hook order violation")]
+    fn test_use_mouse_participates_in_hook_order() {
+        use crate::hooks::context::{HookContext, with_hooks};
+        use crate::hooks::use_signal;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
+
+        with_hooks(ctx.clone(), || {
+            use_mouse(|_| {});
+            let _state = use_signal(|| 1usize);
+        });
+
+        with_hooks(ctx, || {
+            let _state = use_signal(|| 1usize);
+        });
     }
 }

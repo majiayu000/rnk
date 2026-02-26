@@ -1,14 +1,5 @@
 //! Focus management hooks
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-/// Unique focus ID generator
-static FOCUS_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-fn generate_focus_id() -> usize {
-    FOCUS_ID_COUNTER.fetch_add(1, Ordering::SeqCst)
-}
-
 /// Focus state for a component
 #[derive(Debug, Clone)]
 pub struct FocusState {
@@ -64,6 +55,7 @@ struct FocusableElement {
 pub struct FocusManager {
     elements: Vec<FocusableElement>,
     focused_index: Option<usize>,
+    next_id: usize,
 }
 
 impl FocusManager {
@@ -71,6 +63,7 @@ impl FocusManager {
         Self {
             elements: Vec::new(),
             focused_index: None,
+            next_id: 1,
         }
     }
 
@@ -81,7 +74,13 @@ impl FocusManager {
         is_active: bool,
         auto_focus: bool,
     ) -> usize {
-        let id = generate_focus_id();
+        let id = self.next_id;
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .filter(|next| *next != 0)
+            .unwrap_or_else(|| panic!("FocusManager ID counter exhausted"));
+
         self.elements.push(FocusableElement {
             id,
             custom_id,

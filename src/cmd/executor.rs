@@ -72,21 +72,23 @@ impl CmdExecutor {
     ///
     /// * `render_tx` - Channel sender for requesting renders
     ///
-    /// # Panics
-    ///
-    /// Panics if the Tokio runtime cannot be created.
     pub fn new(render_tx: mpsc::UnboundedSender<()>) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2) // Lightweight runtime for UI tasks
             .thread_name("rnk-cmd-executor")
             .enable_all()
             .build()
-            // Safety: Tokio runtime creation only fails if the OS cannot spawn threads
-            // (e.g., resource exhaustion). This is unrecoverable at app startup.
-            .expect("Failed to create Tokio runtime");
+            .ok()
+            .map(Arc::new);
+
+        if runtime.is_none() {
+            // Runtime creation can fail under severe resource pressure.
+            // Fallback to a no-op executor instead of crashing at startup.
+            eprintln!("rnk: failed to create command runtime, command execution is disabled");
+        }
 
         Self {
-            runtime: Some(Arc::new(runtime)),
+            runtime,
             render_handle: CmdRenderNotifier::new(render_tx),
         }
     }
@@ -130,9 +132,13 @@ impl CmdExecutor {
         completion: Option<tokio::sync::oneshot::Sender<()>>,
         notify_render: bool,
     ) {
-        // Safety: `runtime` is only set to None in `shutdown()`. Callers must not
-        // invoke `execute_inner` after shutdown; this is enforced by the App lifecycle.
-        let runtime = self.runtime.as_ref().expect("executor was shutdown");
+        // If the executor has been shut down, gracefully no-op instead of panicking.
+        let Some(runtime) = self.runtime.as_ref() else {
+            if let Some(tx) = completion {
+                let _ = tx.send(());
+            }
+            return;
+        };
         let render_handle = self.render_handle.clone();
 
         /// Signal completion or optionally request render
@@ -406,6 +412,19 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel();
         let _executor = CmdExecutor::new(tx);
         // Should not panic
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_missing_runtime_is_noop() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let executor = CmdExecutor {
+            runtime: None,
+            render_handle: CmdRenderNotifier::new(tx),
+        };
+
+        executor.execute(Cmd::perform(|| async {}));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]

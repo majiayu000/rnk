@@ -53,6 +53,7 @@ pub(crate) mod use_app;
 mod use_async;
 mod use_clipboard;
 mod use_cmd;
+mod use_context;
 mod use_counter;
 mod use_debounce;
 mod use_effect;
@@ -64,6 +65,7 @@ mod use_idle;
 pub mod use_input;
 mod use_interval;
 mod use_keyboard_shortcut;
+mod use_layout_effect;
 mod use_list;
 mod use_local_storage;
 mod use_map;
@@ -74,9 +76,11 @@ pub mod use_mouse;
 mod use_online;
 mod use_previous;
 mod use_reducer;
+mod use_ref;
 mod use_scroll;
 mod use_set;
 mod use_signal;
+mod use_state;
 mod use_stdio;
 mod use_toggle;
 mod use_transition;
@@ -84,6 +88,7 @@ mod use_window_size;
 mod use_window_title;
 
 // === State Management ===
+pub use use_context::{Context, create_context, use_context, with_context};
 pub use use_counter::{CounterHandle, use_counter, use_counter_zero};
 pub use use_form::{FormField, FormHandle, use_form, use_form_empty};
 pub use use_history::{HistoryHandle, use_history, use_history_with_size};
@@ -93,8 +98,10 @@ pub use use_map::{MapHandle, use_map, use_map_empty, use_map_from};
 pub use use_memo::{MemoizedCallback, use_callback, use_memo};
 pub use use_previous::{use_changed, use_is_first_render, use_previous};
 pub use use_reducer::{Dispatch, use_reducer, use_reducer_lazy};
+pub use use_ref::{RefHandle, use_ref};
 pub use use_set::{SetHandle, use_set, use_set_empty};
 pub use use_signal::{Signal, use_signal};
+pub use use_state::{StateSetter, use_state};
 pub use use_toggle::{ToggleHandle, use_toggle, use_toggle_off, use_toggle_on};
 
 // === Side Effects ===
@@ -102,6 +109,7 @@ pub use deps::DepsHash;
 pub use use_async::{AsyncHandle, AsyncState, use_async_state, use_async_state_with};
 pub use use_cmd::{Deps, use_cmd, use_cmd_once};
 pub use use_effect::{use_effect, use_effect_once};
+pub use use_layout_effect::{use_layout_effect, use_layout_effect_once};
 pub use use_transition::{TransitionHandle, use_transition, use_transition_with_easing};
 
 // === Input & Focus ===
@@ -115,7 +123,7 @@ pub use use_clipboard::{
 pub use use_focus::{
     FocusManagerHandle, FocusState, UseFocusOptions, use_focus, use_focus_manager,
 };
-pub use use_input::{Key, use_input};
+pub use use_input::{Key, KeyCodeKind, MediaKeyKind, use_input};
 pub use use_keyboard_shortcut::{
     Modifiers, Shortcut, ShortcutKey, use_keyboard_shortcut, use_keyboard_shortcuts,
 };
@@ -139,7 +147,9 @@ pub use use_interval::{use_interval, use_interval_when, use_timeout};
 pub use use_accessibility::{
     clear_screen_reader_cache, set_screen_reader_enabled, use_is_screen_reader_enabled,
 };
-pub use use_measure::{Dimensions, MeasureContext, MeasureRef, measure_element, use_measure};
+pub use use_measure::{
+    Dimensions, MeasureContext, MeasureRef, measure_element, measure_element_by_key, use_measure,
+};
 pub use use_media_query::{
     Breakpoint, MediaQuery, use_breakpoint, use_breakpoint_down, use_breakpoint_only,
     use_breakpoint_up, use_is_landscape, use_is_portrait, use_media_query,

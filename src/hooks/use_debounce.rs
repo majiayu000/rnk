@@ -31,14 +31,70 @@ use crate::hooks::use_signal::{Signal, use_signal};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+enum DebounceMessage<T> {
+    Update { value: T, delay: Duration },
+}
+
+fn spawn_debounce_worker<T>(debounced: Signal<T>) -> mpsc::Sender<DebounceMessage<T>>
+where
+    T: Clone + PartialEq + Send + Sync + 'static,
+{
+    let (tx, rx) = mpsc::channel::<DebounceMessage<T>>();
+
+    std::thread::spawn(move || {
+        let mut pending: Option<(T, Duration, Instant)> = None;
+
+        loop {
+            if let Some((pending_value, pending_delay, started_at)) = pending.as_ref() {
+                let remaining = pending_delay.saturating_sub(started_at.elapsed());
+
+                match rx.recv_timeout(remaining) {
+                    Ok(DebounceMessage::Update { value, delay }) => {
+                        if delay.is_zero() {
+                            if debounced.get() != value {
+                                debounced.set(value);
+                            }
+                            pending = None;
+                        } else {
+                            pending = Some((value, delay, Instant::now()));
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        let value = pending_value.clone();
+                        if debounced.get() != value {
+                            debounced.set(value);
+                        }
+                        pending = None;
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            } else {
+                match rx.recv() {
+                    Ok(DebounceMessage::Update { value, delay }) => {
+                        if delay.is_zero() {
+                            if debounced.get() != value {
+                                debounced.set(value);
+                            }
+                        } else {
+                            pending = Some((value, delay, Instant::now()));
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+    });
+
+    tx
+}
+
 /// Debounce a value, only updating after the specified delay
 ///
 /// Returns the debounced value that only updates after `delay` has passed
 /// since the last change to `value`.
 ///
-/// Uses channel-based cancellation: when a new value arrives, the old timer
-/// thread is immediately unblocked via a dropped sender, so it exits without
-/// waiting for the full delay.
+/// Uses one worker thread per hook instance. New values are pushed to the
+/// worker, which keeps only the latest pending value and delay.
 pub fn use_debounce<T>(value: T, delay: Duration) -> T
 where
     T: Clone + PartialEq + Send + Sync + 'static,
@@ -46,7 +102,11 @@ where
     let debounced = use_signal(|| value.clone());
     let last_value = use_signal(|| value.clone());
     let last_delay = use_signal(|| delay);
-    let cancel_tx: Signal<Option<mpsc::Sender<()>>> = use_signal(|| None);
+    let worker_tx: Signal<Option<mpsc::Sender<DebounceMessage<T>>>> = use_signal(|| None);
+
+    if worker_tx.get().is_none() {
+        worker_tx.set(Some(spawn_debounce_worker(debounced.clone())));
+    }
 
     // Zero-delay debounce should update immediately.
     if delay.is_zero() {
@@ -73,31 +133,29 @@ where
     }
 
     if value_changed || delay_changed {
-        // Create a new channel. Storing the new tx drops the old one,
-        // which immediately unblocks the old timer thread's recv_timeout
-        // with a Disconnected error, causing it to exit.
-        let (tx, rx) = mpsc::channel::<()>();
-        cancel_tx.set(Some(tx));
+        let latest_value = last_value.get();
+        let latest_delay = last_delay.get();
 
-        let last_value_clone = last_value.clone();
-        let debounced_clone = debounced.clone();
-        let wait = delay;
+        let mut sent = false;
 
-        std::thread::spawn(move || {
-            match rx.recv_timeout(wait) {
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    // Delay expired naturally — commit the value.
-                    let latest = last_value_clone.get();
-                    if debounced_clone.get() != latest {
-                        debounced_clone.set(latest);
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) | Ok(()) => {
-                    // Sender was dropped (newer change arrived) or explicit
-                    // cancel signal — discard this timer.
-                }
-            }
-        });
+        if let Some(tx) = worker_tx.get() {
+            sent = tx
+                .send(DebounceMessage::Update {
+                    value: latest_value.clone(),
+                    delay: latest_delay,
+                })
+                .is_ok();
+        }
+
+        if !sent {
+            // Worker might have exited unexpectedly. Recreate and retry once.
+            let tx = spawn_debounce_worker(debounced.clone());
+            let _ = tx.send(DebounceMessage::Update {
+                value: latest_value,
+                delay: latest_delay,
+            });
+            worker_tx.set(Some(tx));
+        }
     }
 
     debounced.get()

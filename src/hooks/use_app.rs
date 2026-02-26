@@ -24,6 +24,8 @@ impl crate::renderer::registry::AppSink for NoopSink {
 
     fn queue_exec(&self, _request: crate::cmd::ExecRequest) {}
 
+    fn queue_terminal_cmd(&self, _cmd: crate::cmd::TerminalCmd) {}
+
     fn request_suspend(&self) {}
 }
 

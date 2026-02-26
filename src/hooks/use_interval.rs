@@ -23,7 +23,113 @@
 use crate::cmd::Cmd;
 use crate::hooks::use_cmd::use_cmd_once;
 use crate::hooks::use_effect::use_effect;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::time::Duration;
+use std::time::Instant;
+
+#[derive(Clone)]
+struct IntervalTask {
+    delay: Duration,
+    next_fire: Instant,
+    callback: Arc<dyn Fn() + Send + Sync>,
+}
+
+enum IntervalCommand {
+    Register {
+        id: u64,
+        delay: Duration,
+        callback: Arc<dyn Fn() + Send + Sync>,
+    },
+    Unregister {
+        id: u64,
+    },
+}
+
+static NEXT_INTERVAL_ID: AtomicU64 = AtomicU64::new(1);
+
+fn interval_scheduler() -> &'static mpsc::Sender<IntervalCommand> {
+    static SCHEDULER: OnceLock<mpsc::Sender<IntervalCommand>> = OnceLock::new();
+    SCHEDULER.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<IntervalCommand>();
+        std::thread::Builder::new()
+            .name("rnk-interval-scheduler".to_string())
+            .spawn(move || run_interval_scheduler(rx))
+            .expect("failed to spawn interval scheduler thread");
+        tx
+    })
+}
+
+fn apply_interval_command(tasks: &mut HashMap<u64, IntervalTask>, cmd: IntervalCommand) {
+    match cmd {
+        IntervalCommand::Register {
+            id,
+            delay,
+            callback,
+        } => {
+            tasks.insert(
+                id,
+                IntervalTask {
+                    delay,
+                    next_fire: Instant::now() + delay,
+                    callback,
+                },
+            );
+        }
+        IntervalCommand::Unregister { id } => {
+            tasks.remove(&id);
+        }
+    }
+}
+
+fn fire_due_tasks(tasks: &mut HashMap<u64, IntervalTask>) {
+    let now = Instant::now();
+
+    for task in tasks.values_mut() {
+        if task.next_fire > now {
+            continue;
+        }
+
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            (task.callback)();
+        }));
+
+        while task.next_fire <= now {
+            task.next_fire += task.delay;
+        }
+    }
+}
+
+fn run_interval_scheduler(rx: mpsc::Receiver<IntervalCommand>) {
+    let mut tasks: HashMap<u64, IntervalTask> = HashMap::new();
+
+    loop {
+        if tasks.is_empty() {
+            match rx.recv() {
+                Ok(cmd) => apply_interval_command(&mut tasks, cmd),
+                Err(_) => break,
+            }
+            continue;
+        }
+
+        let next_fire = tasks
+            .values()
+            .map(|task| task.next_fire)
+            .min()
+            .unwrap_or_else(Instant::now);
+
+        let wait = next_fire.saturating_duration_since(Instant::now());
+
+        match rx.recv_timeout(wait) {
+            Ok(cmd) => apply_interval_command(&mut tasks, cmd),
+            Err(mpsc::RecvTimeoutError::Timeout) => fire_due_tasks(&mut tasks),
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+}
 
 /// Run a callback at regular intervals
 ///
@@ -50,21 +156,19 @@ where
                 return None;
             }
 
-            let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+            let id = NEXT_INTERVAL_ID.fetch_add(1, Ordering::Relaxed);
             let cb = callback.clone();
+            let callback: Arc<dyn Fn() + Send + Sync> = Arc::new(move || cb());
+            let scheduler = interval_scheduler().clone();
 
-            let handle = std::thread::spawn(move || {
-                loop {
-                    match stop_rx.recv_timeout(delay) {
-                        Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => cb(),
-                    }
-                }
+            let _ = scheduler.send(IntervalCommand::Register {
+                id,
+                delay,
+                callback,
             });
 
             Some(Box::new(move || {
-                let _ = stop_tx.send(());
-                let _ = handle.join();
+                let _ = scheduler.send(IntervalCommand::Unregister { id });
             }) as Box<dyn FnOnce() + Send>)
         },
         (delay, enabled),

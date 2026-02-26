@@ -156,6 +156,11 @@ pub fn use_paste<F>(handler: F)
 where
     F: Fn(&PasteEvent) + 'static,
 {
+    // Reserve a hook slot so use_paste follows the same ordering rules
+    // as other hooks (catches conditional hook calls).
+    if let Some(ctx) = crate::hooks::context::current_context() {
+        ctx.borrow_mut().use_hook(|| ());
+    }
     register_paste_handler(handler);
 }
 
@@ -262,5 +267,25 @@ mod tests {
         assert_eq!(*count.borrow(), 2);
 
         set_current_runtime(None);
+    }
+
+    #[test]
+    #[should_panic(expected = "Hook order violation")]
+    fn test_use_paste_participates_in_hook_order() {
+        use crate::hooks::context::{HookContext, with_hooks};
+        use crate::hooks::use_signal;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
+
+        with_hooks(ctx.clone(), || {
+            use_paste(|_| {});
+            let _state = use_signal(|| 1usize);
+        });
+
+        with_hooks(ctx, || {
+            let _state = use_signal(|| 1usize);
+        });
     }
 }

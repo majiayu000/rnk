@@ -385,9 +385,24 @@ impl Output {
     /// Convert the buffer to a string with ANSI codes
     pub fn render(&self) -> String {
         self.assert_no_active_clips("render");
-        let mut lines: Vec<String> = (0..self.height as usize)
-            .map(|row_idx| self.render_row(row_idx))
-            .collect();
+        let mut lines: Vec<String> = if self.is_dirty() {
+            let dirty_rows = self.render_dirty_rows();
+            if dirty_rows.is_empty() {
+                Vec::new()
+            } else {
+                let mut sparse =
+                    vec![String::new(); dirty_rows.last().map(|(row, _)| row + 1).unwrap_or(0)];
+                for (row, line) in dirty_rows {
+                    sparse[row] = line;
+                }
+                sparse
+            }
+        } else {
+            // Preserve previous behavior when dirty flags were externally reset.
+            (0..self.height as usize)
+                .map(|row_idx| self.render_row(row_idx))
+                .collect()
+        };
 
         // Remove trailing empty lines
         while lines.last().map(|l| l.is_empty()).unwrap_or(false) {
@@ -691,6 +706,21 @@ mod tests {
         assert_eq!(dirty_rows[0].1, "Line 0");
         assert_eq!(dirty_rows[1].0, 2);
         assert_eq!(dirty_rows[1].1, "Line 2");
+    }
+
+    #[test]
+    fn test_render_after_clear_dirty_preserves_content() {
+        let mut output = Output::new(10, 2);
+        output.write(0, 0, "A", &Style::default());
+        output.clear_dirty();
+        assert_eq!(output.render(), "A");
+    }
+
+    #[test]
+    fn test_render_sparse_dirty_rows_preserves_line_gaps() {
+        let mut output = Output::new(10, 4);
+        output.write(0, 2, "C", &Style::default());
+        assert_eq!(output.render(), "\r\n\r\nC");
     }
 
     #[test]

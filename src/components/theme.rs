@@ -719,6 +719,11 @@ thread_local! {
 
 /// Set the current theme
 pub fn set_theme(theme: Theme) {
+    if let Some(ctx) = crate::runtime::current_runtime() {
+        ctx.borrow_mut().set_theme(theme);
+        return;
+    }
+
     CURRENT_THEME.with(|t| {
         *t.borrow_mut() = theme;
     });
@@ -726,6 +731,10 @@ pub fn set_theme(theme: Theme) {
 
 /// Get the current theme
 pub fn get_theme() -> Theme {
+    if let Some(ctx) = crate::runtime::current_runtime() {
+        return ctx.borrow().theme();
+    }
+
     CURRENT_THEME.with(|t| t.borrow().clone())
 }
 
@@ -836,6 +845,30 @@ mod tests {
             42
         });
         assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn test_theme_isolated_per_runtime_context() {
+        use crate::runtime::{RuntimeContext, set_current_runtime};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        set_current_runtime(None);
+        set_theme(Theme::dark());
+        assert_eq!(get_theme().name, "dark");
+
+        let ctx1 = Rc::new(RefCell::new(RuntimeContext::new()));
+        let ctx2 = Rc::new(RefCell::new(RuntimeContext::new()));
+
+        set_current_runtime(Some(ctx1));
+        set_theme(Theme::light());
+        assert_eq!(get_theme().name, "light");
+
+        set_current_runtime(Some(ctx2));
+        assert_eq!(get_theme().name, "dark");
+
+        set_current_runtime(None);
+        assert_eq!(get_theme().name, "dark");
     }
 
     #[test]
