@@ -8,7 +8,7 @@ A React-like declarative terminal UI framework for Rust, inspired by [Ink](https
 
 ## Features
 
-- **React-like API**: Familiar component model with hooks (`use_signal`, `use_effect`, `use_input`, `use_cmd`)
+- **React-like API**: Familiar component model with hooks (`use_signal`, `use_state`, `use_ref`, `use_context`, `use_effect`, `use_layout_effect`, `use_input`, `use_cmd`)
 - **Command System**: Elm-inspired side effect management for async tasks, timers, file I/O
 - **Type-safe Commands**: `Cmd<M>` for compile-time message type checking
 - **Declarative Macros**: `row!`, `col!`, `text!` for concise UI building
@@ -26,6 +26,13 @@ A React-like declarative terminal UI framework for Rust, inspired by [Ink](https
 - **Bracketed Paste**: Distinguish between typed and pasted text
 - **Theme System**: Centralized theming with semantic colors
 - **Cross-platform**: Works on Linux, macOS, and Windows
+
+### Recent Improvements
+
+- Added core hooks: `use_state`, `use_ref`, `create_context`/`use_context`, `use_layout_effect`
+- Integrated dirty-row rendering path in `Output::render()`
+- Improved command executor startup resilience (runtime creation failure now degrades safely)
+- Added `docs/vibe/design-guard-and-fixflow.md` for step-by-step design issue tracking and fixes
 
 ## Quick Start
 
@@ -316,6 +323,9 @@ Notification::new()
 | Hook | Description |
 |------|-------------|
 | `use_signal` | Reactive state management |
+| `use_state` | Simplified `(value, setter)` state API |
+| `use_ref` | Mutable persistent value without re-render |
+| `create_context` / `use_context` | Context-based value sharing |
 | `use_memo` | Memoized computation |
 | `use_callback` | Memoized callback |
 
@@ -325,6 +335,8 @@ Notification::new()
 |------|-------------|
 | `use_effect` | Side effects with dependencies |
 | `use_effect_once` | One-time side effect |
+| `use_layout_effect` | Layout effect API (currently aligned with `use_effect`) |
+| `use_layout_effect_once` | One-time layout effect |
 | `use_cmd` | Command execution with dependencies |
 | `use_cmd_once` | One-time command execution |
 
