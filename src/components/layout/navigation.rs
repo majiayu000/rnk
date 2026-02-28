@@ -292,21 +292,22 @@ mod tests {
     #[test]
     fn test_arrow_navigation() {
         let config = NavigationConfig::default();
-        let mut key = Key::default();
-
-        // Down arrow
-        key.down_arrow = true;
-        let result = handle_list_navigation(0, 10, "", key, &config);
+        let down_key = Key {
+            down_arrow: true,
+            ..Key::default()
+        };
+        let result = handle_list_navigation(0, 10, "", down_key, &config);
         assert_eq!(result, NavigationResult::Moved(1));
 
-        // Up arrow
-        key.down_arrow = false;
-        key.up_arrow = true;
-        let result = handle_list_navigation(5, 10, "", key, &config);
+        let up_key = Key {
+            up_arrow: true,
+            ..Key::default()
+        };
+        let result = handle_list_navigation(5, 10, "", up_key, &config);
         assert_eq!(result, NavigationResult::Moved(4));
 
         // Up arrow at start (should stay at 0)
-        let result = handle_list_navigation(0, 10, "", key, &config);
+        let result = handle_list_navigation(0, 10, "", up_key, &config);
         assert_eq!(result, NavigationResult::Moved(0));
     }
 
@@ -355,49 +356,51 @@ mod tests {
     #[test]
     fn test_home_end_navigation() {
         let config = NavigationConfig::default();
-        let mut key = Key::default();
-
-        // Home
-        key.home = true;
-        let result = handle_list_navigation(5, 10, "", key, &config);
+        let home_key = Key {
+            home: true,
+            ..Key::default()
+        };
+        let result = handle_list_navigation(5, 10, "", home_key, &config);
         assert_eq!(result, NavigationResult::Moved(0));
 
-        // End
-        key.home = false;
-        key.end = true;
-        let result = handle_list_navigation(0, 10, "", key, &config);
+        let end_key = Key {
+            end: true,
+            ..Key::default()
+        };
+        let result = handle_list_navigation(0, 10, "", end_key, &config);
         assert_eq!(result, NavigationResult::Moved(9));
     }
 
     #[test]
     fn test_page_navigation() {
         let config = NavigationConfig::default().page_size(5);
-        let mut key = Key::default();
-
-        // Page down
-        key.page_down = true;
-        let result = handle_list_navigation(0, 20, "", key, &config);
+        let page_down_key = Key {
+            page_down: true,
+            ..Key::default()
+        };
+        let result = handle_list_navigation(0, 20, "", page_down_key, &config);
         assert_eq!(result, NavigationResult::Moved(5));
 
-        // Page up
-        key.page_down = false;
-        key.page_up = true;
-        let result = handle_list_navigation(10, 20, "", key, &config);
+        let page_up_key = Key {
+            page_up: true,
+            ..Key::default()
+        };
+        let result = handle_list_navigation(10, 20, "", page_up_key, &config);
         assert_eq!(result, NavigationResult::Moved(5));
     }
 
     #[test]
     fn test_boundary_conditions() {
         let config = NavigationConfig::default();
-        let mut key = Key::default();
-
-        // Down at end
-        key.down_arrow = true;
-        let result = handle_list_navigation(9, 10, "", key, &config);
+        let down_key = Key {
+            down_arrow: true,
+            ..Key::default()
+        };
+        let result = handle_list_navigation(9, 10, "", down_key, &config);
         assert_eq!(result, NavigationResult::Moved(9));
 
         // Empty list
-        let result = handle_list_navigation(0, 0, "", key, &config);
+        let result = handle_list_navigation(0, 0, "", down_key, &config);
         assert_eq!(result, NavigationResult::None);
     }
 

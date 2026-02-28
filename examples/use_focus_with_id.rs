@@ -14,7 +14,7 @@ fn app() -> Element {
     let app = use_app();
     let focus_manager = use_focus_manager();
 
-    let focus_manager_clone = focus_manager.clone();
+    let focus_manager_clone = focus_manager;
 
     use_input(move |ch, key| {
         match ch {

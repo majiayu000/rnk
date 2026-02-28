@@ -13,11 +13,11 @@ fn main() {
     let output = rnk::render_to_string(&element, 80);
 
     println!("=== Output bytes ===");
-    for (_i, b) in output.bytes().enumerate() {
+    for b in output.bytes() {
         if b == b'\r' {
             print!("[CR]");
         } else if b == b'\n' {
-            print!("[LF]\n");
+            println!("[LF]");
         } else {
             print!("{}", b as char);
         }

@@ -13,7 +13,7 @@ fn main() -> std::io::Result<()> {
 }
 
 fn app() -> Element {
-    let processes = use_signal(|| generate_mock_processes());
+    let processes = use_signal(generate_mock_processes);
     let selected = use_signal(|| 0usize);
     let cpu_history = use_signal(|| vec![30.0; 60]);
     let mem_history = use_signal(|| vec![45.0; 60]);

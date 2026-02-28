@@ -47,9 +47,9 @@ fn app() -> Element {
     let staged_selected = use_signal(|| 0usize);
     let commits_selected = use_signal(|| 0usize);
 
-    let unstaged_files = use_signal(|| mock_unstaged_files());
-    let staged_files = use_signal(|| mock_staged_files());
-    let commits = use_signal(|| mock_commits());
+    let unstaged_files = use_signal(mock_unstaged_files);
+    let staged_files = use_signal(mock_staged_files);
+    let commits = use_signal(mock_commits);
 
     let app = use_app();
 

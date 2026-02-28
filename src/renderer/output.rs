@@ -499,9 +499,11 @@ mod tests {
     #[test]
     fn test_styled_output() {
         let mut output = Output::new(80, 24);
-        let mut style = Style::default();
-        style.color = Some(Color::Green);
-        style.bold = true;
+        let style = Style {
+            color: Some(Color::Green),
+            bold: true,
+            ..Style::default()
+        };
 
         output.write(0, 0, "Test", &style);
 

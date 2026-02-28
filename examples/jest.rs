@@ -26,9 +26,9 @@ enum TestStatus {
 
 fn app() -> Element {
     let app = use_app();
-    let start_time = use_signal(|| Instant::now());
-    let completed_tests = use_signal(|| Vec::<TestResult>::new());
-    let running_tests = use_signal(|| Vec::<TestResult>::new());
+    let start_time = use_signal(Instant::now);
+    let completed_tests = use_signal(Vec::<TestResult>::new);
+    let running_tests = use_signal(Vec::<TestResult>::new);
     let next_test_idx = use_signal(|| 0usize);
     let tick = use_signal(|| 0u32);
 
@@ -114,13 +114,13 @@ fn app() -> Element {
         .flex_direction(FlexDirection::Column)
         .padding(1)
         // Completed tests (using Static-like rendering)
-        .children(completed.iter().map(|test| render_test(test)))
+        .children(completed.iter().map(render_test))
         // Running tests
         .child(if !running.is_empty() {
             Box::new()
                 .flex_direction(FlexDirection::Column)
                 .margin_top(1.0)
-                .children(running.iter().map(|test| render_test(test)))
+                .children(running.iter().map(render_test))
                 .into_element()
         } else {
             Box::new().into_element()

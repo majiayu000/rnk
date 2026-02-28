@@ -73,9 +73,11 @@ fn test_output_buffer() {
 #[test]
 fn test_colored_output() {
     let mut output = Output::new(40, 10);
-    let mut style = rnk::core::Style::default();
-    style.color = Some(Color::Red);
-    style.bold = true;
+    let style = rnk::core::Style {
+        color: Some(Color::Red),
+        bold: true,
+        ..rnk::core::Style::default()
+    };
 
     output.write(0, 0, "Error", &style);
     let rendered = output.render();

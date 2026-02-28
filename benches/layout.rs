@@ -19,7 +19,7 @@ fn create_nested_tree(depth: usize) -> Element {
     for i in 0..depth {
         let mut child = Element::box_element();
         child.style.padding = Edges::new(1.0, 1.0, 0.0, 2.0);
-        child.add_child(Element::text(&format!("Level {}", i)));
+        child.add_child(Element::text(format!("Level {}", i)));
 
         current.add_child(child);
         // Get the last child to continue building
@@ -38,7 +38,7 @@ fn create_wide_tree(width: usize) -> Element {
     for i in 0..width {
         let mut child = Element::box_element();
         child.style.width = Dimension::Points(10.0);
-        child.add_child(Element::text(&format!("Item {}", i)));
+        child.add_child(Element::text(format!("Item {}", i)));
         root.add_child(child);
     }
 
@@ -58,7 +58,7 @@ fn create_grid_layout(rows: usize, cols: usize) -> Element {
             let mut cell = Element::box_element();
             cell.style.width = Dimension::Points(10.0);
             cell.style.height = Dimension::Points(3.0);
-            cell.add_child(Element::text(&format!("({},{})", r, c)));
+            cell.add_child(Element::text(format!("({},{})", r, c)));
             row.add_child(cell);
         }
 
@@ -127,7 +127,7 @@ fn layout_flex_grow() {
     for i in 0..3 {
         let mut child = Element::box_element();
         child.style.flex_grow = 1.0;
-        child.add_child(Element::text(&format!("Flex {}", i)));
+        child.add_child(Element::text(format!("Flex {}", i)));
         root.add_child(child);
     }
 
@@ -165,7 +165,7 @@ fn layout_many_text_elements(count: usize) {
     root.style.flex_direction = FlexDirection::Column;
 
     for i in 0..count {
-        root.add_child(Element::text(&format!("Line number {}", i)));
+        root.add_child(Element::text(format!("Line number {}", i)));
     }
 
     engine.compute(&root, 80, 24);

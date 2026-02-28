@@ -498,6 +498,6 @@ mod tests {
 
         // Smooth opacity should be between 0.0 and 1.0
         let opacity = state.smooth_opacity(200);
-        assert!(opacity >= 0.0 && opacity <= 1.0);
+        assert!((0.0..=1.0).contains(&opacity));
     }
 }

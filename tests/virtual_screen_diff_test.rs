@@ -14,10 +14,6 @@ fn test_virtual_screen_buffer_exists() {
     // From terminal.rs line 135: previous_lines: Vec<String>
     // This is the virtual screen buffer that stores the last frame
 
-    assert!(
-        true,
-        "Virtual screen buffer (previous_lines) exists in Terminal struct"
-    );
 }
 
 /// Test that diff algorithm compares old and new lines
@@ -31,10 +27,6 @@ fn test_diff_algorithm_implementation() {
     // 2. Compare: `if old_line != Some(new_line)`
     // 3. Update only if different: write new content
 
-    assert!(
-        true,
-        "Diff algorithm correctly compares and updates only changed lines"
-    );
 }
 
 /// Test that exit_inline preserves output
@@ -55,7 +47,6 @@ fn test_exit_inline_preserves_output() {
     // - Erase lines
     // - Use alternate screen escape sequences
 
-    assert!(true, "exit_inline() preserves output in terminal history");
 }
 
 /// Test incremental rendering logic
@@ -63,8 +54,8 @@ fn test_exit_inline_preserves_output() {
 fn test_incremental_rendering() {
     // Simulate the incremental rendering logic
 
-    let previous_lines = vec!["Line 1", "Line 2", "Line 3"];
-    let new_lines = vec!["Line 1", "Line 2 CHANGED", "Line 3"];
+    let previous_lines = ["Line 1", "Line 2", "Line 3"];
+    let new_lines = ["Line 1", "Line 2 CHANGED", "Line 3"];
 
     let mut updates_needed = Vec::new();
 
@@ -86,8 +77,8 @@ fn test_incremental_rendering() {
 fn test_size_change_handling() {
     // Test when new content is shorter than previous
 
-    let previous_lines = vec!["Line 1", "Line 2", "Line 3", "Line 4"];
-    let new_lines = vec!["Line 1", "Line 2"];
+    let previous_lines = ["Line 1", "Line 2", "Line 3", "Line 4"];
+    let new_lines = ["Line 1", "Line 2"];
 
     let max_lines = previous_lines.len().max(new_lines.len());
     let mut clears_needed = 0;
@@ -110,7 +101,7 @@ fn test_previous_lines_update() {
     // Verify the previous_lines buffer is updated after each render
     // This is done at terminal.rs:454, 502, 423
 
-    let new_lines = vec!["Line 1", "Line 2"];
+    let new_lines = ["Line 1", "Line 2"];
     let previous_lines: Vec<String> = new_lines.iter().map(|s| s.to_string()).collect();
 
     assert_eq!(previous_lines.len(), 2);
@@ -152,8 +143,4 @@ fn test_no_alternate_screen_in_inline_mode() {
     // Only uses: DisableMouseCapture, show_cursor, disable_raw_mode
     // Does NOT use: LeaveAlternateScreen
 
-    assert!(
-        true,
-        "Inline mode correctly avoids alternate screen escape sequences"
-    );
 }

@@ -98,7 +98,7 @@ fn use_memo_simple() {
     let ctx = Rc::new(RefCell::new(HookContext::new()));
 
     with_hooks(ctx, || {
-        let _value = use_memo(|| expensive_computation(), ());
+        let _value = use_memo(expensive_computation, ());
     });
 }
 
@@ -108,7 +108,7 @@ fn use_memo_with_deps() {
 
     for i in 0..100 {
         with_hooks(ctx.clone(), || {
-            let _value = use_memo(|| expensive_computation(), (i % 10,));
+            let _value = use_memo(expensive_computation, (i % 10,));
         });
     }
 }

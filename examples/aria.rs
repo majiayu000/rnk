@@ -15,7 +15,7 @@ fn app() -> Element {
     let selected = use_signal(|| 0usize);
     let is_screen_reader = use_is_screen_reader_enabled();
 
-    let items = vec![
+    let items = [
         ("apple", "Apple"),
         ("banana", "Banana"),
         ("cherry", "Cherry"),

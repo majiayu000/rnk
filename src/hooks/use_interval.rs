@@ -157,8 +157,7 @@ where
             }
 
             let id = NEXT_INTERVAL_ID.fetch_add(1, Ordering::Relaxed);
-            let cb = callback.clone();
-            let callback: Arc<dyn Fn() + Send + Sync> = Arc::new(move || cb());
+            let callback: Arc<dyn Fn() + Send + Sync> = Arc::new(callback.clone());
             let scheduler = interval_scheduler().clone();
 
             let _ = scheduler.send(IntervalCommand::Register {

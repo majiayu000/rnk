@@ -141,12 +141,13 @@ fn main() {
 }
 
 fn generate_sample_content() -> String {
-    let mut lines = Vec::new();
-    lines.push("# Viewport Demo Content".to_string());
-    lines.push("".to_string());
-    lines.push("This is a demonstration of the Viewport component.".to_string());
-    lines.push("It supports scrolling through large amounts of text.".to_string());
-    lines.push("".to_string());
+    let mut lines = vec![
+        "# Viewport Demo Content".to_string(),
+        "".to_string(),
+        "This is a demonstration of the Viewport component.".to_string(),
+        "It supports scrolling through large amounts of text.".to_string(),
+        "".to_string(),
+    ];
 
     for i in 1..=50 {
         lines.push(format!(

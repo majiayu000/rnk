@@ -31,7 +31,6 @@ fn test_fullscreen_uses_alternate_screen() {
     // Line 170: execute!(stdout(), EnterAlternateScreen, Hide)?;
     // Line 184: execute!(stdout(), Show, LeaveAlternateScreen)?;
 
-    assert!(true, "Fullscreen mode correctly uses alternate screen");
 }
 
 /// Test that inline mode does NOT use alternate screen
@@ -46,7 +45,6 @@ fn test_inline_no_alternate_screen() {
     // Lines 196-208: enter_inline() only uses hide_cursor(), no EnterAlternateScreen
     // Lines 211-241: exit_inline() only uses show_cursor(), no LeaveAlternateScreen
 
-    assert!(true, "Inline mode correctly avoids alternate screen");
 }
 
 /// Integration test: Verify terminal history preservation

@@ -390,13 +390,15 @@ mod tests {
     #[test]
     fn test_shortcut_matches_ctrl_char() {
         let shortcut = Shortcut::ctrl('s');
-        let mut key = Key::default();
-        key.ctrl = true;
+        let key = Key {
+            ctrl: true,
+            ..Key::default()
+        };
 
         assert!(shortcut.matches("s", &key));
         assert!(shortcut.matches("S", &key));
 
-        key.ctrl = false;
+        let key = Key::default();
         assert!(!shortcut.matches("s", &key));
     }
 
@@ -415,45 +417,62 @@ mod tests {
     #[test]
     fn test_shortcut_matches_function_key() {
         let shortcut = Shortcut::f(1);
-        let mut key = Key::default();
-        key.f1 = true;
+        let key = Key {
+            f1: true,
+            ..Key::default()
+        };
 
         assert!(shortcut.matches("", &key));
 
-        key.f1 = false;
-        key.f2 = true;
+        let key = Key {
+            f2: true,
+            ..Key::default()
+        };
         assert!(!shortcut.matches("", &key));
     }
 
     #[test]
     fn test_shortcut_matches_special_keys() {
-        let mut key = Key::default();
-
-        key.return_key = true;
+        let key = Key {
+            return_key: true,
+            ..Key::default()
+        };
         assert!(Shortcut::enter().matches("", &key));
-        key.return_key = false;
 
-        key.escape = true;
+        let key = Key {
+            escape: true,
+            ..Key::default()
+        };
         assert!(Shortcut::escape().matches("", &key));
-        key.escape = false;
 
-        key.tab = true;
+        let key = Key {
+            tab: true,
+            ..Key::default()
+        };
         assert!(Shortcut::tab().matches("", &key));
-        key.tab = false;
 
-        key.up_arrow = true;
+        let key = Key {
+            up_arrow: true,
+            ..Key::default()
+        };
         assert!(Shortcut::up().matches("", &key));
-        key.up_arrow = false;
 
-        key.down_arrow = true;
+        let key = Key {
+            down_arrow: true,
+            ..Key::default()
+        };
         assert!(Shortcut::down().matches("", &key));
-        key.down_arrow = false;
 
-        key.left_arrow = true;
+        let key = Key {
+            left_arrow: true,
+            ..Key::default()
+        };
         assert!(Shortcut::left().matches("", &key));
-        key.left_arrow = false;
 
-        key.right_arrow = true;
+        let key = Key {
+            right_arrow: true,
+            ..Key::default()
+        };
         assert!(Shortcut::right().matches("", &key));
     }
 
@@ -468,9 +487,11 @@ mod tests {
 
     #[test]
     fn test_modifiers_matches() {
-        let mut key = Key::default();
-        key.ctrl = true;
-        key.shift = true;
+        let key = Key {
+            ctrl: true,
+            shift: true,
+            ..Key::default()
+        };
 
         assert!(Modifiers::ctrl_shift().matches(&key));
         assert!(!Modifiers::ctrl().matches(&key));
