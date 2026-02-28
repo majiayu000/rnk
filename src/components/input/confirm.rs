@@ -185,16 +185,16 @@ pub struct ConfirmStyle {
 /// Button display style
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ButtonStyle {
-    /// [Yes] [No]
+    /// `[Yes] [No]`
     #[default]
     Brackets,
-    /// <Yes> <No>
+    /// `<Yes> <No>`
     Angles,
-    /// (Yes) (No)
+    /// `(Yes) (No)`
     Parens,
-    /// Yes | No
+    /// `Yes | No`
     Plain,
-    /// [ Yes ] [ No ] with padding
+    /// `[ Yes ] [ No ]` with padding
     Padded,
 }
 
