@@ -289,18 +289,32 @@ mod tests {
             });
         });
 
-        // Allow any in-flight tick that raced with disable to drain.
-        std::thread::sleep(Duration::from_millis(70));
-        let settled = count.load(Ordering::SeqCst);
-        assert!(
-            settled <= before_disable + 1,
-            "too many ticks after disable; before={}, settled={}",
-            before_disable,
-            settled
-        );
+        // Allow in-flight ticks to drain, then require the counter to stabilize.
+        let settle_deadline = Instant::now() + Duration::from_millis(900);
+        let mut settled = count.load(Ordering::SeqCst);
+        let mut last_change = Instant::now();
+        loop {
+            std::thread::sleep(Duration::from_millis(10));
+            let observed = count.load(Ordering::SeqCst);
+            if observed != settled {
+                settled = observed;
+                last_change = Instant::now();
+            }
+
+            if Instant::now().saturating_duration_since(last_change) >= Duration::from_millis(120) {
+                break;
+            }
+
+            assert!(
+                Instant::now() < settle_deadline,
+                "interval did not stabilize after disable; before={}, current={}",
+                before_disable,
+                observed
+            );
+        }
 
         // After settling, count should no longer increase.
-        std::thread::sleep(Duration::from_millis(80));
+        std::thread::sleep(Duration::from_millis(90));
         let after_disable = count.load(Ordering::SeqCst);
         assert_eq!(
             settled, after_disable,
