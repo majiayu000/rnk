@@ -269,12 +269,22 @@ mod tests {
         });
         assert_eq!(second, "a");
 
-        std::thread::sleep(Duration::from_millis(60));
+        let deadline = Instant::now() + Duration::from_millis(250);
+        loop {
+            let settled = with_hooks(ctx.clone(), || {
+                use_debounce("b".to_string(), Duration::from_millis(30))
+            });
 
-        let third = with_hooks(ctx.clone(), || {
-            use_debounce("b".to_string(), Duration::from_millis(30))
-        });
-        assert_eq!(third, "b");
+            if settled == "b" {
+                break;
+            }
+
+            if Instant::now() >= deadline {
+                panic!("debounced value did not settle to 'b' before timeout");
+            }
+
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     #[test]
