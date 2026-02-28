@@ -13,7 +13,6 @@ fn test_virtual_screen_buffer_exists() {
 
     // From terminal.rs line 135: previous_lines: Vec<String>
     // This is the virtual screen buffer that stores the last frame
-
 }
 
 /// Test that diff algorithm compares old and new lines
@@ -26,7 +25,6 @@ fn test_diff_algorithm_implementation() {
     // 1. Get old line: `let old_line = self.previous_lines.get(i)`
     // 2. Compare: `if old_line != Some(new_line)`
     // 3. Update only if different: write new content
-
 }
 
 /// Test that exit_inline preserves output
@@ -46,7 +44,6 @@ fn test_exit_inline_preserves_output() {
     // - Clear the screen
     // - Erase lines
     // - Use alternate screen escape sequences
-
 }
 
 /// Test incremental rendering logic
@@ -142,5 +139,4 @@ fn test_no_alternate_screen_in_inline_mode() {
     // From terminal.rs:211-241 (exit_inline)
     // Only uses: DisableMouseCapture, show_cursor, disable_raw_mode
     // Does NOT use: LeaveAlternateScreen
-
 }
