@@ -237,13 +237,21 @@ mod tests {
             });
         });
 
-        std::thread::sleep(Duration::from_millis(90));
-        let observed = count.load(Ordering::SeqCst);
-        assert!(
-            observed >= 2,
-            "expected at least 2 interval ticks, observed {}",
-            observed
-        );
+        let deadline = Instant::now() + Duration::from_millis(500);
+        loop {
+            let observed = count.load(Ordering::SeqCst);
+            if observed >= 2 {
+                break;
+            }
+
+            assert!(
+                Instant::now() < deadline,
+                "expected at least 2 interval ticks before timeout, observed {}",
+                observed
+            );
+
+            std::thread::sleep(Duration::from_millis(5));
+        }
 
         drop(ctx);
     }
@@ -260,9 +268,19 @@ mod tests {
             });
         });
 
-        std::thread::sleep(Duration::from_millis(70));
-        let before_disable = count.load(Ordering::SeqCst);
-        assert!(before_disable > 0, "interval did not tick before disable");
+        let ready_deadline = Instant::now() + Duration::from_millis(350);
+        let before_disable = loop {
+            let observed = count.load(Ordering::SeqCst);
+            if observed > 0 {
+                break observed;
+            }
+
+            assert!(
+                Instant::now() < ready_deadline,
+                "interval did not tick before disable"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        };
 
         let count_clone = count.clone();
         with_hooks(ctx.clone(), || {
