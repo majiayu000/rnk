@@ -25,7 +25,7 @@ fn restore_title_escape() -> &'static str {
 /// # Example
 ///
 /// ```ignore
-/// use tink::hooks::use_window_title::set_window_title;
+/// use rnk::hooks::use_window_title::set_window_title;
 ///
 /// set_window_title("My Application - v1.0");
 /// ```
@@ -72,7 +72,7 @@ impl Drop for WindowTitleGuard {
 /// # Example
 ///
 /// ```ignore
-/// use tink::prelude::*;
+/// use rnk::prelude::*;
 ///
 /// fn app() -> Element {
 ///     // Set window title
@@ -98,7 +98,7 @@ pub fn use_window_title(title: &str) {
 /// # Example
 ///
 /// ```ignore
-/// use tink::prelude::*;
+/// use rnk::prelude::*;
 ///
 /// fn app() -> Element {
 ///     let items = use_signal(|| vec!["a", "b", "c"]);
