@@ -138,10 +138,13 @@ impl RenderHelper {
         output.render()
     }
 
-    fn resolve_render_height(&self, element: &Element, width: u16, engine: &mut LayoutEngine) -> u16 {
-        let initial_guess = self
-            .calculate_element_height(element, width, engine)
-            .max(1);
+    fn resolve_render_height(
+        &self,
+        element: &Element,
+        width: u16,
+        engine: &mut LayoutEngine,
+    ) -> u16 {
+        let initial_guess = self.calculate_element_height(element, width, engine).max(1);
         let mut probe_height = initial_guess.max(64);
         let mut measured_height = initial_guess;
 

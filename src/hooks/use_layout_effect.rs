@@ -100,8 +100,8 @@ mod tests {
     use crate::hooks::use_effect::use_effect;
     use std::cell::RefCell;
     use std::rc::Rc;
-    use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn test_use_layout_effect_runs_after_render() {
