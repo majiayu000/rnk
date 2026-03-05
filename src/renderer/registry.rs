@@ -34,9 +34,14 @@ impl AppId {
 
 static APP_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 static RECYCLED_APP_IDS: OnceLock<Mutex<Vec<u64>>> = OnceLock::new();
+static APP_REGISTRATION_ORDER: OnceLock<Mutex<Vec<AppId>>> = OnceLock::new();
 
 fn recycled_app_ids() -> &'static Mutex<Vec<u64>> {
     RECYCLED_APP_IDS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn app_registration_order() -> &'static Mutex<Vec<AppId>> {
+    APP_REGISTRATION_ORDER.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 fn take_recycled_app_id() -> Option<AppId> {
@@ -56,6 +61,20 @@ fn next_fresh_app_id() -> u64 {
             current.checked_add(1).filter(|next| *next != 0)
         })
         .unwrap_or_else(|_| panic!("AppId counter exhausted; cannot allocate more app IDs"))
+}
+
+fn track_registered_app(id: AppId) {
+    if let Ok(mut order) = app_registration_order().lock() {
+        order.push(id);
+    }
+}
+
+fn untrack_registered_app(id: AppId) -> Option<AppId> {
+    let mut order = app_registration_order().lock().ok()?;
+    if let Some(pos) = order.iter().position(|app_id| *app_id == id) {
+        order.remove(pos);
+    }
+    order.last().copied()
 }
 
 // === Printable ===
@@ -307,6 +326,7 @@ pub(crate) fn register_app(runtime: Arc<AppRuntime>) -> AppRegistrationGuard {
     if let Ok(mut registry) = registry().lock() {
         let sink: Arc<dyn AppSink> = runtime;
         registry.insert(id, sink);
+        track_registered_app(id);
         set_current_app(Some(id));
     }
     AppRegistrationGuard { id }
@@ -317,8 +337,9 @@ fn unregister_app(id: AppId) {
         registry.remove(&id);
     }
 
+    let fallback_current = untrack_registered_app(id);
     if AppId::from_raw(CURRENT_APP.load(Ordering::SeqCst)) == Some(id) {
-        set_current_app(None);
+        set_current_app(fallback_current);
     }
 
     recycle_app_id(id);
@@ -661,6 +682,30 @@ mod tests {
         // Should no longer be able to get current app
         let sink2 = current_app_sink();
         assert!(sink2.is_none());
+    }
+
+    #[test]
+    fn test_unregister_current_app_falls_back_to_previous() {
+        let runtime1 = AppRuntime::new(false);
+        runtime1.clear_render_request();
+        let guard1 = register_app(runtime1.clone());
+
+        let runtime2 = AppRuntime::new(false);
+        runtime2.clear_render_request();
+        let guard2 = register_app(runtime2.clone());
+
+        request_render();
+        assert!(runtime2.render_requested());
+        assert!(!runtime1.render_requested());
+
+        runtime1.clear_render_request();
+        runtime2.clear_render_request();
+        drop(guard2);
+
+        request_render();
+        assert!(runtime1.render_requested());
+
+        drop(guard1);
     }
 
     #[test]
