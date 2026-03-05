@@ -53,6 +53,8 @@ pub struct HookContext {
     hook_index: usize,
     /// Effects to run after render
     effects: Vec<Effect>,
+    /// Layout effects to run before passive effects
+    layout_effects: Vec<Effect>,
     /// Cleanup functions from previous effects
     cleanups: Vec<Option<Box<dyn FnOnce() + Send>>>,
     /// Callback to trigger re-render
@@ -74,6 +76,7 @@ impl HookContext {
             hooks: Vec::new(),
             hook_index: 0,
             effects: Vec::new(),
+            layout_effects: Vec::new(),
             cleanups: Vec::new(),
             render_callback: None,
             is_rendering: false,
@@ -97,6 +100,7 @@ impl HookContext {
     pub fn begin_render(&mut self) {
         self.hook_index = 0;
         self.effects.clear();
+        self.layout_effects.clear();
         self.is_rendering = true;
     }
 
@@ -155,10 +159,12 @@ impl HookContext {
         self.effects.push(effect);
     }
 
-    /// Run all pending effects
-    pub fn run_effects(&mut self) {
-        // Run effects and update cleanup functions only for the slots that re-ran.
-        let effects = std::mem::take(&mut self.effects);
+    /// Add a layout effect to run before passive effects
+    pub fn add_layout_effect(&mut self, effect: Effect) {
+        self.layout_effects.push(effect);
+    }
+
+    fn run_effect_batch(&mut self, effects: Vec<Effect>) {
         for effect in effects {
             if effect.slot >= self.cleanups.len() {
                 self.cleanups.resize_with(effect.slot + 1, || None);
@@ -170,6 +176,18 @@ impl HookContext {
 
             self.cleanups[effect.slot] = (effect.callback)();
         }
+    }
+
+    /// Run pending layout effects
+    pub fn run_layout_effects(&mut self) {
+        let effects = std::mem::take(&mut self.layout_effects);
+        self.run_effect_batch(effects);
+    }
+
+    /// Run all pending effects
+    pub fn run_effects(&mut self) {
+        let effects = std::mem::take(&mut self.effects);
+        self.run_effect_batch(effects);
     }
 
     /// Request a re-render
@@ -252,6 +270,7 @@ where
     {
         let mut ctx_ref = ctx.borrow_mut();
         ctx_ref.end_render();
+        ctx_ref.run_layout_effects();
         ctx_ref.run_effects();
     }
 
