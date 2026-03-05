@@ -743,11 +743,24 @@ pub fn with_theme<F, R>(theme: Theme, f: F) -> R
 where
     F: FnOnce(&Theme) -> R,
 {
+    struct ThemeRestoreGuard {
+        previous_theme: Option<Theme>,
+    }
+
+    impl Drop for ThemeRestoreGuard {
+        fn drop(&mut self) {
+            if let Some(previous_theme) = self.previous_theme.take() {
+                set_theme(previous_theme);
+            }
+        }
+    }
+
     let old_theme = get_theme();
     set_theme(theme.clone());
-    let result = f(&theme);
-    set_theme(old_theme);
-    result
+    let _guard = ThemeRestoreGuard {
+        previous_theme: Some(old_theme),
+    };
+    f(&theme)
 }
 
 #[cfg(test)]
@@ -845,6 +858,21 @@ mod tests {
             42
         });
         assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn test_with_theme_restores_after_panic() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let original = get_theme();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            with_theme(Theme::light(), |_| {
+                panic!("boom");
+            });
+        }));
+
+        assert!(result.is_err());
+        assert_eq!(get_theme().name, original.name);
     }
 
     #[test]
