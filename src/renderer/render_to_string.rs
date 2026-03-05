@@ -123,12 +123,8 @@ impl RenderHelper {
     fn render_to_output(&self, element: &Element, width: u16) -> String {
         let mut engine = LayoutEngine::new();
         let layout_width = width;
-        let height = self.calculate_element_height(element, layout_width, &mut engine);
-        engine.compute(element, layout_width, height.max(1000));
-
-        let _layout = engine.get_layout(element.id).unwrap_or_default();
+        let content_height = self.resolve_render_height(element, layout_width, &mut engine);
         let render_width = layout_width;
-        let content_height = height.max(1);
 
         let mut output = Output::new(render_width, content_height);
         let clip_depth_before = output.clip_depth();
@@ -140,6 +136,41 @@ impl RenderHelper {
         );
 
         output.render()
+    }
+
+    fn resolve_render_height(&self, element: &Element, width: u16, engine: &mut LayoutEngine) -> u16 {
+        let initial_guess = self
+            .calculate_element_height(element, width, engine)
+            .max(1);
+        let mut probe_height = initial_guess.max(64);
+        let mut measured_height = initial_guess;
+
+        for _ in 0..6 {
+            engine.compute(element, width, probe_height);
+
+            measured_height = engine
+                .get_layout(element.id)
+                .map(|layout| layout.height.ceil().max(1.0) as u16)
+                .unwrap_or(initial_guess.max(1));
+
+            // We have headroom; current probe height is enough.
+            if measured_height.saturating_add(1) < probe_height {
+                break;
+            }
+
+            if probe_height == u16::MAX {
+                break;
+            }
+
+            probe_height = probe_height
+                .saturating_mul(2)
+                .max(probe_height.saturating_add(1));
+        }
+
+        let resolved_height = measured_height.max(1);
+        // Recompute using resolved height so final layout and output height align.
+        engine.compute(element, width, resolved_height);
+        resolved_height
     }
 
     fn calculate_element_height(
@@ -255,5 +286,19 @@ mod tests {
         let x_pos = first_line.find('X').unwrap_or(usize::MAX);
 
         assert_eq!(x_pos, 2);
+    }
+
+    #[test]
+    fn test_render_to_string_handles_tall_content() {
+        let mut container = Box::new().flex_direction(crate::core::FlexDirection::Column);
+        for i in 0..1100 {
+            container = container.child(Text::new(format!("line-{i}")).into_element());
+        }
+
+        let element = container.into_element();
+        let output = render_to_string(&element, 40);
+
+        assert!(output.contains("line-0"));
+        assert!(output.contains("line-1099"));
     }
 }
