@@ -1,29 +1,13 @@
 ---
 name: Feature Request
-about: Suggest a new feature for rnk
-title: '[Feature] '
+about: Suggest a new feature
+title: ''
 labels: enhancement
 assignees: ''
 ---
 
-## Summary
+## Problem
 
-Brief description of the feature.
-
-## Motivation
-
-Why is this feature needed? What problem does it solve?
-
-## Proposed API
-
-```rust
-// Example of how the feature might be used
-```
+## Proposed Solution
 
 ## Alternatives Considered
-
-Other approaches you've considered.
-
-## Additional Context
-
-Any other relevant information, mockups, or references.
