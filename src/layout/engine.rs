@@ -564,10 +564,9 @@ fn measure_text_node(
 
     let text_height = if let Some(max_width) = available_width {
         if max_width > 0 && text_width > max_width as f32 {
-            // Text needs wrapping - calculate wrapped line count
-            use super::measure::wrap_text;
-            let wrapped = wrap_text(text, max_width);
-            wrapped.lines().count().max(1) as f32
+            // Text needs wrapping - count wrapped lines without allocation
+            use super::measure::count_wrapped_lines_by_width;
+            count_wrapped_lines_by_width(text, max_width) as f32
         } else {
             text.lines().count().max(1) as f32
         }

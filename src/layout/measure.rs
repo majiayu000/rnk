@@ -3,6 +3,37 @@
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+#[inline]
+fn grapheme_width(grapheme: &str) -> usize {
+    UnicodeWidthStr::width(grapheme)
+}
+
+#[inline]
+fn fits_within_width(text: &str, max_width: usize) -> bool {
+    let mut width = 0;
+    for grapheme in text.graphemes(true) {
+        width += grapheme_width(grapheme);
+        if width > max_width {
+            return false;
+        }
+    }
+    true
+}
+
+fn take_prefix_by_width(text: &str, max_width: usize) -> String {
+    let mut result = String::new();
+    let mut width = 0;
+    for grapheme in text.graphemes(true) {
+        let grapheme_width = grapheme_width(grapheme);
+        if width + grapheme_width > max_width {
+            break;
+        }
+        result.push_str(grapheme);
+        width += grapheme_width;
+    }
+    result
+}
+
 /// Measure the display width of text using grapheme clusters
 ///
 /// This function properly handles:
@@ -11,7 +42,11 @@ use unicode_width::UnicodeWidthStr;
 /// - Combining characters (e.g., é = e + combining acute)
 /// - Zero-width characters
 pub fn measure_text_width(text: &str) -> usize {
-    text.graphemes(true).map(UnicodeWidthStr::width).sum()
+    if let Some(width) = ascii_width_fast_path(text) {
+        return width;
+    }
+
+    text.graphemes(true).map(grapheme_width).sum()
 }
 
 /// Measure the display width using grapheme clusters (alias for measure_text_width)
@@ -21,13 +56,18 @@ pub fn display_width(text: &str) -> usize {
 
 /// Measure text dimensions (width, height)
 pub fn measure_text(text: &str) -> (usize, usize) {
-    let lines: Vec<&str> = text.lines().collect();
-    let height = lines.len().max(1);
-    let width = lines
-        .iter()
-        .map(|line| measure_text_width(line))
-        .max()
-        .unwrap_or(0);
+    let mut height = 0usize;
+    let mut width = 0usize;
+
+    for line in text.lines() {
+        height += 1;
+        width = width.max(measure_text_width(line));
+    }
+
+    if height == 0 {
+        height = 1;
+    }
+
     (width, height)
 }
 
@@ -37,11 +77,23 @@ pub fn wrap_text(text: &str, max_width: usize) -> String {
         return String::new();
     }
 
-    let mut result = String::new();
+    if text.is_empty() {
+        return String::new();
+    }
+
+    if text.chars().all(|c| !c.is_control()) {
+        if let Some(width) = ascii_width_fast_path(text) {
+            if width <= max_width {
+                return text.to_string();
+            }
+        }
+    }
+
+    let mut result = String::with_capacity(text.len());
     let mut current_width = 0;
 
     for grapheme in text.graphemes(true) {
-        let grapheme_width = UnicodeWidthStr::width(grapheme);
+        let grapheme_width = grapheme_width(grapheme);
 
         if grapheme == "\n" {
             result.push('\n');
@@ -61,26 +113,13 @@ pub fn wrap_text(text: &str, max_width: usize) -> String {
 
 /// Truncate text to fit within a maximum width (grapheme-aware)
 pub fn truncate_text(text: &str, max_width: usize, ellipsis: &str) -> String {
-    let text_width = measure_text_width(text);
-
-    if text_width <= max_width {
+    if fits_within_width(text, max_width) {
         return text.to_string();
     }
 
     let ellipsis_width = measure_text_width(ellipsis);
     if max_width <= ellipsis_width {
-        // Just take as much of ellipsis as we can
-        let mut result = String::new();
-        let mut width = 0;
-        for g in ellipsis.graphemes(true) {
-            let gw = UnicodeWidthStr::width(g);
-            if width + gw > max_width {
-                break;
-            }
-            result.push_str(g);
-            width += gw;
-        }
-        return result;
+        return take_prefix_by_width(ellipsis, max_width);
     }
 
     let target_width = max_width - ellipsis_width;
@@ -88,7 +127,7 @@ pub fn truncate_text(text: &str, max_width: usize, ellipsis: &str) -> String {
     let mut current_width = 0;
 
     for grapheme in text.graphemes(true) {
-        let grapheme_width = UnicodeWidthStr::width(grapheme);
+        let grapheme_width = grapheme_width(grapheme);
         if current_width + grapheme_width > target_width {
             break;
         }
@@ -102,39 +141,26 @@ pub fn truncate_text(text: &str, max_width: usize, ellipsis: &str) -> String {
 
 /// Truncate text from the start (grapheme-aware)
 pub fn truncate_start(text: &str, max_width: usize, ellipsis: &str) -> String {
-    let text_width = measure_text_width(text);
-
-    if text_width <= max_width {
+    if fits_within_width(text, max_width) {
         return text.to_string();
     }
 
     let ellipsis_width = measure_text_width(ellipsis);
     if max_width <= ellipsis_width {
-        let mut result = String::new();
-        let mut width = 0;
-        for g in ellipsis.graphemes(true) {
-            let gw = UnicodeWidthStr::width(g);
-            if width + gw > max_width {
-                break;
-            }
-            result.push_str(g);
-            width += gw;
-        }
-        return result;
+        return take_prefix_by_width(ellipsis, max_width);
     }
 
     let target_width = max_width - ellipsis_width;
-    let graphemes: Vec<&str> = text.graphemes(true).collect();
     let mut result = String::new();
     let mut current_width = 0;
     let mut end_graphemes = Vec::new();
 
-    for grapheme in graphemes.iter().rev() {
-        let grapheme_width = UnicodeWidthStr::width(*grapheme);
+    for grapheme in text.graphemes(true).rev() {
+        let grapheme_width = grapheme_width(grapheme);
         if current_width + grapheme_width > target_width {
             break;
         }
-        end_graphemes.push(*grapheme);
+        end_graphemes.push(grapheme);
         current_width += grapheme_width;
     }
 
@@ -148,38 +174,24 @@ pub fn truncate_start(text: &str, max_width: usize, ellipsis: &str) -> String {
 
 /// Truncate text from the middle (grapheme-aware)
 pub fn truncate_middle(text: &str, max_width: usize, ellipsis: &str) -> String {
-    let text_width = measure_text_width(text);
-
-    if text_width <= max_width {
+    if fits_within_width(text, max_width) {
         return text.to_string();
     }
 
     let ellipsis_width = measure_text_width(ellipsis);
     if max_width <= ellipsis_width {
-        let mut result = String::new();
-        let mut width = 0;
-        for g in ellipsis.graphemes(true) {
-            let gw = UnicodeWidthStr::width(g);
-            if width + gw > max_width {
-                break;
-            }
-            result.push_str(g);
-            width += gw;
-        }
-        return result;
+        return take_prefix_by_width(ellipsis, max_width);
     }
 
     let available = max_width - ellipsis_width;
     let left_width = available / 2;
     let right_width = available - left_width;
 
-    let graphemes: Vec<&str> = text.graphemes(true).collect();
-
     // Build left part
     let mut left = String::new();
     let mut current_width = 0;
-    for grapheme in &graphemes {
-        let grapheme_width = UnicodeWidthStr::width(*grapheme);
+    for grapheme in text.graphemes(true) {
+        let grapheme_width = grapheme_width(grapheme);
         if current_width + grapheme_width > left_width {
             break;
         }
@@ -190,12 +202,12 @@ pub fn truncate_middle(text: &str, max_width: usize, ellipsis: &str) -> String {
     // Build right part
     let mut right_graphemes = Vec::new();
     current_width = 0;
-    for grapheme in graphemes.iter().rev() {
-        let grapheme_width = UnicodeWidthStr::width(*grapheme);
+    for grapheme in text.graphemes(true).rev() {
+        let grapheme_width = grapheme_width(grapheme);
         if current_width + grapheme_width > right_width {
             break;
         }
-        right_graphemes.push(*grapheme);
+        right_graphemes.push(grapheme);
         current_width += grapheme_width;
     }
     right_graphemes.reverse();
@@ -206,6 +218,57 @@ pub fn truncate_middle(text: &str, max_width: usize, ellipsis: &str) -> String {
     }
 
     format!("{}{}{}", left, ellipsis, right)
+}
+
+/// Count wrapped lines for a text block without allocating wrapped content.
+pub(crate) fn count_wrapped_lines_by_width(text: &str, max_width: usize) -> usize {
+    if text.is_empty() {
+        return 1;
+    }
+
+    if max_width == 0 {
+        return 1;
+    }
+
+    let mut lines = 1usize;
+    let mut current_width = 0usize;
+    let mut ends_with_newline = false;
+
+    for grapheme in text.graphemes(true) {
+        if grapheme.ends_with('\n') {
+            lines += 1;
+            current_width = 0;
+            ends_with_newline = true;
+            continue;
+        }
+        ends_with_newline = false;
+
+        let grapheme_width = grapheme_width(grapheme);
+        if current_width + grapheme_width > max_width {
+            lines += 1;
+            current_width = grapheme_width;
+        } else {
+            current_width += grapheme_width;
+        }
+    }
+
+    // Match `str::lines()` semantics used by the previous implementation:
+    // a trailing '\n' does not produce an extra final empty line.
+    if ends_with_newline && lines > 1 {
+        lines -= 1;
+    }
+
+    lines.max(1)
+}
+
+fn ascii_width_fast_path(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+
+    if !bytes.iter().all(|b| b.is_ascii() && *b > 0x1f && *b < 0x7f) {
+        return None;
+    }
+
+    Some(bytes.len())
 }
 
 /// Pad text to a specific width
@@ -327,5 +390,14 @@ mod tests {
         // Zero-width joiner should have width 0
         let zwj = "\u{200D}"; // Zero Width Joiner
         assert_eq!(measure_text_width(zwj), 0);
+    }
+
+    #[test]
+    fn test_count_wrapped_lines_handles_crlf_like_lines() {
+        let text = "line1\r\nline2\r\n";
+        assert_eq!(
+            count_wrapped_lines_by_width(text, 80),
+            text.lines().count().max(1)
+        );
     }
 }

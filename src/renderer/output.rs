@@ -251,19 +251,27 @@ impl Output {
         self.mark_dirty(row);
 
         let width = self.width as usize;
+        let clip_region = self.clip_stack.last().cloned();
+
+        if text.is_ascii() && clip_region.is_none() {
+            for byte in text.bytes() {
+                if byte == b'\n' || col >= width {
+                    break;
+                }
+                self.write_char_at(col, row, byte as char, style);
+                col += 1;
+            }
+            return;
+        }
 
         for ch in text.chars() {
-            if ch == '\n' {
-                break;
-            }
-
-            if col >= width {
+            if ch == '\n' || col >= width {
                 break;
             }
 
             // Check clip region
             let char_width = ch.width().unwrap_or(1);
-            if let Some(clip) = self.clip_stack.last()
+            if let Some(clip) = clip_region.as_ref()
                 && !clip.contains(col as u16, row as u16)
             {
                 col += char_width;

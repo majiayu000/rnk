@@ -182,8 +182,6 @@ impl RenderHelper {
         max_width: u16,
         _engine: &mut LayoutEngine,
     ) -> u16 {
-        use crate::layout::measure::wrap_text;
-
         let mut height = 1u16;
 
         // Calculate available width for text
@@ -200,16 +198,21 @@ impl RenderHelper {
             let mut total_lines = 0usize;
             for line in lines {
                 let line_text: String = line.spans.iter().map(|s| s.content.as_str()).collect();
-                let wrapped = wrap_text(&line_text, available_width as usize);
-                total_lines += wrapped.lines().count().max(1);
+                total_lines += crate::layout::measure::count_wrapped_lines_by_width(
+                    &line_text,
+                    available_width as usize,
+                );
             }
             height = height.max(total_lines as u16);
         }
 
         // Check text_content with wrapping
         if let Some(text) = &element.text_content {
-            let wrapped = wrap_text(text, available_width as usize);
-            height = height.max(wrapped.lines().count().max(1) as u16);
+            let wrapped_lines = crate::layout::measure::count_wrapped_lines_by_width(
+                text,
+                available_width as usize,
+            );
+            height = height.max(wrapped_lines as u16);
         }
 
         // Add border height
