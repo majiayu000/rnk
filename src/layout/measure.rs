@@ -10,6 +10,10 @@ fn grapheme_width(grapheme: &str) -> usize {
 
 #[inline]
 fn fits_within_width(text: &str, max_width: usize) -> bool {
+    if let Some(width) = ascii_width_fast_path(text) {
+        return width <= max_width;
+    }
+
     let mut width = 0;
     for grapheme in text.graphemes(true) {
         width += grapheme_width(grapheme);
@@ -21,6 +25,13 @@ fn fits_within_width(text: &str, max_width: usize) -> bool {
 }
 
 fn take_prefix_by_width(text: &str, max_width: usize) -> String {
+    if let Some(width) = ascii_width_fast_path(text) {
+        if width <= max_width {
+            return text.to_string();
+        }
+        return text[..max_width].to_string();
+    }
+
     let mut result = String::new();
     let mut width = 0;
     for grapheme in text.graphemes(true) {
@@ -81,12 +92,23 @@ pub fn wrap_text(text: &str, max_width: usize) -> String {
         return String::new();
     }
 
-    if text.chars().all(|c| !c.is_control()) {
-        if let Some(width) = ascii_width_fast_path(text) {
-            if width <= max_width {
-                return text.to_string();
-            }
+    if let Some(width) = ascii_width_fast_path(text) {
+        if width <= max_width {
+            return text.to_string();
         }
+
+        let line_breaks = width.div_ceil(max_width).saturating_sub(1);
+        let mut result = String::with_capacity(text.len() + line_breaks);
+        let mut current_width = 0;
+        for byte in text.bytes() {
+            if current_width == max_width {
+                result.push('\n');
+                current_width = 0;
+            }
+            result.push(byte as char);
+            current_width += 1;
+        }
+        return result;
     }
 
     let mut result = String::with_capacity(text.len());
@@ -113,6 +135,24 @@ pub fn wrap_text(text: &str, max_width: usize) -> String {
 
 /// Truncate text to fit within a maximum width (grapheme-aware)
 pub fn truncate_text(text: &str, max_width: usize, ellipsis: &str) -> String {
+    if let (Some(text_width), Some(ellipsis_width)) =
+        (ascii_width_fast_path(text), ascii_width_fast_path(ellipsis))
+    {
+        if text_width <= max_width {
+            return text.to_string();
+        }
+
+        if max_width <= ellipsis_width {
+            return ellipsis[..max_width].to_string();
+        }
+
+        let target_width = max_width - ellipsis_width;
+        let mut result = String::with_capacity(max_width);
+        result.push_str(&text[..target_width]);
+        result.push_str(ellipsis);
+        return result;
+    }
+
     if fits_within_width(text, max_width) {
         return text.to_string();
     }
@@ -141,6 +181,25 @@ pub fn truncate_text(text: &str, max_width: usize, ellipsis: &str) -> String {
 
 /// Truncate text from the start (grapheme-aware)
 pub fn truncate_start(text: &str, max_width: usize, ellipsis: &str) -> String {
+    if let (Some(text_width), Some(ellipsis_width)) =
+        (ascii_width_fast_path(text), ascii_width_fast_path(ellipsis))
+    {
+        if text_width <= max_width {
+            return text.to_string();
+        }
+
+        if max_width <= ellipsis_width {
+            return ellipsis[..max_width].to_string();
+        }
+
+        let target_width = max_width - ellipsis_width;
+        let start = text_width - target_width;
+        let mut result = String::with_capacity(max_width);
+        result.push_str(ellipsis);
+        result.push_str(&text[start..]);
+        return result;
+    }
+
     if fits_within_width(text, max_width) {
         return text.to_string();
     }
@@ -174,6 +233,29 @@ pub fn truncate_start(text: &str, max_width: usize, ellipsis: &str) -> String {
 
 /// Truncate text from the middle (grapheme-aware)
 pub fn truncate_middle(text: &str, max_width: usize, ellipsis: &str) -> String {
+    if let (Some(text_width), Some(ellipsis_width)) =
+        (ascii_width_fast_path(text), ascii_width_fast_path(ellipsis))
+    {
+        if text_width <= max_width {
+            return text.to_string();
+        }
+
+        if max_width <= ellipsis_width {
+            return ellipsis[..max_width].to_string();
+        }
+
+        let available = max_width - ellipsis_width;
+        let left_width = available / 2;
+        let right_width = available - left_width;
+        let right_start = text_width - right_width;
+
+        let mut result = String::with_capacity(max_width);
+        result.push_str(&text[..left_width]);
+        result.push_str(ellipsis);
+        result.push_str(&text[right_start..]);
+        return result;
+    }
+
     if fits_within_width(text, max_width) {
         return text.to_string();
     }
@@ -228,6 +310,10 @@ pub(crate) fn count_wrapped_lines_by_width(text: &str, max_width: usize) -> usiz
 
     if max_width == 0 {
         return 1;
+    }
+
+    if let Some(width) = ascii_width_fast_path(text) {
+        return width.div_ceil(max_width).max(1);
     }
 
     let mut lines = 1usize;
