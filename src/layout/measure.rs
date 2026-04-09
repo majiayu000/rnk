@@ -67,6 +67,10 @@ pub fn display_width(text: &str) -> usize {
 
 /// Measure text dimensions (width, height)
 pub fn measure_text(text: &str) -> (usize, usize) {
+    if let Some(dimensions) = ascii_measure_text_dimensions_fast_path(text) {
+        return dimensions;
+    }
+
     let mut height = 0usize;
     let mut width = 0usize;
 
@@ -312,8 +316,8 @@ pub(crate) fn count_wrapped_lines_by_width(text: &str, max_width: usize) -> usiz
         return 1;
     }
 
-    if let Some(width) = ascii_width_fast_path(text) {
-        return width.div_ceil(max_width).max(1);
+    if let Some(lines) = ascii_wrapped_line_count_fast_path(text, max_width) {
+        return lines;
     }
 
     let mut lines = 1usize;
@@ -345,6 +349,107 @@ pub(crate) fn count_wrapped_lines_by_width(text: &str, max_width: usize) -> usiz
     }
 
     lines.max(1)
+}
+
+fn ascii_measure_text_dimensions_fast_path(text: &str) -> Option<(usize, usize)> {
+    if text.is_empty() {
+        return Some((0, 1));
+    }
+
+    let bytes = text.as_bytes();
+    let mut max_width = 0usize;
+    let mut current_width = 0usize;
+    let mut height = 1usize;
+    let mut ends_with_line_break = false;
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        let byte = bytes[i];
+
+        if byte == b'\n' {
+            max_width = max_width.max(current_width);
+            current_width = 0;
+            height += 1;
+            ends_with_line_break = true;
+            i += 1;
+            continue;
+        }
+
+        if byte == b'\r' && i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+            max_width = max_width.max(current_width);
+            current_width = 0;
+            height += 1;
+            ends_with_line_break = true;
+            i += 2;
+            continue;
+        }
+
+        if !byte.is_ascii() || byte < 0x20 || byte == 0x7f {
+            return None;
+        }
+
+        current_width += 1;
+        ends_with_line_break = false;
+        i += 1;
+    }
+
+    max_width = max_width.max(current_width);
+    if ends_with_line_break && height > 1 {
+        height -= 1;
+    }
+
+    Some((max_width, height.max(1)))
+}
+
+fn ascii_wrapped_line_count_fast_path(text: &str, max_width: usize) -> Option<usize> {
+    if text.is_empty() {
+        return Some(1);
+    }
+
+    let bytes = text.as_bytes();
+    let mut lines = 1usize;
+    let mut current_width = 0usize;
+    let mut ends_with_line_break = false;
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        let byte = bytes[i];
+
+        if byte == b'\n' {
+            lines += 1;
+            current_width = 0;
+            ends_with_line_break = true;
+            i += 1;
+            continue;
+        }
+
+        if byte == b'\r' && i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+            lines += 1;
+            current_width = 0;
+            ends_with_line_break = true;
+            i += 2;
+            continue;
+        }
+
+        if !byte.is_ascii() || byte < 0x20 || byte == 0x7f {
+            return None;
+        }
+
+        if current_width == max_width {
+            lines += 1;
+            current_width = 1;
+        } else {
+            current_width += 1;
+        }
+        ends_with_line_break = false;
+        i += 1;
+    }
+
+    if ends_with_line_break && lines > 1 {
+        lines -= 1;
+    }
+
+    Some(lines.max(1))
 }
 
 fn ascii_width_fast_path(text: &str) -> Option<usize> {
@@ -485,5 +590,21 @@ mod tests {
             count_wrapped_lines_by_width(text, 80),
             text.lines().count().max(1)
         );
+    }
+
+    #[test]
+    fn test_measure_text_ascii_crlf() {
+        assert_eq!(measure_text("ab\r\nc"), (2, 2));
+    }
+
+    #[test]
+    fn test_measure_text_trailing_newline_semantics() {
+        assert_eq!(measure_text("ab\n"), (2, 1));
+        assert_eq!(measure_text("ab\r\n"), (2, 1));
+    }
+
+    #[test]
+    fn test_count_wrapped_lines_ascii_with_wrap() {
+        assert_eq!(count_wrapped_lines_by_width("abcdef", 3), 2);
     }
 }
