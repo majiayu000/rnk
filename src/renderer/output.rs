@@ -108,28 +108,15 @@ impl Output {
         }
     }
 
-    /// Calculate flat index from (col, row) coordinates
-    #[inline]
-    fn index(&self, col: usize, row: usize) -> usize {
-        row * (self.width as usize) + col
-    }
-
     /// Get a reference to a cell at (col, row)
+    #[cfg(test)]
     #[inline]
     fn get(&self, col: usize, row: usize) -> Option<&StyledChar> {
         if col < self.width as usize && row < self.height as usize {
-            Some(&self.grid[self.index(col, row)])
+            let width = self.width as usize;
+            Some(&self.grid[(row * width) + col])
         } else {
             None
-        }
-    }
-
-    /// Set a cell at (col, row)
-    #[inline]
-    fn set(&mut self, col: usize, row: usize, value: StyledChar) {
-        if col < self.width as usize && row < self.height as usize {
-            let idx = self.index(col, row);
-            self.grid[idx] = value;
         }
     }
 
@@ -258,8 +245,21 @@ impl Output {
                 if byte == b'\n' || col >= width {
                     break;
                 }
-                self.write_char_at(col, row, byte as char, style);
+                self.write_char_at(col, row, byte as char, 1, style);
                 col += 1;
+            }
+            return;
+        }
+
+        if clip_region.is_none() {
+            for ch in text.chars() {
+                if ch == '\n' || col >= width {
+                    break;
+                }
+
+                let char_width = ch.width().unwrap_or(1);
+                self.write_char_at(col, row, ch, char_width, style);
+                col += char_width;
             }
             return;
         }
@@ -278,7 +278,7 @@ impl Output {
                 continue;
             }
 
-            self.write_char_at(col, row, ch, style);
+            self.write_char_at(col, row, ch, char_width, style);
             col += char_width;
         }
     }
@@ -302,48 +302,52 @@ impl Output {
             return;
         }
 
-        self.write_char_at(col, row, ch, style);
+        let char_width = ch.width().unwrap_or(1);
+        self.write_char_at(col, row, ch, char_width, style);
     }
 
     /// Core character placement logic handling wide-char boundaries and placeholders
-    fn write_char_at(&mut self, col: usize, row: usize, ch: char, style: &Style) {
+    fn write_char_at(
+        &mut self,
+        col: usize,
+        row: usize,
+        ch: char,
+        char_width: usize,
+        style: &Style,
+    ) {
         let width = self.width as usize;
-        let char_width = ch.width().unwrap_or(1);
+        let row_start = row * width;
+        let idx = row_start + col;
 
         // Handle wide character at buffer boundary - skip if it won't fit
         if char_width == 2 && col + 1 >= width {
-            self.set(col, row, StyledChar::with_style(' ', style));
+            self.grid[idx] = StyledChar::with_style(' ', style);
             return;
         }
 
         // Handle overwriting wide character's second half (placeholder)
-        if let Some(cell) = self.get(col, row) {
-            if cell.ch == '\0' && col > 0 {
-                self.set(col - 1, row, StyledChar::new(' '));
-            }
+        if self.grid[idx].ch == '\0' && col > 0 {
+            self.grid[idx - 1] = StyledChar::new(' ');
         }
 
         // Handle overwriting wide character's first half
-        if let Some(cell) = self.get(col, row) {
-            let old_char_width = cell.ch.width().unwrap_or(1);
-            if old_char_width == 2 && col + 1 < width {
-                self.set(col + 1, row, StyledChar::new(' '));
-            }
+        let old_char_width = self.grid[idx].ch.width().unwrap_or(1);
+        if old_char_width == 2 && col + 1 < width {
+            self.grid[idx + 1] = StyledChar::new(' ');
         }
 
-        self.set(col, row, StyledChar::with_style(ch, style));
+        self.grid[idx] = StyledChar::with_style(ch, style);
 
         // For wide characters (width=2), mark the next cell as a placeholder
         if char_width == 2 && col + 1 < width {
-            if let Some(next_cell) = self.get(col + 1, row) {
-                if next_cell.ch != '\0' {
-                    let next_char_width = next_cell.ch.width().unwrap_or(1);
-                    if next_char_width == 2 && col + 2 < width {
-                        self.set(col + 2, row, StyledChar::new(' '));
-                    }
+            let next_idx = idx + 1;
+            if self.grid[next_idx].ch != '\0' {
+                let next_char_width = self.grid[next_idx].ch.width().unwrap_or(1);
+                if next_char_width == 2 && col + 2 < width {
+                    self.grid[idx + 2] = StyledChar::new(' ');
                 }
             }
-            self.set(col + 1, row, StyledChar::new('\0'));
+            self.grid[next_idx] = StyledChar::new('\0');
         }
     }
 
@@ -546,6 +550,19 @@ mod tests {
         // The wide char should be replaced with space (broken)
         assert_eq!(output.cell_at(0, 0).unwrap().ch, ' ');
         assert_eq!(output.cell_at(1, 0).unwrap().ch, 'X');
+    }
+
+    #[test]
+    fn test_write_overwrite_wide_char_placeholder() {
+        let mut output = Output::new(80, 24);
+        output.write(0, 0, "你", &Style::default());
+
+        // Overwrite placeholder through `write()` path to keep behavior aligned with `write_char()`.
+        output.write(1, 0, "XY", &Style::default());
+
+        assert_eq!(output.cell_at(0, 0).unwrap().ch, ' ');
+        assert_eq!(output.cell_at(1, 0).unwrap().ch, 'X');
+        assert_eq!(output.cell_at(2, 0).unwrap().ch, 'Y');
     }
 
     #[test]
