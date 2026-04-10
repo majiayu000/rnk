@@ -103,14 +103,14 @@ pub fn wrap_text(text: &str, max_width: usize) -> String {
 
         let line_breaks = width.div_ceil(max_width).saturating_sub(1);
         let mut result = String::with_capacity(text.len() + line_breaks);
-        let mut current_width = 0;
-        for byte in text.bytes() {
-            if current_width == max_width {
+        let mut start = 0usize;
+        while start < width {
+            let end = (start + max_width).min(width);
+            result.push_str(&text[start..end]);
+            if end < width {
                 result.push('\n');
-                current_width = 0;
             }
-            result.push(byte as char);
-            current_width += 1;
+            start = end;
         }
         return result;
     }
@@ -472,15 +472,27 @@ pub fn pad_text(text: &str, width: usize, align: TextAlign) -> String {
 
     let padding = width - text_width;
 
+    let mut result = String::with_capacity(text.len() + padding);
+
     match align {
-        TextAlign::Left => format!("{}{}", text, " ".repeat(padding)),
-        TextAlign::Right => format!("{}{}", " ".repeat(padding), text),
+        TextAlign::Left => {
+            result.push_str(text);
+            result.extend(std::iter::repeat_n(' ', padding));
+        }
+        TextAlign::Right => {
+            result.extend(std::iter::repeat_n(' ', padding));
+            result.push_str(text);
+        }
         TextAlign::Center => {
             let left_pad = padding / 2;
             let right_pad = padding - left_pad;
-            format!("{}{}{}", " ".repeat(left_pad), text, " ".repeat(right_pad))
+            result.extend(std::iter::repeat_n(' ', left_pad));
+            result.push_str(text);
+            result.extend(std::iter::repeat_n(' ', right_pad));
         }
     }
+
+    result
 }
 
 /// Text alignment
@@ -520,6 +532,16 @@ mod tests {
     fn test_wrap_text() {
         let wrapped = wrap_text("hello world", 6);
         assert!(wrapped.contains('\n'));
+    }
+
+    #[test]
+    fn test_wrap_text_ascii_exact_chunks() {
+        assert_eq!(wrap_text("abcdefgh", 3), "abc\ndef\ngh");
+    }
+
+    #[test]
+    fn test_wrap_text_ascii_exact_multiple_chunks() {
+        assert_eq!(wrap_text("abcdef", 3), "abc\ndef");
     }
 
     #[test]
