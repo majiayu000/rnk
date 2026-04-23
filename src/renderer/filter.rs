@@ -114,7 +114,8 @@ impl FilterChain {
     pub fn add(&mut self, filter: EventFilter) {
         self.filters.push(filter);
         // Sort by priority (higher priority first)
-        self.filters.sort_by(|a, b| b.priority.cmp(&a.priority));
+        self.filters
+            .sort_by_key(|filter| std::cmp::Reverse(filter.priority));
     }
 
     /// Add a simple filter function
