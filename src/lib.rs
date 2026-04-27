@@ -59,8 +59,8 @@
 //! ```rust,ignore
 //! let app = use_app();
 //!
-//! use_input(move |key| {
-//!     if key == Key::Char(' ') {
+//! use_input(move |input, _key| {
+//!     if input == " " {
 //!         if app.is_alt_screen() {
 //!             app.exit_alt_screen();  // Switch to inline
 //!         } else {

@@ -6,7 +6,7 @@ name = "rnk"
 version = "0.19.1"
 edition = "2024"
 rust-version = "1.85"
-description = "A React-like declarative terminal UI framework for Rust, inspired by Ink"
+description = "A React-like declarative terminal UI framework for Rust, inspired by Ink and Bubbletea"
 license = "MIT"
 repository = "https://github.com/majiayu000/rnk"
 homepage = "https://github.com/majiayu000/rnk"
@@ -15,7 +15,14 @@ readme = "README.md"
 keywords = ["tui", "terminal", "ui", "cli", "react"]
 categories = ["command-line-interface", "gui"]
 authors = ["majiayu000 <1835304752@qq.com>"]
-exclude = ["examples/*", "docs/*", ".github/*"]
+exclude = [
+    "docs/*",
+    ".github/*",
+    ".claude/*",
+    "video/*",
+    "Cargo.toml.orig",
+    "DESIGN_ISSUES.md",
+]
 
 [lib]
 name = "rnk"
