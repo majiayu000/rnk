@@ -122,11 +122,7 @@ fn render_stats(state: &AppState) -> Element {
     let total = state.todos.len();
     let completed = state.todos.iter().filter(|t| t.completed).count();
     let pending = total - completed;
-    let percentage = if total > 0 {
-        (completed * 100) / total
-    } else {
-        0
-    };
+    let percentage = (completed * 100).checked_div(total).unwrap_or(0);
 
     // Progress bar
     let bar_width = 20;

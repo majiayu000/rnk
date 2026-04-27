@@ -9,9 +9,24 @@ use crate::layout::LayoutEngine;
 use crate::renderer::Output;
 use crate::renderer::output::ClipRegion;
 
-/// Clamp a float to u16 range, treating negative values as 0.
+/// Convert a float screen coordinate to u16.
+///
+/// Negative coordinates are outside the visible viewport. They must not be
+/// clamped to 0, otherwise scrolled-out content is painted at the top edge.
 #[inline]
-fn clamp_to_u16(v: f32) -> u16 {
+fn screen_coord(v: f32) -> Option<u16> {
+    if v < 0.0 {
+        None
+    } else if v >= u16::MAX as f32 {
+        Some(u16::MAX)
+    } else {
+        Some(v as u16)
+    }
+}
+
+/// Clamp a positive extent to u16 range.
+#[inline]
+fn clamp_extent(v: f32) -> u16 {
     if v <= 0.0 {
         0
     } else if v >= u16::MAX as f32 {
@@ -35,28 +50,32 @@ pub(crate) fn render_element_tree(
 
     let layout = layout_engine.get_layout(element.id).unwrap_or_default();
 
-    let x = clamp_to_u16(offset_x + layout.x);
-    let y = clamp_to_u16(offset_y + layout.y);
-    let width = clamp_to_u16(layout.width);
-    let height = clamp_to_u16(layout.height);
+    let raw_x = offset_x + layout.x;
+    let raw_y = offset_y + layout.y;
+    let x = screen_coord(raw_x);
+    let y = screen_coord(raw_y);
+    let width = clamp_extent(layout.width);
+    let height = clamp_extent(layout.height);
 
-    if element.style.background_color.is_some() {
-        output.fill_rect(x, y, width, height, ' ', &element.style);
-    }
+    if let (Some(x), Some(y)) = (x, y) {
+        if element.style.background_color.is_some() {
+            output.fill_rect(x, y, width, height, ' ', &element.style);
+        }
 
-    if element.style.has_border() {
-        render_border(element, output, x, y, width, height);
-    }
+        if element.style.has_border() {
+            render_border(element, output, x, y, width, height);
+        }
 
-    let text_x =
-        x + if element.style.has_border() { 1 } else { 0 } + element.style.padding.left as u16;
-    let text_y =
-        y + if element.style.has_border() { 1 } else { 0 } + element.style.padding.top as u16;
+        let text_x =
+            x + if element.style.has_border() { 1 } else { 0 } + element.style.padding.left as u16;
+        let text_y =
+            y + if element.style.has_border() { 1 } else { 0 } + element.style.padding.top as u16;
 
-    if let Some(spans) = &element.spans {
-        render_spans(spans, output, text_x, text_y);
-    } else if let Some(text) = &element.text_content {
-        output.write(text_x, text_y, text, &element.style);
+        if let Some(spans) = &element.spans {
+            render_spans(spans, output, text_x, text_y);
+        } else if let Some(text) = &element.text_content {
+            output.write(text_x, text_y, text, &element.style);
+        }
     }
 
     let needs_clip = matches!(
@@ -67,18 +86,22 @@ pub(crate) fn render_element_tree(
         Overflow::Hidden | Overflow::Scroll
     );
 
-    let clip_x = x + if element.style.has_border() { 1 } else { 0 };
-    let clip_y = y + if element.style.has_border() { 1 } else { 0 };
+    let clip_x = screen_coord(raw_x + if element.style.has_border() { 1.0 } else { 0.0 });
+    let clip_y = screen_coord(raw_y + if element.style.has_border() { 1.0 } else { 0.0 });
     let clip_width = width.saturating_sub(if element.style.has_border() { 2 } else { 0 });
     let clip_height = height.saturating_sub(if element.style.has_border() { 2 } else { 0 });
 
+    let mut clip_pushed = false;
     if needs_clip && clip_width > 0 && clip_height > 0 {
-        output.clip(ClipRegion {
-            x1: clip_x,
-            y1: clip_y,
-            x2: clip_x.saturating_add(clip_width),
-            y2: clip_y.saturating_add(clip_height),
-        });
+        if let (Some(clip_x), Some(clip_y)) = (clip_x, clip_y) {
+            output.clip(ClipRegion {
+                x1: clip_x,
+                y1: clip_y,
+                x2: clip_x.saturating_add(clip_width),
+                y2: clip_y.saturating_add(clip_height),
+            });
+            clip_pushed = true;
+        }
     }
 
     let scroll_offset_x = element.scroll_offset_x.unwrap_or(0) as f32;
@@ -90,7 +113,7 @@ pub(crate) fn render_element_tree(
         render_element_tree(child, layout_engine, output, child_offset_x, child_offset_y);
     }
 
-    if needs_clip && clip_width > 0 && clip_height > 0 {
+    if clip_pushed {
         output.unclip();
     }
 }
@@ -163,4 +186,44 @@ fn render_spans(lines: &[Line], output: &mut Output, start_x: u16, start_y: u16)
 
 fn border_char(raw: &str) -> char {
     raw.chars().next().unwrap_or(' ')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::{Box, Text};
+    use crate::core::Overflow;
+
+    #[test]
+    fn scrolled_out_negative_rows_do_not_paint_at_top() {
+        let element = Box::new()
+            .flex_direction(crate::core::FlexDirection::Column)
+            .width(12)
+            .height(1)
+            .overflow_y(Overflow::Hidden)
+            .scroll_offset_y(1)
+            .child(
+                Box::new()
+                    .height(1)
+                    .flex_shrink(0.0)
+                    .child(Text::new("hiddenxxxxx").into_element())
+                    .into_element(),
+            )
+            .child(
+                Box::new()
+                    .height(1)
+                    .flex_shrink(0.0)
+                    .child(Text::new("ok").into_element())
+                    .into_element(),
+            )
+            .into_element();
+
+        let mut engine = LayoutEngine::new();
+        engine.compute(&element, 12, 1);
+
+        let mut output = Output::new(12, 1);
+        render_element_tree(&element, &engine, &mut output, 0.0, 0.0);
+
+        assert_eq!(output.render(), "ok");
+    }
 }

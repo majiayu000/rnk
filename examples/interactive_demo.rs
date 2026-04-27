@@ -294,21 +294,19 @@ fn main() -> std::io::Result<()> {
                         state.counter = 0;
                         state.messages.push("Counter reset".into());
                     }
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        if state.selected_item < state.items.len() - 1 {
-                            state.selected_item += 1;
-                            state
-                                .messages
-                                .push(format!("Selected: {}", state.items[state.selected_item]));
-                        }
+                    KeyCode::Char('j') | KeyCode::Down
+                        if state.selected_item < state.items.len().saturating_sub(1) =>
+                    {
+                        state.selected_item += 1;
+                        state
+                            .messages
+                            .push(format!("Selected: {}", state.items[state.selected_item]));
                     }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        if state.selected_item > 0 {
-                            state.selected_item -= 1;
-                            state
-                                .messages
-                                .push(format!("Selected: {}", state.items[state.selected_item]));
-                        }
+                    KeyCode::Char('k') | KeyCode::Up if state.selected_item > 0 => {
+                        state.selected_item -= 1;
+                        state
+                            .messages
+                            .push(format!("Selected: {}", state.items[state.selected_item]));
                     }
                     _ => {}
                 }
