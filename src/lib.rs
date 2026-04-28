@@ -113,6 +113,7 @@ pub mod hooks;
 pub mod layout;
 #[macro_use]
 pub mod macros;
+#[doc(hidden)]
 pub mod reconciler;
 pub mod renderer;
 pub mod runtime;

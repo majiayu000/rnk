@@ -112,6 +112,12 @@ impl IntoPrintable for Element {
     }
 }
 
+impl IntoPrintable for Printable {
+    fn into_printable(self) -> Printable {
+        self
+    }
+}
+
 // === App Sink ===
 
 pub(crate) trait AppSink: Send + Sync {
@@ -311,6 +317,14 @@ pub(crate) fn current_app_sink() -> Option<Arc<dyn AppSink>> {
     registry.get(&id).cloned()
 }
 
+fn current_runtime_render_handle() -> Option<RenderHandle> {
+    crate::runtime::current_runtime().and_then(|ctx| ctx.borrow().render_handle().cloned())
+}
+
+fn current_render_handle() -> Option<RenderHandle> {
+    current_runtime_render_handle().or_else(|| current_app_sink().map(RenderHandle::new))
+}
+
 pub(crate) struct AppRegistrationGuard {
     id: AppId,
 }
@@ -365,8 +379,8 @@ fn unregister_app(id: AppId) {
 /// });
 /// ```
 pub fn request_render() {
-    if let Some(sink) = current_app_sink() {
-        sink.request_render();
+    if let Some(handle) = current_render_handle() {
+        handle.request_render();
     }
 }
 
@@ -400,14 +414,15 @@ pub fn request_render() {
 /// rnk::println(banner);
 /// ```
 pub fn println(message: impl IntoPrintable) {
-    if let Some(sink) = current_app_sink() {
-        sink.println(message.into_printable());
+    let printable = message.into_printable();
+
+    if let Some(handle) = current_render_handle() {
+        handle.println(printable);
         return;
     }
 
     // No app running, print directly as fallback
     use crate::renderer::render_to_string_auto;
-    let printable = message.into_printable();
     let output = match printable {
         Printable::Text(text) => text,
         Printable::Element(element) => render_to_string_auto(&element),
@@ -449,8 +464,8 @@ pub fn println_trimmed(message: impl IntoPrintable) {
 /// enter_alt_screen();
 /// ```
 pub fn enter_alt_screen() {
-    if let Some(sink) = current_app_sink() {
-        sink.enter_alt_screen();
+    if let Some(handle) = current_render_handle() {
+        handle.enter_alt_screen();
     }
 }
 
@@ -468,8 +483,8 @@ pub fn enter_alt_screen() {
 /// exit_alt_screen();
 /// ```
 pub fn exit_alt_screen() {
-    if let Some(sink) = current_app_sink() {
-        sink.exit_alt_screen();
+    if let Some(handle) = current_render_handle() {
+        handle.exit_alt_screen();
     }
 }
 
@@ -477,7 +492,7 @@ pub fn exit_alt_screen() {
 ///
 /// Returns `None` if no app is running.
 pub fn is_alt_screen() -> Option<bool> {
-    current_app_sink().map(|sink| sink.is_alt_screen())
+    current_render_handle().map(|handle| handle.is_alt_screen())
 }
 
 /// Queue an exec request to run an external process.
@@ -486,8 +501,8 @@ pub fn is_alt_screen() -> Option<bool> {
 /// The request will be processed by the event loop, which will suspend
 /// the terminal, run the process, and resume the terminal.
 pub(crate) fn queue_exec_request(request: ExecRequest) {
-    if let Some(sink) = current_app_sink() {
-        sink.queue_exec(request);
+    if let Some(handle) = current_render_handle() {
+        handle.queue_exec(request);
     }
 }
 
@@ -496,8 +511,8 @@ pub(crate) fn queue_exec_request(request: ExecRequest) {
 /// This is used internally by the Cmd system to queue terminal commands
 /// like ClearScreen, HideCursor, ShowCursor, etc.
 pub(crate) fn queue_terminal_cmd(cmd: TerminalCmd) {
-    if let Some(sink) = current_app_sink() {
-        sink.queue_terminal_cmd(cmd);
+    if let Some(handle) = current_render_handle() {
+        handle.queue_terminal_cmd(cmd);
     }
 }
 
@@ -560,18 +575,39 @@ impl RenderHandle {
     pub fn request_suspend(&self) {
         self.sink.request_suspend();
     }
+
+    pub(crate) fn queue_exec(&self, request: ExecRequest) {
+        self.sink.queue_exec(request);
+    }
+
+    pub(crate) fn queue_terminal_cmd(&self, cmd: TerminalCmd) {
+        self.sink.queue_terminal_cmd(cmd);
+    }
 }
 
 /// Get a render handle for cross-thread render requests.
 ///
 /// Returns `None` if no app is currently running.
 pub fn render_handle() -> Option<RenderHandle> {
-    current_app_sink().map(RenderHandle::new)
+    current_render_handle()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cmd::ExecConfig;
+    use crate::runtime::{RuntimeContext, set_current_runtime};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    fn runtime_context_with_handle(runtime: Arc<AppRuntime>) -> Rc<RefCell<RuntimeContext>> {
+        Rc::new(RefCell::new(RuntimeContext::with_app_control(
+            Arc::new(AtomicBool::new(false)),
+            RenderHandle::new(runtime),
+        )))
+    }
 
     #[test]
     fn test_app_id_counter() {
@@ -751,5 +787,79 @@ mod tests {
         runtime.clear_render_request();
         handle.println("test");
         assert!(runtime.render_requested());
+    }
+
+    #[test]
+    fn test_request_render_uses_runtime_handle_without_registry() {
+        let runtime = AppRuntime::new(false);
+        runtime.clear_render_request();
+        set_current_runtime(Some(runtime_context_with_handle(runtime.clone())));
+
+        request_render();
+        assert!(runtime.render_requested());
+
+        set_current_runtime(None);
+    }
+
+    #[test]
+    fn test_println_uses_runtime_handle_without_registry() {
+        let runtime = AppRuntime::new(false);
+        set_current_runtime(Some(runtime_context_with_handle(runtime.clone())));
+
+        println("runtime scoped");
+        let messages = runtime.take_println_messages();
+        assert_eq!(messages.len(), 1);
+        match &messages[0] {
+            Printable::Text(text) => assert_eq!(text, "runtime scoped"),
+            _ => panic!("Expected Text"),
+        }
+
+        set_current_runtime(None);
+    }
+
+    #[test]
+    fn test_is_alt_screen_uses_runtime_handle_without_registry() {
+        let runtime = AppRuntime::new(true);
+        set_current_runtime(Some(runtime_context_with_handle(runtime)));
+
+        assert_eq!(is_alt_screen(), Some(true));
+
+        set_current_runtime(None);
+    }
+
+    #[test]
+    fn test_queue_exec_request_uses_runtime_handle_without_registry() {
+        let runtime = AppRuntime::new(false);
+        runtime.clear_render_request();
+        set_current_runtime(Some(runtime_context_with_handle(runtime.clone())));
+
+        let callback_called = Arc::new(AtomicBool::new(false));
+        let callback_called_clone = callback_called.clone();
+        queue_exec_request(ExecRequest {
+            config: ExecConfig::new("echo").arg("hello"),
+            callback: Box::new(move |_| {
+                callback_called_clone.store(true, Ordering::SeqCst);
+            }),
+        });
+
+        assert!(runtime.render_requested());
+        assert_eq!(runtime.take_exec_requests().len(), 1);
+        assert!(!callback_called.load(Ordering::SeqCst));
+
+        set_current_runtime(None);
+    }
+
+    #[test]
+    fn test_queue_terminal_cmd_uses_runtime_handle_without_registry() {
+        let runtime = AppRuntime::new(false);
+        runtime.clear_render_request();
+        set_current_runtime(Some(runtime_context_with_handle(runtime.clone())));
+
+        queue_terminal_cmd(TerminalCmd::HideCursor);
+
+        assert!(runtime.render_requested());
+        assert_eq!(runtime.take_terminal_cmds(), vec![TerminalCmd::HideCursor]);
+
+        set_current_runtime(None);
     }
 }

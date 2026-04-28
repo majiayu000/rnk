@@ -71,6 +71,9 @@ pub fn measure_element(element_id: ElementId) -> Option<Dimensions> {
 }
 
 /// Measure an element by its user-provided key.
+///
+/// This is a compatibility helper. Runtime storage is keyed by stable `NodeKey`
+/// and string keys are resolved through an alias map when available.
 pub fn measure_element_by_key(key: &str) -> Option<Dimensions> {
     if let Some(ctx) = crate::runtime::current_runtime() {
         ctx.borrow()
@@ -197,15 +200,18 @@ mod tests {
 
     #[test]
     fn test_measure_element_by_key_with_runtime() {
+        use crate::core::NodeKey;
         use crate::runtime::{RuntimeContext, set_current_runtime};
+        use std::any::TypeId;
         use std::cell::RefCell;
         use std::collections::HashMap;
         use std::rc::Rc;
 
         let ctx = Rc::new(RefCell::new(RuntimeContext::new()));
+        let node_key = NodeKey::with_key("sidebar", TypeId::of::<i32>(), 0);
         let mut keyed = HashMap::new();
         keyed.insert(
-            "sidebar".to_string(),
+            node_key,
             Layout {
                 x: 0.0,
                 y: 0.0,
@@ -213,9 +219,11 @@ mod tests {
                 height: 10.0,
             },
         );
+        let mut aliases = HashMap::new();
+        aliases.insert("sidebar".to_string(), node_key);
 
         ctx.borrow_mut()
-            .set_measure_layouts_with_keys(HashMap::new(), keyed);
+            .set_measure_layouts_with_node_keys(HashMap::new(), keyed, aliases);
         set_current_runtime(Some(ctx));
 
         let dims = measure_element_by_key("sidebar");

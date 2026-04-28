@@ -4,6 +4,7 @@ use crate::hooks::context::current_context;
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static CONTEXT_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -56,6 +57,12 @@ pub fn use_context<T: Clone + Send + Sync + 'static>(context: &Context<T>) -> T 
         hook_ctx_ref.use_hook(|| ());
     }
 
+    if let Some(runtime) = crate::runtime::current_runtime()
+        && let Some(value) = runtime.borrow().context_value(context.id)
+    {
+        return value;
+    }
+
     CONTEXT_VALUES.with(|values| {
         values
             .borrow()
@@ -72,19 +79,11 @@ pub fn with_context<T, R>(context: &Context<T>, value: T, f: impl FnOnce() -> R)
 where
     T: Clone + Send + Sync + 'static,
 {
-    CONTEXT_VALUES.with(|values| {
-        values
-            .borrow_mut()
-            .entry(context.id)
-            .or_default()
-            .push(Box::new(value));
-    });
-
-    struct ProviderGuard {
+    struct ThreadLocalProviderGuard {
         id: usize,
     }
 
-    impl Drop for ProviderGuard {
+    impl Drop for ThreadLocalProviderGuard {
         fn drop(&mut self) {
             CONTEXT_VALUES.with(|values| {
                 let mut values = values.borrow_mut();
@@ -98,7 +97,35 @@ where
         }
     }
 
-    let _guard = ProviderGuard { id: context.id };
+    struct RuntimeProviderGuard {
+        runtime: Rc<RefCell<crate::runtime::RuntimeContext>>,
+        id: usize,
+    }
+
+    impl Drop for RuntimeProviderGuard {
+        fn drop(&mut self) {
+            self.runtime.borrow_mut().pop_context_value(self.id);
+        }
+    }
+
+    if let Some(runtime) = crate::runtime::current_runtime() {
+        runtime.borrow_mut().push_context_value(context.id, value);
+        let _guard = RuntimeProviderGuard {
+            runtime,
+            id: context.id,
+        };
+        return f();
+    }
+
+    CONTEXT_VALUES.with(|values| {
+        values
+            .borrow_mut()
+            .entry(context.id)
+            .or_default()
+            .push(Box::new(value));
+    });
+
+    let _guard = ThreadLocalProviderGuard { id: context.id };
     f()
 }
 
@@ -145,6 +172,35 @@ mod tests {
         let b = create_context(2usize);
         let value = with_context(&a, 10usize, || (use_context(&a), use_context(&b)));
         assert_eq!(value, (10, 2));
+    }
+
+    #[test]
+    fn test_runtime_context_provider_is_isolated_and_restored() {
+        use crate::runtime::{RuntimeContext, set_current_runtime};
+
+        let runtime = Rc::new(RefCell::new(RuntimeContext::new()));
+        set_current_runtime(Some(runtime.clone()));
+
+        let language_ctx = create_context("en".to_string());
+        let value = with_context(&language_ctx, "zh".to_string(), || {
+            let outer = use_context(&language_ctx);
+            let inner = with_context(&language_ctx, "ja".to_string(), || {
+                use_context(&language_ctx)
+            });
+            let after_inner = use_context(&language_ctx);
+            (outer, inner, after_inner)
+        });
+
+        assert_eq!(
+            value,
+            ("zh".to_string(), "ja".to_string(), "zh".to_string())
+        );
+        assert_eq!(
+            runtime.borrow().context_value::<String>(language_ctx.id()),
+            None
+        );
+
+        set_current_runtime(None);
     }
 
     #[test]
