@@ -6,6 +6,10 @@ A React-like declarative terminal UI framework for Rust, inspired by [Ink](https
 [![Documentation](https://docs.rs/rnk/badge.svg)](https://docs.rs/rnk)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+## Version Status
+
+The Crates.io badge above is the source of truth for published installs. This checkout currently declares `0.19.1`; when the checkout is ahead of the latest published release, use the git dependency below for the latest source version.
+
 ## Features
 
 - **React-like API**: Familiar component model with hooks (`use_signal`, `use_state`, `use_ref`, `use_context`, `use_effect`, `use_layout_effect`, `use_input`, `use_cmd`)
@@ -36,11 +40,19 @@ A React-like declarative terminal UI framework for Rust, inspired by [Ink](https
 
 ## Quick Start
 
-Add to your `Cargo.toml`:
+Install the latest published Crates.io release:
+
+```bash
+cargo add rnk
+```
+
+If you edit `Cargo.toml` manually, use the current version shown on the Crates.io badge or package page.
+
+For the latest source version before the next release is published:
 
 ```toml
 [dependencies]
-rnk = "0.19"
+rnk = { git = "https://github.com/majiayu000/rnk" }
 ```
 
 ## Examples
