@@ -36,6 +36,7 @@ struct NodeContext {
 pub struct LayoutEngine {
     taffy: TaffyTree<NodeContext>,
     node_map: HashMap<ElementId, NodeId>,
+    element_keys: HashMap<ElementId, NodeKey>,
     /// Map from NodeKey to Taffy NodeId (for VNode-based layout)
     vnode_map: HashMap<NodeKey, NodeId>,
     /// Root node ID for incremental updates
@@ -51,6 +52,7 @@ impl LayoutEngine {
         Self {
             taffy: TaffyTree::new(),
             node_map: HashMap::new(),
+            element_keys: HashMap::new(),
             vnode_map: HashMap::new(),
             root_node: None,
             last_width: 0,
@@ -62,6 +64,7 @@ impl LayoutEngine {
     pub fn build_tree(&mut self, element: &Element) -> Option<NodeId> {
         self.taffy.clear();
         self.node_map.clear();
+        self.element_keys.clear();
         self.vnode_map.clear();
         self.root_node = None;
         self.build_node(element)
@@ -176,6 +179,7 @@ impl LayoutEngine {
     pub fn build_vnode_tree(&mut self, vnode: &VNode) -> Option<NodeId> {
         self.taffy.clear();
         self.node_map.clear();
+        self.element_keys.clear();
         self.vnode_map.clear();
         self.root_node = self.build_vnode(vnode);
         self.root_node
@@ -270,7 +274,9 @@ impl LayoutEngine {
 
     fn sync_element_node_map(&mut self, element_key_map: &HashMap<ElementId, NodeKey>) {
         self.node_map.clear();
+        self.element_keys.clear();
         for (element_id, key) in element_key_map {
+            self.element_keys.insert(*element_id, *key);
             if let Some(node_id) = self.vnode_map.get(key).copied() {
                 self.node_map.insert(*element_id, node_id);
             }
@@ -518,6 +524,11 @@ impl LayoutEngine {
             .collect()
     }
 
+    /// Get the stable node key associated with an element in the current frame.
+    pub(crate) fn node_key_for_element(&self, element_id: ElementId) -> Option<NodeKey> {
+        self.element_keys.get(&element_id).copied()
+    }
+
     /// Check if the engine has a valid tree
     pub fn has_tree(&self) -> bool {
         self.root_node.is_some()
@@ -671,7 +682,9 @@ mod tests {
         let (_vnode, outcome) = engine.compute_element_incremental(&root, None, 80, 24);
         assert!(!outcome.used_reconciler);
         assert!(engine.get_layout(root_id).is_some());
+        assert!(engine.node_key_for_element(root_id).is_some());
         assert!(engine.get_layout(left_id).is_some());
+        assert!(engine.node_key_for_element(left_id).is_some());
         assert!(engine.get_layout(left_text_id).is_some());
         assert!(engine.get_layout(right_id).is_some());
         assert!(engine.get_layout(right_text_id).is_some());

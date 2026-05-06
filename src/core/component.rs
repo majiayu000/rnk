@@ -8,6 +8,9 @@
 //! - **update**: Handle messages and produce side effects
 //! - **view**: Render the component to an Element tree
 //!
+//! This API is kept for compatibility, but the main `render(...)` pipeline in rnk
+//! is centered on `Fn() -> Element` plus hooks.
+//!
 //! # Example
 //!
 //! ```rust

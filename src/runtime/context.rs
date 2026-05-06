@@ -18,6 +18,7 @@
 //! - Better testability (no global state pollution)
 //! - Clearer ownership and lifecycle
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -26,6 +27,7 @@ use std::time::{Duration, Instant};
 
 use crate::cmd::Cmd;
 use crate::components::Theme;
+use crate::core::NodeKey;
 use crate::hooks::context::{HookContext, HookStorage};
 use crate::hooks::paste::PasteEvent;
 use crate::hooks::use_focus::FocusManager;
@@ -81,14 +83,21 @@ pub struct RuntimeContext {
 
     /// Measured element dimensions (element_id -> (width, height))
     measurements: std::collections::HashMap<crate::core::ElementId, (u16, u16)>,
-    /// Measured element dimensions by user key (key -> (width, height))
+    /// Measured element dimensions by stable node identity.
+    measurements_by_node_key: std::collections::HashMap<NodeKey, (u16, u16)>,
+    /// Compatibility fallback for older string-keyed measurement call paths.
     measurements_by_key: std::collections::HashMap<String, (u16, u16)>,
+    /// Alias map from user-provided string keys to stable node identities.
+    measurement_key_aliases: std::collections::HashMap<String, NodeKey>,
 
     /// Shared frame rate statistics
     frame_rate_stats: Option<Arc<SharedFrameRateStats>>,
 
     /// Current theme for this runtime (isolated per app/runtime context)
     theme: Theme,
+
+    /// Provider-backed context values scoped to the active runtime.
+    context_values: std::collections::HashMap<usize, Vec<Box<dyn Any>>>,
 }
 
 impl RuntimeContext {
@@ -107,9 +116,12 @@ impl RuntimeContext {
             paste_handlers: Vec::new(),
             last_activity: Instant::now(),
             measurements: std::collections::HashMap::new(),
+            measurements_by_node_key: std::collections::HashMap::new(),
             measurements_by_key: std::collections::HashMap::new(),
+            measurement_key_aliases: std::collections::HashMap::new(),
             frame_rate_stats: None,
             theme: Theme::dark(),
+            context_values: std::collections::HashMap::new(),
         }
     }
 
@@ -128,9 +140,12 @@ impl RuntimeContext {
             paste_handlers: Vec::new(),
             last_activity: Instant::now(),
             measurements: std::collections::HashMap::new(),
+            measurements_by_node_key: std::collections::HashMap::new(),
             measurements_by_key: std::collections::HashMap::new(),
+            measurement_key_aliases: std::collections::HashMap::new(),
             frame_rate_stats: None,
             theme: Theme::dark(),
+            context_values: std::collections::HashMap::new(),
         }
     }
 
@@ -379,21 +394,25 @@ impl RuntimeContext {
         layouts: std::collections::HashMap<crate::core::ElementId, crate::layout::Layout>,
     ) {
         self.measurements.clear();
+        self.measurements_by_node_key.clear();
         self.measurements_by_key.clear();
+        self.measurement_key_aliases.clear();
         for (id, layout) in layouts {
             self.measurements
                 .insert(id, (layout.width as u16, layout.height as u16));
         }
     }
 
-    /// Replace all measurements with optional key-indexed measurements.
+    /// Replace all measurements with compatibility string-keyed measurements.
     pub fn set_measure_layouts_with_keys(
         &mut self,
         layouts: std::collections::HashMap<crate::core::ElementId, crate::layout::Layout>,
         keyed_layouts: std::collections::HashMap<String, crate::layout::Layout>,
     ) {
         self.measurements.clear();
+        self.measurements_by_node_key.clear();
         self.measurements_by_key.clear();
+        self.measurement_key_aliases.clear();
 
         for (id, layout) in layouts {
             self.measurements
@@ -406,6 +425,31 @@ impl RuntimeContext {
         }
     }
 
+    /// Replace all measurements with stable node-keyed measurements plus string aliases.
+    pub fn set_measure_layouts_with_node_keys(
+        &mut self,
+        layouts: std::collections::HashMap<crate::core::ElementId, crate::layout::Layout>,
+        node_keyed_layouts: std::collections::HashMap<NodeKey, crate::layout::Layout>,
+        key_aliases: std::collections::HashMap<String, NodeKey>,
+    ) {
+        self.measurements.clear();
+        self.measurements_by_node_key.clear();
+        self.measurements_by_key.clear();
+        self.measurement_key_aliases.clear();
+
+        for (id, layout) in layouts {
+            self.measurements
+                .insert(id, (layout.width as u16, layout.height as u16));
+        }
+
+        for (node_key, layout) in node_keyed_layouts {
+            self.measurements_by_node_key
+                .insert(node_key, (layout.width as u16, layout.height as u16));
+        }
+
+        self.measurement_key_aliases = key_aliases;
+    }
+
     /// Get measurement as Dimensions (width, height as f32)
     pub fn get_measurement_dims(&self, element_id: crate::core::ElementId) -> Option<(f32, f32)> {
         self.measurements
@@ -413,8 +457,24 @@ impl RuntimeContext {
             .map(|&(w, h)| (w as f32, h as f32))
     }
 
+    /// Get measurement by stable node key as Dimensions (width, height as f32)
+    pub fn get_measurement_by_node_key_dims(&self, node_key: NodeKey) -> Option<(f32, f32)> {
+        self.measurements_by_node_key
+            .get(&node_key)
+            .map(|&(w, h)| (w as f32, h as f32))
+    }
+
+    /// Resolve a user-facing string alias to a stable node key.
+    pub fn resolve_measurement_key_alias(&self, key: &str) -> Option<NodeKey> {
+        self.measurement_key_aliases.get(key).copied()
+    }
+
     /// Get measurement by user key as Dimensions (width, height as f32)
     pub fn get_measurement_by_key_dims(&self, key: &str) -> Option<(f32, f32)> {
+        if let Some(node_key) = self.resolve_measurement_key_alias(key) {
+            return self.get_measurement_by_node_key_dims(node_key);
+        }
+
         self.measurements_by_key
             .get(key)
             .map(|&(w, h)| (w as f32, h as f32))
@@ -442,6 +502,39 @@ impl RuntimeContext {
     /// Get the current theme for this runtime.
     pub fn theme(&self) -> Theme {
         self.theme.clone()
+    }
+
+    // === Context Provider Methods ===
+
+    /// Push a provider value for the given context ID onto the runtime-local stack.
+    pub fn push_context_value<T: Clone + Send + Sync + 'static>(
+        &mut self,
+        context_id: usize,
+        value: T,
+    ) {
+        self.context_values
+            .entry(context_id)
+            .or_default()
+            .push(Box::new(value));
+    }
+
+    /// Pop the most recently pushed provider value for the given context ID.
+    pub fn pop_context_value(&mut self, context_id: usize) {
+        if let Some(stack) = self.context_values.get_mut(&context_id) {
+            let _ = stack.pop();
+            if stack.is_empty() {
+                self.context_values.remove(&context_id);
+            }
+        }
+    }
+
+    /// Get the active provider value for the given context ID.
+    pub fn context_value<T: Clone + Send + Sync + 'static>(&self, context_id: usize) -> Option<T> {
+        self.context_values
+            .get(&context_id)
+            .and_then(|stack| stack.last())
+            .and_then(|boxed| boxed.downcast_ref::<T>())
+            .cloned()
     }
 }
 
@@ -602,6 +695,73 @@ mod tests {
             ctx.get_measurement_by_key_dims("main-panel"),
             Some((42.0, 9.0))
         );
+    }
+
+    #[test]
+    fn test_runtime_context_measurements_by_node_key_and_alias() {
+        use crate::core::ElementId;
+        use crate::layout::Layout;
+        use std::any::TypeId;
+        use std::collections::HashMap;
+
+        let mut ctx = RuntimeContext::new();
+        let id = ElementId::new();
+        let node_key = NodeKey::with_key("main-panel", TypeId::of::<i32>(), 0);
+
+        let mut by_id = HashMap::new();
+        by_id.insert(
+            id,
+            Layout {
+                x: 0.0,
+                y: 0.0,
+                width: 42.0,
+                height: 9.0,
+            },
+        );
+
+        let mut by_node_key = HashMap::new();
+        by_node_key.insert(
+            node_key,
+            Layout {
+                x: 0.0,
+                y: 0.0,
+                width: 42.0,
+                height: 9.0,
+            },
+        );
+
+        let mut aliases = HashMap::new();
+        aliases.insert("main-panel".to_string(), node_key);
+
+        ctx.set_measure_layouts_with_node_keys(by_id, by_node_key, aliases);
+        assert_eq!(
+            ctx.get_measurement_by_node_key_dims(node_key),
+            Some((42.0, 9.0))
+        );
+        assert_eq!(
+            ctx.resolve_measurement_key_alias("main-panel"),
+            Some(node_key)
+        );
+        assert_eq!(
+            ctx.get_measurement_by_key_dims("main-panel"),
+            Some((42.0, 9.0))
+        );
+    }
+
+    #[test]
+    fn test_runtime_context_context_values_nested() {
+        let mut ctx = RuntimeContext::new();
+        ctx.push_context_value(7, "outer".to_string());
+        assert_eq!(ctx.context_value::<String>(7).as_deref(), Some("outer"));
+
+        ctx.push_context_value(7, "inner".to_string());
+        assert_eq!(ctx.context_value::<String>(7).as_deref(), Some("inner"));
+
+        ctx.pop_context_value(7);
+        assert_eq!(ctx.context_value::<String>(7).as_deref(), Some("outer"));
+
+        ctx.pop_context_value(7);
+        assert_eq!(ctx.context_value::<String>(7), None);
     }
 
     #[test]
