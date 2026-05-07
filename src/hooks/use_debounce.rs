@@ -239,25 +239,20 @@ where
 
             match recv_result {
                 Ok(ThrottleMessage::Update { value, interval }) => {
+                    // Leading edge: no prior emit, OR window has fully elapsed.
+                    // Zero interval also takes this path (every value is ready).
                     let ready = match last_emit {
                         None => true,
                         Some(t) => t.elapsed() >= interval,
                     };
 
                     if ready {
-                        // Leading edge: emit immediately.
-                        if interval.is_zero() {
-                            // No throttling at all; always emit.
-                            throttled.set(value);
-                            last_emit = Some(Instant::now());
-                            pending = None;
-                        } else {
-                            throttled.set(value);
-                            last_emit = Some(Instant::now());
-                            pending = None;
-                        }
+                        throttled.set(value);
+                        last_emit = Some(Instant::now());
+                        pending = None;
                     } else {
                         // Within window: buffer for trailing-edge emission.
+                        // Subsequent pushes overwrite, so the latest value wins.
                         pending = Some((value, interval));
                     }
                 }
