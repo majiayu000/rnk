@@ -257,7 +257,12 @@ where
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if let Some((value, _)) = pending.take() {
+                    let mut trailing = pending.take();
+                    while let Ok(ThrottleMessage::Update { value, interval }) = rx.try_recv() {
+                        trailing = Some((value, interval));
+                    }
+
+                    if let Some((value, _)) = trailing {
                         throttled.set(value);
                         last_emit = Some(Instant::now());
                     }
