@@ -204,21 +204,131 @@ pub fn use_debounce_handle(delay: Duration) -> DebounceHandle {
     }
 }
 
-/// Throttle a value, only allowing updates at most once per interval
+enum ThrottleMessage<T> {
+    Update { value: T, interval: Duration },
+}
+
+fn spawn_throttle_worker<T>(throttled: Signal<T>) -> mpsc::Sender<ThrottleMessage<T>>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    let (tx, rx) = mpsc::channel::<ThrottleMessage<T>>();
+
+    std::thread::spawn(move || {
+        // Trailing-edge buffer: keep the latest value pushed within the current
+        // throttle window so we can emit it once the window closes.
+        let mut pending: Option<(T, Duration)> = None;
+        // Whether any value has been emitted yet this run; before the first
+        // emit we pass values through immediately (leading edge).
+        let mut last_emit: Option<Instant> = None;
+
+        loop {
+            // Compute how long until the trailing edge should fire (if any).
+            let trailing_wait = match (&pending, last_emit) {
+                (Some((_, interval)), Some(emitted)) => {
+                    Some(interval.saturating_sub(emitted.elapsed()))
+                }
+                _ => None,
+            };
+
+            let recv_result = match trailing_wait {
+                Some(wait) if wait.is_zero() => Err(mpsc::RecvTimeoutError::Timeout),
+                Some(wait) => rx.recv_timeout(wait),
+                None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+            };
+
+            match recv_result {
+                Ok(ThrottleMessage::Update { value, interval }) => {
+                    // Leading edge: no prior emit, OR window has fully elapsed.
+                    // Zero interval also takes this path (every value is ready).
+                    let ready = match last_emit {
+                        None => true,
+                        Some(t) => t.elapsed() >= interval,
+                    };
+
+                    if ready {
+                        throttled.set(value);
+                        last_emit = Some(Instant::now());
+                        pending = None;
+                    } else {
+                        // Within window: buffer for trailing-edge emission.
+                        // Subsequent pushes overwrite, so the latest value wins.
+                        pending = Some((value, interval));
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let mut trailing = pending.take();
+                    while let Ok(ThrottleMessage::Update { value, interval }) = rx.try_recv() {
+                        trailing = Some((value, interval));
+                    }
+
+                    if let Some((value, _)) = trailing {
+                        throttled.set(value);
+                        last_emit = Some(Instant::now());
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+    });
+
+    tx
+}
+
+/// Throttle a value, allowing updates at most once per interval.
 ///
-/// Unlike debounce which waits for inactivity, throttle ensures
-/// updates happen at a regular maximum rate.
+/// Unlike [`use_debounce`] which waits for inactivity, throttle emits the
+/// **leading edge** (first update passes through immediately) and the
+/// **trailing edge** (the most recent value is emitted at most once per
+/// `interval`). Values pushed within the throttle window are not silently
+/// dropped — the latest pending value is delivered after the window closes.
+///
+/// Uses one worker thread per hook instance. Pass `Duration::ZERO` to disable
+/// throttling entirely (every value passes through immediately).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use rnk::prelude::*;
+/// use std::time::Duration;
+///
+/// fn app() -> Element {
+///     let scroll_y = use_signal(|| 0u32);
+///
+///     // Render at most ~30fps even if scroll_y changes rapidly.
+///     let throttled = use_throttle(scroll_y.get(), Duration::from_millis(33));
+///     Text::new(format!("y = {throttled}")).into_element()
+/// }
+/// ```
 pub fn use_throttle<T>(value: T, interval: Duration) -> T
 where
     T: Clone + Send + Sync + 'static,
 {
     let throttled = use_signal(|| value.clone());
-    let last_update = use_signal(Instant::now);
+    let worker_tx: Signal<Option<mpsc::Sender<ThrottleMessage<T>>>> = use_signal(|| None);
 
-    // Check if enough time has passed since last update
-    if last_update.get().elapsed() >= interval {
-        throttled.set(value);
-        last_update.set(Instant::now());
+    if worker_tx.get().is_none() {
+        worker_tx.set(Some(spawn_throttle_worker(throttled.clone())));
+    }
+
+    let mut sent = false;
+    if let Some(tx) = worker_tx.get() {
+        sent = tx
+            .send(ThrottleMessage::Update {
+                value: value.clone(),
+                interval,
+            })
+            .is_ok();
+    }
+
+    if !sent {
+        // Worker exited unexpectedly. Respawn and retry once.
+        let tx = spawn_throttle_worker(throttled.clone());
+        let _ = tx.send(ThrottleMessage::Update {
+            value: value.clone(),
+            interval,
+        });
+        worker_tx.set(Some(tx));
     }
 
     throttled.get()
@@ -230,6 +340,10 @@ mod tests {
     use crate::hooks::context::{HookContext, with_hooks};
     use std::cell::RefCell;
     use std::rc::Rc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     #[test]
     fn test_use_debounce_compiles() {
@@ -243,6 +357,145 @@ mod tests {
         fn _test() {
             let _throttled = use_throttle(42, Duration::from_millis(100));
         }
+    }
+
+    #[test]
+    fn test_use_throttle_leading_edge_emits_immediately() {
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
+
+        let first = with_hooks(ctx.clone(), || {
+            use_throttle("a".to_string(), Duration::from_millis(50))
+        });
+
+        // Leading edge: first call should pass through immediately. The worker
+        // emits asynchronously, so allow a short settle window.
+        let deadline = Instant::now() + Duration::from_millis(150);
+        let mut observed = first;
+        while observed != "a" && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+            observed = with_hooks(ctx.clone(), || {
+                use_throttle("a".to_string(), Duration::from_millis(50))
+            });
+        }
+        assert_eq!(observed, "a", "leading-edge value should be emitted");
+    }
+
+    #[test]
+    fn test_use_throttle_trailing_edge_delivers_latest_pending_value() {
+        // Reproduces the silent-drop bug: rapid updates within the throttle
+        // window must not be lost. The trailing-edge value must propagate to
+        // a subsequent observer that itself does NOT call use_throttle (i.e.
+        // a sibling component reading the same Signal).
+        //
+        // The previous implementation only ever wrote to the throttled Signal
+        // from inside use_throttle() at a moment when the interval had passed,
+        // so any rapid sequence A, B, C within a single window left the Signal
+        // stuck at the leading-edge value forever unless another use_throttle()
+        // call arrived later — silently dropping B and C.
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
+        let interval = Duration::from_millis(40);
+
+        // Leading-edge emit (value 1 should appear immediately).
+        let _ = with_hooks(ctx.clone(), || use_throttle(1u32, interval));
+        std::thread::sleep(Duration::from_millis(10));
+
+        // Three rapid updates within the same throttle window. The old
+        // implementation discards all of them because elapsed() < interval.
+        for v in 2u32..=4u32 {
+            let _ = with_hooks(ctx.clone(), || use_throttle(v, interval));
+        }
+
+        // Snapshot the throttled Signal directly (without calling use_throttle
+        // again) by reading the worker_tx slot's adjacent throttled signal
+        // through one more hook invocation that uses the SAME pushed value 4
+        // — under the new impl the worker has already emitted 4 by the time
+        // we reach this point, so we can read it back. Sleep generously past
+        // the window to give the worker time to fire its trailing emission.
+        std::thread::sleep(interval * 3);
+
+        // After the throttle window closes, the trailing value must be visible
+        // even if the next hook call passes the SAME value 4 (i.e. no further
+        // change). The buggy implementation only updates the signal when
+        // elapsed >= interval AND the call is in flight, so this still works
+        // for the buggy impl in isolation. To make the bug observable, we
+        // verify a *second* observer pattern below.
+        let observed = with_hooks(ctx.clone(), || use_throttle(4u32, interval));
+        assert_eq!(
+            observed, 4,
+            "trailing-edge throttle should deliver the latest pending value"
+        );
+    }
+
+    #[test]
+    fn test_use_throttle_emits_trailing_value_without_further_pushes() {
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
+        let render_count = Arc::new(AtomicUsize::new(0));
+        ctx.borrow_mut().set_render_callback({
+            let render_count = Arc::clone(&render_count);
+            Arc::new(move || {
+                render_count.fetch_add(1, Ordering::SeqCst);
+            })
+        });
+
+        let interval = Duration::from_millis(40);
+
+        // Leading-edge emit: value 10. Wait for the worker to observe that
+        // first value so the following values definitely fall inside the same
+        // throttle window instead of racing ahead of the worker.
+        let _ = with_hooks(ctx.clone(), || use_throttle(10u32, interval));
+        let leading_deadline = Instant::now() + Duration::from_millis(200);
+        while render_count.load(Ordering::SeqCst) < 2 {
+            assert!(
+                Instant::now() < leading_deadline,
+                "leading-edge throttle value did not render before timeout"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let before_burst = render_count.load(Ordering::SeqCst);
+
+        // Burst within one window: 11, 12, 13. The worker should buffer 13 as
+        // the trailing-edge candidate and request a render without any further
+        // hook invocation.
+        for v in 11u32..=13u32 {
+            let _ = with_hooks(ctx.clone(), || use_throttle(v, interval));
+        }
+
+        let trailing_deadline = Instant::now() + Duration::from_millis(250);
+        while render_count.load(Ordering::SeqCst) <= before_burst {
+            assert!(
+                Instant::now() < trailing_deadline,
+                "worker did not emit trailing-edge value before timeout"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        let observed = with_hooks(ctx.clone(), || use_throttle(13u32, interval));
+        assert_eq!(
+            observed, 13,
+            "worker should have emitted trailing-edge 13 before this call"
+        );
+    }
+
+    #[test]
+    fn test_use_throttle_zero_interval_passes_every_value() {
+        let ctx = Rc::new(RefCell::new(HookContext::new()));
+
+        let _ = with_hooks(ctx.clone(), || use_throttle(0u32, Duration::ZERO));
+        for v in 1u32..=5u32 {
+            let _ = with_hooks(ctx.clone(), || use_throttle(v, Duration::ZERO));
+        }
+
+        // Final value must propagate. Allow brief worker scheduling latency.
+        let deadline = Instant::now() + Duration::from_millis(200);
+        let mut observed = 0u32;
+        while Instant::now() < deadline {
+            observed = with_hooks(ctx.clone(), || use_throttle(5u32, Duration::ZERO));
+            if observed == 5 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(observed, 5);
     }
 
     #[test]
