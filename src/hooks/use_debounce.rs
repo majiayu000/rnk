@@ -335,6 +335,10 @@ mod tests {
     use crate::hooks::context::{HookContext, with_hooks};
     use std::cell::RefCell;
     use std::rc::Rc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     #[test]
     fn test_use_debounce_compiles() {
@@ -419,48 +423,48 @@ mod tests {
 
     #[test]
     fn test_use_throttle_emits_trailing_value_without_further_pushes() {
-        // After a burst of rapid updates within one throttle window, the
-        // worker must emit the latest value on its own timer. The old
-        // implementation had no timer and only updated the throttled Signal
-        // inline during a hook call, so a sequence like (push A, push B,
-        // long sleep, observe) returned A — silently dropping B.
-        //
-        // We capture the throttled Signal once via the first hook call, then
-        // observe it directly from the same thread without re-invoking
-        // use_throttle (which would mask the bug by triggering another push).
         let ctx = Rc::new(RefCell::new(HookContext::new()));
+        let render_count = Arc::new(AtomicUsize::new(0));
+        ctx.borrow_mut().set_render_callback({
+            let render_count = Arc::clone(&render_count);
+            Arc::new(move || {
+                render_count.fetch_add(1, Ordering::SeqCst);
+            })
+        });
+
         let interval = Duration::from_millis(40);
 
-        // Leading-edge emit: value 10.
+        // Leading-edge emit: value 10. Wait for the worker to observe that
+        // first value so the following values definitely fall inside the same
+        // throttle window instead of racing ahead of the worker.
         let _ = with_hooks(ctx.clone(), || use_throttle(10u32, interval));
-        std::thread::sleep(Duration::from_millis(5));
+        let leading_deadline = Instant::now() + Duration::from_millis(200);
+        while render_count.load(Ordering::SeqCst) < 2 {
+            assert!(
+                Instant::now() < leading_deadline,
+                "leading-edge throttle value did not render before timeout"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let before_burst = render_count.load(Ordering::SeqCst);
 
-        // Burst within one window: 11, 12, 13. The new worker buffers 13 as
-        // the trailing-edge candidate; the old impl drops all three.
+        // Burst within one window: 11, 12, 13. The worker should buffer 13 as
+        // the trailing-edge candidate and request a render without any further
+        // hook invocation.
         for v in 11u32..=13u32 {
             let _ = with_hooks(ctx.clone(), || use_throttle(v, interval));
         }
 
-        // Sleep generously past the throttle window. Under the new impl the
-        // worker fires its trailing-edge timer and writes 13 to the Signal.
-        std::thread::sleep(interval * 4);
+        let trailing_deadline = Instant::now() + Duration::from_millis(250);
+        while render_count.load(Ordering::SeqCst) <= before_burst {
+            assert!(
+                Instant::now() < trailing_deadline,
+                "worker did not emit trailing-edge value before timeout"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
 
-        // Observe with one final hook call. We pass the same trailing value
-        // (13) so no new push could mask a missing trailing-edge emission;
-        // under the old impl the inline branch would only fire because
-        // elapsed >= interval, but the worker-buffered values 11 and 12 were
-        // already lost — only 13 (from this call) would surface, matching
-        // by coincidence. To distinguish, we also check that the worker
-        // emitted 13 BEFORE this final call by reading via a short sleep
-        // window where no hook call has happened.
-        //
-        // Concretely: we already slept interval*4 ≈ 160ms. We now make ONE
-        // hook call with a different value (99) and assert it returns 13
-        // (the previously-emitted trailing value), proving the worker
-        // delivered 13 on its own. If the old impl were in place, the
-        // throttled Signal would still be at 10 (leading edge) at this
-        // moment and the inline branch would set it to 99 and return 99.
-        let observed = with_hooks(ctx.clone(), || use_throttle(99u32, interval));
+        let observed = with_hooks(ctx.clone(), || use_throttle(13u32, interval));
         assert_eq!(
             observed, 13,
             "worker should have emitted trailing-edge 13 before this call"
