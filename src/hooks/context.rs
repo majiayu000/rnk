@@ -229,9 +229,12 @@ thread_local! {
 
 /// Get the current hook context
 pub fn current_context() -> Option<Rc<RefCell<HookContext>>> {
-    CURRENT_CONTEXT
-        .with(|ctx| ctx.borrow().clone())
+    explicit_current_context()
         .or_else(|| crate::runtime::current_runtime().map(|rt| rt.borrow().hook_context()))
+}
+
+fn explicit_current_context() -> Option<Rc<RefCell<HookContext>>> {
+    CURRENT_CONTEXT.with(|ctx| ctx.borrow().clone())
 }
 
 /// Run a function with a hook context
@@ -239,8 +242,9 @@ pub fn with_hooks<F, R>(ctx: Rc<RefCell<HookContext>>, f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    // Save the previous context so nested calls work correctly
-    let prev = current_context();
+    // Save only the explicit context so runtime fallback is not restored into
+    // CURRENT_CONTEXT after the runtime exits.
+    let prev = explicit_current_context();
 
     // Set the current context
     CURRENT_CONTEXT.with(|current| {
@@ -350,6 +354,19 @@ mod tests {
         assert!(Rc::ptr_eq(&resolved.unwrap(), &expected));
 
         set_current_runtime(None);
+    }
+
+    #[test]
+    fn test_with_runtime_clears_fallback_hook_context() {
+        use crate::runtime::{RuntimeContext, with_runtime};
+
+        let runtime = Rc::new(RefCell::new(RuntimeContext::new()));
+
+        with_runtime(runtime, || {
+            assert!(current_context().is_some());
+        });
+
+        assert!(current_context().is_none());
     }
 
     #[test]
