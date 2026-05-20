@@ -379,10 +379,9 @@ fn read_line_with_input_box() -> io::Result<String> {
                         input.push(c);
                         redraw_prompt_box(&input)?;
                     }
-                    KeyCode::Backspace => {
-                        if input.pop().is_some() {
-                            redraw_prompt_box(&input)?;
-                        }
+                    KeyCode::Backspace if !input.is_empty() => {
+                        input.pop();
+                        redraw_prompt_box(&input)?;
                     }
                     KeyCode::Esc => {
                         input.clear();
