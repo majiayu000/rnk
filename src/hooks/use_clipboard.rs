@@ -26,6 +26,16 @@
 
 use std::process::Command;
 
+#[cfg(any(target_os = "windows", test))]
+fn windows_set_clipboard_command_args(_text: &str) -> [&'static str; 4] {
+    [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Set-Clipboard -Value ([Console]::In.ReadToEnd())",
+    ]
+}
+
 /// Handle for clipboard operations
 #[derive(Clone, Copy)]
 pub struct ClipboardHandle;
@@ -159,10 +169,18 @@ pub fn write_clipboard(text: &str) -> bool {
 
     #[cfg(target_os = "windows")]
     {
-        let escaped = text.replace("\"", "`\"");
+        use std::io::Write;
+
         Command::new("powershell")
-            .args(["-command", &format!("Set-Clipboard -Value \"{}\"", escaped)])
-            .status()
+            .args(windows_set_clipboard_command_args(text))
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                if let Some(mut stdin) = child.stdin.take() {
+                    stdin.write_all(text.as_bytes())?;
+                }
+                child.wait()
+            })
             .map(|status| status.success())
             .unwrap_or(false)
     }
@@ -224,5 +242,33 @@ mod tests {
     fn test_is_clipboard_available() {
         // Just check it doesn't panic
         let _ = is_clipboard_available();
+    }
+
+    #[test]
+    fn windows_clipboard_payload_is_not_embedded_in_powershell_source() {
+        let payloads = [
+            r#"$(Start-Process calc)"#,
+            "`n; Write-Host injected",
+            "first line\r\nsecond line; Remove-Item -Recurse C:\\tmp",
+        ];
+
+        for payload in payloads {
+            let args = windows_set_clipboard_command_args(payload);
+            let command_source = args.join(" ");
+
+            assert_eq!(
+                args,
+                [
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Set-Clipboard -Value ([Console]::In.ReadToEnd())",
+                ]
+            );
+            assert!(!command_source.contains(payload));
+            assert!(!command_source.contains("Start-Process"));
+            assert!(!command_source.contains("Write-Host injected"));
+            assert!(!command_source.contains("Remove-Item"));
+        }
     }
 }
