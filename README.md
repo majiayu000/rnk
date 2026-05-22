@@ -40,7 +40,8 @@ The Crates.io badge above is the source of truth for published installs. This ch
 
 ## Quick Start
 
-Install the latest published Crates.io release:
+rnk is distributed as a Rust crate for Cargo projects. Add the latest published
+Crates.io release:
 
 ```bash
 cargo add rnk
@@ -54,6 +55,10 @@ For the latest source version before the next release is published:
 [dependencies]
 rnk = { git = "https://github.com/majiayu000/rnk" }
 ```
+
+The `rnk` binary target is a minimal repository demo and does not expose a
+standalone CLI surface. Keep installation docs centered on Cargo dependencies
+until a dedicated CLI distribution is added.
 
 ## Examples
 
