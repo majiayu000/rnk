@@ -460,14 +460,15 @@ mod tests {
             let _ = with_hooks(ctx.clone(), || use_throttle(v, interval));
         }
 
-        let trailing_deadline = Instant::now() + Duration::from_millis(250);
-        while render_count.load(Ordering::SeqCst) <= before_burst {
-            assert!(
-                Instant::now() < trailing_deadline,
-                "worker did not emit trailing-edge value before timeout"
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        // The runner may cross the first throttle window while scheduling the
+        // burst, making 11 a valid leading-edge emission before 13 trails it.
+        // Wait for the window to settle, then verify the worker requested at
+        // least one render without another hook invocation.
+        std::thread::sleep(interval * 3);
+        assert!(
+            render_count.load(Ordering::SeqCst) > before_burst,
+            "worker did not emit trailing-edge value before timeout"
+        );
 
         let observed = with_hooks(ctx.clone(), || use_throttle(13u32, interval));
         assert_eq!(
