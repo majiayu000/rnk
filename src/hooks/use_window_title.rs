@@ -9,7 +9,11 @@ use std::io::{Write, stdout};
 fn set_title_escape(title: &str) -> String {
     // OSC 0 sets both window title and icon name
     // BEL (0x07) terminates the sequence in most terminals
-    format!("\x1b]0;{}\x07", title)
+    format!("\x1b]0;{}\x07", sanitize_title(title))
+}
+
+fn sanitize_title(title: &str) -> String {
+    title.chars().filter(|ch| !ch.is_control()).collect()
 }
 
 /// Restore the original window title (best effort)
@@ -135,5 +139,32 @@ mod tests {
     fn test_title_with_special_chars() {
         let escape = set_title_escape("My App - [1/10]");
         assert_eq!(escape, "\x1b]0;My App - [1/10]\x07");
+    }
+
+    #[test]
+    fn test_sanitize_title_strips_c0_and_c1_control_characters() {
+        let controls: String = (0..=0x1f)
+            .chain(0x7f..=0x9f)
+            .filter_map(char::from_u32)
+            .collect();
+        assert_eq!(
+            sanitize_title(&format!("before{controls}after")),
+            "beforeafter"
+        );
+    }
+
+    #[test]
+    fn test_title_escape_sanitizes_terminal_control_payload() {
+        let escape = set_title_escape("safe\x07\x1b]2;owned\x07still\x1b\\done\u{009c}");
+        assert_eq!(escape, "\x1b]0;safe]2;ownedstill\\done\x07");
+
+        let payload = escape
+            .strip_prefix("\x1b]0;")
+            .and_then(|value| value.strip_suffix('\x07'))
+            .expect("escape should keep one OSC wrapper");
+        assert!(
+            payload.chars().all(|ch| !ch.is_control()),
+            "payload must not contain terminal control characters"
+        );
     }
 }
