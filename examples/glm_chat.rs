@@ -17,12 +17,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::watch;
-use unicode_width::UnicodeWidthChar;
 
 use rnk::prelude::{Color, Element, FlexDirection, Text};
 
 // Alias tink's Box to avoid conflict with std::boxed::Box
 use rnk::prelude::Box as RnkBox;
+
+#[path = "glm_chat/prompt_box.rs"]
+mod prompt_box;
+use prompt_box::{clear_live_prompt_box, draw_prompt_box, redraw_prompt_box};
 
 const API_URL: &str = "https://open.bigmodel.cn/api/anthropic/v1/messages";
 
@@ -305,13 +308,6 @@ fn render_error(message: &str) -> Element {
         .into_element()
 }
 
-fn render_prompt() -> Element {
-    RnkBox::new()
-        .flex_direction(FlexDirection::Row)
-        .child(Text::new("> ").color(Color::Yellow).bold().into_element())
-        .into_element()
-}
-
 fn render_goodbye() -> Element {
     Text::new("Goodbye!").dim().into_element()
 }
@@ -335,12 +331,6 @@ fn print_element(element: &Element) {
     println!("{}", output);
 }
 
-// Print tink element to stdout (without newline, for inline prompts)
-fn print_element_inline(element: &Element) {
-    let output = rnk::render_to_string_auto(element);
-    print!("{}", output);
-}
-
 // Direct ANSI print for AI response (bypasses layout engine to avoid indentation)
 fn print_assistant_response(text: &str) {
     // ● prefix in default color, then white text
@@ -348,13 +338,27 @@ fn print_assistant_response(text: &str) {
     println!("\x1b[97m● {}\x1b[0m", text);
 }
 
-/// Read a line of input with proper CJK character handling
-/// Uses raw mode to correctly handle backspace for wide characters
-fn read_line_with_cjk() -> io::Result<String> {
-    let mut input = String::new();
-    let mut stdout = io::stdout();
+struct RawModeGuard;
 
-    terminal::enable_raw_mode()?;
+impl RawModeGuard {
+    fn enter() -> io::Result<Self> {
+        terminal::enable_raw_mode()?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = terminal::disable_raw_mode();
+    }
+}
+
+/// Read a line in a Claude Code style prompt box with proper CJK backspace handling.
+fn read_line_with_input_box() -> io::Result<String> {
+    let mut input = String::new();
+    let _raw_mode = RawModeGuard::enter()?;
+
+    draw_prompt_box(&input)?;
 
     loop {
         if event::poll(Duration::from_millis(100))? {
@@ -364,42 +368,24 @@ fn read_line_with_cjk() -> io::Result<String> {
             {
                 match code {
                     KeyCode::Enter => {
-                        // Print newline and exit
-                        print!("\r\n");
-                        stdout.flush()?;
                         break;
                     }
                     KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-                        // Ctrl+C - exit
+                        // Ctrl+C - exit immediately, matching terminal conventions.
                         terminal::disable_raw_mode()?;
                         std::process::exit(0);
                     }
                     KeyCode::Char(c) => {
-                        // Add character to input
                         input.push(c);
-                        print!("{}", c);
-                        stdout.flush()?;
+                        redraw_prompt_box(&input)?;
                     }
-                    KeyCode::Backspace => {
-                        if let Some(ch) = input.pop() {
-                            // Move cursor back by character width and clear
-                            let char_width = ch.width().unwrap_or(1);
-                            // Move left, print spaces, move left again
-                            for _ in 0..char_width {
-                                print!("\x08 \x08");
-                            }
-                            stdout.flush()?;
-                        }
+                    KeyCode::Backspace if !input.is_empty() => {
+                        input.pop();
+                        redraw_prompt_box(&input)?;
                     }
                     KeyCode::Esc => {
-                        // Clear input on Escape
-                        let total_width: usize =
-                            input.chars().map(|c| c.width().unwrap_or(1)).sum();
-                        for _ in 0..total_width {
-                            print!("\x08 \x08");
-                        }
-                        stdout.flush()?;
                         input.clear();
+                        redraw_prompt_box(&input)?;
                     }
                     _ => {}
                 }
@@ -407,7 +393,6 @@ fn read_line_with_cjk() -> io::Result<String> {
         }
     }
 
-    terminal::disable_raw_mode()?;
     Ok(input)
 }
 
@@ -576,12 +561,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     loop {
-        // Print prompt (inline so user types on same line)
-        print_element_inline(&render_prompt());
+        // Use custom input handler for a live Claude Code style prompt box.
+        let input = read_line_with_input_box()?;
+        clear_live_prompt_box();
         io::stdout().flush()?;
 
-        // Use custom input handler for proper CJK backspace support
-        let input = read_line_with_cjk()?;
         let input = input.trim();
 
         match input.to_lowercase().as_str() {
@@ -600,10 +584,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "" => continue,
             _ => {}
         }
-
-        // Clear the line where user typed (move up and clear)
-        // The user input was already echoed, so we need to replace it with formatted version
-        print!("\x1b[1A\x1b[2K"); // Move up one line and clear it
 
         // Display user message in Claude Code style
         print_element(&render_user_message(input));
