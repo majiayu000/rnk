@@ -11,12 +11,17 @@ artifacts are also available from the GitHub Releases page.
 - Linked the README to this changelog and the GitHub Releases page so release
   history is easier to find.
 
+### Fixed
+
+- Made `use_throttle` leading-edge state deterministic so trailing-edge values
+  are not held back by worker-thread scheduling delays.
+
 ### Upgrade Notes
 
 - No API, dependency, feature, or minimum-supported-Rust-version changes are
   included in this release.
 - Existing `rnk = "0.19.1"` users can upgrade to `rnk = "0.19.2"` for the
-  documentation updates only.
+  documentation updates and throttle scheduling fix.
 
 ### Compatibility Notes
 
