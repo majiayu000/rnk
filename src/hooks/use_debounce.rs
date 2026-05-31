@@ -205,66 +205,83 @@ pub fn use_debounce_handle(delay: Duration) -> DebounceHandle {
 }
 
 enum ThrottleMessage<T> {
-    Update { value: T, interval: Duration },
+    Schedule { value: T, emit_at: Instant },
+    Clear,
 }
 
-fn spawn_throttle_worker<T>(throttled: Signal<T>) -> mpsc::Sender<ThrottleMessage<T>>
+fn spawn_throttle_worker<T>(
+    throttled: Signal<T>,
+    last_emit: Signal<Option<Instant>>,
+) -> mpsc::Sender<ThrottleMessage<T>>
 where
     T: Clone + Send + Sync + 'static,
 {
     let (tx, rx) = mpsc::channel::<ThrottleMessage<T>>();
 
     std::thread::spawn(move || {
-        // Trailing-edge buffer: keep the latest value pushed within the current
-        // throttle window so we can emit it once the window closes.
-        let mut pending: Option<(T, Duration)> = None;
-        // Whether any value has been emitted yet this run; before the first
-        // emit we pass values through immediately (leading edge).
-        let mut last_emit: Option<Instant> = None;
+        // Keep the latest value pushed within the current throttle window so
+        // the trailing edge emits the newest pending value.
+        let mut pending: Option<(T, Instant)> = None;
 
         loop {
-            // Compute how long until the trailing edge should fire (if any).
-            let trailing_wait = match (&pending, last_emit) {
-                (Some((_, interval)), Some(emitted)) => {
-                    Some(interval.saturating_sub(emitted.elapsed()))
+            let recv_result = match pending.as_ref() {
+                Some((_, emit_at)) => {
+                    let wait = emit_at.saturating_duration_since(Instant::now());
+                    if wait.is_zero() {
+                        Err(mpsc::RecvTimeoutError::Timeout)
+                    } else {
+                        rx.recv_timeout(wait)
+                    }
                 }
-                _ => None,
-            };
-
-            let recv_result = match trailing_wait {
-                Some(wait) if wait.is_zero() => Err(mpsc::RecvTimeoutError::Timeout),
-                Some(wait) => rx.recv_timeout(wait),
                 None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
             };
 
             match recv_result {
-                Ok(ThrottleMessage::Update { value, interval }) => {
-                    // Leading edge: no prior emit, OR window has fully elapsed.
-                    // Zero interval also takes this path (every value is ready).
-                    let ready = match last_emit {
-                        None => true,
-                        Some(t) => t.elapsed() >= interval,
-                    };
-
-                    if ready {
-                        throttled.set(value);
-                        last_emit = Some(Instant::now());
-                        pending = None;
-                    } else {
-                        // Within window: buffer for trailing-edge emission.
-                        // Subsequent pushes overwrite, so the latest value wins.
-                        pending = Some((value, interval));
-                    }
+                Ok(ThrottleMessage::Schedule { value, emit_at }) => {
+                    pending = Some((value, emit_at));
+                }
+                Ok(ThrottleMessage::Clear) => {
+                    pending = None;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    let mut trailing = pending.take();
-                    while let Ok(ThrottleMessage::Update { value, interval }) = rx.try_recv() {
-                        trailing = Some((value, interval));
+                    let now = Instant::now();
+                    let mut trailing = None;
+                    let mut future_pending = None;
+
+                    if let Some((value, emit_at)) = pending.take() {
+                        if emit_at <= now {
+                            trailing = Some(value);
+                        } else {
+                            future_pending = Some((value, emit_at));
+                        }
                     }
 
-                    if let Some((value, _)) = trailing {
+                    while let Ok(message) = rx.try_recv() {
+                        match message {
+                            ThrottleMessage::Schedule { value, emit_at } => {
+                                if emit_at <= now {
+                                    trailing = Some(value);
+                                    future_pending = None;
+                                } else {
+                                    trailing = None;
+                                    future_pending = Some((value, emit_at));
+                                }
+                            }
+                            ThrottleMessage::Clear => {
+                                trailing = None;
+                                future_pending = None;
+                            }
+                        }
+                    }
+
+                    if let Some(pending_value) = future_pending {
+                        pending = Some(pending_value);
+                        continue;
+                    }
+
+                    if let Some(value) = trailing {
                         throttled.set(value);
-                        last_emit = Some(Instant::now());
+                        last_emit.set(Some(Instant::now()));
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -273,6 +290,50 @@ where
     });
 
     tx
+}
+
+fn send_throttle_schedule<T>(
+    worker_tx: &Signal<Option<mpsc::Sender<ThrottleMessage<T>>>>,
+    throttled: Signal<T>,
+    last_emit: Signal<Option<Instant>>,
+    value: T,
+    emit_at: Instant,
+) where
+    T: Clone + Send + Sync + 'static,
+{
+    let mut message = Some(ThrottleMessage::Schedule { value, emit_at });
+
+    if let Some(tx) = worker_tx.get() {
+        if let Some(message_to_send) = message.take() {
+            match tx.send(message_to_send) {
+                Ok(()) => return,
+                Err(err) => {
+                    message = Some(err.0);
+                }
+            }
+        }
+    }
+
+    let tx = spawn_throttle_worker(throttled, last_emit);
+    if let Some(message) = message {
+        match tx.send(message) {
+            Ok(()) => worker_tx.set(Some(tx)),
+            Err(_) => worker_tx.set(None),
+        }
+    } else {
+        worker_tx.set(Some(tx));
+    }
+}
+
+fn clear_throttle_schedule<T>(worker_tx: &Signal<Option<mpsc::Sender<ThrottleMessage<T>>>>)
+where
+    T: Clone + Send + Sync + 'static,
+{
+    if let Some(tx) = worker_tx.get()
+        && tx.send(ThrottleMessage::Clear).is_err()
+    {
+        worker_tx.set(None);
+    }
 }
 
 /// Throttle a value, allowing updates at most once per interval.
@@ -305,30 +366,32 @@ where
     T: Clone + Send + Sync + 'static,
 {
     let throttled = use_signal(|| value.clone());
+    let last_emit = use_signal(|| None::<Instant>);
     let worker_tx: Signal<Option<mpsc::Sender<ThrottleMessage<T>>>> = use_signal(|| None);
 
-    if worker_tx.get().is_none() {
-        worker_tx.set(Some(spawn_throttle_worker(throttled.clone())));
+    let now = Instant::now();
+    let last_emit_at = last_emit.get();
+    let should_emit_now = interval.is_zero()
+        || match last_emit_at {
+            Some(emitted_at) => now.saturating_duration_since(emitted_at) >= interval,
+            None => true,
+        };
+
+    if should_emit_now {
+        throttled.set(value);
+        last_emit.set(Some(now));
+        clear_throttle_schedule(&worker_tx);
+        return throttled.get();
     }
 
-    let mut sent = false;
-    if let Some(tx) = worker_tx.get() {
-        sent = tx
-            .send(ThrottleMessage::Update {
-                value: value.clone(),
-                interval,
-            })
-            .is_ok();
-    }
-
-    if !sent {
-        // Worker exited unexpectedly. Respawn and retry once.
-        let tx = spawn_throttle_worker(throttled.clone());
-        let _ = tx.send(ThrottleMessage::Update {
-            value: value.clone(),
-            interval,
-        });
-        worker_tx.set(Some(tx));
+    if let Some(emitted_at) = last_emit_at {
+        send_throttle_schedule(
+            &worker_tx,
+            throttled.clone(),
+            last_emit.clone(),
+            value,
+            emitted_at + interval,
+        );
     }
 
     throttled.get()

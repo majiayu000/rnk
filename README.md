@@ -8,7 +8,12 @@ A React-like declarative terminal UI framework for Rust, inspired by [Ink](https
 
 ## Version Status
 
-The Crates.io badge above is the source of truth for published installs. This checkout currently declares `0.19.1`; when the checkout is ahead of the latest published release, use the git dependency below for the latest source version.
+The Crates.io badge above is the source of truth for published installs. This
+checkout currently declares `0.19.2`; when the checkout is ahead of the latest
+published release, use the git dependency below for the latest source version.
+Release notes live in [CHANGELOG.md](CHANGELOG.md); older published release
+artifacts remain available on
+[GitHub Releases](https://github.com/majiayu000/rnk/releases).
 
 ## Features
 
@@ -59,6 +64,20 @@ rnk = { git = "https://github.com/majiayu000/rnk" }
 The `rnk` binary target is a minimal repository demo and does not expose a
 standalone CLI surface. Keep installation docs centered on Cargo dependencies
 until a dedicated CLI distribution is added.
+
+## Limitations
+
+- The public distribution is the Rust crate API. The `rnk` binary target is a
+  minimal repository demo, not a supported end-user CLI.
+- Terminal feature support depends on the user's terminal emulator. Mouse input,
+  hyperlinks, bracketed paste, alternate-screen behavior, and color rendering may
+  vary by platform and terminal.
+- `rnk-style`, `rnk-style-core`, and `rnk-icons` are workspace crates with their
+  own package versions. Their release cadence may differ from the top-level
+  `rnk` crate.
+- The `http` feature is optional. Applications that need HTTP support must enable
+  it explicitly.
+- The framework targets Rust `1.85` and newer.
 
 ## Examples
 
