@@ -3,6 +3,7 @@
 //! Provides a centered overlay that can be used for dialogs, confirmations,
 //! and other modal interactions.
 
+use crate::components::{ActionButton, ActionRole, ActionShape, ActionState, Text, get_theme};
 use crate::core::{AlignItems, BorderStyle, Color, Element, FlexDirection, JustifyContent};
 
 /// Modal alignment options
@@ -265,11 +266,17 @@ pub struct Dialog {
     cancel_color: Option<Color>,
     /// Focus indicator color
     focus_color: Option<Color>,
+    /// Shared action button shape
+    button_shape: ActionShape,
+    /// Gap between action buttons
+    button_gap: u16,
 }
 
 impl Dialog {
     /// Create a new dialog
     pub fn new() -> Self {
+        let theme = get_theme();
+        let tokens = theme.design_tokens();
         Self {
             title: None,
             message: None,
@@ -277,11 +284,13 @@ impl Dialog {
             confirm_label: "OK".to_string(),
             cancel_label: "Cancel".to_string(),
             focused_button: 0,
-            border_style: BorderStyle::Round,
+            border_style: tokens.borders.dialog,
             width: Some(50),
-            confirm_color: Some(Color::Green),
-            cancel_color: Some(Color::Red),
-            focus_color: Some(Color::Cyan),
+            confirm_color: None,
+            cancel_color: None,
+            focus_color: None,
+            button_shape: ActionShape::Padded,
+            button_gap: tokens.density.gap,
         }
     }
 
@@ -351,10 +360,53 @@ impl Dialog {
         self
     }
 
+    /// Set the shared action button shape.
+    pub fn button_shape(mut self, shape: ActionShape) -> Self {
+        self.button_shape = shape;
+        self
+    }
+
+    /// Set the gap between action buttons.
+    pub fn button_gap(mut self, gap: u16) -> Self {
+        self.button_gap = gap;
+        self
+    }
+
+    fn action_text(&self, label: &str, role: ActionRole, focused: bool) -> Text {
+        let state = if focused {
+            ActionState::Focused
+        } else {
+            ActionState::Rest
+        };
+
+        let mut text = ActionButton::new(label)
+            .role(role)
+            .state(state)
+            .shape(self.button_shape)
+            .into_text();
+
+        if focused {
+            if let Some(fc) = self.focus_color {
+                text = text.color(fc);
+            }
+            text = text.bold();
+        } else {
+            let override_color = match role {
+                ActionRole::Primary => self.confirm_color,
+                ActionRole::Secondary => self.cancel_color,
+                ActionRole::Destructive => None,
+            };
+            if let Some(color) = override_color {
+                text = text.color(color);
+            }
+        }
+
+        text
+    }
+
     /// Convert to Element
     pub fn into_element(self) -> Element {
         use crate::components::Box;
-        use crate::components::Text;
 
         let mut modal = Modal::new().border_style(self.border_style);
 
@@ -365,6 +417,14 @@ impl Dialog {
         if let Some(title) = &self.title {
             modal = modal.title(title);
         }
+
+        let confirm_focused = self.focused_button == 0;
+        let cancel_focused = self.focused_button == 1;
+        let button_gap = self.button_gap as f32;
+        let confirm_text =
+            self.action_text(&self.confirm_label, ActionRole::Primary, confirm_focused);
+        let cancel_text =
+            self.action_text(&self.cancel_label, ActionRole::Secondary, cancel_focused);
 
         // Add message or custom content
         if let Some(msg) = &self.message {
@@ -378,36 +438,10 @@ impl Dialog {
         // Add spacer before buttons
         modal = modal.child(Text::new("").into_element());
 
-        // Create button row
-        let confirm_focused = self.focused_button == 0;
-        let cancel_focused = self.focused_button == 1;
-
-        let mut confirm_text = Text::new(format!("[ {} ]", self.confirm_label));
-        if let Some(color) = self.confirm_color {
-            confirm_text = confirm_text.color(color);
-        }
-        if confirm_focused {
-            confirm_text = confirm_text.bold();
-            if let Some(fc) = self.focus_color {
-                confirm_text = confirm_text.color(fc);
-            }
-        }
-
-        let mut cancel_text = Text::new(format!("[ {} ]", self.cancel_label));
-        if let Some(color) = self.cancel_color {
-            cancel_text = cancel_text.color(color);
-        }
-        if cancel_focused {
-            cancel_text = cancel_text.bold();
-            if let Some(fc) = self.focus_color {
-                cancel_text = cancel_text.color(fc);
-            }
-        }
-
         let button_row = Box::new()
             .flex_direction(FlexDirection::Row)
             .justify_content(JustifyContent::Center)
-            .gap(2.0)
+            .gap(button_gap)
             .child(confirm_text.into_element())
             .child(cancel_text.into_element())
             .into_element();
@@ -554,5 +588,25 @@ mod tests {
             .focused_button(1);
 
         let _element = dialog.into_element();
+    }
+
+    #[test]
+    fn test_dialog_action_button_tokens() {
+        let element = Dialog::new()
+            .button_shape(ActionShape::Plain)
+            .button_gap(3)
+            .into_element();
+        let Some(modal_box) = element.children.get(0) else {
+            panic!("missing modal content");
+        };
+        let Some(button_row) = modal_box.children.get(1) else {
+            panic!("missing button row");
+        };
+        let Some(confirm) = button_row.children.get(0) else {
+            panic!("missing confirm button");
+        };
+
+        assert_eq!(button_row.style.gap, 3.0);
+        assert_eq!(confirm.text_content.as_deref(), Some("OK"));
     }
 }

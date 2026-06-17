@@ -40,7 +40,7 @@ Interactive component state and event contracts live in
 - **Chainable Style API**: CSS-like fluent styling with `.fg()`, `.bg()`, `.bold()`, `.p()`, `.m()`
 - **Mouse Support**: Full mouse event handling
 - **Bracketed Paste**: Distinguish between typed and pasted text
-- **Theme System**: Centralized theming with semantic colors
+- **Theme System**: Centralized theming with semantic colors, design tokens, variants, and shared action styles
 - **Cross-platform**: Works on Linux, macOS, and Windows
 
 ### Recent Improvements
@@ -561,10 +561,14 @@ list_indexed!(items.iter(), |idx, item| text!("[{}] {}", idx, item))
 ## Theme System
 
 ```rust
-use rnk::components::{Theme, ThemeBuilder, set_theme, get_theme, with_theme};
+use rnk::components::{
+    ActionButton, ActionRole, ActionState, ComponentState, ComponentVariant,
+    SemanticColor, Theme, ThemeBuilder, get_theme, set_theme, with_theme,
+};
+use rnk::core::Color;
 
 // Create custom theme
-let theme = ThemeBuilder::new()
+let theme = ThemeBuilder::new("custom")
     .primary(Color::Cyan)
     .secondary(Color::Magenta)
     .success(Color::Green)
@@ -578,11 +582,25 @@ set_theme(theme);
 // Use theme colors
 let color = get_theme().semantic_color(SemanticColor::Primary);
 
+// Use derived design tokens and variants
+let tokens = get_theme().design_tokens();
+let focused = get_theme().variant_style(ComponentVariant::Primary, ComponentState::Focused);
+
+// Use shared action styling for button-like labels
+let action = ActionButton::new("Save")
+    .role(ActionRole::Primary)
+    .state(ActionState::Focused)
+    .into_element();
+
 // Scoped theme
-with_theme(dark_theme, || {
+let dark_theme = Theme::dark();
+with_theme(dark_theme, |_| {
     // Components here use dark_theme
 });
 ```
+
+See [Design Tokens And Component Variants](docs/DESIGN_TOKENS_AND_VARIANTS.md)
+for the current token and variant contract.
 
 ## Cross-thread Rendering
 

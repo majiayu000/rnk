@@ -1,5 +1,6 @@
 //! Shared status level styling for components (alert, notification, etc.)
 
+use crate::components::{Theme, get_theme};
 use crate::core::Color;
 
 /// Common status levels used across components.
@@ -40,30 +41,44 @@ pub(crate) use impl_status_level_from;
 
 /// Get shared style data for a status level.
 pub fn status_style(level: StatusLevel) -> StatusStyle {
+    status_style_with_theme(level, &get_theme())
+}
+
+/// Get shared style data for a status level from a specific theme.
+pub fn status_style_with_theme(level: StatusLevel, theme: &Theme) -> StatusStyle {
+    let tokens = theme.design_tokens();
+    let fg = match level {
+        StatusLevel::Info => theme.primary,
+        StatusLevel::Success => theme.success,
+        StatusLevel::Warning => theme.warning,
+        StatusLevel::Error => theme.error,
+    };
+    let bg = theme.background.elevated;
+
     match level {
         StatusLevel::Info => StatusStyle {
-            icon: "ℹ",
+            icon: tokens.symbols.info,
             label: "INFO",
-            fg: Color::Cyan,
-            bg: Color::Ansi256(23),
+            fg,
+            bg,
         },
         StatusLevel::Success => StatusStyle {
-            icon: "✓",
+            icon: tokens.symbols.success,
             label: "SUCCESS",
-            fg: Color::Green,
-            bg: Color::Ansi256(22),
+            fg,
+            bg,
         },
         StatusLevel::Warning => StatusStyle {
-            icon: "⚠",
+            icon: tokens.symbols.warning,
             label: "WARNING",
-            fg: Color::Yellow,
-            bg: Color::Ansi256(58),
+            fg,
+            bg,
         },
         StatusLevel::Error => StatusStyle {
-            icon: "✗",
+            icon: tokens.symbols.error,
             label: "ERROR",
-            fg: Color::Red,
-            bg: Color::Ansi256(52),
+            fg,
+            bg,
         },
     }
 }
@@ -75,9 +90,11 @@ mod tests {
     #[test]
     fn test_status_style_info() {
         let style = status_style(StatusLevel::Info);
-        assert_eq!(style.icon, "ℹ");
+        let theme = get_theme();
+
+        assert_eq!(style.icon, theme.design_tokens().symbols.info);
         assert_eq!(style.label, "INFO");
-        assert_eq!(style.fg, Color::Cyan);
-        assert_eq!(style.bg, Color::Ansi256(23));
+        assert_eq!(style.fg, theme.primary);
+        assert_eq!(style.bg, theme.background.elevated);
     }
 }

@@ -188,6 +188,9 @@ Acceptance criteria:
 
 GitHub issue: [#24](https://github.com/majiayu000/rnk/issues/24)
 
+Current contract document:
+[docs/DESIGN_TOKENS_AND_VARIANTS.md](DESIGN_TOKENS_AND_VARIANTS.md)
+
 ### 6. Focus, Accessibility, And Input Semantics
 
 Problem:
