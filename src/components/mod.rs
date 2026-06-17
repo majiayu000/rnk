@@ -1,5 +1,6 @@
 //! UI Components
 
+mod action;
 mod display;
 mod feedback;
 mod input;
@@ -17,6 +18,7 @@ pub(crate) use input::selection_list;
 pub(crate) use layout::capsule;
 
 // display
+pub use action::{ActionButton, ActionRole, ActionShape, ActionState, ActionStyle};
 pub use display::text;
 pub use display::{
     Accordion, AccordionItem, Avatar, AvatarSize, Badge, BadgeVariant, Bar, BarChart,
@@ -71,9 +73,10 @@ pub use layout::{
     handle_list_navigation, handle_tree_input, virtual_scroll_view,
 };
 pub use theme::{
-    BackgroundColors, BorderColors, ButtonColors, ComponentColors, InputColors, ListColors,
-    ProgressColors, SemanticColor, TextColors, Theme, ThemeBuilder, get_theme, set_theme,
-    with_theme,
+    BackgroundColors, BorderColors, BorderTokens, ButtonColors, ComponentColors, ComponentState,
+    ComponentVariant, Density, DensityTokens, DesignTokens, FocusTokens, InputColors, ListColors,
+    ProgressColors, SemanticColor, SpacingTokens, StateTokens, SymbolTokens, TextColors, Theme,
+    ThemeBuilder, VariantStyle, get_theme, set_theme, with_theme,
 };
 
 // Implement From<T> for Element for all components with into_element()

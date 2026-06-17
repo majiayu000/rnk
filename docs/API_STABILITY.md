@@ -96,6 +96,7 @@ Current field exposure review:
 | --- | --- | --- |
 | `Element` | Public tree fields such as `id`, `element_type`, `style`, `children`, text, key, and scroll offsets. | Advanced but supported before `1.0`; prefer constructors/builders in examples. Field set may be reduced or moved behind methods before `1.0`. |
 | `Style` | Public CSS-like layout, spacing, border, color, text, overflow, and `#[doc(hidden)] is_static`. | Intentionally field-addressable for style construction and tests. New token/state fields may be added by #24. |
+| `Theme` | Public semantic color fields and component color groups. | Field layout is preserved for direct construction. Non-color tokens are currently resolved through `Theme::design_tokens()` and `Theme::variant_style(...)` instead of new public fields. |
 | `AppOptions` | Public renderer options. | Supported configuration struct. New fields may be added with defaults. |
 | `RenderOptions` | Public render-to-string options. | Supported for testing and snapshots; may gain options as terminal compatibility work expands. |
 | `StyledChar`, `ClipRegion`, and `Output` | Public renderer buffer fields such as cells, clip coordinates, width, and height. | Advanced/experimental renderer internals. Direct field construction is allowed today for diagnostics and tests, but fields may be hidden or replaced by accessors before `1.0`. |

@@ -35,7 +35,10 @@
 //! }
 //! ```
 
-use crate::components::{Box as RnkBox, InteractionMode, InteractionOutcome, Text};
+use crate::components::{
+    ActionButton, ActionRole, ActionShape, ActionState, Box as RnkBox, InteractionMode,
+    InteractionOutcome, Text, Theme, get_theme,
+};
 use crate::core::{Color, Element, FlexDirection};
 
 /// Confirm dialog state
@@ -200,21 +203,41 @@ pub enum ButtonStyle {
 
 impl Default for ConfirmStyle {
     fn default() -> Self {
-        Self {
-            yes_label: "Yes".to_string(),
-            no_label: "No".to_string(),
-            separator: "  ".to_string(),
-            focused_color: Some(Color::White),
-            focused_bg: Some(Color::Cyan),
-            unfocused_color: Some(Color::BrightBlack),
-            prompt_color: None,
-            show_hints: true,
-            button_style: ButtonStyle::Brackets,
+        Self::from_theme(&Theme::dark())
+    }
+}
+
+impl From<ButtonStyle> for ActionShape {
+    fn from(style: ButtonStyle) -> Self {
+        match style {
+            ButtonStyle::Brackets => ActionShape::Brackets,
+            ButtonStyle::Angles => ActionShape::Angles,
+            ButtonStyle::Parens => ActionShape::Parens,
+            ButtonStyle::Plain => ActionShape::Plain,
+            ButtonStyle::Padded => ActionShape::Padded,
         }
     }
 }
 
 impl ConfirmStyle {
+    /// Create a style from the resolved theme tokens.
+    pub fn from_theme(theme: &Theme) -> Self {
+        let tokens = theme.design_tokens();
+        let focused = theme.action_style(ActionRole::Primary, ActionState::Focused);
+        let rest = theme.action_style(ActionRole::Secondary, ActionState::Rest);
+        Self {
+            yes_label: "Yes".to_string(),
+            no_label: "No".to_string(),
+            separator: " ".repeat(tokens.density.gap as usize),
+            focused_color: Some(focused.fg),
+            focused_bg: focused.bg,
+            unfocused_color: Some(rest.fg),
+            prompt_color: Some(theme.text.primary),
+            show_hints: true,
+            button_style: ButtonStyle::Brackets,
+        }
+    }
+
     /// Create a new style with defaults
     pub fn new() -> Self {
         Self::default()
@@ -283,19 +306,31 @@ impl ConfirmStyle {
 
     /// Format a button label
     fn format_button(&self, label: &str, hint: Option<char>) -> String {
-        let hint_str = if self.show_hints {
-            hint.map(|c| format!("({})", c)).unwrap_or_default()
-        } else {
-            String::new()
-        };
+        ActionShape::from(self.button_style).format_label(label, hint, self.show_hints)
+    }
 
-        match self.button_style {
-            ButtonStyle::Brackets => format!("[{}]{}", label, hint_str),
-            ButtonStyle::Angles => format!("<{}>{}", label, hint_str),
-            ButtonStyle::Parens => format!("({}){}", label, hint_str),
-            ButtonStyle::Plain => format!("{}{}", label, hint_str),
-            ButtonStyle::Padded => format!("[ {} ]{}", label, hint_str),
+    fn action_text(&self, label: &str, hint: char, role: ActionRole, state: ActionState) -> Text {
+        let mut text = ActionButton::new(label)
+            .role(role)
+            .state(state)
+            .shape(self.button_style.into())
+            .hint(Some(hint))
+            .show_hint(self.show_hints)
+            .into_text();
+
+        if state == ActionState::Focused {
+            if let Some(color) = self.focused_color {
+                text = text.color(color);
+            }
+            if let Some(bg) = self.focused_bg {
+                text = text.background(bg);
+            }
+            text = text.bold();
+        } else if let Some(color) = self.unfocused_color {
+            text = text.color(color);
         }
+
+        text
     }
 
     /// Confirm/Cancel style
@@ -335,7 +370,7 @@ impl<'a> Confirm<'a> {
     pub fn new(state: &'a ConfirmState) -> Self {
         Self {
             state,
-            style: ConfirmStyle::default(),
+            style: ConfirmStyle::from_theme(&get_theme()),
             focused: true,
         }
     }
@@ -389,39 +424,27 @@ impl<'a> Confirm<'a> {
         // Buttons row
         let mut buttons = RnkBox::new().flex_direction(FlexDirection::Row);
 
-        // Yes button
-        let yes_label = self.style.format_button(&self.style.yes_label, Some('Y'));
-        let mut yes_text = Text::new(&yes_label);
-        if self.focused && self.state.is_yes_focused() {
-            if let Some(color) = self.style.focused_color {
-                yes_text = yes_text.color(color);
-            }
-            if let Some(bg) = self.style.focused_bg {
-                yes_text = yes_text.background(bg);
-            }
-            yes_text = yes_text.bold();
-        } else if let Some(color) = self.style.unfocused_color {
-            yes_text = yes_text.color(color);
-        }
+        let yes_state = if self.focused && self.state.is_yes_focused() {
+            ActionState::Focused
+        } else {
+            ActionState::Rest
+        };
+        let yes_text =
+            self.style
+                .action_text(&self.style.yes_label, 'Y', ActionRole::Primary, yes_state);
         buttons = buttons.child(yes_text.into_element());
 
         // Separator
         buttons = buttons.child(Text::new(&self.style.separator).into_element());
 
-        // No button
-        let no_label = self.style.format_button(&self.style.no_label, Some('N'));
-        let mut no_text = Text::new(&no_label);
-        if self.focused && self.state.is_no_focused() {
-            if let Some(color) = self.style.focused_color {
-                no_text = no_text.color(color);
-            }
-            if let Some(bg) = self.style.focused_bg {
-                no_text = no_text.background(bg);
-            }
-            no_text = no_text.bold();
-        } else if let Some(color) = self.style.unfocused_color {
-            no_text = no_text.color(color);
-        }
+        let no_state = if self.focused && self.state.is_no_focused() {
+            ActionState::Focused
+        } else {
+            ActionState::Rest
+        };
+        let no_text =
+            self.style
+                .action_text(&self.style.no_label, 'N', ActionRole::Secondary, no_state);
         buttons = buttons.child(no_text.into_element());
 
         container = container.child(buttons.into_element());
@@ -575,6 +598,18 @@ mod tests {
         let _ok_cancel = ConfirmStyle::ok_cancel();
         let _save_discard = ConfirmStyle::save_discard();
         let _delete_keep = ConfirmStyle::delete_keep();
+    }
+
+    #[test]
+    fn test_confirm_style_from_theme() {
+        let theme = Theme::dark();
+        let style = ConfirmStyle::from_theme(&theme);
+        let expected = theme.action_style(ActionRole::Primary, ActionState::Focused);
+
+        assert_eq!(style.separator, "  ");
+        assert_eq!(style.focused_color, Some(expected.fg));
+        assert_eq!(style.focused_bg, expected.bg);
+        assert_eq!(style.prompt_color, Some(theme.text.primary));
     }
 
     #[test]
