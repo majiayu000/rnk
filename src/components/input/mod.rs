@@ -1,6 +1,7 @@
 mod code_editor;
 mod color_picker;
 mod command_palette;
+mod command_palette_accessibility;
 mod confirm;
 mod context_menu;
 mod file_picker;

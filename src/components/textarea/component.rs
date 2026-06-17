@@ -3,7 +3,9 @@
 //! A multi-line text input component similar to Bubbles' textarea.
 
 use crate::components::{Box as RnkBox, InteractionMode, InteractionOutcome, Text};
-use crate::core::{BorderStyle, Color, Element, FlexDirection, Overflow};
+use crate::core::{
+    AccessibilityProps, AccessibilityRole, BorderStyle, Color, Element, FlexDirection, Overflow,
+};
 
 use super::keymap::{TextAreaAction, TextAreaKeyMap};
 use super::state::TextAreaState;
@@ -278,7 +280,12 @@ impl<'a> TextArea<'a> {
                 placeholder_text = placeholder_text.color(color);
             }
             container = container.child(placeholder_text.into_element());
-            return container.into_element();
+            return container.into_element().with_accessibility(
+                AccessibilityProps::new(AccessibilityRole::TextArea)
+                    .label("Text area")
+                    .value(self.state.placeholder())
+                    .focusable(self.focused),
+            );
         }
 
         // Render visible lines
@@ -309,7 +316,12 @@ impl<'a> TextArea<'a> {
             container = container.child(empty_line);
         }
 
-        container.into_element()
+        container.into_element().with_accessibility(
+            AccessibilityProps::new(AccessibilityRole::TextArea)
+                .label("Text area")
+                .value(self.state.content())
+                .focusable(self.focused),
+        )
     }
 
     /// Render a single line

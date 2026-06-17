@@ -39,7 +39,7 @@ use crate::components::{
     ActionButton, ActionRole, ActionShape, ActionState, Box as RnkBox, InteractionMode,
     InteractionOutcome, Text, Theme, get_theme,
 };
-use crate::core::{Color, Element, FlexDirection};
+use crate::core::{AccessibilityProps, AccessibilityRole, Color, Element, FlexDirection};
 
 /// Confirm dialog state
 #[derive(Debug, Clone)]
@@ -449,7 +449,15 @@ impl<'a> Confirm<'a> {
 
         container = container.child(buttons.into_element());
 
-        container.into_element()
+        container.into_element().with_accessibility(
+            AccessibilityProps::new(AccessibilityRole::Dialog)
+                .label(self.state.prompt.clone())
+                .description(format!(
+                    "{} or {}",
+                    self.style.yes_label, self.style.no_label
+                ))
+                .focusable(self.focused),
+        )
     }
 }
 

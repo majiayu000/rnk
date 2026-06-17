@@ -199,8 +199,10 @@ pub use crate::hooks::{
 // =============================================================================
 
 pub use crate::hooks::{
-    FocusManagerHandle, FocusState, UseFocusOptions, use_focus, use_focus_manager,
+    FocusManagerHandle, FocusState, ScopedFocusOptions, UseFocusOptions, use_focus,
+    use_focus_manager, use_focus_traversal, use_focus_traversal_in_scope, use_scoped_focus,
 };
+pub use crate::{AccessibilityProps, AccessibilityRole};
 
 // =============================================================================
 // Hooks - Scroll & Measure
@@ -233,7 +235,9 @@ pub use crate::hooks::{
 /// ```
 pub mod lite {
     pub use crate::components::{Box as LayoutBox, Spacer, Text};
-    pub use crate::core::{Color, Element, FlexDirection, Style};
+    pub use crate::core::{
+        AccessibilityProps, AccessibilityRole, Color, Element, FlexDirection, Style,
+    };
     pub use crate::hooks::{Key, use_app, use_effect, use_input, use_signal};
     pub use crate::renderer::{render, render_to_string};
 }

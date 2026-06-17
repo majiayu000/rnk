@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::components::{InteractionMode, InteractionOutcome, Text};
-use crate::core::{Color, Element};
+use crate::core::{AccessibilityProps, AccessibilityRole, Color, Element};
 
 /// File type for display
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -754,7 +754,21 @@ impl<'a> FilePicker<'a> {
 
     /// Convert to Element
     pub fn into_element(self) -> Element {
-        Text::new(self.render()).into_element()
+        let visible_entries = self.state.visible_entries();
+        let mut accessibility = AccessibilityProps::new(AccessibilityRole::FilePicker)
+            .label(format!(
+                "File picker {}",
+                self.state.current_dir().to_string_lossy()
+            ))
+            .description(format!("{} entries", visible_entries.len()))
+            .focusable(true);
+        if let Some(entry) = visible_entries.get(self.state.cursor()).copied() {
+            accessibility = accessibility.value(entry.name.clone());
+        }
+
+        Text::new(self.render())
+            .into_element()
+            .with_accessibility(accessibility)
     }
 }
 

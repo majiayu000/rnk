@@ -16,7 +16,9 @@ pub use color::{
 };
 #[doc(hidden)]
 pub use component::{Component, ComponentInstance, StatelessComponent};
-pub use element::{Children, Element, ElementId, ElementType};
+pub use element::{
+    AccessibilityProps, AccessibilityRole, Children, Element, ElementId, ElementType,
+};
 pub use style::{
     AlignItems, AlignSelf, BorderStyle, Dimension, Display, Edges, FlexDirection, JustifyContent,
     Overflow, Position, Style, TextWrap,
