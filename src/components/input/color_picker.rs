@@ -16,7 +16,7 @@
 //! }
 //! ```
 
-use crate::components::{Box, Text};
+use crate::components::{Box, InteractionMode, InteractionOutcome, Text};
 use crate::core::{Color, Element, FlexDirection};
 
 /// Predefined color palette
@@ -270,6 +270,8 @@ pub struct ColorPicker {
     style: ColorPickerStyle,
     /// Title
     title: Option<String>,
+    /// Input mode for disabled/read-only behavior.
+    mode: InteractionMode,
 }
 
 impl ColorPicker {
@@ -280,6 +282,7 @@ impl ColorPicker {
             state: ColorPickerState::new(),
             style: ColorPickerStyle::default(),
             title: None,
+            mode: InteractionMode::Enabled,
         }
     }
 
@@ -304,6 +307,24 @@ impl ColorPicker {
     /// Set title
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
+        self
+    }
+
+    /// Enable normal selection and submit behavior.
+    pub fn enabled(mut self) -> Self {
+        self.mode = InteractionMode::Enabled;
+        self
+    }
+
+    /// Ignore all input.
+    pub fn disabled(mut self) -> Self {
+        self.mode = InteractionMode::Disabled;
+        self
+    }
+
+    /// Allow rendering/focus while blocking selection changes and submit.
+    pub fn read_only(mut self) -> Self {
+        self.mode = InteractionMode::ReadOnly;
         self
     }
 
@@ -388,6 +409,53 @@ impl Default for ColorPicker {
     }
 }
 
+/// Handle ColorPicker navigation, submit, and cancel against explicit state.
+pub fn handle_color_picker_input(
+    state: &mut ColorPickerState,
+    palette: &[Color],
+    colors_per_row: usize,
+    key: &crate::hooks::Key,
+    mode: InteractionMode,
+) -> InteractionOutcome<Color> {
+    if mode.is_disabled() || palette.is_empty() {
+        return InteractionOutcome::Ignored;
+    }
+
+    if key.escape {
+        state.close();
+        return InteractionOutcome::Cancelled;
+    }
+
+    if mode.is_read_only() {
+        return InteractionOutcome::Ignored;
+    }
+
+    let max = palette.len();
+    let row = colors_per_row.max(1);
+    let mut next = state.selected.min(max - 1);
+
+    if key.left_arrow {
+        next = next.saturating_sub(1);
+    } else if key.right_arrow {
+        next = (next + 1).min(max - 1);
+    } else if key.up_arrow {
+        next = next.saturating_sub(row);
+    } else if key.down_arrow {
+        next = (next + row).min(max - 1);
+    } else if key.home {
+        next = 0;
+    } else if key.end {
+        next = max - 1;
+    } else if key.return_key || key.space {
+        return InteractionOutcome::Submitted(palette[next]);
+    } else {
+        return InteractionOutcome::Ignored;
+    }
+
+    state.select(next);
+    InteractionOutcome::Changed(palette[next])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,5 +538,49 @@ mod tests {
     fn test_color_to_hex() {
         let hex = ColorPicker::color_to_hex(&Color::Rgb(255, 0, 128));
         assert_eq!(hex, "#FF0080");
+    }
+
+    #[test]
+    fn test_handle_color_picker_input_modes_and_submit() {
+        let palette = ColorPalette::basic();
+        let mut state = ColorPickerState::new();
+
+        let outcome = handle_color_picker_input(
+            &mut state,
+            &palette.colors,
+            8,
+            &crate::hooks::Key {
+                right_arrow: true,
+                ..Default::default()
+            },
+            InteractionMode::Enabled,
+        );
+        assert_eq!(outcome, InteractionOutcome::Changed(Color::Red));
+        assert_eq!(state.selected, 1);
+
+        let outcome = handle_color_picker_input(
+            &mut state,
+            &palette.colors,
+            8,
+            &crate::hooks::Key {
+                right_arrow: true,
+                ..Default::default()
+            },
+            InteractionMode::ReadOnly,
+        );
+        assert_eq!(outcome, InteractionOutcome::Ignored);
+        assert_eq!(state.selected, 1);
+
+        let outcome = handle_color_picker_input(
+            &mut state,
+            &palette.colors,
+            8,
+            &crate::hooks::Key {
+                return_key: true,
+                ..Default::default()
+            },
+            InteractionMode::Enabled,
+        );
+        assert_eq!(outcome, InteractionOutcome::Submitted(Color::Red));
     }
 }

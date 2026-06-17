@@ -1,6 +1,6 @@
 //! TextInput component - Single-line text input with cursor
 
-use crate::components::{Box, Text};
+use crate::components::{Box, InteractionMode, InteractionOutcome, Text};
 use crate::core::{Color, Element, FlexDirection};
 use crate::hooks::{FocusState, UseFocusOptions, use_focus, use_input, use_signal};
 
@@ -32,6 +32,11 @@ impl TextInputState {
     /// Get the current value
     pub fn value(&self) -> &str {
         &self.value
+    }
+
+    /// Get the current cursor position as a character index.
+    pub fn cursor(&self) -> usize {
+        self.cursor
     }
 
     /// Set the value
@@ -162,6 +167,8 @@ pub struct TextInputOptions {
     pub placeholder_color: Option<Color>,
     /// Cursor color
     pub cursor_color: Option<Color>,
+    /// Input mode for disabled/read-only behavior.
+    pub mode: InteractionMode,
 }
 
 impl Default for TextInputOptions {
@@ -175,6 +182,7 @@ impl Default for TextInputOptions {
             color: None,
             placeholder_color: None,
             cursor_color: None,
+            mode: InteractionMode::Enabled,
         }
     }
 }
@@ -221,6 +229,24 @@ impl TextInputOptions {
 
     pub fn cursor_color(mut self, color: Color) -> Self {
         self.cursor_color = Some(color);
+        self
+    }
+
+    /// Enable normal editing behavior.
+    pub fn enabled(mut self) -> Self {
+        self.mode = InteractionMode::Enabled;
+        self
+    }
+
+    /// Ignore all input.
+    pub fn disabled(mut self) -> Self {
+        self.mode = InteractionMode::Disabled;
+        self
+    }
+
+    /// Allow focus/cursor movement, but block value mutation and submit.
+    pub fn read_only(mut self) -> Self {
+        self.mode = InteractionMode::ReadOnly;
         self
     }
 }
@@ -358,7 +384,7 @@ impl TextInputHandle {
 pub fn use_text_input(options: TextInputOptions) -> TextInputHandle {
     let state = use_signal(TextInputState::default);
     let focus = use_focus(options.focus.clone());
-    let max_length = options.max_length;
+    let input_options = options.clone();
 
     // Handle input when focused
     use_input({
@@ -370,49 +396,10 @@ pub fn use_text_input(options: TextInputOptions) -> TextInputHandle {
                 return;
             }
 
-            // Handle special keys
-            if key.backspace {
-                state.update(|s| s.backspace());
-                return;
-            }
-
-            if key.delete {
-                state.update(|s| s.delete());
-                return;
-            }
-
-            if key.left_arrow {
-                state.update(|s| s.move_left());
-                return;
-            }
-
-            if key.right_arrow {
-                state.update(|s| s.move_right());
-                return;
-            }
-
-            if key.home || (key.ctrl && input == "a") {
-                state.update(|s| s.move_to_start());
-                return;
-            }
-
-            if key.end || (key.ctrl && input == "e") {
-                state.update(|s| s.move_to_end());
-                return;
-            }
-
-            // Ignore control sequences
-            if key.ctrl || key.alt || key.escape || key.tab || key.return_key {
-                return;
-            }
-
-            // Insert regular characters
-            if !input.is_empty() {
-                state.update(|s| {
-                    if max_length == 0 || s.value.chars().count() < max_length {
-                        s.insert_str(input);
-                    }
-                });
+            let mut next = state.get();
+            let outcome = handle_text_input(&mut next, input, key, &input_options);
+            if outcome.is_changed() || matches!(outcome, InteractionOutcome::Handled) {
+                state.set(next);
             }
         }
     });
@@ -422,6 +409,87 @@ pub fn use_text_input(options: TextInputOptions) -> TextInputHandle {
         focus,
         options,
     }
+}
+
+/// Handle a text input key event against explicit state.
+///
+/// Enabled mode edits state and returns changed/submitted/cancelled outcomes.
+/// Read-only mode allows cursor movement but blocks value mutation and submit.
+/// Disabled mode ignores every input and leaves state unchanged.
+pub fn handle_text_input(
+    state: &mut TextInputState,
+    input: &str,
+    key: &crate::hooks::Key,
+    options: &TextInputOptions,
+) -> InteractionOutcome<String> {
+    if options.mode.is_disabled() {
+        return InteractionOutcome::Ignored;
+    }
+
+    if key.escape {
+        return InteractionOutcome::Cancelled;
+    }
+
+    if key.left_arrow {
+        state.move_left();
+        return InteractionOutcome::Handled;
+    }
+
+    if key.right_arrow {
+        state.move_right();
+        return InteractionOutcome::Handled;
+    }
+
+    if key.home || (key.ctrl && input == "a") {
+        state.move_to_start();
+        return InteractionOutcome::Handled;
+    }
+
+    if key.end || (key.ctrl && input == "e") {
+        state.move_to_end();
+        return InteractionOutcome::Handled;
+    }
+
+    if !options.mode.is_enabled() {
+        return InteractionOutcome::Ignored;
+    }
+
+    if key.return_key {
+        return InteractionOutcome::Submitted(state.value.clone());
+    }
+
+    if key.backspace {
+        state.backspace();
+        return InteractionOutcome::Changed(state.value.clone());
+    }
+
+    if key.delete {
+        state.delete();
+        return InteractionOutcome::Changed(state.value.clone());
+    }
+
+    if key.ctrl || key.alt || key.tab {
+        return InteractionOutcome::Ignored;
+    }
+
+    if !input.is_empty() {
+        let remaining = if options.max_length == 0 {
+            input.chars().count()
+        } else {
+            options.max_length.saturating_sub(state.char_count())
+        };
+        if remaining == 0 {
+            return InteractionOutcome::Ignored;
+        }
+
+        let inserted: String = input.chars().take(remaining).collect();
+        if !inserted.is_empty() {
+            state.insert_str(&inserted);
+            return InteractionOutcome::Changed(state.value.clone());
+        }
+    }
+
+    InteractionOutcome::Ignored
 }
 
 #[cfg(test)]
@@ -501,5 +569,73 @@ mod tests {
         state.backspace();
         assert_eq!(state.value(), "你");
         assert_eq!(state.cursor, 1);
+    }
+
+    #[test]
+    fn test_handle_text_input_change_submit_and_cancel() {
+        let mut state = TextInputState::default();
+        let options = TextInputOptions::default();
+
+        let outcome = handle_text_input(&mut state, "a", &crate::hooks::Key::default(), &options);
+        assert_eq!(outcome, InteractionOutcome::Changed("a".to_string()));
+        assert_eq!(state.value(), "a");
+
+        let outcome = handle_text_input(
+            &mut state,
+            "",
+            &crate::hooks::Key {
+                return_key: true,
+                ..Default::default()
+            },
+            &options,
+        );
+        assert_eq!(outcome, InteractionOutcome::Submitted("a".to_string()));
+
+        let outcome = handle_text_input(
+            &mut state,
+            "",
+            &crate::hooks::Key {
+                escape: true,
+                ..Default::default()
+            },
+            &options,
+        );
+        assert_eq!(outcome, InteractionOutcome::Cancelled);
+    }
+
+    #[test]
+    fn test_handle_text_input_modes() {
+        let mut state = TextInputState::default();
+        state.set_value("abc");
+
+        let read_only = TextInputOptions::default().read_only();
+        let outcome = handle_text_input(&mut state, "x", &crate::hooks::Key::default(), &read_only);
+        assert_eq!(outcome, InteractionOutcome::Ignored);
+        assert_eq!(state.value(), "abc");
+
+        let outcome = handle_text_input(
+            &mut state,
+            "",
+            &crate::hooks::Key {
+                left_arrow: true,
+                ..Default::default()
+            },
+            &read_only,
+        );
+        assert_eq!(outcome, InteractionOutcome::Handled);
+        assert_eq!(state.cursor(), 2);
+
+        let disabled = TextInputOptions::default().disabled();
+        let outcome = handle_text_input(
+            &mut state,
+            "",
+            &crate::hooks::Key {
+                right_arrow: true,
+                ..Default::default()
+            },
+            &disabled,
+        );
+        assert_eq!(outcome, InteractionOutcome::Ignored);
+        assert_eq!(state.cursor(), 2);
     }
 }

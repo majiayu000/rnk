@@ -68,6 +68,9 @@ mod component;
 mod keymap;
 mod state;
 
-pub use component::{TextArea, TextAreaStyle, apply_textarea_action, handle_textarea_input};
+pub use component::{
+    TextArea, TextAreaStyle, apply_textarea_action, handle_textarea_input,
+    handle_textarea_input_with_mode,
+};
 pub use keymap::{KeyBinding, KeyType, Modifiers, TextAreaAction, TextAreaKeyMap};
 pub use state::{Position, Selection, TextAreaState};

@@ -35,7 +35,7 @@
 //! }
 //! ```
 
-use crate::components::{Box as RnkBox, Text};
+use crate::components::{Box as RnkBox, InteractionMode, InteractionOutcome, Text};
 use crate::core::{Color, Element, FlexDirection};
 
 /// Confirm dialog state
@@ -436,35 +436,55 @@ pub fn handle_confirm_input(
     input: &str,
     key: &crate::hooks::Key,
 ) -> bool {
-    // Already answered
-    if state.is_answered() {
-        return false;
+    handle_confirm_input_with_mode(state, input, key, InteractionMode::Enabled).is_handled()
+}
+
+/// Handle confirm dialog input with explicit disabled/read-only behavior.
+pub fn handle_confirm_input_with_mode(
+    state: &mut ConfirmState,
+    input: &str,
+    key: &crate::hooks::Key,
+    mode: InteractionMode,
+) -> InteractionOutcome<bool> {
+    if mode.is_disabled() {
+        return InteractionOutcome::Ignored;
     }
 
-    let mut handled = false;
+    // Already answered
+    if state.is_answered() {
+        return InteractionOutcome::Ignored;
+    }
 
     // Tab or arrow keys to toggle
     if key.tab || key.left_arrow || key.right_arrow {
         state.toggle_focus();
-        handled = true;
-    }
-    // Enter to submit
-    else if key.return_key || key.space {
-        state.submit();
-        handled = true;
-    }
-    // Y for yes
-    else if input.eq_ignore_ascii_case("y") {
-        state.confirm();
-        handled = true;
-    }
-    // N for no, or Escape for cancel
-    else if input.eq_ignore_ascii_case("n") || key.escape {
-        state.cancel();
-        handled = true;
+        return InteractionOutcome::Handled;
     }
 
-    handled
+    if key.escape || input.eq_ignore_ascii_case("n") {
+        if mode.is_read_only() {
+            return InteractionOutcome::Cancelled;
+        }
+        state.cancel();
+        return InteractionOutcome::Cancelled;
+    }
+
+    if mode.is_read_only() {
+        return InteractionOutcome::Ignored;
+    }
+
+    // Enter to submit
+    if key.return_key || key.space {
+        state.submit();
+        return InteractionOutcome::Submitted(state.result().unwrap_or(false));
+    }
+    // Y for yes
+    if input.eq_ignore_ascii_case("y") {
+        state.confirm();
+        return InteractionOutcome::Submitted(true);
+    }
+
+    InteractionOutcome::Ignored
 }
 
 #[cfg(test)]
@@ -566,5 +586,39 @@ mod tests {
         assert!(rendered.contains("Delete file?"));
         assert!(rendered.contains("Yes"));
         assert!(rendered.contains("No"));
+    }
+
+    #[test]
+    fn test_handle_confirm_input_with_mode() {
+        let mut state = ConfirmState::new("Delete?");
+        let outcome = handle_confirm_input_with_mode(
+            &mut state,
+            "",
+            &crate::hooks::Key {
+                tab: true,
+                ..Default::default()
+            },
+            InteractionMode::ReadOnly,
+        );
+        assert_eq!(outcome, InteractionOutcome::Handled);
+        assert!(state.is_yes_focused());
+
+        let outcome = handle_confirm_input_with_mode(
+            &mut state,
+            "y",
+            &crate::hooks::Key::default(),
+            InteractionMode::ReadOnly,
+        );
+        assert_eq!(outcome, InteractionOutcome::Ignored);
+        assert!(!state.is_answered());
+
+        let outcome = handle_confirm_input_with_mode(
+            &mut state,
+            "y",
+            &crate::hooks::Key::default(),
+            InteractionMode::Enabled,
+        );
+        assert_eq!(outcome, InteractionOutcome::Submitted(true));
+        assert!(state.is_confirmed());
     }
 }
