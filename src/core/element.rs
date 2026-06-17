@@ -53,6 +53,125 @@ pub enum ElementType {
     VirtualText,
 }
 
+/// Semantic role exposed to accessibility and testing consumers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AccessibilityRole {
+    /// Generic container with no stronger semantic meaning.
+    #[default]
+    Generic,
+    /// Static text content.
+    Text,
+    /// Button-like action.
+    Button,
+    /// Single-line editable text input.
+    TextInput,
+    /// Multi-line editable text input.
+    TextArea,
+    /// Single-selection list or select control.
+    Select,
+    /// Multi-selection list control.
+    MultiSelect,
+    /// A selectable option in a list.
+    Option,
+    /// Dialog or modal surface.
+    Dialog,
+    /// Command menu or palette.
+    Menu,
+    /// Color picker control.
+    ColorPicker,
+    /// File picker control.
+    FilePicker,
+    /// Scrollable viewport.
+    Viewport,
+    /// Passive status or feedback message.
+    Status,
+}
+
+/// Accessibility metadata attached to an element.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccessibilityProps {
+    /// Semantic role for the element.
+    pub role: AccessibilityRole,
+    /// Human-readable label.
+    pub label: Option<String>,
+    /// Longer description or usage hint.
+    pub description: Option<String>,
+    /// Whether the element is disabled.
+    pub disabled: bool,
+    /// Whether the element is read-only.
+    pub read_only: bool,
+    /// Whether the element participates in focus traversal.
+    pub focusable: bool,
+    /// Selection state, when applicable.
+    pub selected: Option<bool>,
+    /// Current value, when applicable.
+    pub value: Option<String>,
+}
+
+impl Default for AccessibilityProps {
+    fn default() -> Self {
+        Self::new(AccessibilityRole::Generic)
+    }
+}
+
+impl AccessibilityProps {
+    /// Create metadata for a role.
+    pub fn new(role: AccessibilityRole) -> Self {
+        Self {
+            role,
+            label: None,
+            description: None,
+            disabled: false,
+            read_only: false,
+            focusable: false,
+            selected: None,
+            value: None,
+        }
+    }
+
+    /// Set the human-readable label.
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    /// Set the longer description.
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set disabled state.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    /// Set read-only state.
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    /// Set whether this element is focusable.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
+    }
+
+    /// Set selection state.
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = Some(selected);
+        self
+    }
+
+    /// Set current value.
+    pub fn value(mut self, value: impl Into<String>) -> Self {
+        self.value = Some(value.into());
+        self
+    }
+}
+
 /// Children container
 #[derive(Debug, Clone, Default)]
 pub struct Children(Vec<Element>);
@@ -136,6 +255,8 @@ pub struct Element {
     pub spans: Option<Vec<Line>>,
     /// Key for reconciliation
     pub key: Option<String>,
+    /// Accessibility metadata for this element.
+    pub accessibility: Option<AccessibilityProps>,
     /// Horizontal scroll offset (for overflow: scroll/hidden)
     pub scroll_offset_x: Option<u16>,
     /// Vertical scroll offset (for overflow: scroll/hidden)
@@ -161,6 +282,7 @@ impl Clone for Element {
             text_content: self.text_content.clone(),
             spans: self.spans.clone(),
             key: self.key.clone(),
+            accessibility: self.accessibility.clone(),
             scroll_offset_x: self.scroll_offset_x,
             scroll_offset_y: self.scroll_offset_y,
         }
@@ -178,6 +300,7 @@ impl Element {
             text_content: None,
             spans: None,
             key: None,
+            accessibility: None,
             scroll_offset_x: None,
             scroll_offset_y: None,
         }
@@ -193,6 +316,7 @@ impl Element {
             text_content: None,
             spans: None,
             key: None,
+            accessibility: None,
             scroll_offset_x: None,
             scroll_offset_y: None,
         }
@@ -214,6 +338,22 @@ impl Element {
     pub fn with_key(mut self, key: impl Into<String>) -> Self {
         self.key = Some(key.into());
         self
+    }
+
+    /// Attach accessibility metadata.
+    pub fn with_accessibility(mut self, props: AccessibilityProps) -> Self {
+        self.accessibility = Some(props);
+        self
+    }
+
+    /// Get accessibility metadata.
+    pub fn accessibility(&self) -> Option<&AccessibilityProps> {
+        self.accessibility.as_ref()
+    }
+
+    /// Get mutable accessibility metadata.
+    pub fn accessibility_mut(&mut self) -> Option<&mut AccessibilityProps> {
+        self.accessibility.as_mut()
     }
 
     /// Add a child element
@@ -243,6 +383,39 @@ impl Element {
     pub fn get_text(&self) -> Option<&str> {
         self.text_content.as_deref()
     }
+
+    /// Return readable fallback text from semantic metadata and descendants.
+    pub fn accessible_text(&self) -> String {
+        let mut parts = Vec::new();
+
+        if let Some(accessibility) = &self.accessibility {
+            push_unique_part(&mut parts, accessibility.label.as_deref());
+            push_unique_part(&mut parts, accessibility.value.as_deref());
+            push_unique_part(&mut parts, accessibility.description.as_deref());
+        }
+
+        if parts.is_empty() {
+            push_unique_part(&mut parts, self.text_content.as_deref());
+        }
+
+        for child in &self.children {
+            let text = child.accessible_text();
+            push_unique_part(&mut parts, (!text.is_empty()).then_some(text.as_str()));
+        }
+
+        parts.join(" ")
+    }
+}
+
+fn push_unique_part(parts: &mut Vec<String>, value: Option<&str>) {
+    let Some(value) = value else {
+        return;
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() || parts.iter().any(|part| part == trimmed) {
+        return;
+    }
+    parts.push(trimmed.to_string());
 }
 
 impl Default for Element {
@@ -329,5 +502,32 @@ mod tests {
         // But same content
         assert_eq!(original.get_text(), cloned.get_text());
         assert_eq!(original.element_type, cloned.element_type);
+    }
+
+    #[test]
+    fn test_accessibility_metadata_and_fallback_text() {
+        let mut element = Element::box_element().with_accessibility(
+            AccessibilityProps::new(AccessibilityRole::Button)
+                .label("Submit")
+                .description("Saves the form")
+                .focusable(true),
+        );
+        element.add_child(Element::text("Ctrl+S"));
+
+        let Some(props) = element.accessibility() else {
+            panic!("accessibility metadata missing");
+        };
+        assert_eq!(props.role, AccessibilityRole::Button);
+        assert!(props.focusable);
+        assert_eq!(element.accessible_text(), "Submit Saves the form Ctrl+S");
+    }
+
+    #[test]
+    fn test_accessible_text_uses_descendants_when_unlabelled() {
+        let mut element = Element::box_element();
+        element.add_child(Element::text("First"));
+        element.add_child(Element::text("Second"));
+
+        assert_eq!(element.accessible_text(), "First Second");
     }
 }

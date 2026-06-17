@@ -246,6 +246,18 @@ impl Shortcut {
 
     /// Check if a Key matches this shortcut
     pub fn matches(&self, input: &str, key: &Key) -> bool {
+        if matches!(self.key, ShortcutKey::Tab) {
+            if self.modifiers.ctrl != key.ctrl || self.modifiers.alt != key.alt {
+                return false;
+            }
+
+            return if self.modifiers.shift {
+                key.back_tab || (key.tab && key.shift)
+            } else {
+                !key.shift && key.tab && !key.back_tab
+            };
+        }
+
         // Check modifiers first
         if !self.modifiers.matches(key) {
             return false;
@@ -275,7 +287,7 @@ impl Shortcut {
             ShortcutKey::F(_) => false,
             ShortcutKey::Enter => key.return_key,
             ShortcutKey::Escape => key.escape,
-            ShortcutKey::Tab => key.tab,
+            ShortcutKey::Tab => key.tab && !key.back_tab,
             ShortcutKey::Backspace => key.backspace,
             ShortcutKey::Delete => key.delete,
             ShortcutKey::Up => key.up_arrow,
@@ -483,6 +495,24 @@ mod tests {
         assert_eq!(Shortcut::f(1).description(), "F1");
         assert_eq!(Shortcut::escape().description(), "Esc");
         assert_eq!(Shortcut::shift_tab().description(), "Shift+Tab");
+    }
+
+    #[test]
+    fn test_shift_tab_matches_back_tab_only() {
+        let tab = Key {
+            tab: true,
+            ..Key::default()
+        };
+        let back_tab = Key {
+            back_tab: true,
+            shift: true,
+            ..Key::default()
+        };
+
+        assert!(Shortcut::tab().matches("", &tab));
+        assert!(!Shortcut::tab().matches("", &back_tab));
+        assert!(Shortcut::shift_tab().matches("", &back_tab));
+        assert!(!Shortcut::shift_tab().matches("", &tab));
     }
 
     #[test]

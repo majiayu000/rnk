@@ -213,6 +213,9 @@ Acceptance criteria:
 - Accessibility metadata is available on interactive components.
 - Tests cover focus traversal and accessible fallback text.
 
+Current contract document:
+[docs/FOCUS_ACCESSIBILITY_INPUT.md](FOCUS_ACCESSIBILITY_INPUT.md)
+
 GitHub issue: [#25](https://github.com/majiayu000/rnk/issues/25)
 
 ### 7. Terminal Compatibility, Unicode, And ANSI Behavior

@@ -24,6 +24,8 @@
 use crate::components::{Box, InteractionMode, InteractionOutcome, Text};
 use crate::core::{Color, Element, FlexDirection};
 
+use super::command_palette_accessibility::command_palette_props;
+
 /// A command in the palette
 #[derive(Debug, Clone)]
 pub struct Command {
@@ -443,7 +445,9 @@ impl CommandPalette {
     /// Convert to Element
     pub fn into_element(self) -> Element {
         if !self.state.open {
-            return Box::new().into_element();
+            let accessibility =
+                command_palette_props(None, "", self.commands.len(), self.mode, false);
+            return Box::new().into_element().with_accessibility(accessibility);
         }
 
         let filtered = self.filtered_commands();
@@ -511,7 +515,15 @@ impl CommandPalette {
             );
         }
 
-        container.into_element()
+        container
+            .into_element()
+            .with_accessibility(command_palette_props(
+                self.title.as_deref(),
+                &self.state.query,
+                self.commands.len(),
+                self.mode,
+                true,
+            ))
     }
 }
 

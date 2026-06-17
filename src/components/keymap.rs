@@ -41,6 +41,8 @@ pub enum KeyType {
     Enter,
     /// Tab
     Tab,
+    /// Shift+Tab / terminal BackTab
+    BackTab,
     /// Escape
     Escape,
     /// Space
@@ -120,10 +122,11 @@ impl KeyBinding {
 
     /// Check if this binding matches the given input
     pub fn matches(&self, input: &str, key: &crate::hooks::Key) -> bool {
-        if self.modifiers.ctrl != key.ctrl
-            || self.modifiers.alt != key.alt
-            || self.modifiers.shift != key.shift
-        {
+        if self.modifiers.ctrl != key.ctrl || self.modifiers.alt != key.alt {
+            return false;
+        }
+
+        if !matches!(self.key, KeyType::BackTab) && self.modifiers.shift != key.shift {
             return false;
         }
 
@@ -140,9 +143,39 @@ impl KeyBinding {
             KeyType::Backspace => key.backspace,
             KeyType::Delete => key.delete,
             KeyType::Enter => key.return_key,
-            KeyType::Tab => key.tab,
+            KeyType::Tab => key.tab && !key.back_tab,
+            KeyType::BackTab => key.back_tab || (key.tab && key.shift),
             KeyType::Escape => key.escape,
             KeyType::Space => key.space,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hooks::Key;
+
+    #[test]
+    fn test_tab_and_back_tab_bindings_are_distinct() {
+        let tab = Key {
+            tab: true,
+            ..Key::default()
+        };
+        let back_tab = Key {
+            back_tab: true,
+            shift: true,
+            ..Key::default()
+        };
+        let legacy_back_tab = Key {
+            tab: true,
+            shift: true,
+            ..Key::default()
+        };
+
+        assert!(KeyBinding::special(KeyType::Tab).matches("", &tab));
+        assert!(!KeyBinding::special(KeyType::Tab).matches("", &back_tab));
+        assert!(KeyBinding::special(KeyType::BackTab).matches("", &back_tab));
+        assert!(KeyBinding::special(KeyType::BackTab).matches("", &legacy_back_tab));
     }
 }

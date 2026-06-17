@@ -4,7 +4,9 @@
 //! similar to Bubbles' viewport component.
 
 use crate::components::{Box as RnkBox, InteractionMode, InteractionOutcome, Text};
-use crate::core::{BorderStyle, Color, Element, FlexDirection, Overflow};
+use crate::core::{
+    AccessibilityProps, AccessibilityRole, BorderStyle, Color, Element, FlexDirection, Overflow,
+};
 
 use super::keymap::{ViewportAction, ViewportKeyMap};
 use super::state::ViewportState;
@@ -282,10 +284,24 @@ impl<'a> Viewport<'a> {
                 .flex_direction(FlexDirection::Row)
                 .child(container.into_element())
                 .child(scrollbar)
-                .into_element();
+                .into_element()
+                .with_accessibility(self.accessibility_props());
         }
 
-        container.into_element()
+        container
+            .into_element()
+            .with_accessibility(self.accessibility_props())
+    }
+
+    fn accessibility_props(&self) -> AccessibilityProps {
+        AccessibilityProps::new(AccessibilityRole::Viewport)
+            .label("Viewport")
+            .description(format!(
+                "Showing {} of {} lines",
+                self.state.height().min(self.state.total_line_count()),
+                self.state.total_line_count()
+            ))
+            .focusable(self.focused)
     }
 
     /// Render the scrollbar

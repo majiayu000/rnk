@@ -21,6 +21,8 @@ The current public API boundary and pre-1.0 semver policy live in
 [docs/API_STABILITY.md](docs/API_STABILITY.md).
 Interactive component state and event contracts live in
 [docs/INTERACTIVE_COMPONENT_CONTRACTS.md](docs/INTERACTIVE_COMPONENT_CONTRACTS.md).
+Focus, accessibility, and input semantics live in
+[docs/FOCUS_ACCESSIBILITY_INPUT.md](docs/FOCUS_ACCESSIBILITY_INPUT.md).
 
 ## Features
 
@@ -397,7 +399,10 @@ Notification::new()
 | Hook | Description |
 |------|-------------|
 | `use_focus` | Focus state for a component |
+| `use_scoped_focus` | Focus state inside a traversal scope |
 | `use_focus_manager` | Global focus management |
+| `use_focus_traversal` | Default Tab / Shift+Tab focus traversal |
+| `use_focus_traversal_in_scope` | Scoped Tab / Shift+Tab focus traversal |
 | `use_scroll` | Scroll state management |
 
 ### Application

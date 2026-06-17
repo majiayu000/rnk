@@ -121,7 +121,8 @@ pub use use_clipboard::{
     ClipboardHandle, is_clipboard_available, read_clipboard, use_clipboard, write_clipboard,
 };
 pub use use_focus::{
-    FocusManagerHandle, FocusState, UseFocusOptions, use_focus, use_focus_manager,
+    FocusManagerHandle, FocusState, ScopedFocusOptions, UseFocusOptions, use_focus,
+    use_focus_manager, use_focus_traversal, use_focus_traversal_in_scope, use_scoped_focus,
 };
 pub use use_input::{Key, KeyCodeKind, MediaKeyKind, use_input};
 pub use use_keyboard_shortcut::{

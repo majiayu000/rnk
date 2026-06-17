@@ -18,6 +18,7 @@ fn app() -> Element {
             app.exit();
         }
     });
+    use_focus_traversal_in_scope("focus-demo");
 
     Box::new()
         .flex_direction(FlexDirection::Column)
@@ -47,8 +48,8 @@ fn app() -> Element {
         .into_element()
 }
 
-fn focusable_item(label: &str, _index: usize) -> Element {
-    let focus = use_focus(UseFocusOptions::default());
+fn focusable_item(label: &str, index: usize) -> Element {
+    let focus = use_scoped_focus(ScopedFocusOptions::new("focus-demo").focus_order(index as i32));
 
     let border_color = if focus.is_focused {
         Color::Green

@@ -7,7 +7,7 @@ use crate::components::Box as RnkBox;
 use crate::components::navigation::{NavigationConfig, handle_list_navigation};
 use crate::components::selection_list::{ListStyle, indicator_padding, render_list};
 use crate::components::{InteractionMode, InteractionOutcome};
-use crate::core::{Color, Element};
+use crate::core::{AccessibilityProps, AccessibilityRole, Color, Element};
 use crate::hooks::{use_input, use_signal};
 
 /// A selectable item in the MultiSelect
@@ -355,8 +355,16 @@ impl<T: Clone + 'static> MultiSelect<T> {
 
     /// Convert to element with internal state management
     pub fn into_element(self) -> Element {
+        let mode = self.mode;
         if self.items.is_empty() {
-            return RnkBox::new().into_element();
+            return RnkBox::new().into_element().with_accessibility(
+                AccessibilityProps::new(AccessibilityRole::MultiSelect)
+                    .label("Multi-select input")
+                    .description("No options")
+                    .disabled(mode.is_disabled())
+                    .read_only(mode.is_read_only())
+                    .focusable(false),
+            );
         }
 
         let initial_highlighted = self.highlighted;
@@ -367,7 +375,6 @@ impl<T: Clone + 'static> MultiSelect<T> {
         let is_focused = self.is_focused;
         let vim_navigation = self.vim_navigation;
         let number_shortcuts = self.number_shortcuts;
-        let mode = self.mode;
 
         // Create signal for interaction state
         let state_signal =
@@ -393,7 +400,30 @@ impl<T: Clone + 'static> MultiSelect<T> {
         }
 
         // Render the list
+        let state = state_signal.get();
+        let selected_labels = state
+            .selected_flags()
+            .iter()
+            .enumerate()
+            .filter(|(_, selected)| **selected)
+            .filter_map(|(idx, _)| items.get(idx).map(|item| item.label.clone()))
+            .collect::<Vec<_>>();
+        let mut accessibility = AccessibilityProps::new(AccessibilityRole::MultiSelect)
+            .label("Multi-select input")
+            .description(format!(
+                "{} options, {} selected",
+                items.len(),
+                selected_labels.len()
+            ))
+            .disabled(mode.is_disabled())
+            .read_only(mode.is_read_only())
+            .focusable(is_focused && !mode.is_disabled());
+        if !selected_labels.is_empty() {
+            accessibility = accessibility.value(selected_labels.join(", "));
+        }
+
         render_multi_select_list(&items, state_signal, limit, &style)
+            .with_accessibility(accessibility)
     }
 }
 

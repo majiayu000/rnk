@@ -1,7 +1,7 @@
 //! TextInput component - Single-line text input with cursor
 
 use crate::components::{Box, InteractionMode, InteractionOutcome, Text};
-use crate::core::{Color, Element, FlexDirection};
+use crate::core::{AccessibilityProps, AccessibilityRole, Color, Element, FlexDirection};
 use crate::hooks::{FocusState, UseFocusOptions, use_focus, use_input, use_signal};
 
 /// A single-line text input component
@@ -284,6 +284,26 @@ impl TextInputHandle {
     pub fn view(&self) -> Element {
         let state = self.state.get();
         let options = &self.options;
+        let accessible_label = options
+            .placeholder
+            .clone()
+            .unwrap_or_else(|| "Text input".to_string());
+        let mut accessibility = AccessibilityProps::new(AccessibilityRole::TextInput)
+            .label(accessible_label)
+            .disabled(options.mode.is_disabled())
+            .read_only(options.mode.is_read_only())
+            .focusable(!options.mode.is_disabled());
+        if !state.value.is_empty() {
+            let accessible_value = if options.mask {
+                options
+                    .mask_char
+                    .to_string()
+                    .repeat(state.value.chars().count())
+            } else {
+                state.value.clone()
+            };
+            accessibility = accessibility.value(accessible_value);
+        }
 
         let display_value = if state.value.is_empty() {
             // Show placeholder
@@ -292,7 +312,7 @@ impl TextInputHandle {
                 if let Some(color) = options.placeholder_color {
                     text = text.color(color);
                 }
-                return text.into_element();
+                return text.into_element().with_accessibility(accessibility);
             }
             String::new()
         } else if options.mask {
@@ -344,12 +364,13 @@ impl TextInputHandle {
                     text.into_element()
                 })
                 .into_element()
+                .with_accessibility(accessibility)
         } else {
             let mut text = Text::new(&display_value);
             if let Some(color) = options.color {
                 text = text.color(color);
             }
-            text.into_element()
+            text.into_element().with_accessibility(accessibility)
         }
     }
 }

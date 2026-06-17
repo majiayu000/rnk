@@ -17,7 +17,7 @@
 //! ```
 
 use crate::components::{Box, InteractionMode, InteractionOutcome, Text};
-use crate::core::{Color, Element, FlexDirection};
+use crate::core::{AccessibilityProps, AccessibilityRole, Color, Element, FlexDirection};
 
 /// Predefined color palette
 #[derive(Debug, Clone)]
@@ -399,7 +399,21 @@ impl ColorPicker {
             }
         }
 
-        container.into_element()
+        let mut accessibility = AccessibilityProps::new(AccessibilityRole::ColorPicker)
+            .label(
+                self.title
+                    .clone()
+                    .unwrap_or_else(|| "Color picker".to_string()),
+            )
+            .description(format!("{} colors", self.palette.colors.len()))
+            .disabled(self.mode.is_disabled())
+            .read_only(self.mode.is_read_only())
+            .focusable(!self.mode.is_disabled());
+        if let Some(color) = self.selected_color() {
+            accessibility = accessibility.value(Self::color_to_hex(&color));
+        }
+
+        container.into_element().with_accessibility(accessibility)
     }
 }
 

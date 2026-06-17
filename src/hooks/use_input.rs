@@ -111,6 +111,7 @@ pub struct Key {
     pub return_key: bool,
     pub escape: bool,
     pub tab: bool,
+    pub back_tab: bool,
     pub backspace: bool,
     pub delete: bool,
     pub space: bool,
@@ -176,7 +177,8 @@ impl Key {
             // Action keys
             return_key: matches!(code, KeyCodeKind::Enter),
             escape: matches!(code, KeyCodeKind::Escape),
-            tab: matches!(code, KeyCodeKind::Tab | KeyCodeKind::BackTab),
+            tab: matches!(code, KeyCodeKind::Tab),
+            back_tab: matches!(code, KeyCodeKind::BackTab),
             backspace: matches!(code, KeyCodeKind::Backspace),
             delete: matches!(code, KeyCodeKind::Delete),
             space: matches!(code, KeyCodeKind::Char(' ')),
@@ -197,7 +199,7 @@ impl Key {
 
             // Modifiers
             ctrl: modifiers.contains(KeyModifiers::CONTROL),
-            shift: modifiers.contains(KeyModifiers::SHIFT),
+            shift: modifiers.contains(KeyModifiers::SHIFT) || matches!(code, KeyCodeKind::BackTab),
             alt: modifiers.contains(KeyModifiers::ALT),
             meta: modifiers.contains(KeyModifiers::SUPER),
 
@@ -391,6 +393,25 @@ mod tests {
         assert!(key.ctrl);
         assert!(key.shift);
         assert!(!key.alt);
+    }
+
+    #[test]
+    fn test_back_tab_is_distinct_from_tab() {
+        let event = KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE);
+        let key = Key::from_event(&event);
+
+        assert_eq!(key.code(), KeyCodeKind::BackTab);
+        assert!(key.back_tab);
+        assert!(key.shift);
+        assert!(!key.tab);
+
+        let event = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        let key = Key::from_event(&event);
+
+        assert_eq!(key.code(), KeyCodeKind::Tab);
+        assert!(key.tab);
+        assert!(!key.back_tab);
+        assert!(!key.shift);
     }
 
     #[test]

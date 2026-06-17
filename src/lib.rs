@@ -134,7 +134,7 @@ pub mod prelude;
 
 // Re-export main types
 pub use crate::components::{Box, Text};
-pub use crate::core::{Color, Element, ElementId, Style};
+pub use crate::core::{AccessibilityProps, AccessibilityRole, Color, Element, ElementId, Style};
 
 // Re-export rendering APIs
 pub use crate::renderer::{
