@@ -80,7 +80,7 @@ until a dedicated CLI distribution is added.
   `rnk` crate.
 - The `http` feature is optional. Applications that need HTTP support must enable
   it explicitly.
-- The framework targets Rust `1.85` and newer.
+- The framework targets Rust `1.88` and newer.
 
 ## Examples
 

@@ -2,7 +2,7 @@
 name = "rnk-style-core"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Shared style primitives for rnk crates"
 license = "MIT"
 repository = "https://github.com/majiayu000/rnk"

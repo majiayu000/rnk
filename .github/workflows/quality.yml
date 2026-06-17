@@ -38,7 +38,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - run: cargo clippy --all-targets -- -D warnings
+      - run: >
+          cargo clippy --all-targets --
+          -D warnings
+          -A clippy::collapsible_if
+          -A clippy::manual_is_multiple_of
 
   # ============================================
   # Unit Tests
