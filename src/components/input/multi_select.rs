@@ -3,7 +3,7 @@
 //! A multi-selection component similar to Ink's ink-multi-select that handles
 //! keyboard navigation and selection internally.
 
-use crate::components::Box as TinkBox;
+use crate::components::Box as RnkBox;
 use crate::components::navigation::{NavigationConfig, handle_list_navigation};
 use crate::components::selection_list::{ListStyle, indicator_padding, render_list};
 use crate::core::{Color, Element};
@@ -270,7 +270,7 @@ impl<T: Clone + 'static> MultiSelect<T> {
     /// Convert to element with internal state management
     pub fn into_element(self) -> Element {
         if self.items.is_empty() {
-            return TinkBox::new().into_element();
+            return RnkBox::new().into_element();
         }
 
         let initial_highlighted = self.highlighted;

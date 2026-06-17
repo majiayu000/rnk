@@ -22,7 +22,7 @@ fn app() -> Element {
         .border_style(BorderStyle::Round)
         .border_color(Color::Cyan)
         .child(
-            Text::new("Hello, Tink!")
+            Text::new("Hello, rnk!")
                 .color(Color::Green)
                 .bold()
                 .into_element(),

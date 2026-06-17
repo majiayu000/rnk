@@ -625,6 +625,9 @@ fn test_component() {
 
 ## Running Examples
 
+The list below is a curated representative set, not a generated index. Cargo
+auto-discovers the full top-level example set from `examples/*.rs`.
+
 ```bash
 # Basic examples
 cargo run --example hello
@@ -671,23 +674,10 @@ src/
 
 ## Comparison with Ink/Bubbletea
 
-| Feature | rnk | Ink | Bubbletea |
-|---------|-----|-----|-----------|
-| Language | Rust | JavaScript | Go |
-| Rendering | Line-level diff | Line-level diff | Line-level diff |
-| Layout | Flexbox (Taffy) | Flexbox (Yoga) | Manual |
-| State | Hooks + Signals | React hooks | Model-Update |
-| Type-safe Cmds | Cmd<M> | N/A | N/A |
-| Declarative Macros | row!/col!/text! | JSX | N/A |
-| Components | 40+ | ~10 | Bubbles lib |
-| Inline mode | ✓ | ✓ | ✓ |
-| Fullscreen | ✓ | ✓ | ✓ |
-| Mouse support | ✓ | ✗ | ✓ |
-| Bracketed paste | ✓ | ✗ | ✓ |
-| Theme system | ✓ | ✗ | Lipgloss |
-| Println | ✓ | Static | tea.Println |
-| Cross-thread | request_render() | - | tea.Program.Send |
-| Suspend/Resume | ✓ | ✗ | ✓ |
+See [docs/COMPARISON.md](docs/COMPARISON.md) for the current evidence-based
+comparison. In short, `rnk` is a Rust-native, hook/signal-driven, Taffy-backed
+terminal UI framework, while feature parity with Ink and Bubbletea depends on
+the specific terminal behavior and application pattern being compared.
 
 ## License
 

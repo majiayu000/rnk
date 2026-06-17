@@ -1,4 +1,4 @@
-//! Assertion helpers for testing Tink components
+//! Assertion helpers for testing rnk components
 //!
 //! Provides convenient assertion macros and functions for verifying
 //! layout and rendering correctness.

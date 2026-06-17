@@ -1,4 +1,4 @@
-//! Todo App Example - Demonstrates tink's capabilities
+//! Todo App Example - Demonstrates rnk's capabilities
 //!
 //! Run with: cargo run --example todo
 
@@ -9,7 +9,7 @@ fn main() {
     let todos = use_signal(|| {
         vec![
             ("Learn Rust".to_string(), false),
-            ("Build tink framework".to_string(), true),
+            ("Build rnk framework".to_string(), true),
             ("Create todo app".to_string(), false),
         ]
     });

@@ -1,4 +1,4 @@
-//! Complex Todo App Example - Demonstrates all tink features
+//! Complex Todo App Example - Demonstrates all rnk features
 //!
 //! This example uses rnk's built-in render API for simplicity.
 //!
@@ -57,7 +57,7 @@ impl Default for AppState {
                 },
                 TodoItem {
                     id: 2,
-                    text: "Build tink framework".into(),
+                    text: "Build rnk framework".into(),
                     completed: true,
                     created_at: "2024-01-02".into(),
                 },
@@ -83,7 +83,7 @@ impl Default for AppState {
             selected_index: 0,
             show_help: false,
             show_completed: true,
-            status_message: "Welcome to Tink Todo!".into(),
+            status_message: "Welcome to rnk Todo!".into(),
         }
     }
 }
@@ -104,7 +104,7 @@ fn render_header() -> Element {
                 .into_element(),
         )
         .child(
-            Text::new("        TINK TODO APPLICATION           ")
+            Text::new("        RNK TODO APPLICATION           ")
                 .color(Color::White)
                 .bold()
                 .into_element(),
@@ -509,7 +509,7 @@ fn render_static_log(messages: &[String]) -> Element {
 
 fn main() {
     println!("\x1b[2J\x1b[H"); // Clear screen
-    println!("Tink Todo App - Comprehensive Demo\n");
+    println!("rnk Todo App - Comprehensive Demo\n");
 
     // Initialize state
     let state = AppState::default();
@@ -540,7 +540,7 @@ fn main() {
     print!("{}", output);
 
     println!("\n\n--- Demo Complete ---");
-    println!("This example demonstrates ALL tink features:");
+    println!("This example demonstrates ALL rnk features:");
     println!("  - Flexbox layout (row/column, justify, align, gap)");
     println!("  - Styled text (colors, bold, italic, underline, strikethrough)");
     println!("  - Borders with per-side colors (Round, Single, Double)");

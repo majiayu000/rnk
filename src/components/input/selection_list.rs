@@ -1,7 +1,7 @@
 //! Shared list rendering helpers for selection components.
 
 use crate::components::navigation::calculate_visible_range;
-use crate::components::{Box as TinkBox, Text};
+use crate::components::{Box as RnkBox, Text};
 use crate::core::{Color, Element, FlexDirection};
 
 /// Shared style accessors for selectable lists.
@@ -36,7 +36,7 @@ where
     let total_items = items.len();
     let (start, end) = calculate_visible_range(highlighted, total_items, limit);
 
-    let mut container = TinkBox::new().flex_direction(FlexDirection::Column);
+    let mut container = RnkBox::new().flex_direction(FlexDirection::Column);
 
     for (idx, item) in items.iter().enumerate().take(end).skip(start) {
         let is_highlighted = idx == highlighted;
