@@ -34,7 +34,7 @@ that every listed terminal has been manually certified on every platform.
 Inline rendering is implemented by updating the current terminal position and
 clearing changed or removed lines. Shorter replacement lines are erased before
 the replacement text is written, so stale suffix cells are not part of the
-fullscreen diff contract.
+managed output line-diff contract.
 
 Fullscreen rendering uses the alternate screen buffer. Entering and leaving
 alternate screen is implemented by crossterm or ANSI sequences, but the exact
