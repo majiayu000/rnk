@@ -3,6 +3,7 @@
 mod display;
 mod feedback;
 mod input;
+mod interaction;
 pub mod keymap;
 mod layout;
 
@@ -44,9 +45,22 @@ pub use input::{
     Command, CommandPalette, CommandPaletteState, CommandPaletteStyle, Confirm, ConfirmState,
     ConfirmStyle, ContextMenu, ContextMenuState, ContextMenuStyle, FileEntry, FileFilter,
     FilePicker, FilePickerState, FilePickerStyle, FileType, Language, MenuItem, MultiSelect,
-    MultiSelectItem, MultiSelectStyle, Paginator, PaginatorState, PaginatorStyle, PaginatorType,
-    SelectInput, SelectInputStyle, SelectItem, TextInputHandle, TextInputOptions, TextInputState,
-    handle_confirm_input, handle_paginator_input, use_text_input,
+    MultiSelectItem, MultiSelectState, MultiSelectStyle, Paginator, PaginatorState, PaginatorStyle,
+    PaginatorType, SelectInput, SelectInputState, SelectInputStyle, SelectItem, TextInputHandle,
+    TextInputOptions, TextInputState, handle_color_picker_input, handle_command_palette_input,
+    handle_confirm_input, handle_confirm_input_with_mode, handle_file_picker_input,
+    handle_multi_select_input, handle_paginator_input, handle_select_input, handle_text_input,
+    use_text_input,
+};
+pub use interaction::{InteractionMode, InteractionOutcome};
+pub use textarea::{
+    Position as TextAreaPosition, Selection as TextAreaSelection, TextArea, TextAreaAction,
+    TextAreaKeyMap, TextAreaState, TextAreaStyle, apply_textarea_action, handle_textarea_input,
+    handle_textarea_input_with_mode,
+};
+pub use viewport::{
+    Viewport, ViewportAction, ViewportKeyMap, ViewportState, ViewportStyle, apply_viewport_action,
+    handle_viewport_input, handle_viewport_input_with_mode,
 };
 // layout
 pub use layout::navigation;

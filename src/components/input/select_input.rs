@@ -6,6 +6,7 @@
 use crate::components::Box as RnkBox;
 use crate::components::navigation::{NavigationConfig, handle_list_navigation};
 use crate::components::selection_list::{ListStyle, indicator_padding, render_list};
+use crate::components::{InteractionMode, InteractionOutcome};
 use crate::core::{Color, Element};
 use crate::hooks::{Signal, use_input, use_signal};
 
@@ -34,6 +35,48 @@ impl<T: Clone + ToString> From<T> for SelectItem<T> {
             label: value.to_string(),
             value,
         }
+    }
+}
+
+/// State for controlled SelectInput usage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SelectInputState {
+    /// Currently highlighted item index.
+    highlighted: usize,
+    /// Last submitted item index.
+    submitted: Option<usize>,
+    /// Whether the interaction was cancelled.
+    cancelled: bool,
+}
+
+impl SelectInputState {
+    /// Create select state with an initial highlighted index.
+    pub fn new(highlighted: usize) -> Self {
+        Self {
+            highlighted,
+            submitted: None,
+            cancelled: false,
+        }
+    }
+
+    /// Get the highlighted item index.
+    pub fn highlighted(&self) -> usize {
+        self.highlighted
+    }
+
+    /// Set the highlighted item index, clamped to item count.
+    pub fn set_highlighted(&mut self, index: usize, item_count: usize) {
+        self.highlighted = index.min(item_count.saturating_sub(1));
+    }
+
+    /// Get the last submitted item index.
+    pub fn submitted(&self) -> Option<usize> {
+        self.submitted
+    }
+
+    /// Return true when input cancelled this select.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled
     }
 }
 
@@ -137,6 +180,8 @@ pub struct SelectInput<T: Clone + 'static> {
     vim_navigation: bool,
     /// Whether to enable number key shortcuts
     number_shortcuts: bool,
+    /// Input mode for disabled/read-only behavior.
+    mode: InteractionMode,
 }
 
 impl<T: Clone + 'static> SelectInput<T> {
@@ -150,6 +195,7 @@ impl<T: Clone + 'static> SelectInput<T> {
             is_focused: true,
             vim_navigation: true,
             number_shortcuts: true,
+            mode: InteractionMode::Enabled,
         }
     }
 
@@ -197,6 +243,24 @@ impl<T: Clone + 'static> SelectInput<T> {
         self
     }
 
+    /// Enable normal navigation and submit behavior.
+    pub fn enabled(mut self) -> Self {
+        self.mode = InteractionMode::Enabled;
+        self
+    }
+
+    /// Ignore all input.
+    pub fn disabled(mut self) -> Self {
+        self.mode = InteractionMode::Disabled;
+        self
+    }
+
+    /// Allow highlight navigation but block submit.
+    pub fn read_only(mut self) -> Self {
+        self.mode = InteractionMode::ReadOnly;
+        self
+    }
+
     /// Set highlight color
     pub fn highlight_color(mut self, color: Color) -> Self {
         self.style.highlight_color = Some(color);
@@ -232,34 +296,74 @@ impl<T: Clone + 'static> SelectInput<T> {
         let is_focused = self.is_focused;
         let vim_navigation = self.vim_navigation;
         let number_shortcuts = self.number_shortcuts;
+        let mode = self.mode;
 
-        // Create signal for highlighted index
-        let highlighted_signal = use_signal(|| initial_highlighted);
+        // Create signal for interaction state
+        let state_signal = use_signal(|| SelectInputState::new(initial_highlighted));
 
         // Set up input handling if focused
         if is_focused {
             let items_len = items.len();
-            let highlighted_for_input = highlighted_signal.clone();
+            let state_for_input = state_signal.clone();
 
             use_input(move |input, key| {
-                let current = highlighted_for_input.get();
-
                 let config = NavigationConfig::new()
                     .vim_navigation(vim_navigation)
                     .number_shortcuts(number_shortcuts);
 
-                let result = handle_list_navigation(current, items_len, input, *key, &config);
-                if let Some(new_pos) = result.is_moved().then(|| result.unwrap_or(current)) {
-                    if new_pos != current {
-                        highlighted_for_input.set(new_pos);
-                    }
+                let mut next = state_for_input.get();
+                let outcome = handle_select_input(&mut next, items_len, input, key, &config, mode);
+                if outcome.is_handled() {
+                    state_for_input.set(next);
                 }
             });
         }
 
         // Render the list
-        render_select_list(&items, highlighted_signal, limit, &style)
+        render_select_list(&items, state_signal, limit, &style)
     }
+}
+
+/// Handle SelectInput navigation, submit, and cancel against explicit state.
+pub fn handle_select_input(
+    state: &mut SelectInputState,
+    item_count: usize,
+    input: &str,
+    key: &crate::hooks::Key,
+    config: &NavigationConfig,
+    mode: InteractionMode,
+) -> InteractionOutcome<usize> {
+    if mode.is_disabled() || item_count == 0 {
+        return InteractionOutcome::Ignored;
+    }
+
+    state.set_highlighted(state.highlighted, item_count);
+
+    if key.escape {
+        state.cancelled = true;
+        return InteractionOutcome::Cancelled;
+    }
+
+    let current = state.highlighted;
+    let result = handle_list_navigation(current, item_count, input, *key, config);
+    if result.is_moved() {
+        let new_pos = result.unwrap_or(current);
+        if new_pos != current {
+            state.highlighted = new_pos;
+        }
+        return InteractionOutcome::Handled;
+    }
+
+    if mode.is_read_only() {
+        return InteractionOutcome::Ignored;
+    }
+
+    if key.return_key || key.space {
+        state.submitted = Some(state.highlighted);
+        return InteractionOutcome::Submitted(state.highlighted);
+    }
+
+    InteractionOutcome::Ignored
 }
 
 impl ListStyle for SelectInputStyle {
@@ -291,11 +395,11 @@ impl ListStyle for SelectInputStyle {
 /// Render the select list as an Element
 fn render_select_list<T: Clone + 'static>(
     items: &[SelectItem<T>],
-    highlighted_signal: Signal<usize>,
+    state_signal: Signal<SelectInputState>,
     limit: Option<usize>,
     style: &SelectInputStyle,
 ) -> Element {
-    let highlighted = highlighted_signal.get();
+    let highlighted = state_signal.get().highlighted();
 
     render_list(
         items,
@@ -408,5 +512,92 @@ mod tests {
         let items = vec![SelectItem::new("A", 'a'), SelectItem::new("B", 'b')];
         let select = SelectInput::from_items(items);
         assert_eq!(select.len(), 2);
+    }
+
+    #[test]
+    fn test_handle_select_input_navigation_submit_and_cancel() {
+        let mut state = SelectInputState::new(0);
+        let config = NavigationConfig::new().vim_navigation(true);
+
+        let outcome = handle_select_input(
+            &mut state,
+            3,
+            "j",
+            &crate::hooks::Key::default(),
+            &config,
+            InteractionMode::Enabled,
+        );
+        assert_eq!(outcome, InteractionOutcome::Handled);
+        assert_eq!(state.highlighted(), 1);
+
+        let outcome = handle_select_input(
+            &mut state,
+            3,
+            "",
+            &crate::hooks::Key {
+                return_key: true,
+                ..Default::default()
+            },
+            &config,
+            InteractionMode::Enabled,
+        );
+        assert_eq!(outcome, InteractionOutcome::Submitted(1));
+        assert_eq!(state.submitted(), Some(1));
+
+        let outcome = handle_select_input(
+            &mut state,
+            3,
+            "",
+            &crate::hooks::Key {
+                escape: true,
+                ..Default::default()
+            },
+            &config,
+            InteractionMode::Enabled,
+        );
+        assert_eq!(outcome, InteractionOutcome::Cancelled);
+        assert!(state.is_cancelled());
+    }
+
+    #[test]
+    fn test_handle_select_input_modes() {
+        let config = NavigationConfig::new().vim_navigation(true);
+        let mut state = SelectInputState::new(0);
+
+        let outcome = handle_select_input(
+            &mut state,
+            3,
+            "j",
+            &crate::hooks::Key::default(),
+            &config,
+            InteractionMode::Disabled,
+        );
+        assert_eq!(outcome, InteractionOutcome::Ignored);
+        assert_eq!(state.highlighted(), 0);
+
+        let outcome = handle_select_input(
+            &mut state,
+            3,
+            "j",
+            &crate::hooks::Key::default(),
+            &config,
+            InteractionMode::ReadOnly,
+        );
+        assert_eq!(outcome, InteractionOutcome::Handled);
+        assert_eq!(state.highlighted(), 1);
+
+        let outcome = handle_select_input(
+            &mut state,
+            3,
+            "",
+            &crate::hooks::Key {
+                return_key: true,
+                ..Default::default()
+            },
+            &config,
+            InteractionMode::ReadOnly,
+        );
+        assert_eq!(outcome, InteractionOutcome::Ignored);
+        assert_eq!(state.submitted(), None);
     }
 }

@@ -6,6 +6,7 @@
 use crate::components::Box as RnkBox;
 use crate::components::navigation::{NavigationConfig, handle_list_navigation};
 use crate::components::selection_list::{ListStyle, indicator_padding, render_list};
+use crate::components::{InteractionMode, InteractionOutcome};
 use crate::core::{Color, Element};
 use crate::hooks::{use_input, use_signal};
 
@@ -43,6 +44,70 @@ impl<T: Clone> MultiSelectItem<T> {
     pub fn with_selected(mut self, selected: bool) -> Self {
         self.selected = selected;
         self
+    }
+}
+
+/// State for controlled MultiSelect usage.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MultiSelectState {
+    /// Currently highlighted item index.
+    highlighted: usize,
+    /// Per-item selected flags.
+    selected: Vec<bool>,
+    /// Whether the interaction was cancelled.
+    cancelled: bool,
+}
+
+impl MultiSelectState {
+    /// Create multi-select state from a highlighted index and selected flags.
+    pub fn new(highlighted: usize, selected: Vec<bool>) -> Self {
+        Self {
+            highlighted,
+            selected,
+            cancelled: false,
+        }
+    }
+
+    /// Create multi-select state from item defaults.
+    pub fn from_items<T: Clone>(items: &[MultiSelectItem<T>], highlighted: usize) -> Self {
+        Self::new(
+            highlighted,
+            items.iter().map(|item| item.selected).collect(),
+        )
+    }
+
+    /// Get the highlighted item index.
+    pub fn highlighted(&self) -> usize {
+        self.highlighted
+    }
+
+    /// Set the highlighted item index, clamped to item count.
+    pub fn set_highlighted(&mut self, index: usize, item_count: usize) {
+        self.highlighted = index.min(item_count.saturating_sub(1));
+    }
+
+    /// Get selected flags.
+    pub fn selected_flags(&self) -> &[bool] {
+        &self.selected
+    }
+
+    /// Get selected item indices.
+    pub fn selected_indices(&self) -> Vec<usize> {
+        self.selected
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, selected)| selected.then_some(idx))
+            .collect()
+    }
+
+    /// Return true when input cancelled this multi-select.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled
+    }
+
+    fn ensure_len(&mut self, item_count: usize) {
+        self.selected.resize(item_count, false);
+        self.set_highlighted(self.highlighted, item_count);
     }
 }
 
@@ -171,6 +236,8 @@ pub struct MultiSelect<T: Clone + 'static> {
     vim_navigation: bool,
     /// Whether to enable number key shortcuts (1-9)
     number_shortcuts: bool,
+    /// Input mode for disabled/read-only behavior.
+    mode: InteractionMode,
 }
 
 impl<T: Clone + 'static> MultiSelect<T> {
@@ -184,6 +251,7 @@ impl<T: Clone + 'static> MultiSelect<T> {
             is_focused: true,
             vim_navigation: true,
             number_shortcuts: false,
+            mode: InteractionMode::Enabled,
         }
     }
 
@@ -228,6 +296,24 @@ impl<T: Clone + 'static> MultiSelect<T> {
     /// Enable or disable number key shortcuts (1-9)
     pub fn number_shortcuts(mut self, enabled: bool) -> Self {
         self.number_shortcuts = enabled;
+        self
+    }
+
+    /// Enable normal navigation and selection behavior.
+    pub fn enabled(mut self) -> Self {
+        self.mode = InteractionMode::Enabled;
+        self
+    }
+
+    /// Ignore all input.
+    pub fn disabled(mut self) -> Self {
+        self.mode = InteractionMode::Disabled;
+        self
+    }
+
+    /// Allow highlight navigation but block selection changes and submit.
+    pub fn read_only(mut self) -> Self {
+        self.mode = InteractionMode::ReadOnly;
         self
     }
 
@@ -281,64 +367,96 @@ impl<T: Clone + 'static> MultiSelect<T> {
         let is_focused = self.is_focused;
         let vim_navigation = self.vim_navigation;
         let number_shortcuts = self.number_shortcuts;
+        let mode = self.mode;
 
-        // Create signals for state
-        let highlighted_signal = use_signal(|| initial_highlighted);
-        let selections_signal = use_signal(|| initial_selections);
+        // Create signal for interaction state
+        let state_signal =
+            use_signal(|| MultiSelectState::new(initial_highlighted, initial_selections));
 
         // Set up input handling if focused
         if is_focused {
             let items_len = items.len();
-            let highlighted_for_input = highlighted_signal.clone();
-            let selections_for_input = selections_signal.clone();
+            let state_for_input = state_signal.clone();
 
             use_input(move |input, key| {
-                let current = highlighted_for_input.get();
-
-                // Handle navigation
                 let config = NavigationConfig::new()
                     .vim_navigation(vim_navigation)
                     .number_shortcuts(number_shortcuts);
-                let result = handle_list_navigation(current, items_len, input, *key, &config);
-                if result.is_moved() {
-                    let new_pos = result.unwrap_or(current);
-                    if new_pos != current {
-                        highlighted_for_input.set(new_pos);
-                    }
-                }
 
-                // Toggle selection with Space
-                if key.space {
-                    selections_for_input.update(|selections| {
-                        if let Some(selected) = selections.get_mut(current) {
-                            *selected = !*selected;
-                        }
-                    });
-                }
-
-                // Select all with 'a'
-                if input == "a" && key.ctrl {
-                    selections_for_input.update(|selections| {
-                        for selected in selections.iter_mut() {
-                            *selected = true;
-                        }
-                    });
-                }
-
-                // Deselect all with 'd' (Ctrl+D)
-                if input == "d" && key.ctrl {
-                    selections_for_input.update(|selections| {
-                        for selected in selections.iter_mut() {
-                            *selected = false;
-                        }
-                    });
+                let mut next = state_for_input.get();
+                let outcome =
+                    handle_multi_select_input(&mut next, items_len, input, key, &config, mode);
+                if outcome.is_handled() {
+                    state_for_input.set(next);
                 }
             });
         }
 
         // Render the list
-        render_multi_select_list(&items, highlighted_signal, selections_signal, limit, &style)
+        render_multi_select_list(&items, state_signal, limit, &style)
     }
+}
+
+/// Handle MultiSelect navigation, selection changes, submit, and cancel.
+pub fn handle_multi_select_input(
+    state: &mut MultiSelectState,
+    item_count: usize,
+    input: &str,
+    key: &crate::hooks::Key,
+    config: &NavigationConfig,
+    mode: InteractionMode,
+) -> InteractionOutcome<Vec<usize>> {
+    if mode.is_disabled() || item_count == 0 {
+        return InteractionOutcome::Ignored;
+    }
+
+    state.ensure_len(item_count);
+
+    if key.escape {
+        state.cancelled = true;
+        return InteractionOutcome::Cancelled;
+    }
+
+    let current = state.highlighted;
+    let result = handle_list_navigation(current, item_count, input, *key, config);
+    if result.is_moved() {
+        let new_pos = result.unwrap_or(current);
+        if new_pos != current {
+            state.highlighted = new_pos;
+        }
+        return InteractionOutcome::Handled;
+    }
+
+    if mode.is_read_only() {
+        return InteractionOutcome::Ignored;
+    }
+
+    if key.return_key {
+        return InteractionOutcome::Submitted(state.selected_indices());
+    }
+
+    if key.space {
+        if let Some(selected) = state.selected.get_mut(current) {
+            *selected = !*selected;
+            return InteractionOutcome::Changed(state.selected_indices());
+        }
+    }
+
+    if input == "a" && key.ctrl {
+        for selected in &mut state.selected {
+            *selected = true;
+        }
+        return InteractionOutcome::Changed(state.selected_indices());
+    }
+
+    if input == "d" && key.ctrl {
+        for selected in &mut state.selected {
+            *selected = false;
+        }
+        return InteractionOutcome::Changed(state.selected_indices());
+    }
+
+    InteractionOutcome::Ignored
 }
 
 impl ListStyle for MultiSelectStyle {
@@ -370,13 +488,13 @@ impl ListStyle for MultiSelectStyle {
 /// Render the multi-select list as an Element
 fn render_multi_select_list<T: Clone + 'static>(
     items: &[MultiSelectItem<T>],
-    highlighted_signal: crate::hooks::Signal<usize>,
-    selections_signal: crate::hooks::Signal<Vec<bool>>,
+    state_signal: crate::hooks::Signal<MultiSelectState>,
     limit: Option<usize>,
     style: &MultiSelectStyle,
 ) -> Element {
-    let highlighted = highlighted_signal.get();
-    let selections = selections_signal.get();
+    let state = state_signal.get();
+    let highlighted = state.highlighted();
+    let selections = state.selected_flags().to_vec();
 
     render_list(
         items,
@@ -495,5 +613,105 @@ mod tests {
         ];
         let select = MultiSelect::from_items(items);
         assert_eq!(select.len(), 2);
+    }
+
+    #[test]
+    fn test_handle_multi_select_input_change_submit_and_cancel() {
+        let mut state = MultiSelectState::new(0, vec![false, true, false]);
+        let config = NavigationConfig::new().vim_navigation(true);
+
+        let outcome = handle_multi_select_input(
+            &mut state,
+            3,
+            "",
+            &crate::hooks::Key {
+                space: true,
+                ..Default::default()
+            },
+            &config,
+            InteractionMode::Enabled,
+        );
+        assert_eq!(outcome, InteractionOutcome::Changed(vec![0, 1]));
+        assert_eq!(state.selected_indices(), vec![0, 1]);
+
+        let outcome = handle_multi_select_input(
+            &mut state,
+            3,
+            "j",
+            &crate::hooks::Key::default(),
+            &config,
+            InteractionMode::Enabled,
+        );
+        assert_eq!(outcome, InteractionOutcome::Handled);
+        assert_eq!(state.highlighted(), 1);
+
+        let outcome = handle_multi_select_input(
+            &mut state,
+            3,
+            "",
+            &crate::hooks::Key {
+                return_key: true,
+                ..Default::default()
+            },
+            &config,
+            InteractionMode::Enabled,
+        );
+        assert_eq!(outcome, InteractionOutcome::Submitted(vec![0, 1]));
+
+        let outcome = handle_multi_select_input(
+            &mut state,
+            3,
+            "",
+            &crate::hooks::Key {
+                escape: true,
+                ..Default::default()
+            },
+            &config,
+            InteractionMode::Enabled,
+        );
+        assert_eq!(outcome, InteractionOutcome::Cancelled);
+        assert!(state.is_cancelled());
+    }
+
+    #[test]
+    fn test_handle_multi_select_input_modes() {
+        let config = NavigationConfig::new().vim_navigation(true);
+        let mut state = MultiSelectState::new(0, vec![false, false]);
+
+        let outcome = handle_multi_select_input(
+            &mut state,
+            2,
+            "",
+            &crate::hooks::Key {
+                space: true,
+                ..Default::default()
+            },
+            &config,
+            InteractionMode::ReadOnly,
+        );
+        assert_eq!(outcome, InteractionOutcome::Ignored);
+        assert_eq!(state.selected_indices(), Vec::<usize>::new());
+
+        let outcome = handle_multi_select_input(
+            &mut state,
+            2,
+            "j",
+            &crate::hooks::Key::default(),
+            &config,
+            InteractionMode::ReadOnly,
+        );
+        assert_eq!(outcome, InteractionOutcome::Handled);
+        assert_eq!(state.highlighted(), 1);
+
+        let outcome = handle_multi_select_input(
+            &mut state,
+            2,
+            "k",
+            &crate::hooks::Key::default(),
+            &config,
+            InteractionMode::Disabled,
+        );
+        assert_eq!(outcome, InteractionOutcome::Ignored);
+        assert_eq!(state.highlighted(), 1);
     }
 }

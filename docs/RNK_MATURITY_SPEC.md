@@ -161,6 +161,9 @@ Acceptance criteria:
 
 GitHub issue: [#23](https://github.com/majiayu000/rnk/issues/23)
 
+Current contract document:
+[docs/INTERACTIVE_COMPONENT_CONTRACTS.md](INTERACTIVE_COMPONENT_CONTRACTS.md)
+
 ### 5. Design Tokens And Component Variants
 
 Problem:

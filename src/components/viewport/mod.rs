@@ -68,6 +68,9 @@ mod component;
 mod keymap;
 mod state;
 
-pub use component::{Viewport, ViewportStyle, apply_viewport_action, handle_viewport_input};
+pub use component::{
+    Viewport, ViewportStyle, apply_viewport_action, handle_viewport_input,
+    handle_viewport_input_with_mode,
+};
 pub use keymap::{KeyBinding, KeyType, Modifiers, ViewportAction, ViewportKeyMap};
 pub use state::ViewportState;

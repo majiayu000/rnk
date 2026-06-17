@@ -13,6 +13,7 @@
 //! - **Layout Components**: Box, Spacer, Transform, Static
 //! - **Display Components**: Text, List, Table, Tree, Tabs
 //! - **Input Components**: TextInput, SelectInput, MultiSelect, Confirm
+//! - **Text Editing**: TextArea, Viewport
 //! - **Feedback Components**: Progress, Spinner, Notification, Toast, Modal
 //! - **Navigation Components**: Paginator, Scrollbar, Help
 //! - **Hooks - State**: use_signal, use_memo, use_callback
@@ -66,10 +67,21 @@ pub use crate::components::{
 // =============================================================================
 
 pub use crate::components::{
-    Confirm, ConfirmState, ConfirmStyle, FileEntry, FileFilter, FilePicker, FilePickerState,
-    FilePickerStyle, FileType, MultiSelect, MultiSelectItem, MultiSelectStyle, SelectInput,
-    SelectInputStyle, SelectItem, SelectionState, TextInputHandle, TextInputOptions,
-    TextInputState, handle_confirm_input, use_text_input,
+    ColorPalette, ColorPicker, ColorPickerState, ColorPickerStyle, Command, CommandPalette,
+    CommandPaletteState, CommandPaletteStyle, Confirm, ConfirmState, ConfirmStyle, FileEntry,
+    FileFilter, FilePicker, FilePickerState, FilePickerStyle, FileType, InteractionMode,
+    InteractionOutcome, MultiSelect, MultiSelectItem, MultiSelectState, MultiSelectStyle,
+    SelectInput, SelectInputState, SelectInputStyle, SelectItem, SelectionState, TextInputHandle,
+    TextInputOptions, TextInputState, handle_color_picker_input, handle_command_palette_input,
+    handle_confirm_input, handle_confirm_input_with_mode, handle_file_picker_input,
+    handle_multi_select_input, handle_select_input, handle_text_input, use_text_input,
+};
+
+pub use crate::components::{
+    TextArea, TextAreaAction, TextAreaKeyMap, TextAreaPosition, TextAreaSelection, TextAreaState,
+    TextAreaStyle, Viewport, ViewportAction, ViewportKeyMap, ViewportState, ViewportStyle,
+    apply_textarea_action, apply_viewport_action, handle_textarea_input,
+    handle_textarea_input_with_mode, handle_viewport_input, handle_viewport_input_with_mode,
 };
 
 // =============================================================================

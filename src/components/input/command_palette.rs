@@ -21,7 +21,7 @@
 //! }
 //! ```
 
-use crate::components::{Box, Text};
+use crate::components::{Box, InteractionMode, InteractionOutcome, Text};
 use crate::core::{Color, Element, FlexDirection};
 
 /// A command in the palette
@@ -165,6 +165,13 @@ fn fuzzy_match(text: &str, pattern: &str) -> bool {
         }
     }
     pattern_chars.peek().is_none()
+}
+
+fn filtered_commands_for_query<'a>(commands: &'a [Command], query: &str) -> Vec<&'a Command> {
+    let mut filtered: Vec<_> = commands.iter().filter(|cmd| cmd.matches(query)).collect();
+
+    filtered.sort_by_key(|cmd| std::cmp::Reverse(cmd.match_score(query)));
+    filtered
 }
 
 /// Command palette state
@@ -330,6 +337,8 @@ pub struct CommandPalette {
     placeholder: String,
     /// Title
     title: Option<String>,
+    /// Input mode for disabled/read-only behavior.
+    mode: InteractionMode,
 }
 
 impl CommandPalette {
@@ -341,6 +350,7 @@ impl CommandPalette {
             style: CommandPaletteStyle::default(),
             placeholder: "> Type to search...".to_string(),
             title: None,
+            mode: InteractionMode::Enabled,
         }
     }
 
@@ -368,21 +378,27 @@ impl CommandPalette {
         self
     }
 
+    /// Enable normal query and submit behavior.
+    pub fn enabled(mut self) -> Self {
+        self.mode = InteractionMode::Enabled;
+        self
+    }
+
+    /// Ignore all input.
+    pub fn disabled(mut self) -> Self {
+        self.mode = InteractionMode::Disabled;
+        self
+    }
+
+    /// Allow navigation but block query edits and submit.
+    pub fn read_only(mut self) -> Self {
+        self.mode = InteractionMode::ReadOnly;
+        self
+    }
+
     /// Get filtered and sorted commands
     pub fn filtered_commands(&self) -> Vec<&Command> {
-        let mut filtered: Vec<_> = self
-            .commands
-            .iter()
-            .filter(|cmd| cmd.matches(&self.state.query))
-            .collect();
-
-        // Sort by match score
-        filtered.sort_by(|a, b| {
-            b.match_score(&self.state.query)
-                .cmp(&a.match_score(&self.state.query))
-        });
-
-        filtered
+        filtered_commands_for_query(&self.commands, &self.state.query)
     }
 
     /// Get the currently selected command
@@ -497,6 +513,75 @@ impl CommandPalette {
 
         container.into_element()
     }
+}
+
+/// Handle CommandPalette query, navigation, submit, and cancel.
+pub fn handle_command_palette_input(
+    state: &mut CommandPaletteState,
+    commands: &[Command],
+    input: &str,
+    key: &crate::hooks::Key,
+    mode: InteractionMode,
+) -> InteractionOutcome<String> {
+    if mode.is_disabled() {
+        return InteractionOutcome::Ignored;
+    }
+
+    if key.escape {
+        state.close();
+        return InteractionOutcome::Cancelled;
+    }
+
+    if !state.open {
+        return InteractionOutcome::Ignored;
+    }
+
+    let filtered = filtered_commands_for_query(commands, &state.query);
+    let filtered_count = filtered.len();
+
+    if key.up_arrow {
+        state.select_prev(filtered_count);
+        return InteractionOutcome::Handled;
+    }
+    if key.down_arrow {
+        state.select_next(filtered_count);
+        return InteractionOutcome::Handled;
+    }
+
+    if mode.is_read_only() {
+        return InteractionOutcome::Ignored;
+    }
+
+    if key.return_key {
+        let command = filtered.get(state.selected).copied();
+        if let Some(command) = command {
+            if command.disabled {
+                return InteractionOutcome::Ignored;
+            }
+            let id = command.id.clone();
+            state.close();
+            return InteractionOutcome::Submitted(id);
+        }
+        return InteractionOutcome::Ignored;
+    }
+
+    if key.backspace {
+        state.query.pop();
+        state.selected = 0;
+        return InteractionOutcome::Changed(state.query.clone());
+    }
+
+    if input.chars().count() == 1 && !key.ctrl && !key.alt {
+        if let Some(ch) = input.chars().next() {
+            if !ch.is_control() {
+                state.query.push(ch);
+                state.selected = 0;
+                return InteractionOutcome::Changed(state.query.clone());
+            }
+        }
+    }
+
+    InteractionOutcome::Ignored
 }
 
 #[cfg(test)]
@@ -634,5 +719,64 @@ mod tests {
         assert_eq!(style.width, 80);
         assert_eq!(style.max_visible, 15);
         assert_eq!(style.selected_bg, Color::Green);
+    }
+
+    #[test]
+    fn test_handle_command_palette_input_modes_and_submit() {
+        let commands = vec![
+            Command::new("file.open", "Open File"),
+            Command::new("file.delete", "Delete File").disabled(true),
+        ];
+        let mut state = CommandPaletteState::new();
+        state.open();
+
+        let outcome = handle_command_palette_input(
+            &mut state,
+            &commands,
+            "d",
+            &crate::hooks::Key::default(),
+            InteractionMode::Enabled,
+        );
+        assert_eq!(outcome, InteractionOutcome::Changed("d".to_string()));
+        assert_eq!(state.query, "d");
+
+        let outcome = handle_command_palette_input(
+            &mut state,
+            &commands,
+            "",
+            &crate::hooks::Key {
+                return_key: true,
+                ..Default::default()
+            },
+            InteractionMode::Enabled,
+        );
+        assert_eq!(outcome, InteractionOutcome::Ignored);
+
+        state.set_query("open");
+        let outcome = handle_command_palette_input(
+            &mut state,
+            &commands,
+            "",
+            &crate::hooks::Key {
+                return_key: true,
+                ..Default::default()
+            },
+            InteractionMode::Enabled,
+        );
+        assert_eq!(
+            outcome,
+            InteractionOutcome::Submitted("file.open".to_string())
+        );
+
+        state.open();
+        let outcome = handle_command_palette_input(
+            &mut state,
+            &commands,
+            "x",
+            &crate::hooks::Key::default(),
+            InteractionMode::ReadOnly,
+        );
+        assert_eq!(outcome, InteractionOutcome::Ignored);
+        assert!(state.query.is_empty());
     }
 }

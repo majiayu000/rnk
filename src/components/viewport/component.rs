@@ -3,7 +3,7 @@
 //! A high-performance scrollable view for displaying large text content,
 //! similar to Bubbles' viewport component.
 
-use crate::components::{Box as RnkBox, Text};
+use crate::components::{Box as RnkBox, InteractionMode, InteractionOutcome, Text};
 use crate::core::{BorderStyle, Color, Element, FlexDirection, Overflow};
 
 use super::keymap::{ViewportAction, ViewportKeyMap};
@@ -340,6 +340,31 @@ pub fn handle_viewport_input(
     }
 }
 
+/// Handle viewport input with explicit disabled/read-only behavior.
+pub fn handle_viewport_input_with_mode(
+    state: &mut ViewportState,
+    input: &str,
+    key: &crate::hooks::Key,
+    keymap: &ViewportKeyMap,
+    mode: InteractionMode,
+) -> InteractionOutcome<(usize, usize)> {
+    if mode.is_disabled() {
+        return InteractionOutcome::Ignored;
+    }
+
+    let before = (state.x_offset(), state.y_offset());
+    if let Some(action) = keymap.match_action(input, key) {
+        apply_viewport_action(state, action);
+        let after = (state.x_offset(), state.y_offset());
+        if after != before {
+            return InteractionOutcome::Changed(after);
+        }
+        return InteractionOutcome::Handled;
+    }
+
+    InteractionOutcome::Ignored
+}
+
 /// Apply a viewport action to the state
 pub fn apply_viewport_action(state: &mut ViewportState, action: ViewportAction) {
     match action {
@@ -394,5 +419,31 @@ mod tests {
 
         // Should have 2 children: content box and scrollbar
         assert_eq!(element.children.len(), 2);
+    }
+
+    #[test]
+    fn test_handle_viewport_input_with_mode() {
+        let keymap = ViewportKeyMap::default();
+        let mut state = ViewportState::new(80, 2);
+        state.set_content("1\n2\n3\n4");
+
+        let outcome = handle_viewport_input_with_mode(
+            &mut state,
+            "j",
+            &crate::hooks::Key::default(),
+            &keymap,
+            InteractionMode::ReadOnly,
+        );
+        assert_eq!(outcome, InteractionOutcome::Changed((0, 1)));
+
+        let outcome = handle_viewport_input_with_mode(
+            &mut state,
+            "j",
+            &crate::hooks::Key::default(),
+            &keymap,
+            InteractionMode::Disabled,
+        );
+        assert_eq!(outcome, InteractionOutcome::Ignored);
+        assert_eq!(state.y_offset(), 1);
     }
 }

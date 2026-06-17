@@ -2,7 +2,7 @@
 //!
 //! A multi-line text input component similar to Bubbles' textarea.
 
-use crate::components::{Box as RnkBox, Text};
+use crate::components::{Box as RnkBox, InteractionMode, InteractionOutcome, Text};
 use crate::core::{BorderStyle, Color, Element, FlexDirection, Overflow};
 
 use super::keymap::{TextAreaAction, TextAreaKeyMap};
@@ -433,6 +433,71 @@ pub fn handle_textarea_input(
     None
 }
 
+/// Handle textarea input with explicit disabled/read-only behavior.
+pub fn handle_textarea_input_with_mode(
+    state: &mut TextAreaState,
+    input: &str,
+    key: &crate::hooks::Key,
+    keymap: &TextAreaKeyMap,
+    mode: InteractionMode,
+) -> InteractionOutcome<String> {
+    if mode.is_disabled() {
+        return InteractionOutcome::Ignored;
+    }
+
+    if key.escape {
+        return InteractionOutcome::Cancelled;
+    }
+
+    let before = state.content();
+    if let Some(action) = keymap.match_action(input, key) {
+        if mode.is_read_only() && textarea_action_edits_content(action) {
+            return InteractionOutcome::Ignored;
+        }
+
+        apply_textarea_action(state, action);
+        let after = state.content();
+        if after != before {
+            return InteractionOutcome::Changed(after);
+        }
+        return InteractionOutcome::Handled;
+    }
+
+    if mode.is_read_only() {
+        return InteractionOutcome::Ignored;
+    }
+
+    if input.len() == 1 && !key.ctrl && !key.alt {
+        if let Some(ch) = input.chars().next() {
+            if !ch.is_control() {
+                state.insert_char(ch);
+                let after = state.content();
+                if after != before {
+                    return InteractionOutcome::Changed(after);
+                }
+                return InteractionOutcome::Handled;
+            }
+        }
+    }
+
+    InteractionOutcome::Ignored
+}
+
+fn textarea_action_edits_content(action: TextAreaAction) -> bool {
+    matches!(
+        action,
+        TextAreaAction::DeleteBefore
+            | TextAreaAction::DeleteAfter
+            | TextAreaAction::DeleteWordBefore
+            | TextAreaAction::DeleteWordAfter
+            | TextAreaAction::DeleteLine
+            | TextAreaAction::Cut
+            | TextAreaAction::Paste
+            | TextAreaAction::InsertNewline
+            | TextAreaAction::InsertTab
+    )
+}
+
 /// Apply a textarea action to the state
 pub fn apply_textarea_action(state: &mut TextAreaState, action: TextAreaAction) {
     match action {
@@ -518,5 +583,42 @@ mod tests {
         let element = textarea.into_element();
 
         assert!(!element.children.is_empty());
+    }
+
+    #[test]
+    fn test_handle_textarea_input_with_mode() {
+        let keymap = TextAreaKeyMap::default();
+        let mut state = TextAreaState::new();
+
+        let outcome = handle_textarea_input_with_mode(
+            &mut state,
+            "a",
+            &crate::hooks::Key::default(),
+            &keymap,
+            InteractionMode::Enabled,
+        );
+        assert_eq!(outcome, InteractionOutcome::Changed("a".to_string()));
+
+        let outcome = handle_textarea_input_with_mode(
+            &mut state,
+            "b",
+            &crate::hooks::Key::default(),
+            &keymap,
+            InteractionMode::ReadOnly,
+        );
+        assert_eq!(outcome, InteractionOutcome::Ignored);
+        assert_eq!(state.content(), "a");
+
+        let outcome = handle_textarea_input_with_mode(
+            &mut state,
+            "",
+            &crate::hooks::Key {
+                left_arrow: true,
+                ..Default::default()
+            },
+            &keymap,
+            InteractionMode::ReadOnly,
+        );
+        assert_eq!(outcome, InteractionOutcome::Handled);
     }
 }
