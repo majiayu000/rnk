@@ -17,6 +17,8 @@ artifacts remain available on
 
 Current maturity planning and issue acceptance criteria live in
 [docs/RNK_MATURITY_SPEC.md](docs/RNK_MATURITY_SPEC.md).
+The current public API boundary and pre-1.0 semver policy live in
+[docs/API_STABILITY.md](docs/API_STABILITY.md).
 
 ## Features
 

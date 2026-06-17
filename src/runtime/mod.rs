@@ -1,5 +1,9 @@
 //! Runtime utilities for terminal state management
 //!
+//! This module is experimental and internal-adjacent. It is public for advanced
+//! integration and diagnostics, but application code should prefer hooks,
+//! `AppContext`, and renderer entry points from `rnk::prelude`.
+//!
 //! This module provides:
 //! - Unified runtime context for app state
 //! - Panic hook for terminal restoration
