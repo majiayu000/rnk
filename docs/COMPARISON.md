@@ -40,8 +40,6 @@ The maturity spec tracks the remaining work. Important open areas are:
 - Consistent controlled/uncontrolled contracts for interactive components.
 - Non-color design tokens, component variants, and shared action primitives.
 - Focus scopes, keyboard conventions, accessibility metadata, and fallback text.
-- Stronger test harness support for input, mouse, resize, focus, and golden app
-  flows.
 
 See [RNK_MATURITY_SPEC.md](RNK_MATURITY_SPEC.md) for issue-level acceptance
 criteria. See [TERMINAL_COMPATIBILITY.md](TERMINAL_COMPATIBILITY.md) for the

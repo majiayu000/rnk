@@ -259,7 +259,10 @@ pub fn clear_input_handlers() {}
 /// Dispatch input to all handlers
 pub fn dispatch_input(input: &str, key: &Key) {
     if let Some(ctx) = crate::runtime::current_runtime() {
-        ctx.borrow().dispatch_input(input, key);
+        let handlers = ctx.borrow().input_handlers.clone();
+        for handler in handlers {
+            handler(input, key);
+        }
     }
 }
 

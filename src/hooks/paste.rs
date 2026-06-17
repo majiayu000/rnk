@@ -136,7 +136,10 @@ where
 pub fn dispatch_paste(content: &str) {
     let event = PasteEvent::new(content);
     if let Some(ctx) = crate::runtime::current_runtime() {
-        ctx.borrow().dispatch_paste(&event);
+        let handlers = ctx.borrow().paste_handlers.clone();
+        for handler in handlers {
+            handler(&event);
+        }
     }
 }
 

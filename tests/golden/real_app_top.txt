@@ -1,0 +1,5 @@
+CPU       Mem
+42% ↓ 3%  1.8G ↑ 128M
+[######>---------]  42% load
+pid  command      cpu
+101  rnk-demo     12%

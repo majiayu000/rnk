@@ -21,8 +21,11 @@
 //! ```
 
 use crate::core::Element;
-use crate::hooks::context::{HookContext, with_hooks};
+use crate::hooks::use_input::{Key, KeyCodeKind, MediaKeyKind};
+use crate::hooks::use_mouse::Mouse;
+use crate::runtime::{RuntimeContext, current_runtime, set_current_runtime, with_runtime};
 use crate::testing::TestRenderer;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MediaKeyCode};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -33,8 +36,8 @@ where
 {
     /// Component function
     component: F,
-    /// Hook context for state persistence
-    context: Rc<RefCell<HookContext>>,
+    /// Runtime context for hook state and event handlers.
+    runtime: Rc<RefCell<RuntimeContext>>,
     /// Test renderer
     renderer: TestRenderer,
     /// Last rendered output
@@ -52,12 +55,12 @@ where
 
     /// Create a test harness with custom terminal size
     pub fn with_size(component: F, width: u16, height: u16) -> Self {
-        let context = Rc::new(RefCell::new(HookContext::new()));
+        let runtime = Rc::new(RefCell::new(RuntimeContext::new()));
         let renderer = TestRenderer::new(width, height);
 
         let mut harness = Self {
             component,
-            context,
+            runtime,
             renderer,
             last_output: String::new(),
         };
@@ -69,7 +72,7 @@ where
 
     /// Render the component and update last_output
     pub fn render(&mut self) -> &str {
-        let element = with_hooks(self.context.clone(), || (self.component)());
+        let element = with_runtime(self.runtime.clone(), || (self.component)());
         self.last_output = self.renderer.render_to_plain(&element);
         &self.last_output
     }
@@ -81,13 +84,131 @@ where
 
     /// Get the last rendered output with ANSI codes
     pub fn output_ansi(&mut self) -> String {
-        let element = with_hooks(self.context.clone(), || (self.component)());
+        let element = with_runtime(self.runtime.clone(), || (self.component)());
         self.renderer.render_to_ansi(&element)
     }
 
     /// Re-render and return the new output
     pub fn update(&mut self) -> &str {
         self.render()
+    }
+
+    /// Get the runtime context used by this harness.
+    pub fn runtime_context(&self) -> Rc<RefCell<RuntimeContext>> {
+        self.runtime.clone()
+    }
+
+    /// Dispatch a typed key through registered `use_input` handlers and render.
+    pub fn send_key(&mut self, code: KeyCodeKind) -> &str {
+        self.send_key_with_modifiers(code, KeyModifiers::NONE)
+    }
+
+    /// Dispatch a typed key with modifiers through registered `use_input`
+    /// handlers and render.
+    pub fn send_key_with_modifiers(&mut self, code: KeyCodeKind, modifiers: KeyModifiers) -> &str {
+        let event = KeyEvent::new(key_code_to_event_code(code), modifiers);
+        self.send_key_event(event)
+    }
+
+    /// Dispatch a raw crossterm key event through registered `use_input`
+    /// handlers and render.
+    pub fn send_key_event(&mut self, event: KeyEvent) -> &str {
+        let key = Key::from_event(&event);
+        let input = Key::char_from_event(&event);
+        self.dispatch_key(&input, &key)
+    }
+
+    /// Dispatch an already-built key plus input string and render.
+    pub fn dispatch_key(&mut self, input: &str, key: &Key) -> &str {
+        self.with_current_runtime(|| {
+            crate::hooks::use_input::dispatch_input(input, key);
+        });
+        self.render()
+    }
+
+    /// Dispatch text as a sequence of character key events and render once.
+    pub fn send_text(&mut self, text: &str) -> &str {
+        let handlers = self.runtime.borrow().input_handlers.clone();
+        self.with_current_runtime(|| {
+            for ch in text.chars() {
+                let event = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
+                let key = Key::from_event(&event);
+                let input = Key::char_from_event(&event);
+                for handler in &handlers {
+                    handler(&input, &key);
+                }
+            }
+        });
+        self.render()
+    }
+
+    /// Dispatch a mouse event through registered `use_mouse` handlers and render.
+    pub fn send_mouse(&mut self, mouse: Mouse) -> &str {
+        let handlers = self.runtime.borrow().mouse_handlers.clone();
+        self.with_current_runtime(|| {
+            for handler in handlers {
+                handler(&mouse);
+            }
+        });
+        self.render()
+    }
+
+    /// Dispatch paste content through registered `use_paste` handlers and render.
+    pub fn send_paste(&mut self, content: &str) -> &str {
+        self.with_current_runtime(|| {
+            crate::hooks::paste::dispatch_paste(content);
+        });
+        self.render()
+    }
+
+    /// Resize the test renderer and render at the new dimensions.
+    pub fn resize(&mut self, width: u16, height: u16) -> &str {
+        self.renderer = TestRenderer::new(width, height);
+        self.render()
+    }
+
+    /// Move focus to the next registered focusable element and render.
+    pub fn focus_next(&mut self) -> &str {
+        self.render();
+        self.runtime.borrow_mut().focus_manager_mut().focus_next();
+        self.render()
+    }
+
+    /// Move focus to the previous registered focusable element and render.
+    pub fn focus_previous(&mut self) -> &str {
+        self.render();
+        self.runtime
+            .borrow_mut()
+            .focus_manager_mut()
+            .focus_previous();
+        self.render()
+    }
+
+    /// Focus a registered focusable element by custom ID and render.
+    pub fn focus(&mut self, id: &str) -> &str {
+        self.render();
+        self.runtime.borrow_mut().focus_manager_mut().focus(id);
+        self.render()
+    }
+
+    fn with_current_runtime<R>(&self, f: impl FnOnce() -> R) -> R {
+        let previous = current_runtime();
+        set_current_runtime(Some(self.runtime.clone()));
+
+        struct RuntimeGuard {
+            previous: Option<Rc<RefCell<RuntimeContext>>>,
+        }
+
+        impl Drop for RuntimeGuard {
+            fn drop(&mut self) {
+                set_current_runtime(self.previous.take());
+            }
+        }
+
+        let guard = RuntimeGuard { previous };
+        let result = f();
+        drop(guard);
+        result
     }
 
     // ========== Assertions ==========
@@ -169,6 +290,40 @@ where
     /// Get the height of the test terminal
     pub fn height(&self) -> u16 {
         self.renderer.height()
+    }
+}
+
+fn key_code_to_event_code(code: KeyCodeKind) -> KeyCode {
+    match code {
+        KeyCodeKind::Up => KeyCode::Up,
+        KeyCodeKind::Down => KeyCode::Down,
+        KeyCodeKind::Left => KeyCode::Left,
+        KeyCodeKind::Right => KeyCode::Right,
+        KeyCodeKind::PageUp => KeyCode::PageUp,
+        KeyCodeKind::PageDown => KeyCode::PageDown,
+        KeyCodeKind::Home => KeyCode::Home,
+        KeyCodeKind::End => KeyCode::End,
+        KeyCodeKind::Insert => KeyCode::Insert,
+        KeyCodeKind::Enter => KeyCode::Enter,
+        KeyCodeKind::Escape => KeyCode::Esc,
+        KeyCodeKind::Tab => KeyCode::Tab,
+        KeyCodeKind::BackTab => KeyCode::BackTab,
+        KeyCodeKind::Backspace => KeyCode::Backspace,
+        KeyCodeKind::Delete => KeyCode::Delete,
+        KeyCodeKind::Char(ch) => KeyCode::Char(ch),
+        KeyCodeKind::Function(n) => KeyCode::F(n),
+        KeyCodeKind::Media(media) => KeyCode::Media(match media {
+            MediaKeyKind::Play => MediaKeyCode::Play,
+            MediaKeyKind::Pause => MediaKeyCode::Pause,
+            MediaKeyKind::PlayPause => MediaKeyCode::PlayPause,
+            MediaKeyKind::Stop => MediaKeyCode::Stop,
+            MediaKeyKind::Next => MediaKeyCode::TrackNext,
+            MediaKeyKind::Previous => MediaKeyCode::TrackPrevious,
+            MediaKeyKind::VolumeUp => MediaKeyCode::RaiseVolume,
+            MediaKeyKind::VolumeDown => MediaKeyCode::LowerVolume,
+            MediaKeyKind::VolumeMute => MediaKeyCode::MuteVolume,
+        }),
+        KeyCodeKind::Unknown => KeyCode::Null,
     }
 }
 

@@ -388,6 +388,15 @@ impl From<Color> for CrosstermColor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
+
+    static BACKGROUND_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn background_test_lock() -> MutexGuard<'static, ()> {
+        BACKGROUND_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+    }
 
     #[test]
     fn test_hex_color() {
@@ -451,6 +460,7 @@ mod tests {
 
     #[test]
     fn test_adaptive_color_resolve_dark() {
+        let _lock = background_test_lock();
         set_dark_background(true);
         let adaptive = AdaptiveColor::new(Color::Black, Color::White);
         assert_eq!(adaptive.resolve(), Color::White);
@@ -458,6 +468,7 @@ mod tests {
 
     #[test]
     fn test_adaptive_color_resolve_light() {
+        let _lock = background_test_lock();
         set_dark_background(false);
         let adaptive = AdaptiveColor::new(Color::Black, Color::White);
         assert_eq!(adaptive.resolve(), Color::Black);
@@ -474,6 +485,7 @@ mod tests {
 
     #[test]
     fn test_adaptive_color_into_color() {
+        let _lock = background_test_lock();
         set_dark_background(true);
         let adaptive = AdaptiveColor::new(Color::Black, Color::White);
         let color: Color = adaptive.into();
@@ -490,6 +502,7 @@ mod tests {
 
     #[test]
     fn test_is_dark_background() {
+        let _lock = background_test_lock();
         set_dark_background(true);
         assert!(is_dark_background());
 

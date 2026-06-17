@@ -147,7 +147,10 @@ pub fn dispatch_mouse_event(event: &MouseEvent) {
     let mouse = Mouse::from_event(event);
 
     if let Some(ctx) = crate::runtime::current_runtime() {
-        ctx.borrow().dispatch_mouse(&mouse);
+        let handlers = ctx.borrow().mouse_handlers.clone();
+        for handler in handlers {
+            handler(&mouse);
+        }
     }
 }
 

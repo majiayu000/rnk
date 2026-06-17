@@ -12,6 +12,8 @@
 //! - Environment detection (CI, TTY)
 
 mod context;
+#[cfg(test)]
+mod context_tests;
 mod environment;
 mod panic_handler;
 mod signal_handler;
