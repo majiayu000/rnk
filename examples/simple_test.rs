@@ -30,7 +30,7 @@ fn create_ui() -> Element {
                 .padding_x(2.0)
                 .padding_y(1.0)
                 .child(
-                    Text::new("Tink Interactive Demo")
+                    Text::new("rnk Interactive Demo")
                         .color(Color::Cyan)
                         .bold()
                         .into_element(),

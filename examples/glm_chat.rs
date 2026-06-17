@@ -1,4 +1,4 @@
-//! GLM CLI Chat Demo with Tool Use - Using Tink UI
+//! GLM CLI Chat Demo with Tool Use - Using rnk UI
 //!
 //! Run with: GLM_API_KEY=your_key cargo run --example glm_chat
 
@@ -20,7 +20,7 @@ use tokio::sync::watch;
 
 use rnk::prelude::{Color, Element, FlexDirection, Text};
 
-// Alias tink's Box to avoid conflict with std::boxed::Box
+// Alias rnk's Box to avoid conflict with std::boxed::Box
 use rnk::prelude::Box as RnkBox;
 
 #[path = "glm_chat/prompt_box.rs"]
@@ -325,7 +325,7 @@ fn render_cancelled() -> Element {
         .into_element()
 }
 
-// Print tink element to stdout (with newline)
+// Print rnk element to stdout (with newline)
 fn print_element(element: &Element) {
     let output = rnk::render_to_string_auto(element);
     println!("{}", output);

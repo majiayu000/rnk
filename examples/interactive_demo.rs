@@ -1,6 +1,6 @@
 //! Interactive Demo - Full working demo with keyboard input
 //!
-//! This demonstrates the complete tink feature set with real interactivity.
+//! This demonstrates the complete rnk feature set with real interactivity.
 //! Uses rnk's built-in render API for simplicity.
 //!
 //! Run with: cargo run --example interactive_demo
@@ -57,7 +57,7 @@ fn render_ui(state: &DemoState) -> Element {
                 .padding_x(2.0)
                 .padding_y(1.0)
                 .child(
-                    Text::new("Tink Interactive Demo")
+                    Text::new("rnk Interactive Demo")
                         .color(Color::Cyan)
                         .bold()
                         .into_element(),
@@ -318,6 +318,6 @@ fn main() -> std::io::Result<()> {
     execute!(stdout, terminal::LeaveAlternateScreen, cursor::Show)?;
     terminal::disable_raw_mode()?;
 
-    println!("Thanks for trying Tink!");
+    println!("Thanks for trying rnk!");
     Ok(())
 }

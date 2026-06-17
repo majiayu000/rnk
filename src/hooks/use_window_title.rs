@@ -80,7 +80,7 @@ impl Drop for WindowTitleGuard {
 ///
 /// fn app() -> Element {
 ///     // Set window title
-///     use_window_title("My Tink App");
+///     use_window_title("My rnk App");
 ///
 ///     // Or with dynamic title
 ///     let count = use_signal(|| 0);

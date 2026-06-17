@@ -6,7 +6,7 @@
 use rnk::prelude::*;
 
 fn main() {
-    println!("=== Tink Static Demo ===\n");
+    println!("=== rnk Static Demo ===\n");
 
     // Demo 1: Simple Hello World
     println!("1. Hello World Box:");
@@ -28,7 +28,7 @@ fn demo_hello() {
         .border_style(BorderStyle::Round)
         .border_color(Color::Cyan)
         .child(
-            Text::new("Hello, Tink!")
+            Text::new("Hello, rnk!")
                 .color(Color::Green)
                 .bold()
                 .into_element(),

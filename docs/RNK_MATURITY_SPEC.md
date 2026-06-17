@@ -88,8 +88,9 @@ GitHub issue: [#20](https://github.com/majiayu000/rnk/issues/20)
 
 Problem:
 
-Public docs describe `rnk`, but older documents still use `Tink`, claim 100%
-completion, and list already-fixed runtime problems as active blockers.
+Public docs describe `rnk`, but older documents used the historical name, made
+unsupported 100% completion claims, and listed already-fixed runtime problems as
+active blockers.
 
 Required outcome:
 

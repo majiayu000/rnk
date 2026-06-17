@@ -1,4 +1,4 @@
-name: Tink Quality Gate
+name: rnk Quality Gate
 
 on:
   push:

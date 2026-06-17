@@ -9,7 +9,7 @@ fn main() {
         .padding(1.0)
         .border_style(BorderStyle::Round)
         .child(
-            Text::new("Hello, Tink!")
+            Text::new("Hello, rnk!")
                 .color(Color::Green)
                 .bold()
                 .into_element(),

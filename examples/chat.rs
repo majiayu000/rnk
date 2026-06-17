@@ -51,7 +51,7 @@ fn app() -> Element {
                 .border_color(Color::Cyan)
                 .padding_x(2.0)
                 .child(
-                    Text::new("Tink Chat")
+                    Text::new("rnk Chat")
                         .color(Color::Cyan)
                         .bold()
                         .into_element(),
