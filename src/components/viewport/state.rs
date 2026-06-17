@@ -519,4 +519,17 @@ mod tests {
         state.goto_left();
         assert!(state.at_left());
     }
+
+    #[test]
+    fn test_clip_line_does_not_split_wide_char_at_right_edge() {
+        assert_eq!(clip_line("你a", 0, 1), "");
+        assert_eq!(clip_line("你a", 0, 2), "你");
+        assert_eq!(clip_line("你a", 0, 3), "你a");
+    }
+
+    #[test]
+    fn test_clip_line_skips_wide_char_when_offset_lands_inside_it() {
+        assert_eq!(clip_line("你a", 1, 2), "a");
+        assert_eq!(clip_line("a你b", 2, 2), "b");
+    }
 }

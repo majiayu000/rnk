@@ -241,6 +241,9 @@ Acceptance criteria:
 - ANSI-aware truncation/clipping is tested or listed as unsupported.
 - Resize tests cover width shrink and stale cell cleanup behavior.
 
+Current contract document:
+[docs/TERMINAL_COMPATIBILITY.md](TERMINAL_COMPATIBILITY.md)
+
 GitHub issue: [#26](https://github.com/majiayu000/rnk/issues/26)
 
 ### 8. Testing Harness And Real-App Validation

@@ -80,7 +80,9 @@ until a dedicated CLI distribution is added.
   minimal repository demo, not a supported end-user CLI.
 - Terminal feature support depends on the user's terminal emulator. Mouse input,
   hyperlinks, bracketed paste, alternate-screen behavior, and color rendering may
-  vary by platform and terminal.
+  vary by platform and terminal. See
+  [docs/TERMINAL_COMPATIBILITY.md](docs/TERMINAL_COMPATIBILITY.md) for the
+  current compatibility matrix and Unicode/ANSI behavior contract.
 - `rnk-style`, `rnk-style-core`, and `rnk-icons` are workspace crates with their
   own package versions. Their release cadence may differ from the top-level
   `rnk` crate.
