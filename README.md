@@ -15,6 +15,9 @@ Release notes live in [CHANGELOG.md](CHANGELOG.md); older published release
 artifacts remain available on
 [GitHub Releases](https://github.com/majiayu000/rnk/releases).
 
+Current maturity planning and issue acceptance criteria live in
+[docs/RNK_MATURITY_SPEC.md](docs/RNK_MATURITY_SPEC.md).
+
 ## Features
 
 - **React-like API**: Familiar component model with hooks (`use_signal`, `use_state`, `use_ref`, `use_context`, `use_effect`, `use_layout_effect`, `use_input`, `use_cmd`)
