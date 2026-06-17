@@ -267,6 +267,14 @@ Acceptance criteria:
 - `cargo build --examples` or an equivalent example gate is required in CI.
 - Example index clearly separates tutorial, showcase, debug, and internal files.
 
+Current validation:
+
+- `tests/harness_interactions.rs`
+- `tests/golden_real_apps.rs`
+- `examples/README.md`
+- `.github/workflows/ci.yml` checks examples with `cargo check --workspace --examples --all-features --locked --verbose`.
+- `.github/workflows/quality.yml` builds examples with `cargo build --examples`.
+
 GitHub issue: [#27](https://github.com/majiayu000/rnk/issues/27)
 
 ## Issue Map

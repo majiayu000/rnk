@@ -18,8 +18,10 @@ const GOLDEN_DIR: &str = "tests/golden";
 pub enum GoldenResult {
     /// Output matches the golden file
     Match,
-    /// Golden file doesn't exist (first run)
+    /// Golden file was created because `UPDATE_GOLDEN` was set.
     Created,
+    /// Golden file does not exist and `UPDATE_GOLDEN` was not set.
+    Missing { path: PathBuf, actual: String },
     /// Output differs from golden file
     Mismatch {
         expected: String,
@@ -28,11 +30,22 @@ pub enum GoldenResult {
     },
 }
 
+/// Output format used for golden files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GoldenFormat {
+    /// Render without ANSI escape sequences.
+    #[default]
+    Plain,
+    /// Render with ANSI escape sequences.
+    Ansi,
+}
+
 /// Golden file test context
 pub struct GoldenTest {
     name: String,
     width: u16,
     height: u16,
+    format: GoldenFormat,
 }
 
 impl GoldenTest {
@@ -42,6 +55,7 @@ impl GoldenTest {
             name: name.into(),
             width: 80,
             height: 24,
+            format: GoldenFormat::Plain,
         }
     }
 
@@ -52,9 +66,29 @@ impl GoldenTest {
         self
     }
 
+    /// Set the output format for this golden test.
+    pub fn with_format(mut self, format: GoldenFormat) -> Self {
+        self.format = format;
+        self
+    }
+
+    /// Compare against a plain-text golden file.
+    pub fn plain(self) -> Self {
+        self.with_format(GoldenFormat::Plain)
+    }
+
+    /// Compare against an ANSI golden file.
+    pub fn ansi(self) -> Self {
+        self.with_format(GoldenFormat::Ansi)
+    }
+
     /// Get the path to the golden file
     fn golden_path(&self) -> PathBuf {
-        PathBuf::from(GOLDEN_DIR).join(format!("{}.txt", self.name))
+        let suffix = match self.format {
+            GoldenFormat::Plain => "txt",
+            GoldenFormat::Ansi => "ansi.txt",
+        };
+        PathBuf::from(GOLDEN_DIR).join(format!("{}.{}", self.name, suffix))
     }
 
     /// Compare element output against golden file
@@ -64,6 +98,14 @@ impl GoldenTest {
             GoldenResult::Match => {}
             GoldenResult::Created => {
                 println!("Golden file created: {}", self.golden_path().display());
+            }
+            GoldenResult::Missing { path, actual } => {
+                panic!(
+                    "\n\nGolden file missing for '{}': {}\n\nActual:\n{}\n\nRun with UPDATE_GOLDEN=1 to create it.",
+                    self.name,
+                    path.display(),
+                    actual
+                );
             }
             GoldenResult::Mismatch {
                 expected,
@@ -80,22 +122,38 @@ impl GoldenTest {
 
     /// Compare element output against golden file (without panic)
     pub fn compare(&self, element: &Element) -> GoldenResult {
-        let renderer = TestRenderer::new(self.width, self.height);
-        let actual = renderer.render_to_plain(element);
+        let actual = self.render(element);
 
         let golden_path = self.golden_path();
 
         if !golden_path.exists() {
-            // Create directory if needed
-            if let Some(parent) = golden_path.parent() {
-                let _ = fs::create_dir_all(parent);
+            if should_update_golden() {
+                if let Some(parent) = golden_path.parent() {
+                    if fs::create_dir_all(parent).is_err() {
+                        return GoldenResult::Missing {
+                            path: golden_path,
+                            actual,
+                        };
+                    }
+                }
+                return if fs::write(&golden_path, &actual).is_ok() {
+                    GoldenResult::Created
+                } else {
+                    GoldenResult::Missing {
+                        path: golden_path,
+                        actual,
+                    }
+                };
             }
-            // Write the golden file
-            let _ = fs::write(&golden_path, &actual);
-            return GoldenResult::Created;
+            return GoldenResult::Missing {
+                path: golden_path,
+                actual,
+            };
         }
 
-        let expected = fs::read_to_string(&golden_path).unwrap_or_else(|_| String::new());
+        let expected = normalize_golden_output(
+            &fs::read_to_string(&golden_path).unwrap_or_else(|_| String::new()),
+        );
 
         if actual == expected {
             GoldenResult::Match
@@ -110,8 +168,7 @@ impl GoldenTest {
 
     /// Update the golden file with new output
     pub fn update(&self, element: &Element) -> std::io::Result<()> {
-        let renderer = TestRenderer::new(self.width, self.height);
-        let output = renderer.render_to_plain(element);
+        let output = self.render(element);
 
         let golden_path = self.golden_path();
         if let Some(parent) = golden_path.parent() {
@@ -119,6 +176,28 @@ impl GoldenTest {
         }
         fs::write(golden_path, output)
     }
+
+    fn render(&self, element: &Element) -> String {
+        let renderer = TestRenderer::new(self.width, self.height);
+        let output = match self.format {
+            GoldenFormat::Plain => renderer.render_to_plain(element),
+            GoldenFormat::Ansi => renderer.render_to_ansi(element),
+        };
+        normalize_golden_output(&output)
+    }
+}
+
+fn should_update_golden() -> bool {
+    std::env::var("UPDATE_GOLDEN").is_ok()
+}
+
+fn normalize_golden_output(output: &str) -> String {
+    let output = output.replace("\r\n", "\n").replace('\r', "\n");
+    output
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Generate a simple diff between two strings
@@ -188,5 +267,19 @@ mod tests {
     fn test_golden_path() {
         let golden = GoldenTest::new("my_test");
         assert!(golden.golden_path().ends_with("my_test.txt"));
+    }
+
+    #[test]
+    fn test_golden_ansi_path() {
+        let golden = GoldenTest::new("my_test").ansi();
+        assert!(golden.golden_path().ends_with("my_test.ansi.txt"));
+    }
+
+    #[test]
+    fn test_normalize_golden_output_removes_terminal_padding() {
+        assert_eq!(
+            normalize_golden_output("alpha   \r\nbeta\t \n"),
+            "alpha\nbeta"
+        );
     }
 }

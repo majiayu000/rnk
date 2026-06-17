@@ -655,7 +655,9 @@ fn test_component() {
 ## Running Examples
 
 The list below is a curated representative set, not a generated index. Cargo
-auto-discovers the full top-level example set from `examples/*.rs`.
+auto-discovers the full top-level example set from `examples/*.rs`. See
+[examples/README.md](examples/README.md) for the categorized tutorial,
+showcase, component demo, debug, and internal index.
 
 ```bash
 # Basic examples

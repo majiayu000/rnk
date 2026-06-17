@@ -1,0 +1,6 @@
+Name: Ada Lovelace
+  Engineer
+  Designer
+❯ Researcher
+Submit profile?
+[Yes](Y)  [No](N)

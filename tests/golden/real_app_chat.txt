@@ -1,0 +1,4 @@
+● session: deterministic chat
+> Summarize the release gates
+● CI, docs, and examples are all checked.
+> ready
