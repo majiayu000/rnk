@@ -82,6 +82,35 @@ mod ansi {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum LineDiffOp<'a> {
+    Rewrite { row: usize, line: &'a str },
+    Clear { row: usize },
+}
+
+fn fullscreen_line_diff<'a>(
+    previous_lines: &[String],
+    new_lines: &[&'a str],
+) -> Vec<LineDiffOp<'a>> {
+    let mut ops = Vec::new();
+
+    for (row, new_line) in new_lines.iter().enumerate() {
+        let old_line = previous_lines.get(row).map(|line| line.as_str());
+        if old_line != Some(*new_line) {
+            ops.push(LineDiffOp::Rewrite {
+                row,
+                line: new_line,
+            });
+        }
+    }
+
+    for row in new_lines.len()..previous_lines.len() {
+        ops.push(LineDiffOp::Clear { row });
+    }
+
+    ops
+}
+
 /// Terminal abstraction with ink-style rendering
 ///
 /// Supports both inline and fullscreen (alternate screen) modes:
@@ -381,31 +410,27 @@ impl Terminal {
 
         let new_lines: Vec<&str> = output.lines().collect();
 
-        // Incremental update - only redraw changed lines
-        for (i, new_line) in new_lines.iter().enumerate() {
-            let old_line = self.previous_lines.get(i).map(|s| s.as_str());
-
-            if old_line != Some(*new_line) {
-                // Move to line and clear it, then write new content
-                write!(
-                    stdout,
-                    "{}{}{}",
-                    ansi::cursor_to(i as u16, 0),
-                    ansi::erase_line(),
-                    new_line
-                )?;
-            }
-        }
-
-        // Clear any extra lines from previous render
-        if self.previous_lines.len() > new_lines.len() {
-            for i in new_lines.len()..self.previous_lines.len() {
-                write!(
-                    stdout,
-                    "{}{}",
-                    ansi::cursor_to(i as u16, 0),
-                    ansi::erase_line()
-                )?;
+        for op in fullscreen_line_diff(&self.previous_lines, &new_lines) {
+            match op {
+                LineDiffOp::Rewrite { row, line } => {
+                    // Erase first so shorter replacement lines cannot leave stale cells.
+                    write!(
+                        stdout,
+                        "{}{}{}",
+                        ansi::cursor_to(row as u16, 0),
+                        ansi::erase_line(),
+                        line
+                    )?;
+                }
+                LineDiffOp::Clear { row } => {
+                    // Clear rows removed by the new frame.
+                    write!(
+                        stdout,
+                        "{}{}",
+                        ansi::cursor_to(row as u16, 0),
+                        ansi::erase_line()
+                    )?;
+                }
             }
         }
 
@@ -733,5 +758,34 @@ mod tests {
         // but we can verify the state is set up correctly for the optimization
         assert_eq!(terminal.last_output, "line1\nline2");
         assert!(!terminal.previous_lines.is_empty());
+    }
+
+    #[test]
+    fn test_fullscreen_line_diff_erases_shorter_changed_lines() {
+        let previous = vec!["abcdef".to_string()];
+        let new_lines = vec!["abc"];
+
+        assert_eq!(
+            fullscreen_line_diff(&previous, &new_lines),
+            vec![LineDiffOp::Rewrite {
+                row: 0,
+                line: "abc"
+            }]
+        );
+    }
+
+    #[test]
+    fn test_fullscreen_line_diff_clears_removed_rows() {
+        let previous = vec![
+            "top".to_string(),
+            "middle".to_string(),
+            "bottom".to_string(),
+        ];
+        let new_lines = vec!["top"];
+
+        assert_eq!(
+            fullscreen_line_diff(&previous, &new_lines),
+            vec![LineDiffOp::Clear { row: 1 }, LineDiffOp::Clear { row: 2 }]
+        );
     }
 }

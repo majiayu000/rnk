@@ -6,6 +6,27 @@ use super::Terminal;
 use super::registry::{AppRuntime, ModeSwitch, Printable};
 use super::render_to_string::render_to_string;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResizeAction {
+    repaint: bool,
+    clear_screen: bool,
+}
+
+fn resize_action(
+    last_width: u16,
+    last_height: u16,
+    new_width: u16,
+    new_height: u16,
+    alt_screen: bool,
+) -> ResizeAction {
+    let changed = new_width != last_width || new_height != last_height;
+
+    ResizeAction {
+        repaint: changed,
+        clear_screen: changed && alt_screen,
+    }
+}
+
 /// Handles terminal mode switching, terminal commands, and inline println rendering.
 pub(crate) struct TerminalController;
 
@@ -143,8 +164,16 @@ impl TerminalController {
         use crossterm::terminal::{Clear, ClearType};
         use std::io::stdout;
 
-        if new_width != *last_width || new_height != *last_height {
-            if terminal.is_alt_screen() {
+        let action = resize_action(
+            *last_width,
+            *last_height,
+            new_width,
+            new_height,
+            terminal.is_alt_screen(),
+        );
+
+        if action.repaint {
+            if action.clear_screen {
                 let _ = execute!(stdout(), MoveTo(0, 0), Clear(ClearType::All));
             }
             // Inline mode: repaint only to avoid clearing scrollback.
@@ -153,5 +182,43 @@ impl TerminalController {
 
         *last_width = new_width;
         *last_height = new_height;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resize_action_no_change_is_noop() {
+        assert_eq!(
+            resize_action(80, 24, 80, 24, true),
+            ResizeAction {
+                repaint: false,
+                clear_screen: false
+            }
+        );
+    }
+
+    #[test]
+    fn test_resize_action_width_shrink_repaints_inline_without_clear() {
+        assert_eq!(
+            resize_action(100, 24, 80, 24, false),
+            ResizeAction {
+                repaint: true,
+                clear_screen: false
+            }
+        );
+    }
+
+    #[test]
+    fn test_resize_action_width_shrink_clears_alt_screen() {
+        assert_eq!(
+            resize_action(100, 24, 80, 24, true),
+            ResizeAction {
+                repaint: true,
+                clear_screen: true
+            }
+        );
     }
 }
