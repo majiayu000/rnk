@@ -1,4 +1,8 @@
-//! Core types and abstractions
+//! Core types and abstractions.
+//!
+//! This module is an advanced public surface. Application code should prefer
+//! `rnk::prelude::*`; direct `core` imports are useful for custom components,
+//! tests, and low-level integration.
 
 mod color;
 mod component;

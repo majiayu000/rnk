@@ -21,6 +21,10 @@
 //! - **Hooks - Utilities**: use_scroll, use_measure, use_app
 //! - **Hooks - Animation**: use_animation, use_transition
 //! - **Rendering**: render, AppBuilder, render_to_string
+//!
+//! This is the recommended stable import surface for application code.
+//! Advanced modules may expose additional types, but examples should prefer
+//! this prelude unless a narrow import is clearer.
 
 // =============================================================================
 // Core Types

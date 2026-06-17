@@ -1,5 +1,10 @@
 //! Rendering system
 //!
+//! This module is an advanced and experimental pre-1.0 public surface. The
+//! stable application entry points are re-exported through `rnk::prelude` and
+//! the crate root; lower-level renderer types may change as terminal behavior
+//! and testing APIs mature.
+//!
 //! This module provides the core rendering infrastructure for rnk:
 //!
 //! - **App**: The main application runner

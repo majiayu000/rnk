@@ -1,5 +1,9 @@
 //! Testing infrastructure for rnk
 //!
+//! This module is an experimental test-support surface. The names here are
+//! public so applications can test components, but #27 may expand or refine the
+//! harness before `1.0`.
+//!
 //! Provides utilities for testing terminal UI components without
 //! actual terminal interaction.
 //!

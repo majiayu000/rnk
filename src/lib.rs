@@ -3,6 +3,14 @@
 //! A terminal UI framework inspired by [Ink](https://github.com/vadimdemedes/ink)
 //! and [Bubbletea](https://github.com/charmbracelet/bubbletea).
 //!
+//! ## Public API Boundary
+//!
+//! Application code should prefer `rnk::prelude::*`. The crate root re-exports
+//! a small compatibility surface for common imports, while lower-level modules
+//! such as `renderer`, `runtime`, and `testing` are advanced or experimental
+//! pre-1.0 APIs. See `docs/API_STABILITY.md` in the repository for the current
+//! public API boundary and semver policy.
+//!
 //! ## Features
 //!
 //! - Declarative UI with flexbox layout
