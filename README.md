@@ -9,7 +9,7 @@ A React-like declarative terminal UI framework for Rust, inspired by [Ink](https
 ## Version Status
 
 The Crates.io badge above is the source of truth for published installs. This
-checkout currently declares `0.19.2`; when the checkout is ahead of the latest
+checkout currently declares `0.19.3`; when the checkout is ahead of the latest
 published release, use the git dependency below for the latest source version.
 Release notes live in [CHANGELOG.md](CHANGELOG.md); older published release
 artifacts remain available on

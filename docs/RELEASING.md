@@ -60,3 +60,10 @@ cargo publish --locked -p <package>
 Already-published package versions are skipped. Publishing in dependency order
 lets package-level dry-runs validate path-plus-version dependencies after their
 upstream package has been released.
+
+When a helper crate is being published for the first time, a local dry-run of a
+downstream package may fail until the upstream crate exists in the crates.io
+index. For example, `cargo publish --dry-run -p rnk-style` requires
+`rnk-style-core` to be visible on crates.io. The release workflow therefore
+publishes in dependency order and waits for each newly published package version
+to become visible before moving to the next package.

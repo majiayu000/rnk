@@ -132,6 +132,25 @@ jobs:
           PY
           }
 
+          wait_for_crate_version() {
+            local package="$1"
+            local version="$2"
+            local attempts=30
+
+            for attempt in $(seq 1 "$attempts"); do
+              if crate_version_published "$package" "$version"; then
+                echo "::notice::$package $version is visible on crates.io"
+                return 0
+              fi
+
+              echo "Waiting for $package $version to be visible on crates.io ($attempt/$attempts)"
+              sleep 10
+            done
+
+            echo "$package $version was not visible on crates.io after $attempts attempts" >&2
+            return 1
+          }
+
           for package in $PUBLISH_PACKAGES; do
             version="$(package_version "$package")"
             if crate_version_published "$package" "$version"; then
@@ -141,7 +160,7 @@ jobs:
 
             cargo publish --dry-run --locked -p "$package"
             cargo publish --locked -p "$package"
-            sleep 20
+            wait_for_crate_version "$package" "$version"
           done
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
