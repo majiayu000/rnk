@@ -242,6 +242,47 @@ pub mod lite {
     pub use crate::renderer::{render, render_to_string};
 }
 
+// =============================================================================
+// Widgets Prelude (Focused Component Imports)
+// =============================================================================
+
+/// A focused import set for examples built around the recommended core widgets.
+///
+/// ```ignore
+/// use rnk::prelude::widgets::*;
+/// ```
+pub mod widgets {
+    pub use crate::components::{
+        Box, Box as LayoutBox, Command, CommandPalette, CommandPaletteState, CommandPaletteStyle,
+        InteractionMode, InteractionOutcome, NavigationConfig, SelectInput, SelectInputState,
+        SelectInputStyle, SelectItem, Text, TextArea, TextAreaKeyMap, TextAreaState, TextAreaStyle,
+        TextInputHandle, TextInputOptions, TextInputState, handle_command_palette_input,
+        handle_select_input, handle_text_input, handle_textarea_input_with_mode, use_text_input,
+    };
+    pub use crate::core::{
+        AccessibilityProps, AccessibilityRole, BorderStyle, Color, Element, FlexDirection, Style,
+    };
+    pub use crate::hooks::{Key, use_app, use_input, use_signal};
+    pub use crate::renderer::{render, render_to_string};
+}
+
+// =============================================================================
+// Testing Prelude
+// =============================================================================
+
+/// A convenience import set for test and snapshot helpers.
+///
+/// This mirrors `rnk::testing`, which remains an experimental test-support
+/// surface before `1.0`.
+///
+/// ```ignore
+/// use rnk::prelude::testing::*;
+/// ```
+pub mod testing {
+    pub use crate::testing::*;
+    pub use crate::{assert_snapshot, golden_test, inline_snapshot};
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -259,5 +300,29 @@ mod tests {
             .child(Text::new("lite").into_element())
             .into_element();
         let _style = Style::new().fg(Color::Green);
+    }
+
+    #[test]
+    fn test_widgets_prelude_compiles() {
+        use super::widgets::*;
+        let mut state = TextInputState::default();
+        let outcome = handle_text_input(
+            &mut state,
+            "x",
+            &Key::default(),
+            &TextInputOptions::default(),
+        );
+        assert_eq!(outcome, InteractionOutcome::Changed("x".to_string()));
+
+        let _element = LayoutBox::new()
+            .child(Text::new("widgets").into_element())
+            .into_element();
+    }
+
+    #[test]
+    fn test_testing_prelude_compiles() {
+        use super::testing::*;
+        let renderer = TestRenderer::new(20, 5);
+        assert_eq!(renderer.width(), 20);
     }
 }

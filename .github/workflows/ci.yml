@@ -12,6 +12,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
   test:
@@ -107,6 +108,10 @@ jobs:
             echo "Unexpected agent-facing, docs, or workflow files in rnk package" >&2
             exit 1
           fi
+          if grep -nE '\]\((docs/|examples/)' README.md; then
+            echo "README uses package-relative docs/examples links that may break on crates.io" >&2
+            exit 1
+          fi
 
   clippy:
     name: Clippy
@@ -160,3 +165,77 @@ jobs:
         run: cargo doc --workspace --no-deps --all-features --locked
         env:
           RUSTDOCFLAGS: -D warnings
+
+  doc-tests:
+    name: Doc Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Run doc tests
+        run: cargo test --doc --workspace --all-features --locked --verbose
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install cargo-tarpaulin
+        uses: taiki-e/install-action@cargo-tarpaulin
+
+      - name: Run coverage
+        run: cargo tarpaulin --workspace --all-features --out Xml --locked
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          files: cobertura.xml
+          fail_ci_if_error: false
+
+  miri:
+    name: Miri
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+          components: miri
+
+      - name: Run focused Miri tests
+        run: cargo miri test --lib -- layout::measure
+
+  ci-gate:
+    name: CI Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - test
+      - workspace
+      - msrv
+      - feature-matrix
+      - clippy
+      - fmt
+      - docs
+      - doc-tests
+    steps:
+      - name: Required checks passed
+        run: echo "Required CI checks passed"

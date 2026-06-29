@@ -38,6 +38,26 @@ prefer `rnk::prelude::*` unless a narrow import is clearer.
 `rnk::prelude::lite::*` is the stable low-conflict import set for small examples
 or applications that want fewer names in scope.
 
+`rnk::prelude::widgets::*` is the beginner component import set. It focuses on
+the components recommended in the onboarding path: layout `Box`, `Text`,
+`TextInput`, `SelectInput`, `TextArea`, and `CommandPalette`, plus the state,
+keyboard, and interaction helper types needed to test them.
+
+`rnk::prelude::testing::*` is a convenience test import set. It mirrors the
+experimental `rnk::testing` module so users can write snapshot and interaction
+tests without depending on renderer internals directly.
+
+Beginner docs should use these import paths in this order:
+
+1. `rnk::prelude::*` for full application examples.
+2. `rnk::prelude::lite::*` for very small examples that want fewer names.
+3. `rnk::prelude::widgets::*` for focused component examples.
+4. `rnk::prelude::testing::*` for tests only.
+
+Application docs should not start with lower-level modules such as
+`rnk::components`, `rnk::hooks`, `rnk::renderer`, or `rnk::runtime` unless the
+example is explicitly about extension, integration, or advanced testing.
+
 Some renderer-adjacent types are intentionally in the prelude because app code
 uses them directly:
 

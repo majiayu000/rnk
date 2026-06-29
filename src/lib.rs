@@ -11,6 +11,18 @@
 //! pre-1.0 APIs. See `docs/API_STABILITY.md` in the repository for the current
 //! public API boundary and semver policy.
 //!
+//! ## API Levels
+//!
+//! - **Stable app surface**: `rnk::prelude::*`, `rnk::prelude::lite::*`, and
+//!   `rnk::prelude::widgets::*`.
+//! - **Advanced extension surface**: `core`, `components`, `hooks`, `cmd`,
+//!   `animation`, and `layout`.
+//! - **Experimental/internal-adjacent surface**: `renderer`, `runtime`,
+//!   `testing`, and doc-hidden `reconciler` details.
+//!
+//! New applications should start with the prelude. Use lower-level modules only
+//! when building custom components, renderer integrations, or test harnesses.
+//!
 //! ## Features
 //!
 //! - Declarative UI with flexbox layout

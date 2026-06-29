@@ -19,8 +19,12 @@ Current maturity planning and issue acceptance criteria live in
 [docs/RNK_MATURITY_SPEC.md](https://github.com/majiayu000/rnk/blob/main/docs/RNK_MATURITY_SPEC.md).
 The current public API boundary and pre-1.0 semver policy live in
 [docs/API_STABILITY.md](https://github.com/majiayu000/rnk/blob/main/docs/API_STABILITY.md).
+The 5-minute first app path lives in
+[docs/getting-started.md](https://github.com/majiayu000/rnk/blob/main/docs/getting-started.md).
 Interactive component state and event contracts live in
 [docs/INTERACTIVE_COMPONENT_CONTRACTS.md](https://github.com/majiayu000/rnk/blob/main/docs/INTERACTIVE_COMPONENT_CONTRACTS.md).
+The recommended core component contracts live in
+[docs/CORE_COMPONENT_CONTRACTS.md](https://github.com/majiayu000/rnk/blob/main/docs/CORE_COMPONENT_CONTRACTS.md).
 Focus, accessibility, and input semantics live in
 [docs/FOCUS_ACCESSIBILITY_INPUT.md](https://github.com/majiayu000/rnk/blob/main/docs/FOCUS_ACCESSIBILITY_INPUT.md).
 
@@ -88,6 +92,9 @@ The `rnk` binary target is a minimal repository demo and does not expose a
 standalone CLI surface. Keep installation docs centered on Cargo dependencies
 until a dedicated CLI distribution is added.
 
+For a copy-paste path from an empty Cargo project to an interactive TUI, follow
+[docs/getting-started.md](https://github.com/majiayu000/rnk/blob/main/docs/getting-started.md).
+
 ## Limitations
 
 - The public distribution is the Rust crate API. The `rnk` binary target is a
@@ -105,6 +112,17 @@ until a dedicated CLI distribution is added.
 - The framework targets Rust `1.88` and newer.
 
 ## Examples
+
+Recommended first examples:
+
+```bash
+cargo run --example hello
+cargo run --example counter
+cargo run --example todo_app
+```
+
+The full examples index lives at
+[examples/README.md](https://github.com/majiayu000/rnk/blob/main/examples/README.md).
 
 ### Hello World
 
