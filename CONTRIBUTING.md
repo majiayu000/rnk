@@ -6,7 +6,7 @@ Thank you for your interest in contributing to rnk! This document provides guide
 
 ### Prerequisites
 
-- Rust 1.85+ (edition 2024)
+- Rust 1.88+ (edition 2024)
 - Git
 
 ### Setup
@@ -16,11 +16,11 @@ Thank you for your interest in contributing to rnk! This document provides guide
 git clone https://github.com/majiayu000/rnk.git
 cd rnk
 
-# Build the project
-cargo build
+# Build the workspace
+cargo build --workspace --locked
 
-# Run tests
-cargo test --lib
+# Run library tests
+cargo test --workspace --lib --locked
 
 # Run an example
 cargo run --example counter
@@ -40,16 +40,20 @@ Run these commands before submitting:
 
 ```bash
 # Format code
-cargo fmt
+cargo fmt --all -- --check
 
 # Run linter
-cargo clippy
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -A clippy::collapsible_if -A clippy::manual_is_multiple_of
 
 # Run tests
-cargo test --lib
+cargo test --workspace --lib --all-features --locked
 
 # Run all tests including integration
-cargo test --all-targets
+cargo test --workspace --all-targets --all-features --locked
+
+# Check examples and benches
+cargo check --workspace --examples --all-features --locked
+cargo check --workspace --benches --all-features --locked
 ```
 
 ### Commit Guidelines

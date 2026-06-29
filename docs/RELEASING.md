@@ -37,6 +37,18 @@ Every tag release must run the full workspace test gate:
 cargo test --workspace --all-targets --all-features --locked --verbose
 ```
 
+The release workflow also validates the root `rnk` package file list before
+publishing:
+
+```bash
+cargo package --list -p rnk --locked
+```
+
+The package list must not include agent-private files such as `AGENTS.md` or
+`CLAUDE.md`, workflow files, or repository-only `docs/` content. README links to
+repository docs and examples must use GitHub absolute URLs so they keep working
+from crates.io.
+
 Each publishable package is dry-run validated immediately before it is published:
 
 ```bash

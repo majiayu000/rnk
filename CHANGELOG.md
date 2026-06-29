@@ -25,7 +25,8 @@ artifacts are also available from the GitHub Releases page.
 
 ### Compatibility Notes
 
-- The top-level `rnk` crate still targets Rust `1.85` and newer.
+- The top-level `rnk` crate targets Rust `1.88` and newer in the current
+  checkout.
 - Workspace helper crates keep their existing independent `0.1.0` package
   versions.
 

@@ -16,6 +16,8 @@ keywords = ["tui", "terminal", "ui", "cli", "react"]
 categories = ["command-line-interface", "gui"]
 authors = ["majiayu000 <1835304752@qq.com>"]
 exclude = [
+    "AGENTS.md",
+    "CLAUDE.md",
     "docs/*",
     ".github/*",
     ".claude/*",
