@@ -98,6 +98,16 @@ jobs:
       - name: Check benchmarks
         run: cargo check --workspace --benches --all-features --locked --verbose
 
+      - name: Check package contents
+        run: |
+          set -eu
+          package_list="$(mktemp)"
+          cargo package --list -p rnk --locked > "$package_list"
+          if grep -E '^(AGENTS\.md|CLAUDE\.md|docs/|\.github/|\.claude/)' "$package_list"; then
+            echo "Unexpected agent-facing, docs, or workflow files in rnk package" >&2
+            exit 1
+          fi
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
