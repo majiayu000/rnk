@@ -16,13 +16,13 @@ artifacts remain available on
 [GitHub Releases](https://github.com/majiayu000/rnk/releases).
 
 Current maturity planning and issue acceptance criteria live in
-[docs/RNK_MATURITY_SPEC.md](docs/RNK_MATURITY_SPEC.md).
+[docs/RNK_MATURITY_SPEC.md](https://github.com/majiayu000/rnk/blob/main/docs/RNK_MATURITY_SPEC.md).
 The current public API boundary and pre-1.0 semver policy live in
-[docs/API_STABILITY.md](docs/API_STABILITY.md).
+[docs/API_STABILITY.md](https://github.com/majiayu000/rnk/blob/main/docs/API_STABILITY.md).
 Interactive component state and event contracts live in
-[docs/INTERACTIVE_COMPONENT_CONTRACTS.md](docs/INTERACTIVE_COMPONENT_CONTRACTS.md).
+[docs/INTERACTIVE_COMPONENT_CONTRACTS.md](https://github.com/majiayu000/rnk/blob/main/docs/INTERACTIVE_COMPONENT_CONTRACTS.md).
 Focus, accessibility, and input semantics live in
-[docs/FOCUS_ACCESSIBILITY_INPUT.md](docs/FOCUS_ACCESSIBILITY_INPUT.md).
+[docs/FOCUS_ACCESSIBILITY_INPUT.md](https://github.com/majiayu000/rnk/blob/main/docs/FOCUS_ACCESSIBILITY_INPUT.md).
 
 ## Features
 
@@ -44,6 +44,20 @@ Focus, accessibility, and input semantics live in
 - **Bracketed Paste**: Distinguish between typed and pasted text
 - **Theme System**: Centralized theming with semantic colors, design tokens, variants, and shared action styles
 - **Cross-platform**: Works on Linux, macOS, and Windows
+
+## When To Use rnk
+
+Use `rnk` when you want to build an interactive Rust CLI app with a declarative
+component tree, hooks, flexbox-style layout, typed side effects, and built-in
+terminal widgets.
+
+It is a good fit for agent UIs, chat-style tools, dashboards, forms, selectors,
+and terminal workflows where application code should read more like a component
+tree than a manual draw loop.
+
+Prefer Ratatui when you want lower-level control over every frame or already use
+its widget ecosystem. Prefer plain `crossterm` when you only need terminal input
+or a few styled lines.
 
 ### Recent Improvements
 
@@ -81,7 +95,7 @@ until a dedicated CLI distribution is added.
 - Terminal feature support depends on the user's terminal emulator. Mouse input,
   hyperlinks, bracketed paste, alternate-screen behavior, and color rendering may
   vary by platform and terminal. See
-  [docs/TERMINAL_COMPATIBILITY.md](docs/TERMINAL_COMPATIBILITY.md) for the
+  [docs/TERMINAL_COMPATIBILITY.md](https://github.com/majiayu000/rnk/blob/main/docs/TERMINAL_COMPATIBILITY.md) for the
   current compatibility matrix and Unicode/ANSI behavior contract.
 - `rnk-style`, `rnk-style-core`, and `rnk-icons` are workspace crates with their
   own package versions. Their release cadence may differ from the top-level
@@ -606,7 +620,7 @@ with_theme(dark_theme, |_| {
 });
 ```
 
-See [Design Tokens And Component Variants](docs/DESIGN_TOKENS_AND_VARIANTS.md)
+See [Design Tokens And Component Variants](https://github.com/majiayu000/rnk/blob/main/docs/DESIGN_TOKENS_AND_VARIANTS.md)
 for the current token and variant contract.
 
 ## Cross-thread Rendering
@@ -656,14 +670,18 @@ fn test_component() {
 
 The list below is a curated representative set, not a generated index. Cargo
 auto-discovers the full top-level example set from `examples/*.rs`. See
-[examples/README.md](examples/README.md) for the categorized tutorial,
+[examples/README.md](https://github.com/majiayu000/rnk/blob/main/examples/README.md) for the categorized tutorial,
 showcase, component demo, debug, and internal index.
 
 ```bash
+# Recommended first run
+cargo run --example hello      # minimal render path
+cargo run --example counter    # state and keyboard input
+cargo run --example todo_app   # app-shaped workflow
+
 # Basic examples
-cargo run --example hello
-cargo run --example counter
-cargo run --example todo_app
+cargo run --example inline_mode
+cargo run --example use_input
 
 # Showcase applications
 cargo run --example rnk_top      # htop-like system monitor
@@ -705,10 +723,11 @@ src/
 
 ## Comparison with Ink/Bubbletea
 
-See [docs/COMPARISON.md](docs/COMPARISON.md) for the current evidence-based
-comparison. In short, `rnk` is a Rust-native, hook/signal-driven, Taffy-backed
-terminal UI framework, while feature parity with Ink and Bubbletea depends on
-the specific terminal behavior and application pattern being compared.
+See [docs/COMPARISON.md](https://github.com/majiayu000/rnk/blob/main/docs/COMPARISON.md) for the current
+evidence-based comparison. In short, `rnk` is a Rust-native, hook/signal-driven,
+Taffy-backed terminal UI framework. Feature parity with Ink, Bubbletea, and
+Ratatui depends on the specific terminal behavior and application pattern being
+compared.
 
 ## License
 

@@ -1,25 +1,25 @@
 # rnk Framework Comparison
 
 This document is a current evidence snapshot for `rnk` compared with Ink
-(JavaScript) and Bubbletea (Go). It is not a parity scorecard. Terminal UI
-behavior depends on terminal emulator support, platform behavior, and the exact
-application mode.
+(JavaScript), Bubbletea (Go), and Ratatui (Rust). It is not a parity scorecard.
+Terminal UI behavior depends on terminal emulator support, platform behavior,
+and the exact application mode.
 
 ## Summary
 
-| Area | rnk | Ink | Bubbletea |
-|------|-----|-----|-----------|
-| Language | Rust | JavaScript / TypeScript | Go |
-| Architecture | React-like components and hooks | React components | Elm-style update loop |
-| Layout | Taffy Flexbox | Yoga Flexbox | Manual layout, often with Lip Gloss |
-| State | hooks and signals | React hooks | model/update messages |
-| Rendering | line-level diff output | line-level output | line-level output |
-| Inline mode | supported | supported | supported |
-| Fullscreen mode | supported | supported | supported |
-| Mouse input | supported through hooks | limited / application-specific | supported |
-| Bracketed paste | supported | limited / application-specific | supported |
-| Theme system | semantic terminal theme API | application-specific | Lip Gloss ecosystem |
-| Rust type safety | native | not applicable | not applicable |
+| Area | rnk | Ratatui | Ink | Bubbletea |
+|------|-----|---------|-----|-----------|
+| Language | Rust | Rust | JavaScript / TypeScript | Go |
+| Architecture | React-like components and hooks | immediate-mode widgets and buffers | React components | Elm-style update loop |
+| Layout | Taffy Flexbox | constraint-based terminal layout | Yoga Flexbox | Manual layout, often with Lip Gloss |
+| State | hooks and signals | application-owned state | React hooks | model/update messages |
+| Rendering | line-level diff output | buffer/frame rendering through backend | line-level output | line-level output |
+| Inline mode | supported | backend/application-specific | supported | supported |
+| Fullscreen mode | supported | common through crossterm backend | supported | supported |
+| Mouse input | supported through hooks | supported through backend events | limited / application-specific | supported |
+| Bracketed paste | supported | backend/application-specific | limited / application-specific | supported |
+| Theme system | semantic terminal theme API | application/widget styling | application-specific | Lip Gloss ecosystem |
+| Rust type safety | native | native | not applicable | not applicable |
 
 ## Current Strengths
 
@@ -49,6 +49,10 @@ current terminal matrix and Unicode/ANSI behavior contract.
 
 Choose `rnk` when you want a Rust-native, declarative terminal UI with Flexbox
 layout, hooks, typed commands, and built-in components.
+
+Choose Ratatui when you want direct control over terminal buffers, frame
+rendering, and a mature Rust widget ecosystem, especially if your application is
+already structured around an immediate-mode draw loop.
 
 Choose Ink when your application is already in the JavaScript/TypeScript and
 React ecosystem.
