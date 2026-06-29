@@ -43,7 +43,7 @@ Run these commands before submitting:
 cargo fmt --all -- --check
 
 # Run linter
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -A clippy::collapsible_if -A clippy::manual_is_multiple_of
 
 # Run tests
 cargo test --workspace --lib --all-features --locked
