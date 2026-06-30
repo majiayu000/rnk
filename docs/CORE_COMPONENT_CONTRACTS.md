@@ -18,7 +18,7 @@ should stay clear, documented, and tested.
 - Disabled mode ignores input. Read-only mode may allow navigation, but must not
   mutate values or submit data.
 
-## Components
+## Recommended Core Components
 
 | Component | Controlled | Uncontrolled | Keyboard | Callback / Outcome | Disabled / Read-only | Test Anchor |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -33,6 +33,23 @@ should stay clear, documented, and tested.
 `TextInputState`, `TextInputOptions`, `TextInputHandle`, `use_text_input(...)`,
 and `handle_text_input(...)`; there is not a standalone `TextInput` builder type
 yet.
+
+## Audited Input Extensions
+
+These components are not the smallest beginner set, but their interaction
+contracts are documented and covered by the same core contract test file.
+
+| Component | Controlled | Uncontrolled | Keyboard | Callback / Outcome | Disabled / Read-only | Test Anchor |
+| --- | --- | --- | --- | --- | --- | --- |
+| `MultiSelect` | `MultiSelectState` plus `handle_multi_select_input(...)`. | `MultiSelect::new(items)` can own local selected/highlighted state while rendered. | Arrow or vim navigation moves highlight, Space toggles selection, Enter submits selected indices, Escape cancels, Ctrl-A/Ctrl-D select or clear all. | `InteractionOutcome<Vec<usize>>` returns selected indices for changed or submitted values, plus handled, cancelled, or ignored. | Disabled ignores all input. Read-only allows highlight navigation but blocks selection changes and submit. | `tests/core_component_contracts.rs` covers toggle, submit, read-only navigation, and disabled behavior. |
+| `Confirm` | `ConfirmState` plus `handle_confirm_input_with_mode(...)`. | `Confirm::new(&state)` renders caller-owned state. | Tab/Left/Right toggles focus, Enter/Space submits focused answer, Y submits yes, N/Escape cancels. | `InteractionOutcome<bool>` returns submitted answer, handled focus movement, cancelled, or ignored. | Disabled ignores all input. Read-only allows focus movement and cancel but blocks answer submit. | `tests/core_component_contracts.rs` covers focus, submit, read-only, and disabled behavior. |
+| `FilePicker` | `FilePickerState` plus `handle_file_picker_input(...)`. | `FilePicker::new(&state)` renders caller-owned state. | Arrows/Home/End/Page move cursor, Enter enters directories or submits focused file, Space toggles selection, Backspace edits search or goes parent, Escape cancels. | `InteractionOutcome<Vec<PathBuf>>` returns selected paths for changed or submitted values, plus handled, cancelled, or ignored. | Disabled ignores all input. Read-only allows cursor and directory navigation but blocks search edits, selection changes, and submit. | `tests/core_component_contracts.rs` covers navigation, submit, read-only, and disabled behavior. |
+| `ColorPicker` | `ColorPickerState` plus `handle_color_picker_input(...)`. | `ColorPicker::new()` can render with owned builder state. | Arrows/Home/End move selection, Enter/Space submits selected color, Escape closes/cancels. | `InteractionOutcome<Color>` returns changed or submitted color, plus cancelled or ignored. | Disabled ignores all input. Read-only blocks selection movement and submit. | `tests/core_component_contracts.rs` covers selection, submit, read-only, and disabled behavior. |
+
+`Paginator`, `ContextMenu`, and `CodeEditor` are intentionally deferred from this
+audited set. `Paginator` still returns a `bool` from its handler, `ContextMenu`
+needs a pure handler contract, and `CodeEditor` needs a separate state/handler
+design before it can share this matrix.
 
 ## Maintenance Rules
 

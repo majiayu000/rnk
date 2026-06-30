@@ -53,5 +53,9 @@ and one mode path:
 - disabled or read-only handling
 - keyboard navigation through the pure handler
 
+`tests/core_component_contracts.rs` is the cross-component contract anchor for
+the recommended core set plus audited input extensions: `MultiSelect`,
+`Confirm`, `FilePicker`, and `ColorPicker`.
+
 Full runtime key/mouse simulation belongs to the test harness workstream tracked
 by issue #27.

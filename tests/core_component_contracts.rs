@@ -1,4 +1,5 @@
 use rnk::prelude::*;
+use std::path::{Path, PathBuf};
 
 fn enter_key() -> Key {
     Key {
@@ -10,6 +11,34 @@ fn enter_key() -> Key {
 fn left_key() -> Key {
     Key {
         left_arrow: true,
+        ..Default::default()
+    }
+}
+
+fn right_key() -> Key {
+    Key {
+        right_arrow: true,
+        ..Default::default()
+    }
+}
+
+fn down_key() -> Key {
+    Key {
+        down_arrow: true,
+        ..Default::default()
+    }
+}
+
+fn space_key() -> Key {
+    Key {
+        space: true,
+        ..Default::default()
+    }
+}
+
+fn tab_key() -> Key {
+    Key {
+        tab: true,
         ..Default::default()
     }
 }
@@ -224,4 +253,204 @@ fn command_palette_interaction_contract() {
         InteractionMode::Disabled,
     );
     assert_eq!(outcome, InteractionOutcome::Ignored);
+}
+
+#[test]
+fn multi_select_interaction_contract() {
+    let config = NavigationConfig::new().vim_navigation(true);
+    let mut state = MultiSelectState::new(0, vec![false, true, false]);
+
+    let outcome = handle_multi_select_input(
+        &mut state,
+        3,
+        "",
+        &space_key(),
+        &config,
+        InteractionMode::Enabled,
+    );
+    assert_eq!(outcome, InteractionOutcome::Changed(vec![0, 1]));
+    assert_eq!(state.selected_indices(), vec![0, 1]);
+
+    let outcome = handle_multi_select_input(
+        &mut state,
+        3,
+        "",
+        &enter_key(),
+        &config,
+        InteractionMode::Enabled,
+    );
+    assert_eq!(outcome, InteractionOutcome::Submitted(vec![0, 1]));
+
+    let mut read_only_state = MultiSelectState::new(0, vec![false, false]);
+    let outcome = handle_multi_select_input(
+        &mut read_only_state,
+        2,
+        "j",
+        &Key::default(),
+        &config,
+        InteractionMode::ReadOnly,
+    );
+    assert_eq!(outcome, InteractionOutcome::Handled);
+    assert_eq!(read_only_state.highlighted(), 1);
+
+    let outcome = handle_multi_select_input(
+        &mut read_only_state,
+        2,
+        "",
+        &space_key(),
+        &config,
+        InteractionMode::ReadOnly,
+    );
+    assert_eq!(outcome, InteractionOutcome::Ignored);
+    assert!(read_only_state.selected_indices().is_empty());
+
+    let outcome = handle_multi_select_input(
+        &mut read_only_state,
+        2,
+        "k",
+        &Key::default(),
+        &config,
+        InteractionMode::Disabled,
+    );
+    assert_eq!(outcome, InteractionOutcome::Ignored);
+    assert_eq!(read_only_state.highlighted(), 1);
+}
+
+#[test]
+fn confirm_interaction_contract() {
+    let mut state = ConfirmState::new("Delete?");
+
+    let outcome =
+        handle_confirm_input_with_mode(&mut state, "", &tab_key(), InteractionMode::Enabled);
+    assert_eq!(outcome, InteractionOutcome::Handled);
+    assert!(state.is_yes_focused());
+
+    let outcome =
+        handle_confirm_input_with_mode(&mut state, "", &enter_key(), InteractionMode::Enabled);
+    assert_eq!(outcome, InteractionOutcome::Submitted(true));
+    assert!(state.is_confirmed());
+
+    let mut read_only_state = ConfirmState::new("Delete?");
+    let outcome = handle_confirm_input_with_mode(
+        &mut read_only_state,
+        "",
+        &tab_key(),
+        InteractionMode::ReadOnly,
+    );
+    assert_eq!(outcome, InteractionOutcome::Handled);
+    assert!(read_only_state.is_yes_focused());
+
+    let outcome = handle_confirm_input_with_mode(
+        &mut read_only_state,
+        "y",
+        &Key::default(),
+        InteractionMode::ReadOnly,
+    );
+    assert_eq!(outcome, InteractionOutcome::Ignored);
+    assert!(!read_only_state.is_answered());
+
+    let outcome = handle_confirm_input_with_mode(
+        &mut read_only_state,
+        "n",
+        &Key::default(),
+        InteractionMode::Disabled,
+    );
+    assert_eq!(outcome, InteractionOutcome::Ignored);
+    assert!(!read_only_state.is_answered());
+}
+
+#[test]
+fn file_picker_interaction_contract() {
+    let mut state = FilePickerState::new(PathBuf::from("/home"));
+    state.set_entries(vec![
+        FileEntry::file("file1.txt", PathBuf::from("/home/file1.txt")),
+        FileEntry::file("file2.txt", PathBuf::from("/home/file2.txt")),
+    ]);
+
+    let outcome = handle_file_picker_input(&mut state, "", &down_key(), InteractionMode::ReadOnly);
+    assert_eq!(outcome, InteractionOutcome::Handled);
+    assert_eq!(state.cursor(), 1);
+
+    let outcome = handle_file_picker_input(&mut state, "", &space_key(), InteractionMode::ReadOnly);
+    assert_eq!(outcome, InteractionOutcome::Ignored);
+    assert!(state.selected().is_empty());
+
+    let outcome = handle_file_picker_input(&mut state, "", &enter_key(), InteractionMode::Enabled);
+    assert_eq!(
+        outcome,
+        InteractionOutcome::Submitted(vec![PathBuf::from("/home/file2.txt")])
+    );
+    assert_eq!(
+        state.submitted(),
+        Some(&[PathBuf::from("/home/file2.txt")][..])
+    );
+
+    let mut dir_state = FilePickerState::new(PathBuf::from("/home"));
+    dir_state.set_entries(vec![FileEntry::directory(
+        "src",
+        PathBuf::from("/home/src"),
+    )]);
+    let outcome =
+        handle_file_picker_input(&mut dir_state, "", &enter_key(), InteractionMode::ReadOnly);
+    assert_eq!(outcome, InteractionOutcome::Handled);
+    assert_eq!(dir_state.current_dir(), Path::new("/home/src"));
+
+    let mut disabled_state = FilePickerState::new(PathBuf::from("/home"));
+    disabled_state.set_entries(vec![FileEntry::file(
+        "file.txt",
+        PathBuf::from("/home/file.txt"),
+    )]);
+    let outcome = handle_file_picker_input(
+        &mut disabled_state,
+        "",
+        &down_key(),
+        InteractionMode::Disabled,
+    );
+    assert_eq!(outcome, InteractionOutcome::Ignored);
+    assert_eq!(disabled_state.cursor(), 0);
+}
+
+#[test]
+fn color_picker_interaction_contract() {
+    let palette = ColorPalette::basic();
+    let mut state = ColorPickerState::new();
+
+    let outcome = handle_color_picker_input(
+        &mut state,
+        &palette.colors,
+        8,
+        &right_key(),
+        InteractionMode::Enabled,
+    );
+    assert_eq!(outcome, InteractionOutcome::Changed(Color::Red));
+    assert_eq!(state.selected, 1);
+
+    let outcome = handle_color_picker_input(
+        &mut state,
+        &palette.colors,
+        8,
+        &enter_key(),
+        InteractionMode::Enabled,
+    );
+    assert_eq!(outcome, InteractionOutcome::Submitted(Color::Red));
+
+    let outcome = handle_color_picker_input(
+        &mut state,
+        &palette.colors,
+        8,
+        &right_key(),
+        InteractionMode::ReadOnly,
+    );
+    assert_eq!(outcome, InteractionOutcome::Ignored);
+    assert_eq!(state.selected, 1);
+
+    let outcome = handle_color_picker_input(
+        &mut state,
+        &palette.colors,
+        8,
+        &left_key(),
+        InteractionMode::Disabled,
+    );
+    assert_eq!(outcome, InteractionOutcome::Ignored);
+    assert_eq!(state.selected, 1);
 }
