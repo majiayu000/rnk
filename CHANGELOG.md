@@ -3,6 +3,13 @@
 All notable release notes for this repository live here. Older generated release
 artifacts are also available from the GitHub Releases page.
 
+## Unreleased
+
+### Changed
+
+- Prepared the release workflow for crates.io trusted publishing through GitHub
+  OIDC, with fail-fast crates.io version checks before publish.
+
 ## 0.19.3 - 2026-06-29
 
 ### Added

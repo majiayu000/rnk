@@ -16,6 +16,7 @@ Brief description of changes.
 - [ ] Tests pass (`cargo test --workspace --all-targets --all-features --locked`)
 - [ ] Package contents checked when package surface changes (`cargo package --list -p rnk --locked`)
 - [ ] README repository docs/examples links are GitHub absolute URLs, not package-relative `docs/` or `examples/` links
+- [ ] Release-touching changes update `docs/RELEASING.md` and preserve trusted publishing / fail-fast gates
 - [ ] New tests added for new functionality
 - [ ] Documentation updated if needed
 

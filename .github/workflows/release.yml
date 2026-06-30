@@ -5,6 +5,10 @@ on:
     tags:
       - 'v*'
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
   PUBLISH_PACKAGES: rnk-style-core rnk-style rnk-icons rnk
@@ -13,6 +17,10 @@ jobs:
   publish:
     name: Publish to crates.io
     runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -64,13 +72,15 @@ jobs:
 
       - name: Check package contents and README links
         run: |
-          set -eu
-          package_list="$(mktemp)"
-          cargo package --list -p rnk --locked > "$package_list"
-          if grep -E '^(AGENTS\.md|CLAUDE\.md|docs/|\.github/|\.claude/)' "$package_list"; then
-            echo "Unexpected agent-facing, docs, or workflow files in rnk package" >&2
-            exit 1
-          fi
+          set -euo pipefail
+          for package in $PUBLISH_PACKAGES; do
+            package_list="$(mktemp)"
+            cargo package --list -p "$package" --locked > "$package_list"
+            if grep -E '^(AGENTS\.md|CLAUDE\.md|docs/|\.github/|\.claude/)' "$package_list"; then
+              echo "Unexpected agent-facing, docs, or workflow files in $package package" >&2
+              exit 1
+            fi
+          done
           if grep -nE '\]\((docs/|examples/)' README.md; then
             echo "README uses package-relative docs/examples links that may break on crates.io" >&2
             exit 1
@@ -79,57 +89,55 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --all-targets --all-features --locked --verbose
 
-      - name: Publish to crates.io
+      - name: Plan crates.io publishing
+        id: publish-plan
         run: |
-          package_version() {
-            local package="$1"
-            PACKAGE="$package" python3 <<'PY'
-          import json
-          import os
-          import subprocess
+          set -euo pipefail
+          unpublished=()
 
-          metadata = json.loads(
-              subprocess.check_output(
-                  ["cargo", "metadata", "--format-version", "1", "--no-deps", "--locked"],
-                  text=True,
-              )
-          )
-          package_name = os.environ["PACKAGE"]
-          packages = {package["name"]: package["version"] for package in metadata["packages"]}
-          print(packages[package_name])
-          PY
-          }
+          for package in $PUBLISH_PACKAGES; do
+            version="$(python3 .github/scripts/crates_io_release.py package-version "$package")"
+            if python3 .github/scripts/crates_io_release.py version-status "$package" "$version"; then
+              echo "::notice::Skipping $package $version because it is already published"
+              continue
+            fi
+
+            status=$?
+            if [ "$status" -eq 10 ]; then
+              echo "::notice::$package $version needs publishing"
+              unpublished+=("$package")
+              continue
+            fi
+
+            exit "$status"
+          done
+
+          echo "packages=${unpublished[*]}" >> "$GITHUB_OUTPUT"
+          echo "count=${#unpublished[@]}" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to crates.io
+        if: steps.publish-plan.outputs.count != '0'
+        id: crates-io-auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish to crates.io
+        if: steps.publish-plan.outputs.count != '0'
+        run: |
+          set -euo pipefail
 
           crate_version_published() {
             local package="$1"
             local version="$2"
-            PACKAGE="$package" VERSION="$version" python3 <<'PY'
-          import os
-          import sys
-          import urllib.error
-          import urllib.request
+            if python3 .github/scripts/crates_io_release.py version-status "$package" "$version"; then
+              return 0
+            fi
 
-          package = os.environ["PACKAGE"]
-          version = os.environ["VERSION"]
-          request = urllib.request.Request(
-              f"https://crates.io/api/v1/crates/{package}/{version}",
-              headers={"User-Agent": "rnk-release-workflow"},
-          )
+            status=$?
+            if [ "$status" -eq 10 ]; then
+              return 1
+            fi
 
-          try:
-              with urllib.request.urlopen(request, timeout=30):
-                  pass
-          except urllib.error.HTTPError as error:
-              if error.code == 404:
-                  sys.exit(1)
-              raise
-          except urllib.error.URLError as error:
-              print(
-                  f"Could not check crates.io for {package} {version}: {error}",
-                  file=sys.stderr,
-              )
-              sys.exit(2)
-          PY
+            exit "$status"
           }
 
           wait_for_crate_version() {
@@ -151,8 +159,8 @@ jobs:
             return 1
           }
 
-          for package in $PUBLISH_PACKAGES; do
-            version="$(package_version "$package")"
+          for package in ${{ steps.publish-plan.outputs.packages }}; do
+            version="$(python3 .github/scripts/crates_io_release.py package-version "$package")"
             if crate_version_published "$package" "$version"; then
               echo "::notice::Skipping $package $version because it is already published"
               continue
@@ -163,7 +171,7 @@ jobs:
             wait_for_crate_version "$package" "$version"
           done
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
 
   github-release:
     name: Create GitHub Release
