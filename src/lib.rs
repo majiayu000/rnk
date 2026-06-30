@@ -13,10 +13,11 @@
 //!
 //! ## API Levels
 //!
-//! - **Stable app surface**: `rnk::prelude::*`, `rnk::prelude::lite::*`, and
-//!   `rnk::prelude::widgets::*`.
+//! - **Stable app surface**: `rnk::prelude::*`, `rnk::prelude::lite::*`,
+//!   `rnk::prelude::widgets::*`, and the root compatibility re-exports listed
+//!   below.
 //! - **Advanced extension surface**: `core`, `components`, `hooks`, `cmd`,
-//!   `animation`, and `layout`.
+//!   `animation`, `layout`, and extension macros.
 //! - **Experimental/internal-adjacent surface**: `renderer`, `runtime`,
 //!   `testing`, and doc-hidden `reconciler` details.
 //!
@@ -125,30 +126,47 @@
 //! });
 //! ```
 
+/// Advanced extension surface for keyframe, easing, and spring animation APIs.
 pub mod animation;
+/// Advanced extension surface for typed side-effect commands.
 pub mod cmd;
+/// Advanced extension surface for component modules and concrete widgets.
+///
+/// Application examples should prefer `rnk::prelude::*` or
+/// `rnk::prelude::widgets::*` unless they are documenting a specific component.
 pub mod components;
+/// Advanced extension surface for core element, style, color, and layout types.
 pub mod core;
+/// Advanced extension surface for hook implementations and hook helper types.
 pub mod hooks;
+/// Advanced extension surface for measurement and Taffy-backed layout details.
 pub mod layout;
+/// Stable convenience macros for declarative UI construction.
 #[macro_use]
 pub mod macros;
 #[doc(hidden)]
 pub mod reconciler;
+/// Experimental advanced surface for renderer controls and terminal buffers.
+///
+/// Prefer root render entry points and `rnk::prelude::*` for normal
+/// applications. Direct renderer types may change before `1.0`.
 pub mod renderer;
+/// Experimental internal-adjacent surface for runtime state and terminal
+/// environment helpers.
 pub mod runtime;
 
-/// Testing utilities for verifying UI components
+/// Experimental test-support surface for snapshots, harnesses, and render
+/// assertions.
 pub mod testing;
 
-// Re-export prelude
+/// Stable application import surfaces.
 pub mod prelude;
 
-// Re-export main types
+// Root compatibility re-exports for common application imports.
 pub use crate::components::{Box, Text};
 pub use crate::core::{AccessibilityProps, AccessibilityRole, Color, Element, ElementId, Style};
 
-// Re-export rendering APIs
+// Root compatibility re-exports for rendering and app-control APIs.
 pub use crate::renderer::{
     AppBuilder,
     AppOptions,

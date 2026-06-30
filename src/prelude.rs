@@ -23,9 +23,15 @@
 //! - **Hooks - Animation**: use_animation, use_transition
 //! - **Rendering**: render, AppBuilder, render_to_string
 //!
-//! This is the recommended stable import surface for application code.
-//! Advanced modules may expose additional types, but examples should prefer
-//! this prelude unless a narrow import is clearer.
+//! This is the recommended stable import surface for application code. It is a
+//! broad convenience prelude for complete apps.
+//!
+//! Use `rnk::prelude::lite::*` when a small example wants fewer names in scope,
+//! `rnk::prelude::widgets::*` for examples centered on the recommended beginner
+//! widgets, and `rnk::prelude::testing::*` for snapshot or interaction tests.
+//! Lower-level modules such as `rnk::renderer`, `rnk::runtime`,
+//! `rnk::components`, and `rnk::hooks` remain public for extension work, but
+//! they are not the preferred starting point for new applications.
 
 // =============================================================================
 // Core Types

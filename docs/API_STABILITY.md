@@ -24,8 +24,12 @@ The root crate also re-exports a small compatibility surface:
 - `rnk::Element`
 - `rnk::ElementId`
 - `rnk::Style`
+- `rnk::AccessibilityProps`
+- `rnk::AccessibilityRole`
 - render entry points such as `rnk::render`, `rnk::render_inline`, and
   `rnk::render_fullscreen`
+- render handle and snapshot helpers such as `rnk::render_handle`,
+  `rnk::render_to_string`, and `rnk::render_to_string_with_options`
 - cross-thread and persistent-output helpers such as `rnk::request_render` and
   `rnk::println`
 - declarative UI macros such as `row!`, `col!`, `box_element!`,
@@ -33,7 +37,9 @@ The root crate also re-exports a small compatibility surface:
   `list_indexed!`
 
 Those root re-exports are supported convenience imports, but new examples should
-prefer `rnk::prelude::*` unless a narrow import is clearer.
+prefer `rnk::prelude::*` unless a narrow import is clearer. Root re-exports are
+kept intentionally smaller than the full prelude so docs.rs users can identify
+the stable app entry points without depending on implementation modules.
 
 `rnk::prelude::lite::*` is the stable low-conflict import set for small examples
 or applications that want fewer names in scope.
@@ -69,7 +75,8 @@ uses them directly:
 | `ModeSwitch`, `Printable`, `IntoPrintable` | Advanced but prelude-exported compatibility types; variants may grow before `1.0`. |
 
 Types that are public only through `rnk::renderer`, and not listed above or in
-the root compatibility surface, remain advanced or experimental.
+the prelude table or root compatibility surface, remain advanced or
+experimental.
 
 ## Advanced And Experimental Surfaces
 
@@ -95,6 +102,11 @@ tests, or extension work. They are not the preferred application surface:
 Public modules not listed as stable should be treated as pre-1.0 advanced
 interfaces. They can change when the change is needed to stabilize the prelude,
 fix terminal behavior, or complete the maturity spec.
+
+The crate root rustdoc mirrors this table. Public modules stay visible on
+docs.rs so advanced users can build custom components and integrations, but each
+module should identify whether it is a stable app surface, advanced extension
+surface, or experimental/internal-adjacent surface.
 
 ## Public Field Audit
 

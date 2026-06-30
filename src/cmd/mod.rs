@@ -6,14 +6,14 @@
 //!
 //! # Core command constructors
 //!
-//! - [`Cmd::none()`]
-//! - [`Cmd::perform()`]
-//! - [`Cmd::batch()`]
-//! - [`Cmd::sequence()`]
-//! - [`Cmd::sleep()`]
-//! - [`Cmd::tick()`]
-//! - [`Cmd::every()`]
-//! - [`Cmd::exec()`]
+//! - [`Cmd::none`](crate::cmd::Cmd::none)
+//! - [`Cmd::perform`](crate::cmd::Cmd::perform)
+//! - [`Cmd::batch`](crate::cmd::Cmd::batch)
+//! - [`Cmd::sequence`](crate::cmd::Cmd::sequence)
+//! - [`Cmd::sleep`](crate::cmd::Cmd::sleep)
+//! - [`Cmd::tick`](crate::cmd::Cmd::tick)
+//! - [`Cmd::every`](crate::cmd::Cmd::every)
+//! - [`Cmd::exec`](crate::cmd::Cmd::exec)
 
 mod core;
 mod exec;

@@ -59,6 +59,12 @@ It is a good fit for agent UIs, chat-style tools, dashboards, forms, selectors,
 and terminal workflows where application code should read more like a component
 tree than a manual draw loop.
 
+New applications should start with `use rnk::prelude::*`. Use
+`rnk::prelude::lite::*` for tiny examples, `rnk::prelude::widgets::*` for the
+recommended beginner widget set, and lower-level modules such as
+`rnk::renderer` or `rnk::runtime` only for extension, integration, or advanced
+testing work.
+
 Prefer Ratatui when you want lower-level control over every frame or already use
 its widget ecosystem. Prefer plain `crossterm` when you only need terminal input
 or a few styled lines.
