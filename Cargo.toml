@@ -19,6 +19,7 @@ exclude = [
     "AGENTS.md",
     "CLAUDE.md",
     "docs/*",
+    "specs/*",
     ".github/*",
     ".claude/*",
     "video/*",

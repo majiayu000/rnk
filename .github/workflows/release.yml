@@ -76,8 +76,8 @@ jobs:
           for package in $PUBLISH_PACKAGES; do
             package_list="$(mktemp)"
             cargo package --list -p "$package" --locked > "$package_list"
-            if grep -E '^(AGENTS\.md|CLAUDE\.md|docs/|\.github/|\.claude/)' "$package_list"; then
-              echo "Unexpected agent-facing, docs, or workflow files in $package package" >&2
+            if grep -E '^(AGENTS\.md|CLAUDE\.md|docs/|specs/|\.github/|\.claude/)' "$package_list"; then
+              echo "Unexpected agent-facing, docs, specs, or workflow files in $package package" >&2
               exit 1
             fi
           done
