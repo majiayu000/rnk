@@ -1,6 +1,6 @@
 # Product Spec: crates.io 发布 fail-fast 和 trusted publishing
 
-Linked issue: https://github.com/majiayu000/rnk/issues/48
+Linked issue: #48 (https://github.com/majiayu000/rnk/issues/48)
 
 ## 1. 背景
 

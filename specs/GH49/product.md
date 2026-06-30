@@ -1,6 +1,6 @@
 # Product Spec: 扩展交互输入组件合同
 
-Linked issue: https://github.com/majiayu000/rnk/issues/49
+Linked issue: #49 (https://github.com/majiayu000/rnk/issues/49)
 
 ## 1. 背景
 

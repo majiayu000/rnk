@@ -612,11 +612,7 @@ list_indexed!(items.iter(), |idx, item| text!("[{}] {}", idx, item))
 ## Theme System
 
 ```rust
-use rnk::components::{
-    ActionButton, ActionRole, ActionState, ComponentState, ComponentVariant,
-    SemanticColor, Theme, ThemeBuilder, get_theme, set_theme, with_theme,
-};
-use rnk::core::Color;
+use rnk::prelude::*;
 
 // Create custom theme
 let theme = ThemeBuilder::new("custom")
@@ -633,15 +629,8 @@ set_theme(theme);
 // Use theme colors
 let color = get_theme().semantic_color(SemanticColor::Primary);
 
-// Use derived design tokens and variants
+// Use derived design tokens for advanced styling
 let tokens = get_theme().design_tokens();
-let focused = get_theme().variant_style(ComponentVariant::Primary, ComponentState::Focused);
-
-// Use shared action styling for button-like labels
-let action = ActionButton::new("Save")
-    .role(ActionRole::Primary)
-    .state(ActionState::Focused)
-    .into_element();
 
 // Scoped theme
 let dark_theme = Theme::dark();
@@ -680,7 +669,7 @@ fn main() -> std::io::Result<()> {
 ## Testing
 
 ```rust
-use rnk::testing::{TestRenderer, assert_layout_valid};
+use rnk::prelude::testing::*;
 
 #[test]
 fn test_component() {
@@ -691,7 +680,7 @@ fn test_component() {
     renderer.validate_layout(&element).expect("valid layout");
 
     // Check rendered output
-    let output = rnk::render_to_string(&element, 80);
+    let output = TestRenderer::new(80, 24).render_to_plain(&element);
     assert!(output.contains("expected text"));
 }
 ```
