@@ -29,7 +29,8 @@ Linked issue: https://github.com/majiayu000/rnk/issues/47
 ## 4. 验证
 
 1. `rg -n "WarpUI|ready-to-spec|ready-to-implement" README.md docs/COMPARISON.md CONTRIBUTING.md .github/ISSUE_TEMPLATE`
-2. `cargo check --workspace --locked`
+2. `python3 .github/scripts/check_markdown_links.py README.md docs/COMPARISON.md CONTRIBUTING.md .github/ISSUE_TEMPLATE specs/GH47`
+3. `cargo check --workspace --locked`
 
 ## 5. 回滚
 
