@@ -100,9 +100,10 @@ jobs:
             if python3 .github/scripts/crates_io_release.py version-status "$package" "$version"; then
               echo "::notice::Skipping $package $version because it is already published"
               continue
+            else
+              status=$?
             fi
 
-            status=$?
             if [ "$status" -eq 10 ]; then
               echo "::notice::$package $version needs publishing"
               unpublished+=("$package")
@@ -130,9 +131,10 @@ jobs:
             local version="$2"
             if python3 .github/scripts/crates_io_release.py version-status "$package" "$version"; then
               return 0
+            else
+              status=$?
             fi
 
-            status=$?
             if [ "$status" -eq 10 ]; then
               return 1
             fi

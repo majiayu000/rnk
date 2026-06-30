@@ -1,6 +1,6 @@
 # Tech Spec: pre-1.0 公共 API 边界加固
 
-Linked issue: https://github.com/majiayu000/rnk/issues/50
+Linked issue: #50 (https://github.com/majiayu000/rnk/issues/50)
 
 ## 1. 设计
 
