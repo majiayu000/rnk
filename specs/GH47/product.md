@@ -1,6 +1,6 @@
 # Product Spec: WarpUI 学习边界和开源工作流定位
 
-Linked issue: https://github.com/majiayu000/rnk/issues/47
+Linked issue: #47 (https://github.com/majiayu000/rnk/issues/47)
 
 ## 1. 背景
 
