@@ -67,3 +67,37 @@ index. For example, `cargo publish --dry-run -p rnk-style` requires
 `rnk-style-core` to be visible on crates.io. The release workflow therefore
 publishes in dependency order and waits for each newly published package version
 to become visible before moving to the next package.
+
+## crates.io Authentication
+
+Releases use crates.io Trusted Publishing through GitHub OIDC. The workflow does
+not read a long-lived `CARGO_REGISTRY_TOKEN` secret.
+
+Before cutting the next release, a crates.io owner must configure Trusted
+Publishing for every publishable crate:
+
+| Crate | Repository | Workflow | Environment |
+| --- | --- | --- | --- |
+| `rnk-style-core` | `majiayu000/rnk` | `release.yml` | `release` |
+| `rnk-style` | `majiayu000/rnk` | `release.yml` | `release` |
+| `rnk-icons` | `majiayu000/rnk` | `release.yml` | `release` |
+| `rnk` | `majiayu000/rnk` | `release.yml` | `release` |
+
+The GitHub publish job has `contents: read` and `id-token: write` permissions so
+`rust-lang/crates-io-auth-action@v1` can request a short-lived token. If the
+trusted publisher is not configured, the auth step must fail before any
+`cargo publish` command runs.
+
+The publish plan checks crates.io before authentication. If all package versions
+already exist, the workflow skips authentication and publishing so a rerun of an
+already-published tag can still create or repair the GitHub Release job.
+
+## Failure Recovery
+
+- If package metadata, package contents, README links, tests, dry-run publishing,
+  or crates.io lookup fail, fix the repository and cut a new tag when needed.
+- If trusted publishing authentication fails, configure crates.io Trusted
+  Publishing for the affected crate and rerun the tag workflow.
+- If a crate publishes but the workflow stops before the next crate, rerun the
+  workflow. Already-published versions are skipped and the remaining unpublished
+  packages continue in dependency order.
