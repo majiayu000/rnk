@@ -34,6 +34,24 @@ cargo run --example counter
 2. For significant changes, open an issue first to discuss the approach
 3. Fork the repository and create a feature branch
 
+### SpecRail-lite Issue Flow
+
+For public API, component behavior, release automation, workflow, or positioning
+changes, use an issue-first and spec-first flow:
+
+1. Open or find one GitHub issue for the work.
+2. Use `ready-to-spec` when the problem is understood and a product/technical
+   spec can be written.
+3. Write `specs/GH<number>/product.md`, `specs/GH<number>/tech.md`, and
+   `specs/GH<number>/tasks.md` for non-trivial changes.
+4. Use `ready-to-implement` when the spec is settled enough for code or docs.
+5. Keep one issue to one PR unless a maintainer explicitly asks for a split or
+   combined change.
+
+Human review remains required for readiness, final approval, merge, release, and
+security decisions. Labels describe queue state; they do not grant automatic
+approval.
+
 ### Code Quality
 
 Run these commands before submitting:

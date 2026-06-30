@@ -1,9 +1,9 @@
 # rnk Framework Comparison
 
 This document is a current evidence snapshot for `rnk` compared with Ink
-(JavaScript), Bubbletea (Go), and Ratatui (Rust). It is not a parity scorecard.
-Terminal UI behavior depends on terminal emulator support, platform behavior,
-and the exact application mode.
+(JavaScript), Bubbletea (Go), Ratatui (Rust), and Warp/WarpUI. It is not a
+parity scorecard. Terminal UI behavior depends on terminal emulator support,
+platform behavior, and the exact application mode.
 
 ## Summary
 
@@ -34,12 +34,16 @@ and the exact application mode.
 
 ## Known Gaps
 
-The maturity spec tracks the remaining work. Important open areas are:
+The maturity spec records the original readiness plan. Current open areas should
+be tracked through active GitHub issues and linked specs. Important areas are:
 
-- Public API boundary and pre-1.0 stability policy.
-- Consistent controlled/uncontrolled contracts for interactive components.
-- Non-color design tokens, component variants, and shared action primitives.
-- Focus scopes, keyboard conventions, accessibility metadata, and fallback text.
+- Keeping the public API boundary tight enough that new users do not depend on
+  advanced or experimental modules by accident.
+- Expanding controlled/uncontrolled contracts from the recommended core
+  component set to the broader interactive input surface.
+- Turning broad examples into a smaller set of product-like templates for agent
+  UIs, chat-style tools, dashboards, and forms.
+- Keeping release automation and publishing checks trustworthy.
 
 See [RNK_MATURITY_SPEC.md](RNK_MATURITY_SPEC.md) for issue-level acceptance
 criteria. See [TERMINAL_COMPATIBILITY.md](TERMINAL_COMPATIBILITY.md) for the
@@ -59,6 +63,33 @@ React ecosystem.
 
 Choose Bubbletea when your application is Go-first or benefits from the broader
 Charm ecosystem and Elm-style update model.
+
+## Warp And WarpUI
+
+Warp is a full agentic development environment and terminal product. Its open
+source repository includes `warpui` and `warpui_core`, which are product-internal
+UI framework crates for Warp's app shell, views, native windowing, rendering,
+fonts, clipboard, and platform integration. Those crates are useful design
+references, but they are not a direct `rnk` competitor because they are not
+distributed as a third-party crates.io UI library.
+
+Choose `rnk` when you want a small Rust dependency for terminal-first
+applications. Look at WarpUI when you are studying how a production terminal
+product organizes UI primitives, component contracts, issue/spec workflow, and
+release discipline.
+
+`rnk` should learn these practices from WarpUI and Warp:
+
+- Treat public positioning as part of the product surface.
+- Keep issue readiness explicit with labels such as `ready-to-spec` and
+  `ready-to-implement`.
+- Prefer component contracts that document state, events, disabled/read-only
+  behavior, and test anchors.
+- Keep release automation observable and fail-fast.
+
+`rnk` should not copy WarpUI's scope. Native windows, GPU rendering, desktop app
+distribution, and product-internal service integration are outside `rnk`'s
+terminal-first library boundary.
 
 ## Documentation Policy
 

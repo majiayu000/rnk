@@ -63,6 +63,12 @@ Prefer Ratatui when you want lower-level control over every frame or already use
 its widget ecosystem. Prefer plain `crossterm` when you only need terminal input
 or a few styled lines.
 
+`rnk` is terminal-first. It is not trying to be a native desktop GUI, GPU
+renderer, windowing toolkit, or product-internal app shell like WarpUI. WarpUI is
+a useful reference for product-grade UI contracts and contribution workflow, but
+`rnk` stays focused on third-party Rust terminal apps that should be installable
+with Cargo.
+
 ### Recent Improvements
 
 - Added core hooks: `use_state`, `use_ref`, `create_context`/`use_context`, `use_layout_effect`
