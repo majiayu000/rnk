@@ -6,7 +6,7 @@ GH-58: https://github.com/majiayu000/rnk/issues/58
 
 <!-- specrail-requires-planned-changes-v1 -->
 <!-- specrail-planned-changes
-{"version":1,"issue":58,"complete":true,"paths":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md","src/components/display/text.rs","src/layout/text_flow.rs","src/layout/mod.rs","src/layout/measure.rs","src/layout/engine.rs","src/renderer/error.rs","src/renderer/mod.rs","src/renderer/tree_renderer.rs","src/renderer/output.rs","src/renderer/element_renderer.rs","src/renderer/pipeline.rs","src/renderer/app.rs","src/renderer/render_to_string.rs","src/renderer/static_content.rs","src/renderer/terminal_controller.rs","src/lib.rs","src/prelude.rs","src/testing/renderer.rs","tests/text_flow_root_cause.rs","tests/text_source_compat.rs","tests/text_flow_parity.rs","tests/text_flow_renderer_error_paths.rs","tests/property_tests.rs","tests/prelude_surfaces.rs","tests/text_flow_error_paths.rs"],"spec_refs":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md"]}
+{"version":1,"issue":58,"complete":true,"paths":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md","src/components/display/text.rs","src/layout/text_flow.rs","src/layout/mod.rs","src/layout/measure.rs","src/layout/engine.rs","src/layout/engine/text_flow_bridge.rs","src/renderer/error.rs","src/renderer/mod.rs","src/renderer/tree_renderer.rs","src/renderer/output.rs","src/renderer/element_renderer.rs","src/renderer/pipeline.rs","src/renderer/app.rs","src/renderer/render_to_string.rs","src/renderer/static_content.rs","src/renderer/terminal_controller.rs","src/lib.rs","src/prelude.rs","src/testing/renderer.rs","tests/text_flow_root_cause.rs","tests/text_source_compat.rs","tests/text_flow_parity.rs","tests/text_flow_renderer_error_paths.rs","tests/property_tests.rs","tests/prelude_surfaces.rs","tests/text_flow_error_paths.rs"],"spec_refs":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md"]}
 -->
 
 ## Product Spec
@@ -120,17 +120,25 @@ styled source bytes
 `LayoutEngine` 增加 engine-local `TextFlowCache` 与当前 frame 的
 `ElementId -> flow result` 映射：
 
-1. `build_node` / `element_to_vnode` 从当前 Element 的既有 `text_content` / `spans` 归一化
-   exact/canonical/reconstructed source 和 style byte ranges，不需要 Element 新字段。
-2. dynamic incremental 路径在 diff 前同步本帧 source；即使 diff 产生空 patch 集合，或
+1. `src/layout/engine/text_flow_bridge.rs` 是从 `engine.rs` 拆出的专用桥接模块，负责从当前
+   Element/VNode 的既有 `text_content` / `spans` 与 element-level Style 构造 flow 输入、
+   对齐 source domain，并在最终 layout width 已知后构造待发布结果；不得以
+   `#[rustfmt::skip]`、压缩既有 patch/reorder 逻辑或把 `engine.rs` 卡在 800 行来代替拆分。
+   普通无 spans 的 Element/VNode 也必须把 element-level Style 带入每个 TextFlow run。
+2. legacy normalized spans 以可见 grapheme 与 hard-break 序列对齐 exact CRLF、lone CR 和
+   trailing-break source ranges；只有序列确实无法完整、无歧义对齐时才发布
+   `Reconstructed` diagnostic，并继续以 `text_content` 为 source truth。
+3. dynamic incremental 路径在 diff 前同步本帧 source；即使 diff 产生空 patch 集合，或
    VNode pure text 未改变但 span/style/options 改变，也会更新 NodeContext 并触发 text
    measure recompute。T3 的 exact no-patch fixture 必须分别改变 source 与 span style，
    并证明当前 frame flow/cache identity 都已更新。
-3. Taffy measure callback 用 `TextFlowCache::get_or_compute`，从结果读取 width/row count；
+4. Taffy measure callback 用 `TextFlowCache::get_or_compute`，从结果读取 width/row count；
    不再调用独立 wrapped-line counter。
-4. 完成 layout 后，engine 只发布与当前 exact key 匹配的不可变 flow。失败或中断不更新
-   published map。
-5. `tree_renderer` 只能通过 engine 的只读查询取得当前 element flow；缺失/错误必须进入
+5. 完成 layout 后，engine 必须用最终 content width 取得或重算与当前 exact key 匹配的
+   immutable flow，再与 layout 原子发布；即使 known dimensions 让 Taffy 不调用 measure
+   callback，也不得缺失 current flow、保留错误 width 的 flow 或把缺失静默当成功。失败或
+   中断不更新 published map。
+6. `tree_renderer` 只能通过 engine 的只读查询取得当前 element flow；缺失/错误必须进入
    B-021 typed boundary，禁止回退到单行 `Output::write`。
 
 logical cache key 保存并比较 source、structured run style、`overflow_x/y`、content width、
@@ -280,7 +288,7 @@ verify_integration_exact() {
 | Behavior invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001 | `layout::text_flow`, `LayoutEngine`, `tree_renderer` | `verify_lib_exact layout::text_flow::tests::text_flow_shared_result`；`verify_integration_exact text_flow_parity measure_rows_equal_rendered_rows` |
-| B-002 | styled source normalization / positioned runs | `verify_lib_exact layout::text_flow::tests::text_flow_styled_runs`；`verify_lib_exact layout::text_flow::tests::split_combining_and_zwj_style_boundary_normalizes` |
+| B-002 | styled source normalization / positioned runs | `verify_lib_exact layout::text_flow::tests::text_flow_styled_runs`；`verify_lib_exact layout::text_flow::tests::split_combining_and_zwj_style_boundary_normalizes`；`verify_lib_exact layout::engine::tests::plain_text_style_is_published` |
 | B-003 | empty input / empty line normalization | `verify_lib_exact layout::text_flow::tests::text_flow_empty_inputs` |
 | B-004 | exact-source hard-break tokenizer | `verify_integration_exact text_source_compat exact_crlf_and_trailing_break_ranges` |
 | B-005 | grapheme tokenizer / Output grapheme cell | `verify_lib_exact layout::text_flow::tests::text_flow_graphemes`；`verify_integration_exact text_flow_parity unicode_graphemes_render_intact` |
@@ -292,13 +300,13 @@ verify_integration_exact() {
 | B-011 | logical source map + render projection | T2：`verify_integration_exact property_tests text_flow_logical_source_round_trip`；T5：`verify_integration_exact text_flow_parity projection_source_cell_round_trip` |
 | B-012 | exact logical cache key | `verify_lib_exact layout::text_flow::tests::text_flow_cache_invalidation`，逐项变更 source/style/width/wrap/overflow/tab/ellipsis/policy；`verify_lib_exact layout::engine::tests::incremental_no_patch_refreshes_source_and_style` |
 | B-013 | immutable cache reuse | `verify_lib_exact layout::text_flow::tests::text_flow_cache_reuse`，比较复用与冷算完整 logical result |
-| B-014 | resize/overflow invalidation and reprojection | `verify_integration_exact text_flow_parity resize_reflows_or_reprojects_before_render`；`verify_integration_exact text_flow_parity overflow_change_recomputes_flow_and_projection` |
+| B-014 | resize/overflow invalidation and reprojection | `verify_lib_exact layout::engine::tests::known_dimensions_publish_final_width_flow`；`verify_integration_exact text_flow_parity resize_reflows_or_reprojects_before_render`；`verify_integration_exact text_flow_parity overflow_change_recomputes_flow_and_projection` |
 | B-015 | finalized-range `TextFlowError` + atomic publish | `verify_lib_exact layout::text_flow::tests::finalized_non_grapheme_range_is_error`；`verify_lib_exact layout::engine::tests::text_flow_failure_is_atomic` |
 | B-016 | immutable readers / interrupted compute | `verify_lib_exact layout::text_flow::tests::text_flow_interruption` |
 | B-017 | compatibility wrappers/public surface | `verify_integration_exact text_source_compat plain_multiline_compatibility`；`verify_integration_exact text_source_compat external_element_struct_literal_compiles`；`cargo check --workspace --all-targets --all-features --locked` |
 | B-018 | structured style only / no raw controls | `verify_integration_exact text_flow_parity source_controls_are_not_terminal_sequences` |
 | B-019 | current-head evidence/coverage | `cargo fmt --all -- --check`; exact CI clippy command；`cargo test --workspace --all-targets --all-features --locked`；CodeCov patch coverage >=80%，TextFlow core tarpaulin report =100% |
-| B-020 | Text private source -> existing Element fields | T7：`verify_integration_exact text_source_compat exact_crlf_and_trailing_break_ranges`；`verify_integration_exact text_source_compat structured_source_domain`；T3：`verify_lib_exact layout::engine::tests::reconstructed_source_domain_uses_text_content_truth` |
+| B-020 | Text private source -> existing Element fields | T7：`verify_integration_exact text_source_compat exact_crlf_and_trailing_break_ranges`；`verify_integration_exact text_source_compat structured_source_domain`；T3：`verify_lib_exact layout::engine::tests::alignable_crlf_spans_keep_exact_source_domain`；`verify_lib_exact layout::engine::tests::reconstructed_source_domain_uses_text_content_truth` |
 | B-021 | engine/render/App/string typed failure chain | T5 crate-private unit gates：`verify_lib_exact renderer::tree_renderer::tests::text_flow_error_preserves_source_and_commits_no_partial_output`、`verify_lib_exact renderer::pipeline::tests::text_flow_error_keeps_previous_vnode`；T5 public integration gates：`verify_integration_exact text_flow_renderer_error_paths try_render_to_string_preserves_source_and_returns_no_partial_string`、`verify_integration_exact prelude_surfaces try_render_to_string_surface`；T8：`verify_integration_exact text_flow_error_paths typed_error_reaches_remaining_callers`、`verify_integration_exact text_flow_error_paths caller_failure_commits_no_partial_output` |
 | B-022 | compositor control sanitization | `verify_lib_exact renderer::output::tests::source_controls_are_replaced`；`verify_integration_exact text_flow_parity source_controls_are_not_terminal_sequences` |
 | B-023 | uncached viewport projection | `verify_integration_exact text_flow_parity viewport_projection_tracks_overflow_scroll_and_clip`；`verify_integration_exact text_flow_parity overflow_change_recomputes_flow_and_projection` |

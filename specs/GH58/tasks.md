@@ -65,7 +65,7 @@ verify_integration_exact() {
   - Dependencies: GH58-T1 root-cause artifact、GH58-T7 source contract。
   - Covers: B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009, B-011, B-012, B-013, B-015, B-016, B-017, B-018, B-020, B-022。
 
-- [ ] `SP58-T3`（lane alias: `GH58-T3`）把 LayoutEngine 测量、frame context 与 logical cache 收敛到 TextFlow。Owner: `layout-integration-lane` | Done when: direct/incremental 每帧同步当前 source/style，即使 incremental diff 返回空 patch 集合也必须分别识别 source-only 与 span-style-only 变化并刷新 NodeContext/current flow/cache identity；无法按 T2 规则对齐 spans 时发布 Reconstructed diagnostic 且仍以 `text_content` 为 source truth；Taffy measure 只读 TextFlow dimensions；logical cache key 只含 source/style/width/wrap/`overflow_x/y`/tab/ellipsis/Unicode policy 完整值并逐值比较；overflow-only 变化也使 flow cache miss；完整结果原子发布；viewport height/scroll/content rect/clip/terminal bounds 不写入 cache | Verify: `verify_lib_exact layout::text_flow::tests::text_flow_cache_invalidation`; `verify_lib_exact layout::text_flow::tests::text_flow_cache_reuse`; `verify_lib_exact layout::engine::tests::incremental_no_patch_refreshes_source_and_style`; `verify_lib_exact layout::engine::tests::reconstructed_source_domain_uses_text_content_truth`; `verify_lib_exact layout::engine::tests::text_flow_failure_is_atomic`。
+- [ ] `SP58-T3`（lane alias: `GH58-T3`）把 LayoutEngine 测量、frame context 与 logical cache 收敛到 TextFlow。Owner: `layout-integration-lane` | Done when: `src/layout/engine/text_flow_bridge.rs` 是从 `engine.rs` 拆出的专用桥接模块，不得靠 `#[rustfmt::skip]`、压缩既有逻辑或把 `engine.rs` 卡在 800 行规避拆分；direct/incremental 每帧同步当前 source/style，即使 incremental diff 返回空 patch 集合也必须分别识别 source-only 与 span-style-only 变化并刷新 NodeContext/current flow/cache identity；普通 Element/VNode 的 element-level Style 必须进入 TextFlow；legacy normalized spans 必须按 visible grapheme/hard-break 序列对齐 exact CRLF、CR 与 trailing source ranges，只有确实无法完整、无歧义对齐时才发布 Reconstructed diagnostic 且仍以 `text_content` 为 source truth；Taffy measure 只读 TextFlow dimensions；logical cache key 只含 source/style/width/wrap/`overflow_x/y`/tab/ellipsis/Unicode policy 完整值并逐值比较；overflow-only 变化也使 flow cache miss；layout 成功后必须基于最终 content width 原子发布 current flow，即使 known dimensions 让 Taffy 不调用 measure callback，也不得静默缺失或保留错误宽度；viewport height/scroll/content rect/clip/terminal bounds 不写入 cache | Verify: `verify_lib_exact layout::text_flow::tests::text_flow_cache_invalidation`; `verify_lib_exact layout::text_flow::tests::text_flow_cache_reuse`; `verify_lib_exact layout::engine::tests::incremental_no_patch_refreshes_source_and_style`; `verify_lib_exact layout::engine::tests::plain_text_style_is_published`; `verify_lib_exact layout::engine::tests::alignable_crlf_spans_keep_exact_source_domain`; `verify_lib_exact layout::engine::tests::known_dimensions_publish_final_width_flow`; `verify_lib_exact layout::engine::tests::reconstructed_source_domain_uses_text_content_truth`; `verify_lib_exact layout::engine::tests::text_flow_failure_is_atomic`。
   - Dependencies: GH58-T2。
   - Covers: B-001, B-002, B-012, B-013, B-014, B-015, B-016, B-020, B-023。
 
@@ -92,7 +92,8 @@ verify_integration_exact() {
 - GH58-T7 独占 `src/components/display/text.rs`、`tests/text_source_compat.rs`。
 - GH58-T2 独占 `src/layout/text_flow.rs`、`src/layout/mod.rs`、`src/layout/measure.rs`、
   `tests/property_tests.rs`，在 T7 source contract 稳定后开始。
-- GH58-T3 独占 `src/layout/engine.rs`。
+- GH58-T3 独占 `src/layout/engine.rs`、`src/layout/engine/text_flow_bridge.rs`；后者是从
+  `engine.rs` 拆出的专用桥接模块，不得用 `#[rustfmt::skip]` 或压缩旧逻辑代替拆分。
 - GH58-T4 独占 `src/renderer/output.rs`。
 - GH58-T5 独占 `src/renderer/error.rs`、`src/renderer/mod.rs`、
   `src/renderer/tree_renderer.rs`、`src/renderer/element_renderer.rs`、
