@@ -6,7 +6,7 @@ GH-58: https://github.com/majiayu000/rnk/issues/58
 
 <!-- specrail-requires-planned-changes-v1 -->
 <!-- specrail-planned-changes
-{"version":1,"issue":58,"complete":true,"paths":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md","src/components/display/text.rs","src/layout/text_flow.rs","src/layout/mod.rs","src/layout/measure.rs","src/layout/engine.rs","src/layout/engine/text_flow_bridge.rs","src/renderer/error.rs","src/renderer/mod.rs","src/renderer/tree_renderer.rs","src/renderer/output.rs","src/renderer/element_renderer.rs","src/renderer/pipeline.rs","src/renderer/app.rs","src/renderer/render_to_string.rs","src/renderer/static_content.rs","src/renderer/terminal_controller.rs","src/lib.rs","src/prelude.rs","src/testing/renderer.rs","tests/text_flow_root_cause.rs","tests/text_source_compat.rs","tests/text_flow_parity.rs","tests/text_flow_renderer_error_paths.rs","tests/property_tests.rs","tests/prelude_surfaces.rs","tests/text_flow_error_paths.rs"],"spec_refs":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md"]}
+{"version":1,"issue":58,"complete":true,"paths":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md","src/components/display/text.rs","src/layout/text_flow.rs","src/layout/mod.rs","src/layout/measure.rs","src/layout/engine.rs","src/layout/engine/text_flow_bridge.rs","src/layout/engine/tests.rs","src/renderer/error.rs","src/renderer/mod.rs","src/renderer/tree_renderer.rs","src/renderer/output.rs","src/renderer/element_renderer.rs","src/renderer/pipeline.rs","src/renderer/app.rs","src/renderer/render_to_string.rs","src/renderer/static_content.rs","src/renderer/terminal_controller.rs","src/lib.rs","src/prelude.rs","src/testing/renderer.rs","tests/text_flow_root_cause.rs","tests/text_source_compat.rs","tests/text_flow_parity.rs","tests/text_flow_renderer_error_paths.rs","tests/property_tests.rs","tests/prelude_surfaces.rs","tests/text_flow_error_paths.rs"],"spec_refs":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md"]}
 -->
 
 ## Product Spec
@@ -125,6 +125,8 @@ styled source bytes
    对齐 source domain，并在最终 layout width 已知后构造待发布结果；不得以
    `#[rustfmt::skip]`、压缩既有 patch/reorder 逻辑或把 `engine.rs` 卡在 800 行来代替拆分。
    普通无 spans 的 Element/VNode 也必须把 element-level Style 带入每个 TextFlow run。
+   `src/layout/engine/tests.rs` 只机械承载从 `engine.rs` 迁出的既有 engine unit tests 与
+   T3 新 exact gates；不得改变既有测试语义、弱化断言或引入 GH-59/GH-60 行为。
 2. legacy normalized spans 以可见 grapheme 与 hard-break 序列对齐 exact CRLF、lone CR 和
    trailing-break source ranges；只有序列确实无法完整、无歧义对齐时才发布
    `Reconstructed` diagnostic，并继续以 `text_content` 为 source truth。
