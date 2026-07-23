@@ -18,7 +18,7 @@ GH-58: https://github.com/majiayu000/rnk/issues/58
 
 ## Codebase Context
 
-以下锚点均在 `origin/main` 基线 `e4a89ae128533270d28d768d49977a05a389a582`
+以下锚点均在 `origin/main` 基线 `54617335e9ec16825232685e94433acdd1fd7cb4`
 上通过 Read/grep 核实。
 
 | Area | Files | Current behavior | Why relevant |
