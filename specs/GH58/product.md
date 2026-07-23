@@ -87,19 +87,21 @@ GH-57 umbrella 文档替代自身验收。
     frame 的 render projection 再给出 `{visible cells | clipped}`，每个可见 cell 也必须能
     反查 source grapheme 或 synthetic ellipsis。两层映射均不得指向 grapheme 中间字节。
 12. **B-012** logical flow cache key 必须精确包含 source bytes、line/span 结构及全部
-    structured run style 值（但不含作为 projection 输入的 `overflow_x/y`）、可用内容宽度、
-    `TextWrap`、tab stop、ellipsis 与 Unicode width policy/revision。
+    structured run style 值、`overflow_x/y`、可用内容宽度、`TextWrap`、tab stop、ellipsis
+    与 Unicode width policy/revision。
     任一项改变必须重算；不得只依赖可能碰撞的 hash 或 Element frame ID 判定相等。viewport
-    height、`overflow_x/y`、scroll offsets、content rect、clip stack 与 terminal bounds
-    不进入 logical cache，而必须每 frame 参与 B-023 render projection。
+    height、scroll offsets、content rect、clip stack 与 terminal bounds 不进入 logical cache，
+    而必须每 frame 参与 B-023 render projection。`overflow_x/y` 虽不改变 logical row
+    geometry，仍按 linked issue 的验收语义使完整 TextFlow 结果失效并重算，随后以新结果重建
+    projection；不得只复用旧 logical flow 并改 projection。
 13. **B-013** 当 B-012 的所有输入完全相同时允许复用缓存，复用结果必须与重新计算逐字段
     等价且不可被调用方修改。重复 measure/render 不得追加 run、改变 dirty cells 或产生
     第二份不同 source map。
-14. **B-014** terminal resize 改变任一 Text element 的可用 content width 时，该 element
-    的 logical flow 必须在同一 frame 失效并重算；仅高度、scroll 或 clip 改变时允许复用
-    logical flow，但必须在同一 frame 重建 projection。layout row count 必须等于 logical
-    rows，实际输出必须等于 projection 的当前 visible rows；renderer 不得使用上一 viewport
-    的旧 visibility。
+14. **B-014** terminal resize 改变任一 Text element 的可用 content width，或
+    `overflow_x/y` 单独改变时，该 element 的 logical flow 必须在同一 frame 失效并重算；
+    仅高度、scroll 或 clip 改变时允许复用 logical flow，但必须在同一 frame 重建
+    projection。layout row count 必须等于 logical rows，实际输出必须等于 projection 的当前
+    visible rows；renderer 不得使用上一 viewport 的旧 visibility。
 15. **B-015** flow 计算或缓存发布失败时，纯 TextFlow 层必须返回 `TextFlowError`，不得发布
     部分结果；renderer 消费缺失/错误 flow 时不得回退到当前“只写第一行”的旧路径并显示为
     成功，上一帧缓存也不得被错标为当前输入的有效结果。非 grapheme-boundary error 仅适用于
@@ -138,9 +140,11 @@ GH-57 umbrella 文档替代自身验收。
     执行相同防线，绝不能把 source 的 ESC/C0/C1 bytes 写入 terminal；只有 renderer 根据
     结构化 Style/terminal protocol 生成的 allowlisted ANSI 序列可进入最终输出。
 23. **B-023** render projection 是 frame-local、不可跨 viewport 缓存的结果；它必须以
-    logical flow、`overflow_x/y`、scroll offsets、content rect、完整 clip stack 与 terminal
-    bounds 为输入，原子地产生 visible/clipped source dispositions 和 cells。height-only
-    resize、scroll 或任一祖先 clip 改变都必须重投影，不能复用上一 frame 的 visibility。
+    当前 logical flow、`overflow_x/y`、scroll offsets、content rect、完整 clip stack 与
+    terminal bounds 为输入，原子地产生 visible/clipped source dispositions 和 cells。
+    `overflow_x/y` 改变必须先按 B-012 重算 flow 再重投影；height-only resize、scroll
+    或任一祖先 clip 改变可以复用 logical flow，但仍必须重投影，不能复用上一 frame 的
+    visibility。
 24. **B-024** GH-58 不给 public `Element` 增加任何 required field，也不把它改为
     `#[non_exhaustive]`。`Text` 的私有 source state 在 `into_element` 时写入既有
     `text_content`：plain input 保留 exact bytes，structured input 写 canonical bytes；
@@ -161,9 +165,10 @@ GH-57 umbrella 文档替代自身验收。
       并对 truncated、clipped、hard-break、zero-width 和 synthetic ellipsis 给出明确结果，
       证明 B-011；`Text::new("a\r\nb\r\n")` 的 source map 必须指向原始 CRLF byte ranges，
       trailing break 在不生成最终空行时仍可查询，证明 B-004、B-020。
-- [ ] 内容、span/style 结构、宽度、wrap、overflow、tab、ellipsis 或 Unicode policy
-      中属于 logical-flow 的输入分别改变时 cache miss；height/scroll/clip 单独改变时
-      logical cache 可 hit 但 projection 必须改变，证明 B-012、B-013、B-023。
+- [ ] 内容、span/style 结构、宽度、wrap、`overflow_x/y`、tab、ellipsis 或 Unicode
+      policy 分别改变时 cache miss；overflow-only 变更同时证明 flow 重算与 projection
+      重建，height/scroll/clip 单独改变时 logical cache 可 hit 但 projection 必须改变，
+      证明 B-012、B-013、B-014、B-023。
 - [ ] 连续窄/宽 resize、计算失败注入、取消/中断和重复 render 测试无旧 flow、部分 flow、
       越界写入或第一行 fallback；negative fixtures 分别从 LayoutEngine、dynamic/static App
       路径和 `try_render_to_string*` 观察同一 typed cause，证明 B-014 至 B-016、B-021。

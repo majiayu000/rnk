@@ -106,7 +106,9 @@ styled source bytes
 - width=0 消费输入并返回 logical rows，但 positioned runs 为空。
 - overwide grapheme 在 width=1 不拆分；logical flow 保留完整 run，projection 再按当前
   overflow/clip 将它标为 visible 或 clipped。
-- overflow/scroll/clip 不反向改变 row count，也不写入 logical cache。
+- overflow/scroll/clip 不反向改变 row count；但为满足 GH-58 的明确验收合同，
+  `overflow_x/y` 是 logical cache key 的失效维度，变化时重算等价的 logical rows 后再
+  重建 projection。scroll/clip 仍只触发 projection。
 
 ### 4. LayoutEngine 所有 flow 生命周期
 
@@ -124,13 +126,13 @@ styled source bytes
 5. `tree_renderer` 只能通过 engine 的只读查询取得当前 element flow；缺失/错误必须进入
    B-021 typed boundary，禁止回退到单行 `Output::write`。
 
-logical cache key 保存并比较 source、去除 overflow/scroll/clip 字段后的 structured run
-style、content width、TextWrap、tab、ellipsis、Unicode policy 完整值；hash 只能用于索引，
-命中后仍做 equality。它不依赖 frame-local Element ID；
-width 或 logical input 改变即 miss。viewport height、overflow、scroll、content rect、
-clip stack 与 terminal bounds 不属于这个 key，也不允许缓存其 visible/clipped 结果。
-每次 render 都从当前完整 viewport context 新建 `RenderProjection`；缓存为 LayoutEngine
-实例所有，不增加进程全局锁或跨应用状态。
+logical cache key 保存并比较 source、structured run style、`overflow_x/y`、content width、
+TextWrap、tab、ellipsis、Unicode policy 完整值；hash 只能用于索引，命中后仍做 equality。
+它不依赖 frame-local Element ID；width、overflow 或其他 logical input 改变即 miss。
+viewport height、scroll、content rect、clip stack 与 terminal bounds 不属于这个 key，
+也不允许缓存其 visible/clipped 结果。每次 render 都从当前完整 viewport context 新建
+`RenderProjection`；overflow-only 变化先产生新的等价 logical flow，再以它重建
+projection。缓存为 LayoutEngine 实例所有，不增加进程全局锁或跨应用状态。
 
 Taffy measure closure 本身不能返回 `Result`，所以失败处理固定为：NodeContext 记录首个
 `TextFlowError`，该次 closure 返回只供 Taffy 结束遍历的零尺寸 sentinel，但不发布 flow、
@@ -277,9 +279,9 @@ verify_integration_exact() {
 | B-009 | zero/narrow width + overwide disposition | `verify_lib_exact layout::text_flow::tests::text_flow_narrow_width`；Output bounds 断言 |
 | B-010 | frame-local renderer projection | `verify_integration_exact text_flow_parity viewport_projection_tracks_overflow_scroll_and_clip` |
 | B-011 | logical source map + render projection | `verify_integration_exact property_tests text_flow_source_cell_round_trip` |
-| B-012 | exact logical cache key | `verify_lib_exact layout::text_flow::tests::text_flow_cache_invalidation`，逐项变更 source/style/width/wrap/tab/ellipsis/policy |
+| B-012 | exact logical cache key | `verify_lib_exact layout::text_flow::tests::text_flow_cache_invalidation`，逐项变更 source/style/width/wrap/overflow/tab/ellipsis/policy |
 | B-013 | immutable cache reuse | `verify_lib_exact layout::text_flow::tests::text_flow_cache_reuse`，比较复用与冷算完整 logical result |
-| B-014 | resize/reprojection | `verify_integration_exact text_flow_parity resize_reflows_or_reprojects_before_render` |
+| B-014 | resize/overflow invalidation and reprojection | `verify_integration_exact text_flow_parity resize_reflows_or_reprojects_before_render`；`verify_integration_exact text_flow_parity overflow_change_recomputes_flow_and_projection` |
 | B-015 | finalized-range `TextFlowError` + atomic publish | `verify_lib_exact layout::text_flow::tests::finalized_non_grapheme_range_is_error`；`verify_lib_exact layout::engine::tests::text_flow_failure_is_atomic` |
 | B-016 | immutable readers / interrupted compute | `verify_lib_exact layout::text_flow::tests::text_flow_interruption` |
 | B-017 | compatibility wrappers/public surface | `verify_integration_exact text_source_compat external_element_struct_literal_compiles`；`cargo check --workspace --all-targets --all-features --locked` |
@@ -288,7 +290,7 @@ verify_integration_exact() {
 | B-020 | Text private source -> existing Element fields | `verify_integration_exact text_source_compat exact_crlf_and_trailing_break_ranges`；`verify_integration_exact text_source_compat structured_and_reconstructed_domains` |
 | B-021 | engine/render/App/string typed failure chain | `verify_integration_exact text_flow_error_paths typed_error_reaches_all_render_entrypoints`；`verify_integration_exact prelude_surfaces try_render_to_string_surface` |
 | B-022 | compositor control sanitization | `verify_lib_exact renderer::output::tests::source_controls_are_replaced`；`verify_integration_exact text_flow_parity source_controls_are_not_terminal_sequences` |
-| B-023 | uncached viewport projection | `verify_integration_exact text_flow_parity viewport_projection_tracks_overflow_scroll_and_clip` |
+| B-023 | uncached viewport projection | `verify_integration_exact text_flow_parity viewport_projection_tracks_overflow_scroll_and_clip`；`verify_integration_exact text_flow_parity overflow_change_recomputes_flow_and_projection` |
 | B-024 | Element literal compatibility | `verify_integration_exact text_source_compat external_element_struct_literal_compiles` |
 
 ## 数据流

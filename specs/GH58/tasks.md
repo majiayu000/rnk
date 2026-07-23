@@ -45,19 +45,27 @@ verify_integration_exact() {
 
 ## 实现任务
 
-- [ ] `SP58-T1`（lane alias: `GH58-T1`）建立只依赖现有 public API 的可重复根因 fixture。Owner: `root-cause-test-lane` | Done when: 新增 `tests/text_flow_root_cause.rs`，只复现当前长 plain/rich 文本 measure rows 与 rendered rows 不一致；fixture 在未实现新 API 时即可编译，并在实现前产生预期 red assertion；不得引用 source metadata、TextFlow、try renderer、projection 或后续任务 API | Verify: `verify_integration_exact text_flow_root_cause measure_rows_must_equal_rendered_rows` 在实现前匹配恰好一个测试并产生预期 assertion failure，在最终实现 head 必须通过。
+- [ ] `SP58-T1`（lane alias: `GH58-T1`）在隔离 scratch worktree 中建立只依赖现有 public
+  API 的可重复根因 fixture。Owner: `root-cause-test-lane` | Done when: 临时
+  `tests/text_flow_root_cause.rs` 只复现当前长 plain/rich 文本 measure rows 与 rendered rows
+  不一致；fixture 在未实现新 API 时可编译且产生预期 assertion failure；保存 exact base
+  SHA、fixture patch digest 与失败命令摘要到外部 artifact 后恢复 scratch worktree，目标
+  PR 分支不得提交红测或其他改动；最终 fixture 由 GH58-T5 与首个使其转绿的 renderer
+  集成原子提交 | Verify: 在 scratch worktree 中
+  `verify_integration_exact text_flow_root_cause measure_rows_must_equal_rendered_rows`
+  恰好匹配一个测试并产生预期 assertion failure；`git status --short` 随后为空。
   - Dependencies: 实现门已开；无代码任务依赖。
   - Covers: B-001。
 
 - [ ] `SP58-T7`（lane alias: `GH58-T7`）在不改变 Element public layout 的前提下保留 source。Owner: `text-source-lane` | Done when: `src/components/display/text.rs` 的 private `TextSourceState` 在 `str::lines()` 前保存 exact input；structured constructors 生成 canonical source；`into_element` 只写既有 `text_content` / `spans`；不修改 Element fields、不加 `#[non_exhaustive]`、不建全局 sidecar；`tests/text_source_compat.rs` 独占 exact CRLF/trailing、structured/reconstructed domain、clone 与外部完整 Element literal fixtures | Verify: `verify_integration_exact text_source_compat exact_crlf_and_trailing_break_ranges`; `verify_integration_exact text_source_compat structured_and_reconstructed_domains`; `verify_integration_exact text_source_compat external_element_struct_literal_compiles`。
-  - Dependencies: GH58-T1 root-cause fixture checkpoint 已提交；不写 T1 文件。
+  - Dependencies: GH58-T1 root-cause artifact 已记录；目标分支保持全绿。
   - Covers: B-004, B-011, B-012, B-017, B-020, B-024。
 
 - [ ] `SP58-T2`（lane alias: `GH58-T2`）实现 logical TextFlow core 与兼容 measure helper。Owner: `text-flow-core-lane` | Done when: `src/layout/text_flow.rs` 完整产生 immutable rows/positioned safe styled runs/logical bidirectional map/dispositions/diagnostics；输入 style boundary 切入 combining/ZWJ grapheme 时先归一到首 source style 而非报错，只有 finalized token/map range 违反 grapheme boundary 才返回 typed error；hard-break/tab 先结构化消费，ESC/C0/DEL/C1 生成带原 range 的 safe replacement；`src/layout/mod.rs` 暴露必要类型；`src/layout/measure.rs` 委托同一算法；`tests/property_tests.rs` 由本 lane 独占并增加 logical map properties | Verify: `verify_lib_exact layout::text_flow::tests::split_combining_and_zwj_style_boundary_normalizes`; `verify_lib_exact layout::text_flow::tests::finalized_non_grapheme_range_is_error`; `verify_lib_exact layout::text_flow::tests::text_flow_control_replacement`; `verify_integration_exact property_tests text_flow_source_cell_round_trip`。
-  - Dependencies: GH58-T1 fixture checkpoint、GH58-T7 source contract。
+  - Dependencies: GH58-T1 root-cause artifact、GH58-T7 source contract。
   - Covers: B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009, B-011, B-012, B-013, B-015, B-016, B-017, B-018, B-020, B-022。
 
-- [ ] `SP58-T3`（lane alias: `GH58-T3`）把 LayoutEngine 测量、frame context 与 logical cache 收敛到 TextFlow。Owner: `layout-integration-lane` | Done when: direct/incremental 每帧同步当前 source/style；Taffy measure 只读 TextFlow dimensions；logical cache key 只含 source/style/width/wrap/tab/ellipsis/Unicode policy 完整值并逐值比较；完整结果原子发布；viewport/overflow/scroll/clip 状态不写入 cache | Verify: `verify_lib_exact layout::text_flow::tests::text_flow_cache_invalidation`; `verify_lib_exact layout::text_flow::tests::text_flow_cache_reuse`; `verify_lib_exact layout::engine::tests::text_flow_failure_is_atomic`。
+- [ ] `SP58-T3`（lane alias: `GH58-T3`）把 LayoutEngine 测量、frame context 与 logical cache 收敛到 TextFlow。Owner: `layout-integration-lane` | Done when: direct/incremental 每帧同步当前 source/style；Taffy measure 只读 TextFlow dimensions；logical cache key 只含 source/style/width/wrap/`overflow_x/y`/tab/ellipsis/Unicode policy 完整值并逐值比较；overflow-only 变化也使 flow cache miss；完整结果原子发布；viewport height/scroll/content rect/clip/terminal bounds 不写入 cache | Verify: `verify_lib_exact layout::text_flow::tests::text_flow_cache_invalidation`; `verify_lib_exact layout::text_flow::tests::text_flow_cache_reuse`; `verify_lib_exact layout::engine::tests::text_flow_failure_is_atomic`。
   - Dependencies: GH58-T2。
   - Covers: B-001, B-002, B-012, B-013, B-014, B-015, B-016, B-023。
 
@@ -65,7 +73,7 @@ verify_integration_exact() {
   - Dependencies: GH58-T2、GH58-T3；不写任何 integration test 文件。
   - Covers: B-001, B-005, B-006, B-009, B-011, B-017, B-018, B-022。
 
-- [ ] `SP58-T5`（lane alias: `GH58-T5`）收敛 renderer、frame-local projection、render-to-string 与 public typed surface。Owner: `render-parity-lane` | Done when: 新增 `try_render_element_tree` / `try_render_element` / `try_render_dynamic_frame` Result variants；现有同名非 try 函数保持原返回类型并仅作为 fail-loud compatibility wrappers，使尚未迁移的 App/static/TestRenderer callers 在 T5 exact commit 仍编译；tree/element try renderer 只消费 logical runs并构建不缓存的 RenderProjection；dynamic try pipeline 不提交 partial frame；`TextRenderError`、`try_render_to_string*` 与 exports 完成；本 lane 独占 parity/prelude tests | Verify: `cargo check --workspace --all-targets --all-features --locked`; `verify_integration_exact text_flow_parity measure_rows_equal_rendered_rows`; `verify_integration_exact text_flow_parity viewport_projection_tracks_overflow_scroll_and_clip`; `verify_integration_exact text_flow_parity resize_reflows_or_reprojects_before_render`; `verify_integration_exact prelude_surfaces try_render_to_string_surface`。
+- [ ] `SP58-T5`（lane alias: `GH58-T5`）收敛 renderer、frame-local projection、render-to-string 与 public typed surface。Owner: `render-parity-lane` | Done when: 新增 `try_render_element_tree` / `try_render_element` / `try_render_dynamic_frame` Result variants；现有同名非 try 函数保持原返回类型并仅作为 fail-loud compatibility wrappers，使尚未迁移的 App/static/TestRenderer callers 在 T5 exact commit 仍编译；tree/element try renderer 只消费 logical runs并构建不缓存的 RenderProjection；overflow-only 变化先取得新的 flow 再投影；dynamic try pipeline 不提交 partial frame；`TextRenderError`、`try_render_to_string*` 与 exports 完成；从 GH58-T1 artifact 恢复 `tests/text_flow_root_cause.rs`，与首个使它通过的 renderer 集成原子提交；本 lane 独占 root-cause/parity/prelude tests | Verify: `cargo check --workspace --all-targets --all-features --locked`; `verify_integration_exact text_flow_root_cause measure_rows_must_equal_rendered_rows`; `verify_integration_exact text_flow_parity measure_rows_equal_rendered_rows`; `verify_integration_exact text_flow_parity viewport_projection_tracks_overflow_scroll_and_clip`; `verify_integration_exact text_flow_parity overflow_change_recomputes_flow_and_projection`; `verify_integration_exact text_flow_parity resize_reflows_or_reprojects_before_render`; `verify_integration_exact prelude_surfaces try_render_to_string_surface`。
   - Dependencies: GH58-T3、GH58-T4；不写 T1/T2/T7/T8 tests。
   - Covers: B-001, B-002, B-005, B-007, B-008, B-009, B-010, B-011, B-013, B-014, B-015, B-017, B-018, B-021, B-022, B-023。
 
@@ -79,7 +87,8 @@ verify_integration_exact() {
 
 ## 并行拆分
 
-- GH58-T1 独占 `tests/text_flow_root_cause.rs`，只建立现有 API root-cause checkpoint。
+- GH58-T1 只在隔离 scratch worktree 生成 root-cause patch/evidence artifact，不向目标分支
+  提交文件；GH58-T5 独占并原子提交最终绿色的 `tests/text_flow_root_cause.rs`。
 - GH58-T7 独占 `src/components/display/text.rs`、`tests/text_source_compat.rs`。
 - GH58-T2 独占 `src/layout/text_flow.rs`、`src/layout/mod.rs`、`src/layout/measure.rs`、
   `tests/property_tests.rs`，在 T7 source contract 稳定后开始。
@@ -88,12 +97,15 @@ verify_integration_exact() {
 - GH58-T5 独占 `src/renderer/error.rs`、`src/renderer/mod.rs`、
   `src/renderer/tree_renderer.rs`、`src/renderer/element_renderer.rs`、
   `src/renderer/pipeline.rs`、`src/renderer/render_to_string.rs`、`src/lib.rs`、
-  `src/prelude.rs`、`tests/text_flow_parity.rs`、`tests/prelude_surfaces.rs`。
+  `src/prelude.rs`、`tests/text_flow_root_cause.rs`、`tests/text_flow_parity.rs`、
+  `tests/prelude_surfaces.rs`。
 - GH58-T8 独占 `src/renderer/app.rs`、`src/renderer/static_content.rs`、
   `src/renderer/terminal_controller.rs`、`src/testing/renderer.rs`、
   `tests/text_flow_error_paths.rs`。
 - GH58-T6 为只读 verification/review lane。上述 ownership 全程不转移；任务依赖图为
-  T1 checkpoint -> T7 -> T2 -> T3 -> T4 -> T5 -> T8 -> T6，无 cycle、无共享 writable file。
+  T1 evidence -> T7 -> T2 -> T3 -> T4 -> T5 -> T8 -> T6，无 cycle、无共享 writable file；
+  每个写入目标分支的 task checkpoint 都必须先通过其声明的 focused verification，禁止提交
+  已知红测后继续生产代码。
 
 ## 验证
 
