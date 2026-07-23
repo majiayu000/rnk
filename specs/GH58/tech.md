@@ -219,11 +219,13 @@ LayoutEngine::try_compute + try_render_element_tree
   fail loudly，绝不返回空 String/partial String。
 - `TerminalController::handle_println_messages` 使用 try variant 并映射到 I/O error；
   `TestRenderer` 增加 `try_render_to_ansi/plain`，旧 test wrapper 同样 fail loudly。
-- 负例按写入所有权分阶段落地：T3 在 LayoutEngine 注入 error；T5 在其独占的 tree renderer、
-  dynamic pipeline 与 `try_render_to_string*` 注入同一 error，并在
-  `tests/text_flow_renderer_error_paths.rs` 断言 exact variant/source、未更新 previous VNode、
-  未返回 partial String、无 stale cache 与无 legacy first-line output；T8 只验证其独占的
-  App/static/TerminalController/TestRenderer caller 传播和未提交 static/terminal output。
+- 负例按写入所有权和 Rust 可见性分阶段落地：T3 在 LayoutEngine 注入 error；T5 在
+  `tree_renderer.rs` 的 `#[cfg(test)]` unit tests 断言 exact variant/source、无 partial Output
+  与无 legacy first-line fallback，在 `pipeline.rs` 的 `#[cfg(test)]` unit tests 断言 dynamic
+  failure 不更新 previous VNode；crate 外的 `tests/text_flow_renderer_error_paths.rs` 只通过
+  public `try_render_to_string*` 断言 source chain 与无 partial String，不调用 crate-private
+  renderer/pipeline API。T8 只验证其独占的 App/static/TerminalController/TestRenderer caller
+  传播和未提交 static/terminal output。
 
 ### 8. 兼容与后续边界
 
@@ -297,7 +299,7 @@ verify_integration_exact() {
 | B-018 | structured style only / no raw controls | `verify_integration_exact text_flow_parity source_controls_are_not_terminal_sequences` |
 | B-019 | current-head evidence/coverage | `cargo fmt --all -- --check`; exact CI clippy command；`cargo test --workspace --all-targets --all-features --locked`；CodeCov patch coverage >=80%，TextFlow core tarpaulin report =100% |
 | B-020 | Text private source -> existing Element fields | T7：`verify_integration_exact text_source_compat exact_crlf_and_trailing_break_ranges`；`verify_integration_exact text_source_compat structured_source_domain`；T3：`verify_lib_exact layout::engine::tests::reconstructed_source_domain_uses_text_content_truth` |
-| B-021 | engine/render/App/string typed failure chain | T5：`verify_integration_exact text_flow_renderer_error_paths typed_error_reaches_t5_render_entrypoints`、`verify_integration_exact text_flow_renderer_error_paths t5_failure_commits_no_partial_frame_or_string`、`verify_integration_exact prelude_surfaces try_render_to_string_surface`；T8：`verify_integration_exact text_flow_error_paths typed_error_reaches_remaining_callers`、`verify_integration_exact text_flow_error_paths caller_failure_commits_no_partial_output` |
+| B-021 | engine/render/App/string typed failure chain | T5 crate-private unit gates：`verify_lib_exact renderer::tree_renderer::tests::text_flow_error_preserves_source_and_commits_no_partial_output`、`verify_lib_exact renderer::pipeline::tests::text_flow_error_keeps_previous_vnode`；T5 public integration gates：`verify_integration_exact text_flow_renderer_error_paths try_render_to_string_preserves_source_and_returns_no_partial_string`、`verify_integration_exact prelude_surfaces try_render_to_string_surface`；T8：`verify_integration_exact text_flow_error_paths typed_error_reaches_remaining_callers`、`verify_integration_exact text_flow_error_paths caller_failure_commits_no_partial_output` |
 | B-022 | compositor control sanitization | `verify_lib_exact renderer::output::tests::source_controls_are_replaced`；`verify_integration_exact text_flow_parity source_controls_are_not_terminal_sequences` |
 | B-023 | uncached viewport projection | `verify_integration_exact text_flow_parity viewport_projection_tracks_overflow_scroll_and_clip`；`verify_integration_exact text_flow_parity overflow_change_recomputes_flow_and_projection` |
 | B-024 | Element literal compatibility | `verify_integration_exact text_source_compat external_element_struct_literal_compiles` |
@@ -384,12 +386,14 @@ immutable logical TextFlow、frame-local RenderProjection 与终端 cell buffer�
 
 - [ ] unit：exact/canonical/reconstructed source ingress、tokenization、hard break、tab、
       control replacement、grapheme、wrap、truncate、ellipsis、logical source map/cache、
-      atomic publish、interruption、Output trust boundary 与 typed error source chain。
+      atomic publish、interruption、Output trust boundary，以及 tree renderer/pipeline
+      crate-private typed error、partial Output 与 previous VNode 状态。
 - [ ] integration：`tests/text_flow_parity.rs` 比较 TextFlow rows、Taffy layout height 与
       Output ANSI/cells，覆盖 plain/rich、width=0/1、width/height resize、scroll/clip
-      reprojection、projection 双向 source map 与 source control payload；T5-owned typed
-      failures 由 `tests/text_flow_renderer_error_paths.rs` 覆盖，剩余 T8 caller failures
-      由 `tests/text_flow_error_paths.rs` 覆盖。
+      reprojection、projection 双向 source map 与 source control payload；
+      `tests/text_flow_renderer_error_paths.rs` 只验证 public `try_render_to_string*` source
+      chain 与无 partial String，剩余 T8 caller failures 由 `tests/text_flow_error_paths.rs`
+      覆盖。
 - [ ] property：T2-owned `tests/property_tests.rs` 生成合法 Unicode/width/style boundaries，
       断言 logical map 不落在 grapheme 中间且所有 source 恰好一个 logical disposition；
       T5-owned `tests/text_flow_parity.rs::projection_source_cell_round_trip` 生成 viewport/clip

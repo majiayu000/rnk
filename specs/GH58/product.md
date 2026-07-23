@@ -177,8 +177,10 @@ GH-57 umbrella 文档替代自身验收。
       重建，height/scroll/clip 单独改变时 logical cache 可 hit 但 projection 必须改变，
       证明 B-012、B-013、B-014、B-023。
 - [ ] 连续窄/宽 resize、计算失败注入、取消/中断和重复 render 测试无旧 flow、部分 flow、
-      越界写入或第一行 fallback；negative fixtures 分别从 LayoutEngine、dynamic/static App
-      路径和 `try_render_to_string*` 观察同一 typed cause，证明 B-014 至 B-016、B-021。
+      越界写入或第一行 fallback；crate-private tree renderer、pipeline/previous VNode 状态由
+      所属 source module 的 unit fixtures 断言，crate 外 integration fixture 只通过 public
+      `try_render_to_string*` 观察同一 typed cause 与无 partial String，dynamic/static App
+      callers 另由其所属任务验证，证明 B-014 至 B-016、B-021。
 - [ ] 现有 public surface 与外部完整 `Element` struct literal 编译测试、原有
       text/output/layout 回归全绿，且 T7 checkpoint 的 multiline plain Text 仍完整可见，
       证明 B-017、B-024；ESC screen-clear/cursor/OSC、C0/C1 payload 被可见替换且 source map
