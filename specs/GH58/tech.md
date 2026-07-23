@@ -6,7 +6,7 @@ GH-58: https://github.com/majiayu000/rnk/issues/58
 
 <!-- specrail-requires-planned-changes-v1 -->
 <!-- specrail-planned-changes
-{"version":1,"issue":58,"complete":true,"paths":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md","src/components/display/text.rs","src/layout/text_flow.rs","src/layout/mod.rs","src/layout/measure.rs","src/layout/engine.rs","src/renderer/error.rs","src/renderer/mod.rs","src/renderer/tree_renderer.rs","src/renderer/output.rs","src/renderer/element_renderer.rs","src/renderer/pipeline.rs","src/renderer/app.rs","src/renderer/render_to_string.rs","src/renderer/static_content.rs","src/renderer/terminal_controller.rs","src/lib.rs","src/prelude.rs","src/testing/renderer.rs","tests/text_flow_root_cause.rs","tests/text_source_compat.rs","tests/text_flow_parity.rs","tests/property_tests.rs","tests/prelude_surfaces.rs","tests/text_flow_error_paths.rs"],"spec_refs":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md"]}
+{"version":1,"issue":58,"complete":true,"paths":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md","src/components/display/text.rs","src/layout/text_flow.rs","src/layout/mod.rs","src/layout/measure.rs","src/layout/engine.rs","src/renderer/error.rs","src/renderer/mod.rs","src/renderer/tree_renderer.rs","src/renderer/output.rs","src/renderer/element_renderer.rs","src/renderer/pipeline.rs","src/renderer/app.rs","src/renderer/render_to_string.rs","src/renderer/static_content.rs","src/renderer/terminal_controller.rs","src/lib.rs","src/prelude.rs","src/testing/renderer.rs","tests/text_flow_root_cause.rs","tests/text_source_compat.rs","tests/text_flow_parity.rs","tests/text_flow_renderer_error_paths.rs","tests/property_tests.rs","tests/prelude_surfaces.rs","tests/text_flow_error_paths.rs"],"spec_refs":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md"]}
 -->
 
 ## Product Spec
@@ -47,14 +47,19 @@ field-addressable `Element` 不增加字段、不加 `#[non_exhaustive]`，也�
 - `Text::new` 在调用现有 `str::lines()` 构造兼容 `Line` 视图前保存输入 String 的 exact bytes。
 - `Text::spans` / `line` / `from_lines` 没有外部 line-separator 真值；`into_element` 按当前
   Line/Span 顺序生成 canonical source 和 style byte ranges。
-- `Text::into_element` 对 `Exact` 把保存的原 String 原样写入既有 `text_content`，不设置会与
-  CRLF source 冲突的 normalized spans；对 `Structured` 把 canonical String 写入
+- `Text::into_element` 对 `Exact` 把保存的原 String 原样写入既有 `text_content`，并在 T7
+  checkpoint 保留当前 normalized multiline spans 作为 legacy renderer compatibility view，
+  避免 TextFlow renderer 在 T5 接管前让 `Text::new("a\nb")` 退化为只显示第一行。该 view
+  不声明独立 source domain；T2 按可见 grapheme 与 exact hard-break 顺序对齐其样式，不能从
+  normalized spans 反推 CRLF/trailing bytes。对 `Structured` 则把 canonical String 写入
   `text_content` 并把 Line/Span 留在既有 `spans` 提供 style structure。
 - `Element::text` 已把传入 String 原样写入 `text_content`，clone 已 clone 该字段，无需改
   `Element` layout。外部 struct literal 也以其当前 `text_content` 为 source truth。
 - LayoutEngine 以 `text_content` 为 source domain；当 spans canonical content 与它相同，
-  生成 exact style ranges；不一致时保留 `text_content` bytes、使用 element-level Style 并
-  标记 `Reconstructed` diagnostic，不猜测已经丢失的 CRLF/trailing bytes。
+  生成 exact style ranges。T2 对 `Text::new` 的 legacy compatibility view 按可见 grapheme
+  和 hard-break 顺序对齐 exact source；只有该 view 或其他 spans 无法完整、无歧义对齐时，
+  才保留 `text_content` bytes、使用 element-level Style 并由 T3 标记 `Reconstructed`
+  diagnostic，不猜测已经丢失的 CRLF/trailing bytes。
 
 source map 的 byte range 永远相对于 Element 当前 `text_content`（或 text_content 缺失时由
 spans 生成的 canonical String）。`Text::new("a\r\nb\r\n")` 的 `into_element` 因而仍含
@@ -117,8 +122,10 @@ styled source bytes
 
 1. `build_node` / `element_to_vnode` 从当前 Element 的既有 `text_content` / `spans` 归一化
    exact/canonical/reconstructed source 和 style byte ranges，不需要 Element 新字段。
-2. dynamic incremental 路径在 diff 前同步本帧 source；即使 VNode pure text 未改变，
-   span/style/options 改变也会更新 NodeContext 并触发 text measure recompute。
+2. dynamic incremental 路径在 diff 前同步本帧 source；即使 diff 产生空 patch 集合，或
+   VNode pure text 未改变但 span/style/options 改变，也会更新 NodeContext 并触发 text
+   measure recompute。T3 的 exact no-patch fixture 必须分别改变 source 与 span style，
+   并证明当前 frame flow/cache identity 都已更新。
 3. Taffy measure callback 用 `TextFlowCache::get_or_compute`，从结果读取 width/row count；
    不再调用独立 wrapped-line counter。
 4. 完成 layout 后，engine 只发布与当前 exact key 匹配的不可变 flow。失败或中断不更新
@@ -212,9 +219,11 @@ LayoutEngine::try_compute + try_render_element_tree
   fail loudly，绝不返回空 String/partial String。
 - `TerminalController::handle_println_messages` 使用 try variant 并映射到 I/O error；
   `TestRenderer` 增加 `try_render_to_ansi/plain`，旧 test wrapper 同样 fail loudly。
-- 负例分别在 LayoutEngine、tree renderer、dynamic App、static content、
-  `try_render_to_string*` 注入同一 error，断言 exact variant/source、未更新 previous VNode、
-  未提交 static lines/terminal output、无 stale cache 与无 legacy first-line output。
+- 负例按写入所有权分阶段落地：T3 在 LayoutEngine 注入 error；T5 在其独占的 tree renderer、
+  dynamic pipeline 与 `try_render_to_string*` 注入同一 error，并在
+  `tests/text_flow_renderer_error_paths.rs` 断言 exact variant/source、未更新 previous VNode、
+  未返回 partial String、无 stale cache 与无 legacy first-line output；T8 只验证其独占的
+  App/static/TerminalController/TestRenderer caller 传播和未提交 static/terminal output。
 
 ### 8. 兼容与后续边界
 
@@ -278,17 +287,17 @@ verify_integration_exact() {
 | B-008 | truncate/ellipsis builder | `verify_lib_exact layout::text_flow::tests::text_flow_truncate`，覆盖五种 enum、无截断/窄 ellipsis 与 synthetic mapping |
 | B-009 | zero/narrow width + overwide disposition | `verify_lib_exact layout::text_flow::tests::text_flow_narrow_width`；Output bounds 断言 |
 | B-010 | frame-local renderer projection | `verify_integration_exact text_flow_parity viewport_projection_tracks_overflow_scroll_and_clip` |
-| B-011 | logical source map + render projection | `verify_integration_exact property_tests text_flow_source_cell_round_trip` |
-| B-012 | exact logical cache key | `verify_lib_exact layout::text_flow::tests::text_flow_cache_invalidation`，逐项变更 source/style/width/wrap/overflow/tab/ellipsis/policy |
+| B-011 | logical source map + render projection | T2：`verify_integration_exact property_tests text_flow_logical_source_round_trip`；T5：`verify_integration_exact text_flow_parity projection_source_cell_round_trip` |
+| B-012 | exact logical cache key | `verify_lib_exact layout::text_flow::tests::text_flow_cache_invalidation`，逐项变更 source/style/width/wrap/overflow/tab/ellipsis/policy；`verify_lib_exact layout::engine::tests::incremental_no_patch_refreshes_source_and_style` |
 | B-013 | immutable cache reuse | `verify_lib_exact layout::text_flow::tests::text_flow_cache_reuse`，比较复用与冷算完整 logical result |
 | B-014 | resize/overflow invalidation and reprojection | `verify_integration_exact text_flow_parity resize_reflows_or_reprojects_before_render`；`verify_integration_exact text_flow_parity overflow_change_recomputes_flow_and_projection` |
 | B-015 | finalized-range `TextFlowError` + atomic publish | `verify_lib_exact layout::text_flow::tests::finalized_non_grapheme_range_is_error`；`verify_lib_exact layout::engine::tests::text_flow_failure_is_atomic` |
 | B-016 | immutable readers / interrupted compute | `verify_lib_exact layout::text_flow::tests::text_flow_interruption` |
-| B-017 | compatibility wrappers/public surface | `verify_integration_exact text_source_compat external_element_struct_literal_compiles`；`cargo check --workspace --all-targets --all-features --locked` |
+| B-017 | compatibility wrappers/public surface | `verify_integration_exact text_source_compat plain_multiline_compatibility`；`verify_integration_exact text_source_compat external_element_struct_literal_compiles`；`cargo check --workspace --all-targets --all-features --locked` |
 | B-018 | structured style only / no raw controls | `verify_integration_exact text_flow_parity source_controls_are_not_terminal_sequences` |
 | B-019 | current-head evidence/coverage | `cargo fmt --all -- --check`; exact CI clippy command；`cargo test --workspace --all-targets --all-features --locked`；CodeCov patch coverage >=80%，TextFlow core tarpaulin report =100% |
-| B-020 | Text private source -> existing Element fields | `verify_integration_exact text_source_compat exact_crlf_and_trailing_break_ranges`；`verify_integration_exact text_source_compat structured_and_reconstructed_domains` |
-| B-021 | engine/render/App/string typed failure chain | `verify_integration_exact text_flow_error_paths typed_error_reaches_all_render_entrypoints`；`verify_integration_exact prelude_surfaces try_render_to_string_surface` |
+| B-020 | Text private source -> existing Element fields | T7：`verify_integration_exact text_source_compat exact_crlf_and_trailing_break_ranges`；`verify_integration_exact text_source_compat structured_source_domain`；T3：`verify_lib_exact layout::engine::tests::reconstructed_source_domain_uses_text_content_truth` |
+| B-021 | engine/render/App/string typed failure chain | T5：`verify_integration_exact text_flow_renderer_error_paths typed_error_reaches_t5_render_entrypoints`、`verify_integration_exact text_flow_renderer_error_paths t5_failure_commits_no_partial_frame_or_string`、`verify_integration_exact prelude_surfaces try_render_to_string_surface`；T8：`verify_integration_exact text_flow_error_paths typed_error_reaches_remaining_callers`、`verify_integration_exact text_flow_error_paths caller_failure_commits_no_partial_output` |
 | B-022 | compositor control sanitization | `verify_lib_exact renderer::output::tests::source_controls_are_replaced`；`verify_integration_exact text_flow_parity source_controls_are_not_terminal_sequences` |
 | B-023 | uncached viewport projection | `verify_integration_exact text_flow_parity viewport_projection_tracks_overflow_scroll_and_clip`；`verify_integration_exact text_flow_parity overflow_change_recomputes_flow_and_projection` |
 | B-024 | Element literal compatibility | `verify_integration_exact text_source_compat external_element_struct_literal_compiles` |
@@ -308,7 +317,8 @@ verify_integration_exact() {
 1. `Text` 私有 source state 在 `str::lines()` 前保存 exact source；`into_element` 把 exact
    或 canonical source 写入现有 `text_content`，不改变 Element public layout。
 2. 当前 frame 从 `text_content` / `spans` 归一为带 origin/style byte ranges 的
-   `TextFlowInput`；mismatch 标记 Reconstructed。
+   `TextFlowInput`；先按 B-020 对齐 legacy multiline compatibility view，只有无法完整、
+   无歧义对齐的 mismatch 才标记 Reconstructed。
 3. hard-break/tab 先结构化消费，其余 ESC/C0/DEL/C1 转成带原 source range 的 safe replacement。
 4. logical cache 用完整 key 查找；未命中时纯函数构建完整临时 flow。
 5. 所有 logical rows/runs/source map 成功后原子发布 immutable result。
@@ -377,10 +387,14 @@ immutable logical TextFlow、frame-local RenderProjection 与终端 cell buffer�
       atomic publish、interruption、Output trust boundary 与 typed error source chain。
 - [ ] integration：`tests/text_flow_parity.rs` 比较 TextFlow rows、Taffy layout height 与
       Output ANSI/cells，覆盖 plain/rich、width=0/1、width/height resize、scroll/clip
-      reprojection 与 source control payload；typed entrypoint failures 单独由
-      `tests/text_flow_error_paths.rs` 覆盖。
-- [ ] property：`tests/property_tests.rs` 生成合法 Unicode/width/style boundaries，断言
-      logical/projection map 不落在 grapheme 中间、所有 source 恰好一个 disposition、无越界。
+      reprojection、projection 双向 source map 与 source control payload；T5-owned typed
+      failures 由 `tests/text_flow_renderer_error_paths.rs` 覆盖，剩余 T8 caller failures
+      由 `tests/text_flow_error_paths.rs` 覆盖。
+- [ ] property：T2-owned `tests/property_tests.rs` 生成合法 Unicode/width/style boundaries，
+      断言 logical map 不落在 grapheme 中间且所有 source 恰好一个 logical disposition；
+      T5-owned `tests/text_flow_parity.rs::projection_source_cell_round_trip` 生成 viewport/clip
+      cases，断言 visible/clipped cell reverse map 不落在 grapheme 中间且 synthetic ellipsis
+      不伪装成 source。
 - [ ] compatibility：原 layout measure、output、render-to-string、public surface 与全部
       workspace tests 通过；`tests/text_source_compat.rs` 证明外部完整 Element literal 与
       exact source，`tests/prelude_surfaces.rs` 证明 typed try API 可从稳定 surface 导入。

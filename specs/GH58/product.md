@@ -111,8 +111,10 @@ GH-57 umbrella 文档替代自身验收。
     cache 只能保留中断前已完整发布且 key 仍匹配的结果，不能暴露正在构建的 rows/source map。
 17. **B-017** 现有 `Text` / `Line` / `Span` 构造器、`Text::wrap`、布局测量 helper、
     `Output::write` 调用方及外部完整 `Element { ... }` struct literal 必须继续编译；helper
-    与 renderer 通过 TextFlow 或兼容 wrapper 收敛。若确需改变已测试的 trailing-newline
-    或 truncate 行为，必须另行走有期限的弃用与迁移流程，本 issue 不静默破坏。
+    与 renderer 通过 TextFlow 或兼容 wrapper 收敛。每个可独立验证的任务 checkpoint 都必须
+    保持现有 multiline plain `Text::new("a\nb")` 两行可见，不能在 TextFlow renderer 尚未
+    接管前只保留 exact `text_content` 却移除 legacy multiline spans。若确需改变已测试的
+    trailing-newline 或 truncate 行为，必须另行走有期限的弃用与迁移流程，本 issue 不静默破坏。
 18. **B-018** 字符串中的 ANSI escape 或其他控制序列不得被 TextFlow 解释为颜色、光标移动
     或授权，也不得由 Output 原样进入 terminal byte stream；只有结构化 `Style` / `Span`
     控制样式。具体 replacement 与 allowlist 合同由 B-022 定义。
@@ -121,10 +123,14 @@ GH-57 umbrella 文档替代自身验收。
     truncate/cache 分支达到 100% 时才可声明完成；零匹配 filter、旧 SHA 或视觉演示不算证据。
 20. **B-020** `Text::new(String)` 必须在任何 `str::lines()`、CRLF 归一化或 `Line` 重建前
     把 exact input 保存在 Text 私有状态，并在 `into_element` 时原样写入既有
-    `text_content`；`Element::text(String)` 已直接保存 exact input。`Text::spans` / `line` /
-    `from_lines` 则生成一次 canonical source 写入 `text_content`，`spans` 仅提供 exact style
-    ranges。Element clone 依靠既有字段保留 source；字段不一致时以当前 `text_content` 为
-    source truth 并标记 `Reconstructed`，不得声称恢复已丢失的 CRLF 或 trailing break。
+    `text_content`；`Element::text(String)` 已直接保存 exact input。为满足 B-017，T7
+    checkpoint 必须暂时保留 `Text::new` 当前 normalized multiline spans 作为 legacy renderer
+    compatibility view；它不是第二个 source domain，T2 必须按可见 grapheme 与 hard-break
+    顺序把该 view 对齐回 exact `text_content`。`Text::spans` / `line` / `from_lines` 则生成一次
+    canonical source 写入 `text_content`，`spans` 提供 exact style ranges。Element clone
+    依靠既有字段保留 source；只有 spans 无法按上述规则对齐当前 `text_content` 时才以
+    `text_content` 为 source truth 并标记 `Reconstructed`，不得声称恢复已丢失的 CRLF 或
+    trailing break。
 21. **B-021** TextFlow failure 必须沿一条具体 typed boundary 传播：LayoutEngine 的新增
     `try_compute*` 返回 flow error；tree/element renderer、static/dynamic pipeline 和新增
     public `try_render_to_string*` 返回包含 source `TextFlowError` 的 `TextRenderError`；
@@ -149,8 +155,9 @@ GH-57 umbrella 文档替代自身验收。
     `#[non_exhaustive]`。`Text` 的私有 source state 在 `into_element` 时写入既有
     `text_content`：plain input 保留 exact bytes，structured input 写 canonical bytes；
     `spans` 只提供 style structure。现有外部完整 struct literal、`Element::text` 和 clone
-    继续编译；spans 与 text_content 不一致时以当前 text_content 为 source truth并标记
-    `Reconstructed`，不得增加全局 sidecar 或隐藏 required field。
+    继续编译；spans 无法按 B-020 的 compatibility-view 规则对齐 text_content 时，以当前
+    text_content 为 source truth 并标记 `Reconstructed`，不得增加全局 sidecar 或隐藏
+    required field。
 
 ## 验收标准
 
@@ -173,9 +180,9 @@ GH-57 umbrella 文档替代自身验收。
       越界写入或第一行 fallback；negative fixtures 分别从 LayoutEngine、dynamic/static App
       路径和 `try_render_to_string*` 观察同一 typed cause，证明 B-014 至 B-016、B-021。
 - [ ] 现有 public surface 与外部完整 `Element` struct literal 编译测试、原有
-      text/output/layout 回归全绿，证明 B-017、B-024；ESC screen-clear/cursor/OSC、C0/C1
-      payload 被可见替换且 source map 保留原 range，最终 terminal stream 不含 payload
-      控制序列，证明 B-018、B-022。
+      text/output/layout 回归全绿，且 T7 checkpoint 的 multiline plain Text 仍完整可见，
+      证明 B-017、B-024；ESC screen-clear/cursor/OSC、C0/C1 payload 被可见替换且 source map
+      保留原 range，最终 terminal stream 不含 payload 控制序列，证明 B-018、B-022。
 - [ ] 当前 head 的全量 CI、独立 review、review threads、SpecRail PR gate 和覆盖率证据
       满足 B-019。
 
