@@ -76,14 +76,16 @@ spans 生成的 canonical String）。`Text::new("a\r\nb\r\n")` 的 `into_elemen
   `SanitizedControl`；synthetic ellipsis 只存在于 position-to-source 的 synthetic 分支。
 - `RenderProjection`：当前 frame 的不可变 visible/clipped cells 与反向 cell map，不写入
   `TextFlowCache`。
-- `TextFlowError`：非法 tab stop、内部 byte range 非 grapheme boundary、算术溢出或不完整
-  source 覆盖必须显式失败。
+- `TextFlowError`：非法 tab stop、算术溢出、不完整 source 覆盖，或 normalization 完成后
+  engine 生成的 finalized token/source-map range 仍非 grapheme boundary 时显式失败。调用方
+  输入的 style range 在 grapheme 内不属于 error，必须先按 B-002 归一化并记录 diagnostic。
 
 flow 先把 LF/CRLF/CR 归一为 hard-break token，再把 tab 展开为带 source range 的 synthetic
 spaces；其余 ESC/C0/DEL/C1 scalar 标记 `SanitizedControl` 并生成 B-022 replacement；
 随后用 `UnicodeSegmentation::graphemes(true)` 与同一个 `unicode-width` policy 生成
 grapheme tokens。styled span 边界如果落在 grapheme 内，以第一个 source style 为准并记录
-diagnostic；绝不把 combining/ZWJ 序列拆开。
+diagnostic；绝不把 combining/ZWJ 序列拆开，也不把受支持的 split-style 输入误报为
+`TextFlowError`。只有归一化结束后构造出的 finalized token/map range 违反边界才是内部错误。
 
 ### 3. Wrap、truncate 与 overflow 顺序
 
@@ -183,17 +185,24 @@ TextFlow rows 和可见 Output。
 ```text
 TextFlow::try_build -> Result<TextFlow, TextFlowError>
   -> LayoutEngine::try_compute*
-  -> render_element_tree -> render_element
-  -> RenderPipeline::render_dynamic_frame / StaticRenderer::extract_static_content
+  -> try_render_element_tree -> try_render_element
+  -> RenderPipeline::try_render_dynamic_frame / StaticRenderer::try_extract_static_content
   -> App::render_frame -> io::Result (io::Error source = TextRenderError)
 
-LayoutEngine::try_compute + render_element_tree
+LayoutEngine::try_compute + try_render_element_tree
   -> try_render_to_string_with_options / try_render_to_string*
   -> Result<String, TextRenderError>
 ```
 
-- `tree_renderer`、`element_renderer`、dynamic pipeline 与 static renderer 改为返回
-  `Result`；任一 child 失败立即停止当前临时 Output，调用方不得提交 partial frame/static lines。
+- T5 在 tree/element renderer 与 dynamic pipeline 新增 Result-returning
+  `try_render_element_tree`、`try_render_element`、`try_render_dynamic_frame`。现有
+  `render_element_tree` / `render_element` / `render_dynamic_frame` 保留原返回类型并只委托
+  try variant，Err 时 fail loudly；因此 T5 完成时 App/static/TestRenderer 的现有调用点仍
+  编译，且不会把 error 变成 blank/partial output。
+- T8 再为 static renderer 增加 `try_extract_static_content`；现有
+  `extract_static_content` 同样保留为 fail-loud wrapper。App、static 内部、
+  TerminalController 与 TestRenderer callers 切到 T5/T8 的 try variants；任一 child 失败
+  立即停止临时 Output，调用方不得提交 partial frame/static lines。
 - `App::render_frame` 把 `TextRenderError` 包装进 `io::Error::other` 并保留 source chain；
   `App::run()` 因而以已有 `io::Result` 向应用返回失败。
 - `render_to_string*` 增加同名 `try_` variants 并从 renderer module、crate root 与 prelude
@@ -258,7 +267,7 @@ verify_integration_exact() {
 | Behavior invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001 | `layout::text_flow`, `LayoutEngine`, `tree_renderer` | `verify_lib_exact layout::text_flow::tests::text_flow_shared_result`；`verify_integration_exact text_flow_parity measure_rows_equal_rendered_rows` |
-| B-002 | styled source normalization / positioned runs | `verify_lib_exact layout::text_flow::tests::text_flow_styled_runs`；parity fixture 在 span 边界换行并核对 Style |
+| B-002 | styled source normalization / positioned runs | `verify_lib_exact layout::text_flow::tests::text_flow_styled_runs`；`verify_lib_exact layout::text_flow::tests::split_combining_and_zwj_style_boundary_normalizes` |
 | B-003 | empty input / empty line normalization | `verify_lib_exact layout::text_flow::tests::text_flow_empty_inputs` |
 | B-004 | exact-source hard-break tokenizer | `verify_integration_exact text_source_compat exact_crlf_and_trailing_break_ranges` |
 | B-005 | grapheme tokenizer / Output grapheme cell | `verify_lib_exact layout::text_flow::tests::text_flow_graphemes`；`verify_integration_exact text_flow_parity unicode_graphemes_render_intact` |
@@ -271,7 +280,7 @@ verify_integration_exact() {
 | B-012 | exact logical cache key | `verify_lib_exact layout::text_flow::tests::text_flow_cache_invalidation`，逐项变更 source/style/width/wrap/tab/ellipsis/policy |
 | B-013 | immutable cache reuse | `verify_lib_exact layout::text_flow::tests::text_flow_cache_reuse`，比较复用与冷算完整 logical result |
 | B-014 | resize/reprojection | `verify_integration_exact text_flow_parity resize_reflows_or_reprojects_before_render` |
-| B-015 | `TextFlowError` + atomic compute/publish | `verify_lib_exact layout::engine::tests::text_flow_failure_is_atomic` |
+| B-015 | finalized-range `TextFlowError` + atomic publish | `verify_lib_exact layout::text_flow::tests::finalized_non_grapheme_range_is_error`；`verify_lib_exact layout::engine::tests::text_flow_failure_is_atomic` |
 | B-016 | immutable readers / interrupted compute | `verify_lib_exact layout::text_flow::tests::text_flow_interruption` |
 | B-017 | compatibility wrappers/public surface | `verify_integration_exact text_source_compat external_element_struct_literal_compiles`；`cargo check --workspace --all-targets --all-features --locked` |
 | B-018 | structured style only / no raw controls | `verify_integration_exact text_flow_parity source_controls_are_not_terminal_sequences` |

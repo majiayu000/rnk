@@ -52,7 +52,8 @@ GH-57 umbrella 文档替代自身验收。
 2. **B-002** 普通 `text_content` 与 `Line` / `Span` 富文本必须经过同一 flow 规则；跨
    span 换行后每个 grapheme 保留其结构化样式，样式边界本身不得改变文本宽度、丢字或重复字。
    若样式边界落在一个 grapheme 内，flow 必须按文档化规则归一到该 grapheme 的首个 source
-   style，并记录可诊断的 normalization，而不是拆开 grapheme。
+   style，并记录可诊断的 normalization，而不是拆开 grapheme 或返回 error；combining
+   sequence 与 emoji ZWJ 两类 split-style 输入都属于受支持输入。
 3. **B-003** 缺失文本和空字符串均显示为空且不捏造内容；一个存在但为空的 Text element
    产生一个高度可确定的空 logical row。空 span、空 line 与相邻空 style run 不得导致额外
    cell、无限循环或崩溃。
@@ -101,7 +102,9 @@ GH-57 umbrella 文档替代自身验收。
     的旧 visibility。
 15. **B-015** flow 计算或缓存发布失败时，纯 TextFlow 层必须返回 `TextFlowError`，不得发布
     部分结果；renderer 消费缺失/错误 flow 时不得回退到当前“只写第一行”的旧路径并显示为
-    成功，上一帧缓存也不得被错标为当前输入的有效结果。end-to-end caller 传播由 B-021 定义。
+    成功，上一帧缓存也不得被错标为当前输入的有效结果。非 grapheme-boundary error 仅适用于
+    normalization 后由 engine 生成的 finalized token/map range 违反内部不变量，不适用于
+    B-002 可归一化的输入 style boundary。end-to-end caller 传播由 B-021 定义。
 16. **B-016** 多个只读消费者可共享一个已完成的不可变 flow；计算被取消、中断或失败时，
     cache 只能保留中断前已完整发布且 key 仍匹配的结果，不能暴露正在构建的 rows/source map。
 17. **B-017** 现有 `Text` / `Line` / `Span` 构造器、`Text::wrap`、布局测量 helper、
@@ -125,7 +128,9 @@ GH-57 umbrella 文档替代自身验收。
     public `try_render_to_string*` 返回包含 source `TextFlowError` 的 `TextRenderError`；
     `App::run` 路径把同一 error/source 链映射为失败的 `io::Result`。现有返回 `()` / tuple /
     `String` 的兼容 wrapper 可以保留签名，但遇到 flow error 必须 fail loudly，不能返回空白、
-    第一行、部分 output 或旧 frame。GH-58 不借此接管 GH-60 的通用 Taffy/patch error 合同。
+    第一行、部分 output 或旧 frame。T5 必须先新增 `try_*` Result variants 并让所有现有 caller
+    继续调用签名不变的 fail-loud wrapper，使 T5 自身可编译测试；T8 再把 App/static/terminal/
+    test callers 切到 `try_*` 完成 recoverable 传播。GH-58 不接管 GH-60 通用 Taffy/patch error。
 22. **B-022** hard-break tokenizer 必须先消费 LF/CRLF/CR，tab expander 必须先消费 `\t`；
     到达 compositor 的 source scalar 若属于 ESC、其余 C0（U+0000–U+001F）、DEL 或 C1
     （U+0080–U+009F），必须被 terminal-safe replacement 代替且仍映射回原 source range：
@@ -146,7 +151,8 @@ GH-57 umbrella 文档替代自身验收。
 ## 验收标准
 
 - [ ] 普通文本和跨 style spans 的长文本在多个宽度下，TextFlow row count、布局高度和
-      Output 实际非空行逐项一致，覆盖 B-001、B-002、B-007。
+      Output 实际非空行逐项一致；style boundary 分别切入 combining sequence 与 emoji ZWJ
+      时归一到首 source style、产生 diagnostic 且不返回 error，覆盖 B-001、B-002、B-007。
 - [ ] fixtures 覆盖空/缺失、LF/CRLF/CR、连续与末尾换行、tab、长单词、CJK、emoji ZWJ、
       variation selector、组合序列与零宽 grapheme，证明 B-003 至 B-006。
 - [ ] wrap、四种 truncate 语义、ellipsis、width=0/1、宽字符边界和
