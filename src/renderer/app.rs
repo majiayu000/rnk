@@ -297,10 +297,11 @@ where
 mod tests {
     use super::*;
     use crate::core::Element;
-    use crate::renderer::registry::{is_alt_screen, render_handle};
+    use crate::renderer::registry::{is_alt_screen, lock_test_registry, render_handle};
 
     #[test]
     fn test_registry_cleanup_on_drop() {
+        let _registry_guard = lock_test_registry();
         let runtime = AppRuntime::new(false);
 
         {
