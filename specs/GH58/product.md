@@ -26,7 +26,8 @@ GH-57 umbrella 文档替代自身验收。
 - 明确定义 grapheme、Unicode display width、显式换行、tab、wrap、truncate、ellipsis
   和 overflow 的终端 cell 语义。
 - 对 width=0/1、宽字符边界、clip、resize 和缓存重用给出确定且无越界的行为。
-- 输出源 UTF-8 byte range / grapheme 与可见 cell 的双向映射，支持后续光标和选择能力。
+- 在 `Text::new` / `Element::text` 的原始字符串被 `str::lines()` 或 rich-text 拼接归一化前
+  保留 source bytes，再输出 source UTF-8 byte range / grapheme 与可见 cell 的双向映射。
 - 保留现有 `Text`、`Line`、`Span`、`TextWrap`、`Overflow` 与低层 `Output::write` 使用方式，
   通过兼容适配逐步收敛，不要求应用一次性迁移。
 - 用回归、property、渲染 parity 与覆盖率证据证明内容不再静默丢失。
@@ -54,9 +55,10 @@ GH-57 umbrella 文档替代自身验收。
 3. **B-003** 缺失文本和空字符串均显示为空且不捏造内容；一个存在但为空的 Text element
    产生一个高度可确定的空 logical row。空 span、空 line 与相邻空 style run 不得导致额外
    cell、无限循环或崩溃。
-4. **B-004** `\n`、`\r\n` 与独立 `\r` 均作为 hard line break，CRLF 只能计为一次；
-   连续 hard breaks 保留中间空行。为兼容当前 `str::lines()` 合同，末尾 hard break 默认
-   不额外生成最终空行；源映射仍必须记录该 break 已被消费。
+4. **B-004** 在 B-020 保留的 exact source 上，`\n`、`\r\n` 与独立 `\r` 均作为 hard
+   line break，CRLF 只能计为一次；连续 hard breaks 保留中间空行。为兼容现有可见行合同，
+   末尾 hard break 默认不额外生成最终空行；source map 仍必须以原始 byte range 记录该
+   break 已被消费，不能从归一化后的 `\n` 猜测原字节。
 5. **B-005** 所有分段、换行、截断和 cell 定位必须以 extended grapheme cluster 为最小
    单位，并使用同一 Unicode width policy；CJK、emoji ZWJ、variation selector、combining
    sequence 和零宽 grapheme 不得被拆分、重复或使 measure/render 使用不同宽度。
@@ -76,7 +78,8 @@ GH-57 umbrella 文档替代自身验收。
 10. **B-010** TextFlow 始终先产出完整逻辑行；`overflow_x` 决定超出内容宽度的 run 是可见、
     clipped 还是可滚动，`overflow_y` 与实际 content rect 决定可见行。clip 只能隐藏 cell，
     不得改变测量 row count、source order 或把被裁内容报告为已绘制。
-11. **B-011** 每个 source grapheme 必须能查询其 UTF-8 byte range、logical row 和
+11. **B-011** 每个 source grapheme 必须能查询其在 B-020 exact stored source 中的 UTF-8
+    byte range、logical row 和
     `{visible cells | truncated | clipped | hard-break | zero-width}` disposition；每个可见
     cell 也必须能反查 source grapheme 或 synthetic ellipsis。映射不得指向 grapheme 中间字节。
 12. **B-012** flow cache key 必须精确包含内容、line/span 结构及全部 style 值、可用内容宽度、
@@ -88,9 +91,9 @@ GH-57 umbrella 文档替代自身验收。
 14. **B-014** terminal resize 改变任一 Text element 的可用 content width 时，该 element
     的 flow 必须在同一 frame 失效并重算；新 layout row count 与实际输出行数一致，renderer
     不得使用上一个宽度的旧 flow。
-15. **B-015** flow 计算、缓存发布或 renderer 消费失败时，不得发布部分结果，也不得回退到
-    当前“只写第一行”的旧路径并显示为成功；调用方必须收到可诊断失败，上一帧缓存不得被
-    错标为当前输入的有效结果。
+15. **B-015** flow 计算或缓存发布失败时，纯 TextFlow 层必须返回 `TextFlowError`，不得发布
+    部分结果；renderer 消费缺失/错误 flow 时不得回退到当前“只写第一行”的旧路径并显示为
+    成功，上一帧缓存也不得被错标为当前输入的有效结果。end-to-end caller 传播由 B-021 定义。
 16. **B-016** 多个只读消费者可共享一个已完成的不可变 flow；计算被取消、中断或失败时，
     cache 只能保留中断前已完整发布且 key 仍匹配的结果，不能暴露正在构建的 rows/source map。
 17. **B-017** 现有 `Text` / `Line` / `Span` 构造器、`Text::wrap`、布局测量 helper 和
@@ -103,6 +106,18 @@ GH-57 umbrella 文档替代自身验收。
 19. **B-019** GH-58 只有在当前 implementation head 的正例、边界、失败、property 与渲染
     parity 测试通过，新代码 patch coverage 至少 80%，TextFlow 核心 segmentation/wrap/
     truncate/cache 分支达到 100% 时才可声明完成；零匹配 filter、旧 SHA 或视觉演示不算证据。
+20. **B-020** `Text::new(String)` 与 `Element::text(String)` 必须在任何 `str::lines()`、
+    CRLF 归一化或 `Line` 重建前逐 byte 保留输入；`Text::spans` / `line` / `from_lines`
+    则必须在 Element 构建时生成一次明确的 canonical source 和 exact style byte ranges。
+    Element clone 必须保留该 source metadata。若调用方只提供或直接替换 legacy
+    `text_content` / `spans` 而没有匹配 metadata，flow 的 source domain 只能诚实地取当前
+    可见字段重新构建并标记 `Reconstructed`；不得声称恢复已经丢失的 CRLF 或 trailing break。
+21. **B-021** TextFlow failure 必须沿一条具体 typed boundary 传播：LayoutEngine 的新增
+    `try_compute*` 返回 flow error；tree/element renderer、static/dynamic pipeline 和新增
+    public `try_render_to_string*` 返回包含 source `TextFlowError` 的 `TextRenderError`；
+    `App::run` 路径把同一 error/source 链映射为失败的 `io::Result`。现有返回 `()` / tuple /
+    `String` 的兼容 wrapper 可以保留签名，但遇到 flow error 必须 fail loudly，不能返回空白、
+    第一行、部分 output 或旧 frame。GH-58 不借此接管 GH-60 的通用 Taffy/patch error 合同。
 
 ## 验收标准
 
@@ -114,11 +129,13 @@ GH-57 umbrella 文档替代自身验收。
       `Visible` / `Hidden` / `Scroll` snapshots 证明 B-007 至 B-010。
 - [ ] source-to-cell / cell-to-source round-trip property test 从不返回 grapheme 中间字节，
       并对 truncated、clipped、hard-break、zero-width 和 synthetic ellipsis 给出明确结果，
-      证明 B-011。
+      证明 B-011；`Text::new("a\r\nb\r\n")` 的 source map 必须指向原始 CRLF byte ranges，
+      trailing break 在不生成最终空行时仍可查询，证明 B-004、B-020。
 - [ ] 内容、span/style 结构、宽度、wrap、overflow、tab、ellipsis 或 Unicode policy
       分别改变时 cache miss；输入不变时 cache hit 且结果不可变，证明 B-012、B-013。
 - [ ] 连续窄/宽 resize、计算失败注入、取消/中断和重复 render 测试无旧 flow、部分 flow、
-      越界写入或第一行 fallback，证明 B-014 至 B-016。
+      越界写入或第一行 fallback；negative fixtures 分别从 LayoutEngine、dynamic/static App
+      路径和 `try_render_to_string*` 观察同一 typed cause，证明 B-014 至 B-016、B-021。
 - [ ] 现有 public surface 编译测试与原有文本/output/layout 回归全绿；raw ANSI 不被解析为
       Style，证明 B-017、B-018。
 - [ ] 当前 head 的全量 CI、独立 review、review threads、SpecRail PR gate 和覆盖率证据
@@ -129,12 +146,12 @@ GH-57 umbrella 文档替代自身验收。
 | 类别 | 判定（covered: B-xxx / N/A + 原因） |
 | --- | --- |
 | 空/缺失输入 | covered: B-003、B-009 |
-| 错误与失败路径 | covered: B-002、B-015、B-019 |
+| 错误与失败路径 | covered: B-002、B-015、B-019、B-021 |
 | 授权/权限 | N/A：TextFlow 是纯本地布局计算，不读取权限、不执行工具；ANSI 不被解释为授权或副作用（B-018） |
 | 并发/竞态 | covered: B-013、B-014、B-016 |
 | 重试/幂等 | covered: B-013、B-015、B-016 |
 | 非法状态转换 | N/A：TextFlow 无业务状态机；未完成结果不得发布由 B-015、B-016 约束 |
-| 兼容/迁移 | covered: B-004、B-017 |
+| 兼容/迁移 | covered: B-004、B-017、B-020、B-021 |
 | 降级/回退 | covered: B-009、B-010、B-015 |
 | 证据与审计完整性 | covered: B-019 |
 | 取消/中断/部分完成 | covered: B-015、B-016 |
@@ -143,6 +160,7 @@ GH-57 umbrella 文档替代自身验收。
 
 GH-58 首先在现有 `rnk::layout` 与 renderer 内引入 TextFlow；不创建独立 crate，也不移除
 现有文本 helper。用户可继续通过 `Text` / `Line` / `Span` 构造内容，测量与绘制会自动共享
-新结果。发布说明必须明确默认 tab stop、trailing hard-break、truncate/ellipsis、width=0/1
-及 Unicode width policy 边界。后续 GH-64 / GH-65 可消费 source map 与 row count，但不得
-复制 TextFlow 算法。
+新结果；需要恢复的调用方可使用 typed `try_render_to_string*`，App 运行路径会返回保留
+TextFlow cause 的 I/O error。发布说明必须明确 exact/canonical/reconstructed source domain、
+默认 tab stop、trailing hard-break、truncate/ellipsis、width=0/1 及 Unicode width policy
+边界。后续 GH-64 / GH-65 可消费 source map 与 row count，但不得复制 TextFlow 算法。
