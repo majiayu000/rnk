@@ -6,7 +6,7 @@ GH-58: https://github.com/majiayu000/rnk/issues/58
 
 <!-- specrail-requires-planned-changes-v1 -->
 <!-- specrail-planned-changes
-{"version":1,"issue":58,"complete":true,"paths":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md","src/components/display/text.rs","src/layout/text_flow.rs","src/layout/mod.rs","src/layout/measure.rs","src/layout/engine.rs","src/layout/engine/text_flow_bridge.rs","src/layout/engine/tests.rs","src/renderer/error.rs","src/renderer/mod.rs","src/renderer/tree_renderer.rs","src/renderer/output.rs","src/renderer/output/tests.rs","src/renderer/element_renderer.rs","src/renderer/pipeline.rs","src/renderer/app.rs","src/renderer/render_to_string.rs","src/renderer/static_content.rs","src/renderer/terminal_controller.rs","src/lib.rs","src/prelude.rs","src/testing/renderer.rs","tests/text_flow_root_cause.rs","tests/text_source_compat.rs","tests/text_flow_parity.rs","tests/text_flow_renderer_error_paths.rs","tests/property_tests.rs","tests/prelude_surfaces.rs","tests/text_flow_error_paths.rs"],"spec_refs":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md"]}
+{"version":1,"issue":58,"complete":true,"paths":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md","src/components/display/text.rs","src/layout/text_flow.rs","src/layout/mod.rs","src/layout/measure.rs","src/layout/engine.rs","src/layout/engine/text_flow_bridge.rs","src/layout/engine/tests.rs","src/renderer/error.rs","src/renderer/mod.rs","src/renderer/tree_renderer.rs","src/renderer/tree_renderer/projection.rs","src/renderer/output.rs","src/renderer/output/tests.rs","src/renderer/element_renderer.rs","src/renderer/pipeline.rs","src/renderer/app.rs","src/renderer/render_to_string.rs","src/renderer/static_content.rs","src/renderer/terminal_controller.rs","src/lib.rs","src/prelude.rs","src/testing/renderer.rs","tests/text_flow_root_cause.rs","tests/text_source_compat.rs","tests/text_flow_parity.rs","tests/text_flow_renderer_error_paths.rs","tests/property_tests.rs","tests/prelude_surfaces.rs","tests/text_flow_error_paths.rs"],"spec_refs":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md"]}
 -->
 
 ## Product Spec
@@ -79,8 +79,10 @@ spans 生成的 canonical String）。`Text::new("a\r\nb\r\n")` 的 `into_elemen
   styled runs、logical source/position map、normalization diagnostics 与 cache identity。
 - `TextFlowDisposition`：闭集表示 `Positioned`、`Truncated`、`HardBreak`、`ZeroWidth`、
   `SanitizedControl`；synthetic ellipsis 只存在于 position-to-source 的 synthetic 分支。
-- `RenderProjection`：当前 frame 的不可变 visible/clipped cells 与反向 cell map，不写入
-  `TextFlowCache`。
+- `RenderProjection`：private、frame-local、不可变的双向 map，不写入 `TextFlowCache`。
+  正向以 source byte range、完整 grapheme 与 logical disposition 为 identity，记录其
+  `Visible` / `Clipped` cell range；反向让每个占用的 `(x, y)` cell 指回 source range，或
+  明确指向 synthetic ellipsis，不能伪造 source byte range。
 - `TextFlowError`：非法 tab stop、算术溢出、不完整 source 覆盖，或 normalization 完成后
   engine 生成的 finalized token/source-map range 仍非 grapheme boundary 时显式失败。调用方
   输入的 style range 在 grapheme 内不属于 error，必须先按 B-002 归一化并记录 diagnostic。
@@ -179,6 +181,12 @@ grapheme continuation/suffix 表达和 grapheme 写入原语：
   `Output::write` 则在存 cell 前处理它们，最终 cell suffix 绝不保存 source control scalar。
 - terminal encoder 只能输出由结构化 Style、cursor/terminal protocol 生成的固定 allowlist
   ANSI；source replacement 不得经过 raw escape passthrough。
+- `Output` 提供 crate-private、只读的 whole-EGC active-clip visibility query，供 projection
+  在写入前判断一个 grapheme 的全部 display cells 是否同时位于 terminal bounds、所有当前
+  active clips 内。该 query 不移动 cursor、不修改 cell/clip state；wide grapheme 只有所有
+  cell 都可见时才返回 visible，不能让 projection 先宣称 visible 再由 Output 丢弃一半。
+  `renderer::output::tests::active_clips_report_grapheme_visibility` 必须覆盖嵌套 clip、边界和
+  wide grapheme 的全宽原子结果。
 
 `Output::write` 作为低层单起点兼容 wrapper 改用相同 grapheme writer，但仍不负责自动多行
 布局；只有 TextFlow renderer 负责逐行位置。这样既避免破坏直接调用者，也防止 renderer
@@ -187,8 +195,36 @@ grapheme continuation/suffix 表达和 grapheme 写入原语：
 ### 6. Renderer 与 render-to-string 收敛
 
 `tree_renderer` 删除 `render_spans` 的自有位置算法，统一遍历 TextFlow rows/runs。每个 run
-只携带结构化 Style。renderer 每次以当前 overflow、scroll、content rect、祖先 clip stack
-和 terminal bounds 生成 `RenderProjection`，再把 safe runs 写入 Output；不缓存 projection。
+只携带结构化 Style。renderer 每次在写入前以当前 Text 自身的 content rect、
+`overflow_x/y` 与 scroll、全部祖先 clip、terminal bounds，以及调用
+`try_render_element_tree` 前 `Output` 已有的 active clip stack 生成完整
+`RenderProjection`，再把 safe runs 写入 Output；不缓存 projection，也不得把任一调用前
+已有 clip 覆盖、清空或排除在投影之外。
+
+projection 的正向 map 对每个 source grapheme/disposition 恰好有一条记录：tab 展开的所有
+spaces 共享原 tab 的同一 source range；hidden、hard break 与无前导 cell 的 zero-width
+grapheme 保留明确的无-cell disposition；被 clip 的 grapheme 保留 `Clipped` cell range。
+truncate policy 即使生成多 EGC ellipsis，也必须逐 EGC 标记 synthetic，并让每个可见 cell
+反向指向对应 synthetic identity。display width=2 的 grapheme 要么完整 visible、要么完整
+clipped，不得产生半个 wide cell。所有 occupied visible/clipped cells 都必须能反查唯一的
+source 或 synthetic identity；source/grapheme/disposition 缺项、cell gap、重叠或反向
+identity 不一致均为 malformed map，并在任何 Output mutation 前返回 typed failure。
+
+projection 的 x/y overflow 必须独立执行：`overflow_x` 的 Hidden/Scroll 只决定水平
+位移与裁剪，`overflow_y` 的 Hidden/Scroll 只决定垂直位移与裁剪；任一轴为 Hidden/Scroll
+都不得隐式裁掉另一轴仍为 Visible 的 cells。content rect origin、ancestor offset、scroll
+offset、run position 与 terminal position 在整个投影计算中使用 signed coordinates；左移或
+上移后的负坐标保持为负值直到 terminal/active-clip visibility 判定，禁止 saturating cast 或
+提前 clamp 到 0 后把本应 clipped 的 cells 错投到首列/首行。
+
+若 `tree_renderer.rs` 为保持可维护文件大小需要拆分，T5 必须把上述 private projection
+实现放入 `src/renderer/tree_renderer/projection.rs`；该模块仍属于 T5 ownership，不扩展
+public API。T5 的 crate-private exact gate
+`renderer::tree_renderer::projection::tests::projection_source_cell_round_trip_records_visible_clipped_and_synthetic_cells`
+必须同时锁定 visible、clipped、tab same-range、synthetic multi-EGC ellipsis、wide 原子、
+hard-break/zero-width/hidden 无-cell 记录、malformed map gap fail-loud、x-visible +
+y-hidden、x-hidden + y-visible，以及 scroll 后落到 terminal 左侧/上侧的负坐标不能 clamp。
+T5 顺序依赖 T4 先提供并通过 whole-EGC active-clip visibility query。
 
 `render_to_string` 的 probe 可继续用于 Taffy 高度求解，但 text height 不再通过
 `count_wrapped_lines_by_width` 二次估算；最终高度取当前 layout/TextFlow 结果。direct
@@ -221,6 +257,16 @@ LayoutEngine::try_compute + try_render_element_tree
   `render_element_tree` / `render_element` / `render_dynamic_frame` 保留原返回类型并只委托
   try variant，Err 时 fail loudly；因此 T5 完成时 App/static/TestRenderer 的现有调用点仍
   编译，且不会把 error 变成 blank/partial output。
+- dynamic incremental 的 layout 或 render 返回 Err 时，T5 必须 invalidate/reset
+  `LayoutEngine` 已可能推进的 incremental tree/current publication，使下一次调用强制从
+  当前 Element/VNode 做 full rebuild；`previous_vnode` 与 runtime context 继续保持最后一个
+  成功帧，不能与失败后残留的 engine tree 混用。该恢复只处理 GH-58 typed text failure 后的
+  clean retry，不承诺也不实现 GH-60 的通用 patch transaction、rollback 或任意 layout error。
+  `renderer::pipeline::tests::incremental_failure_retries_from_clean_layout_tree` 必须在同一
+  exact gate 分别覆盖 layout Err 与 layout 已成功后的 render Err；允许 pipeline 内部共享
+  实现接受 private、`#[cfg(test)]` renderer closure/seam，在不扩 public API 的前提下注入
+  `MissingCurrentFlow`。两条路径都要证明失败后 engine 已 reset，修正同一 child 后从 clean
+  tree 重建，且节点不重复、layout/measure/alias/VNode 与最后成功 runtime state 一致。
 - T8 再为 static renderer 增加 `try_extract_static_content`；现有
   `extract_static_content` 同样保留为 fail-loud wrapper。App、static 内部、
   TerminalController 与 TestRenderer callers 切到 T5/T8 的 try variants；任一 child 失败
@@ -301,8 +347,8 @@ verify_integration_exact() {
 | B-007 | wrap row builder | `verify_lib_exact layout::text_flow::tests::text_flow_wrap`；长 ASCII/CJK/emoji token parity |
 | B-008 | truncate/ellipsis builder | `verify_lib_exact layout::text_flow::tests::text_flow_truncate`，覆盖五种 enum、无截断/窄 ellipsis 与 synthetic mapping |
 | B-009 | zero/narrow width + overwide disposition | `verify_lib_exact layout::text_flow::tests::text_flow_narrow_width`；Output bounds 断言 |
-| B-010 | frame-local renderer projection | `verify_integration_exact text_flow_parity viewport_projection_tracks_overflow_scroll_and_clip` |
-| B-011 | logical source map + render projection | T2：`verify_integration_exact property_tests text_flow_logical_source_round_trip`；T5：`verify_integration_exact text_flow_parity projection_source_cell_round_trip` |
+| B-010 | frame-local renderer projection | `verify_lib_exact renderer::output::tests::active_clips_report_grapheme_visibility`；`verify_lib_exact renderer::tree_renderer::projection::tests::projection_source_cell_round_trip_records_visible_clipped_and_synthetic_cells`；`verify_integration_exact text_flow_parity viewport_projection_tracks_overflow_scroll_and_clip` |
+| B-011 | logical source map + render projection | T2：`verify_integration_exact property_tests text_flow_logical_source_round_trip`；T5：`verify_lib_exact renderer::tree_renderer::projection::tests::projection_source_cell_round_trip_records_visible_clipped_and_synthetic_cells`；`verify_integration_exact text_flow_parity projection_source_cell_round_trip` |
 | B-012 | exact logical cache key | `verify_lib_exact layout::text_flow::tests::text_flow_cache_invalidation`，逐项变更 source/style/width/wrap/overflow/tab/ellipsis/policy；`verify_lib_exact layout::engine::tests::incremental_no_patch_refreshes_source_and_style` |
 | B-013 | immutable cache reuse | `verify_lib_exact layout::text_flow::tests::text_flow_cache_reuse`，比较复用与冷算完整 logical result |
 | B-014 | resize/overflow invalidation and reprojection | `verify_lib_exact layout::engine::tests::known_dimensions_publish_final_width_flow`；`verify_integration_exact text_flow_parity resize_reflows_or_reprojects_before_render`；`verify_integration_exact text_flow_parity overflow_change_recomputes_flow_and_projection` |
@@ -312,9 +358,9 @@ verify_integration_exact() {
 | B-018 | structured style only / no raw controls | `verify_integration_exact text_flow_parity source_controls_are_not_terminal_sequences` |
 | B-019 | current-head evidence/coverage | `cargo fmt --all -- --check`; exact CI clippy command；`cargo test --workspace --all-targets --all-features --locked`；CodeCov patch coverage >=80%，TextFlow core tarpaulin report =100% |
 | B-020 | Text private source -> existing Element fields | T7：`verify_integration_exact text_source_compat exact_crlf_and_trailing_break_ranges`；`verify_integration_exact text_source_compat structured_source_domain`；T3：`verify_lib_exact layout::engine::tests::alignable_crlf_spans_keep_exact_source_domain`；`verify_lib_exact layout::engine::tests::reconstructed_source_domain_uses_text_content_truth` |
-| B-021 | engine/render/App/string typed failure chain | T3 engine gate：`verify_lib_exact layout::engine::tests::try_compute_entrypoints_return_text_flow_error`；T5 crate-private unit gates：`verify_lib_exact renderer::tree_renderer::tests::text_flow_error_preserves_source_and_commits_no_partial_output`、`verify_lib_exact renderer::pipeline::tests::text_flow_error_keeps_previous_vnode`；T5 public integration gates：`verify_integration_exact text_flow_renderer_error_paths try_render_to_string_preserves_source_and_returns_no_partial_string`、`verify_integration_exact prelude_surfaces try_render_to_string_surface`；T5/T8 从 T3 typed entrypoints 向 renderer、string、App 与其余 callers 传播同一 cause；T8：`verify_integration_exact text_flow_error_paths typed_error_reaches_remaining_callers`、`verify_integration_exact text_flow_error_paths caller_failure_commits_no_partial_output` |
+| B-021 | engine/render/App/string typed failure chain | T3 engine gate：`verify_lib_exact layout::engine::tests::try_compute_entrypoints_return_text_flow_error`；T5 crate-private unit gates：`verify_lib_exact renderer::tree_renderer::tests::text_flow_error_preserves_source_and_commits_no_partial_output`、`verify_lib_exact renderer::pipeline::tests::text_flow_error_keeps_previous_vnode`、`verify_lib_exact renderer::pipeline::tests::incremental_failure_retries_from_clean_layout_tree`；T5 public integration gates：`verify_integration_exact text_flow_renderer_error_paths try_render_to_string_preserves_source_and_returns_no_partial_string`、`verify_integration_exact prelude_surfaces try_render_to_string_surface`；T5/T8 从 T3 typed entrypoints 向 renderer、string、App 与其余 callers 传播同一 cause；T8：`verify_integration_exact text_flow_error_paths typed_error_reaches_remaining_callers`、`verify_integration_exact text_flow_error_paths caller_failure_commits_no_partial_output` |
 | B-022 | compositor control sanitization | `verify_lib_exact renderer::output::tests::source_controls_are_replaced`；`verify_integration_exact text_flow_parity source_controls_are_not_terminal_sequences` |
-| B-023 | uncached viewport projection | `verify_integration_exact text_flow_parity viewport_projection_tracks_overflow_scroll_and_clip`；`verify_integration_exact text_flow_parity overflow_change_recomputes_flow_and_projection` |
+| B-023 | uncached viewport projection | `verify_lib_exact renderer::output::tests::active_clips_report_grapheme_visibility`；`verify_lib_exact renderer::tree_renderer::projection::tests::projection_source_cell_round_trip_records_visible_clipped_and_synthetic_cells`；`verify_integration_exact text_flow_parity viewport_projection_tracks_overflow_scroll_and_clip`；`verify_integration_exact text_flow_parity overflow_change_recomputes_flow_and_projection` |
 | B-024 | Element literal compatibility | `verify_integration_exact text_source_compat external_element_struct_literal_compiles` |
 
 ## 数据流
@@ -400,7 +446,16 @@ immutable logical TextFlow、frame-local RenderProjection 与终端 cell buffer�
 - [ ] unit：exact/canonical/reconstructed source ingress、tokenization、hard break、tab、
       control replacement、grapheme、wrap、truncate、ellipsis、logical source map/cache、
       atomic publish、interruption、Output trust boundary，以及 tree renderer/pipeline
-      crate-private typed error、partial Output 与 previous VNode 状态。
+      crate-private typed error、partial Output 与 previous VNode 状态；T4 exact gate
+      `renderer::output::tests::active_clips_report_grapheme_visibility` 验证 nested active
+      clips 与 whole-EGC wide 原子可见性；T5 exact gate
+      `renderer::tree_renderer::projection::tests::projection_source_cell_round_trip_records_visible_clipped_and_synthetic_cells`
+      验证双向 map、tab same-range、multi-EGC synthetic ellipsis、hidden/hard-break/
+      zero-width disposition 与 malformed map gap 失败；T5 pipeline exact gate
+      `renderer::pipeline::tests::incremental_failure_retries_from_clean_layout_tree` 验证成功
+      旧帧后分别经历新增 NaN child 的 layout failure，以及通过 private test-only renderer
+      seam 注入 `MissingCurrentFlow` 的 post-layout render failure；两者修正同 child 后都
+      clean full rebuild，且没有重复节点并恢复正确 layout/measure/alias/VNode/runtime。
 - [ ] integration：`tests/text_flow_parity.rs` 比较 TextFlow rows、Taffy layout height 与
       Output ANSI/cells，覆盖 plain/rich、width=0/1、width/height resize、scroll/clip
       reprojection、projection 双向 source map 与 source control payload；
@@ -411,7 +466,10 @@ immutable logical TextFlow、frame-local RenderProjection 与终端 cell buffer�
       断言 logical map 不落在 grapheme 中间且所有 source 恰好一个 logical disposition；
       T5-owned `tests/text_flow_parity.rs::projection_source_cell_round_trip` 生成 viewport/clip
       cases，断言 visible/clipped cell reverse map 不落在 grapheme 中间且 synthetic ellipsis
-      不伪装成 source。
+      不伪装成 source；crate-private projection exact gate 额外证明 current Text 自身
+      content rect/overflow/scroll、祖先 clip、terminal bounds 与调用前已有 Output clips
+      一起参与 map，任何 occupied-cell gap 都显式失败，并覆盖 x-visible+y-hidden、
+      x-hidden+y-visible 与向左/向上滚出 terminal 的 signed negative coordinates。
 - [ ] compatibility：原 layout measure、output、render-to-string、public surface 与全部
       workspace tests 通过；`tests/text_source_compat.rs` 证明外部完整 Element literal 与
       exact source，`tests/prelude_surfaces.rs` 证明 typed try API 可从稳定 surface 导入。
