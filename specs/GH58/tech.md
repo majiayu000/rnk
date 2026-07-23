@@ -6,7 +6,7 @@ GH-58: https://github.com/majiayu000/rnk/issues/58
 
 <!-- specrail-requires-planned-changes-v1 -->
 <!-- specrail-planned-changes
-{"version":1,"issue":58,"complete":true,"paths":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md","src/components/display/text.rs","src/layout/text_flow.rs","src/layout/mod.rs","src/layout/measure.rs","src/layout/engine.rs","src/layout/engine/text_flow_bridge.rs","src/layout/engine/tests.rs","src/renderer/error.rs","src/renderer/mod.rs","src/renderer/tree_renderer.rs","src/renderer/output.rs","src/renderer/element_renderer.rs","src/renderer/pipeline.rs","src/renderer/app.rs","src/renderer/render_to_string.rs","src/renderer/static_content.rs","src/renderer/terminal_controller.rs","src/lib.rs","src/prelude.rs","src/testing/renderer.rs","tests/text_flow_root_cause.rs","tests/text_source_compat.rs","tests/text_flow_parity.rs","tests/text_flow_renderer_error_paths.rs","tests/property_tests.rs","tests/prelude_surfaces.rs","tests/text_flow_error_paths.rs"],"spec_refs":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md"]}
+{"version":1,"issue":58,"complete":true,"paths":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md","src/components/display/text.rs","src/layout/text_flow.rs","src/layout/mod.rs","src/layout/measure.rs","src/layout/engine.rs","src/layout/engine/text_flow_bridge.rs","src/layout/engine/tests.rs","src/renderer/error.rs","src/renderer/mod.rs","src/renderer/tree_renderer.rs","src/renderer/output.rs","src/renderer/output/tests.rs","src/renderer/element_renderer.rs","src/renderer/pipeline.rs","src/renderer/app.rs","src/renderer/render_to_string.rs","src/renderer/static_content.rs","src/renderer/terminal_controller.rs","src/lib.rs","src/prelude.rs","src/testing/renderer.rs","tests/text_flow_root_cause.rs","tests/text_source_compat.rs","tests/text_flow_parity.rs","tests/text_flow_renderer_error_paths.rs","tests/property_tests.rs","tests/prelude_surfaces.rs","tests/text_flow_error_paths.rs"],"spec_refs":["specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md"]}
 -->
 
 ## Product Spec
@@ -163,6 +163,9 @@ Err 时携带 error 文本 fail loudly，不把 sentinel 当成功 layout。这�
 `Output` 保留现有 `StyledChar::ch` 与 `Output::write` 兼容表面，同时为 cell 增加内部
 grapheme continuation/suffix 表达和 grapheme 写入原语：
 
+- `src/renderer/output/tests.rs` 只机械承载从 `output.rs` 迁出的既有 unit tests 与 T4 新
+  exact gates；不得改变或弱化既有测试语义，不得用 `#[rustfmt::skip]` 或压缩旧实现把
+  `output.rs` 卡在 800 行，也不得在该文件引入 integration fixtures 或 T5 renderer 行为。
 - 一个 grapheme 的首个 scalar 继续保存在 lead cell 的 `ch`，剩余 scalars 作为同 cell
   suffix 在 ANSI render 时紧随输出。
 - display width=2 的 lead cell 继续占一个 placeholder cell；overwrite 时 lead、suffix 和

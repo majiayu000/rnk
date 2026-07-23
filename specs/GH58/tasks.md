@@ -69,7 +69,7 @@ verify_integration_exact() {
   - Dependencies: GH58-T2。
   - Covers: B-001, B-002, B-012, B-013, B-014, B-015, B-016, B-020, B-021, B-023。
 
-- [ ] `SP58-T4`（lane alias: `GH58-T4`）实现 grapheme-safe、terminal-safe Output trust boundary。Owner: `text-compositor-lane` | Done when: `src/renderer/output.rs` 原子写 combining/ZWJ suffix 与 wide placeholder；任何漏入的 ESC/C0/DEL/C1 在 cell/suffix 存储前按 B-022 替换；低层 `Output::write` 先结构化处理 break/tab 且不透传 controls；terminal encoder 只生成结构化 allowlisted ANSI；screen-clear、cursor move、OSC 与 C1 unit negatives 证明 payload 不可执行 | Verify: `verify_lib_exact renderer::output::tests::source_controls_are_replaced`; `verify_lib_exact renderer::output::tests::terminal_encoder_rejects_payload_sequences`。
+- [ ] `SP58-T4`（lane alias: `GH58-T4`）实现 grapheme-safe、terminal-safe Output trust boundary。Owner: `text-compositor-lane` | Done when: `src/renderer/output.rs` 原子写 combining/ZWJ suffix 与 wide placeholder；`src/renderer/output/tests.rs` 只机械迁入既有 Output unit tests 并承载 T4 新 exact gates，不改变或弱化既有测试语义、不用 `#[rustfmt::skip]` 或压缩旧实现把 `output.rs` 卡在 800 行、不引入 integration fixtures 或 T5 renderer 行为；任何漏入的 ESC/C0/DEL/C1 在 cell/suffix 存储前按 B-022 替换；低层 `Output::write` 先结构化处理 break/tab 且不透传 controls；terminal encoder 只生成结构化 allowlisted ANSI；screen-clear、cursor move、OSC 与 C1 unit negatives 证明 payload 不可执行 | Verify: `verify_lib_exact renderer::output::tests::source_controls_are_replaced`; `verify_lib_exact renderer::output::tests::terminal_encoder_rejects_payload_sequences`。
   - Dependencies: GH58-T2、GH58-T3；不写任何 integration test 文件。
   - Covers: B-001, B-005, B-006, B-009, B-011, B-017, B-018, B-022。
 
@@ -96,7 +96,9 @@ verify_integration_exact() {
   `src/layout/engine/tests.rs`；bridge 是从 `engine.rs` 拆出的专用桥接模块，不得用
   `#[rustfmt::skip]` 或压缩旧逻辑代替拆分；tests 只机械迁出既有 unit tests 并增加 T3
   exact gates，不改变既有测试语义、不触碰 GH-59/GH-60、不得弱化断言。
-- GH58-T4 独占 `src/renderer/output.rs`。
+- GH58-T4 独占 `src/renderer/output.rs`、`src/renderer/output/tests.rs`；tests 只机械迁出
+  既有 Output unit tests 并增加 T4 exact gates，不改变或弱化既有测试语义、不用
+  `#[rustfmt::skip]` 或压缩旧实现卡 800 行、不引入 integration fixtures 或 T5 行为。
 - GH58-T5 独占 `src/renderer/error.rs`、`src/renderer/mod.rs`、
   `src/renderer/tree_renderer.rs`、`src/renderer/element_renderer.rs`、
   `src/renderer/pipeline.rs`、`src/renderer/render_to_string.rs`、`src/lib.rs`、
