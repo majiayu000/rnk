@@ -6,6 +6,7 @@
 use crate::components::text::Line;
 use crate::core::{Display, Element, Overflow};
 use crate::layout::LayoutEngine;
+use crate::layout::text_flow::flow_text;
 use crate::renderer::Output;
 use crate::renderer::output::ClipRegion;
 
@@ -74,7 +75,23 @@ pub(crate) fn render_element_tree(
         if let Some(spans) = &element.spans {
             render_spans(spans, output, text_x, text_y);
         } else if let Some(text) = &element.text_content {
-            output.write(text_x, text_y, text, &element.style);
+            // Draw the same rows layout reserved height for. Writing the raw
+            // string instead stops at the first hard break or at the right
+            // edge, silently dropping everything after it.
+            let content_width = width
+                .saturating_sub(if element.style.has_border() { 2 } else { 0 })
+                .saturating_sub(element.style.padding.left as u16)
+                .saturating_sub(element.style.padding.right as u16);
+            let flow = flow_text(text, content_width as usize, element.style.text_wrap);
+            for (row_idx, row) in flow.rows().iter().enumerate() {
+                let Ok(offset) = u16::try_from(row_idx) else {
+                    break;
+                };
+                let Some(row_y) = text_y.checked_add(offset) else {
+                    break;
+                };
+                output.write(text_x, row_y, row, &element.style);
+            }
         }
     }
 

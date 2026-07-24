@@ -1,6 +1,6 @@
 //! Layout engine using Taffy
 
-use crate::core::{Element, ElementId, ElementType, NodeKey, Props, VNode, VNodeType};
+use crate::core::{Element, ElementId, ElementType, NodeKey, Props, TextWrap, VNode, VNodeType};
 use crate::layout::measure::measure_text_width;
 use crate::reconciler::{Patch, diff};
 use std::collections::HashMap;
@@ -30,6 +30,9 @@ pub struct IncrementalLayoutOutcome {
 #[derive(Clone)]
 struct NodeContext {
     text_content: Option<String>,
+    /// Wrap mode is part of what determines the flow, so measurement must
+    /// see the same value the renderer will use.
+    text_wrap: TextWrap,
 }
 
 /// Layout engine that computes element positions
@@ -87,6 +90,7 @@ impl LayoutEngine {
 
         let context = NodeContext {
             text_content: element.text_content.clone(),
+            text_wrap: element.style.text_wrap,
         };
 
         // Create node with measure function for text
@@ -200,7 +204,10 @@ impl LayoutEngine {
             _ => None,
         };
 
-        let context = NodeContext { text_content };
+        let context = NodeContext {
+            text_content,
+            text_wrap: vnode.props.style.text_wrap,
+        };
 
         // Create node
         let node_id = if vnode.is_text() {
@@ -552,10 +559,10 @@ fn measure_text_node(
     available_space: taffy::Size<AvailableSpace>,
     node_context: Option<&mut NodeContext>,
 ) -> taffy::Size<f32> {
-    let text = node_context
-        .and_then(|ctx| ctx.text_content.as_ref())
-        .map(|s| s.as_str())
-        .unwrap_or("");
+    let (text, text_wrap) = node_context
+        .map(|ctx| (ctx.text_content.clone().unwrap_or_default(), ctx.text_wrap))
+        .unwrap_or_else(|| (String::new(), TextWrap::default()));
+    let text = text.as_str();
 
     if text.is_empty() {
         return taffy::Size {
@@ -573,23 +580,22 @@ fn measure_text_node(
         _ => None,
     };
 
-    let text_height = if let Some(max_width) = available_width {
-        if max_width > 0 && text_width > max_width as f32 {
-            // Text needs wrapping - count wrapped lines without allocation
-            use super::measure::count_wrapped_lines_by_width;
-            count_wrapped_lines_by_width(text, max_width) as f32
-        } else {
-            text.lines().count().max(1) as f32
+    // Height comes from the same flow the renderer will draw, so reserved rows
+    // and painted rows cannot disagree.
+    let text_height = match available_width {
+        Some(max_width) if max_width > 0 => {
+            super::text_flow::flow_text(text, max_width, text_wrap).row_count() as f32
         }
-    } else {
-        text.lines().count().max(1) as f32
+        _ => text.lines().count().max(1) as f32,
     };
 
     let width = known_dimensions
         .width
         .unwrap_or_else(|| match available_space.width {
             AvailableSpace::Definite(w) => text_width.min(w),
-            AvailableSpace::MinContent => text_width,
+            AvailableSpace::MinContent => {
+                super::measure::min_content_text_width(text, text_wrap) as f32
+            }
             AvailableSpace::MaxContent => text_width,
         });
 
