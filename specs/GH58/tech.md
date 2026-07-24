@@ -350,65 +350,32 @@ LayoutEngine::try_compute + try_render_element_tree
 
 ## Product-to-Test Mapping
 
-所有 filtered 验证只能调用下面两个 exact helper。两者先 `--list --exact`，且匹配数必须
-恰好为 1；不得在表格、任务或 handoff 中直接运行未守卫的 cargo filter：
-
-```sh
-verify_lib_exact() {
-  test_name="$1"
-  matched="$(
-    cargo test --workspace --lib --locked "$test_name" -- --list --exact |
-      awk '/: test$/{count++} END{print count+0}'
-  )"
-  test "$matched" -eq 1 || {
-    printf 'expected one exact lib test, matched %s: %s\n' "$matched" "$test_name" >&2
-    return 1
-  }
-  cargo test --workspace --lib --locked "$test_name" -- --exact
-}
-
-verify_integration_exact() {
-  target="$1"
-  test_name="$2"
-  matched="$(
-    cargo test --test "$target" --locked "$test_name" -- --list --exact |
-      awk '/: test$/{count++} END{print count+0}'
-  )"
-  test "$matched" -eq 1 || {
-    printf 'expected one exact integration test, matched %s: %s::%s\n' \
-      "$matched" "$target" "$test_name" >&2
-    return 1
-  }
-  cargo test --test "$target" --locked "$test_name" -- --exact
-}
-```
-
 | Behavior invariant | Implementation area | Verification |
 | --- | --- | --- |
-| B-001 | `layout::text_flow`, `LayoutEngine`, `tree_renderer` | `verify_lib_exact layout::text_flow::tests::text_flow_shared_result`；`verify_integration_exact text_flow_parity measure_rows_equal_rendered_rows` |
-| B-002 | styled source normalization / positioned runs | `verify_lib_exact layout::text_flow::tests::text_flow_styled_runs`；`verify_lib_exact layout::text_flow::tests::split_combining_and_zwj_style_boundary_normalizes`；`verify_lib_exact layout::engine::tests::plain_text_style_is_published` |
-| B-003 | empty input / empty line normalization | `verify_lib_exact layout::text_flow::tests::text_flow_empty_inputs` |
-| B-004 | exact-source hard-break tokenizer | `verify_integration_exact text_source_compat exact_crlf_and_trailing_break_ranges` |
-| B-005 | grapheme tokenizer / Output grapheme cell | `verify_lib_exact layout::text_flow::tests::text_flow_graphemes`；`verify_integration_exact text_flow_parity unicode_graphemes_render_intact` |
-| B-006 | tab expansion | `verify_lib_exact layout::text_flow::tests::text_flow_tabs`，断言 stops 1/4/8、source range 与零值失败 |
-| B-007 | wrap row builder | `verify_lib_exact layout::text_flow::tests::text_flow_wrap`；长 ASCII/CJK/emoji token parity |
-| B-008 | truncate/ellipsis builder | `verify_lib_exact layout::text_flow::tests::text_flow_truncate`，覆盖五种 enum、无截断/窄 ellipsis 与 synthetic mapping |
-| B-009 | zero/narrow width + overwide disposition | `verify_lib_exact layout::text_flow::tests::text_flow_narrow_width`；Output bounds 断言 |
-| B-010 | frame-local renderer projection | `verify_lib_exact renderer::output::tests::active_clips_report_grapheme_visibility`；`verify_lib_exact renderer::output::tests::staged_snapshot_and_write_footprint_are_isolated`；`verify_lib_exact renderer::tree_renderer::projection::tests::projection_source_cell_round_trip_records_visible_clipped_and_synthetic_cells`；`verify_integration_exact text_flow_parity viewport_projection_tracks_overflow_scroll_and_clip` |
-| B-011 | logical source map + render projection | T2：`verify_integration_exact property_tests text_flow_logical_source_round_trip`；T5：`verify_lib_exact renderer::tree_renderer::projection::tests::projection_source_cell_round_trip_records_visible_clipped_and_synthetic_cells`；`verify_lib_exact renderer::tree_renderer::projection::tests::projection_round_trip_validation_is_linear`；`verify_integration_exact text_flow_parity projection_source_cell_round_trip` |
-| B-012 | exact logical cache key | `verify_lib_exact layout::text_flow::tests::text_flow_cache_invalidation`，逐项变更 source/style/width/wrap/overflow/tab/ellipsis/policy；`verify_lib_exact layout::engine::tests::incremental_no_patch_refreshes_source_and_style` |
-| B-013 | immutable cache reuse | `verify_lib_exact layout::text_flow::tests::text_flow_cache_reuse`，比较复用与冷算完整 logical result |
-| B-014 | resize/overflow invalidation and reprojection | `verify_lib_exact layout::engine::tests::known_dimensions_publish_final_width_flow`；`verify_integration_exact text_flow_parity resize_reflows_or_reprojects_before_render`；`verify_integration_exact text_flow_parity overflow_change_recomputes_flow_and_projection` |
-| B-015 | finalized-range `TextFlowError` + atomic publish | `verify_lib_exact layout::text_flow::tests::finalized_non_grapheme_range_is_error`；`verify_lib_exact layout::engine::tests::text_flow_failure_is_atomic` |
-| B-016 | immutable readers / interrupted compute | `verify_lib_exact layout::text_flow::tests::text_flow_interruption` |
-| B-017 | compatibility wrappers/public surface | `verify_integration_exact text_source_compat plain_multiline_compatibility`；`verify_integration_exact text_source_compat external_element_struct_literal_compiles`；`cargo check --workspace --all-targets --all-features --locked` |
-| B-018 | structured style only / no raw controls | `verify_integration_exact text_flow_parity source_controls_are_not_terminal_sequences` |
+| B-001 | `layout::text_flow`, `LayoutEngine`, `tree_renderer` | `cargo test --workspace --lib --locked layout::text_flow::tests::text_flow_shared_result -- --exact`；`cargo test --test text_flow_parity --locked measure_rows_equal_rendered_rows -- --exact` |
+| B-002 | styled source normalization / positioned runs | `cargo test --workspace --lib --locked layout::text_flow::tests::text_flow_styled_runs -- --exact`；`cargo test --workspace --lib --locked layout::text_flow::tests::split_combining_and_zwj_style_boundary_normalizes -- --exact`；`cargo test --workspace --lib --locked layout::engine::tests::plain_text_style_is_published -- --exact` |
+| B-003 | empty input / empty line normalization | `cargo test --workspace --lib --locked layout::text_flow::tests::text_flow_empty_inputs -- --exact` |
+| B-004 | exact-source hard-break tokenizer | `cargo test --test text_source_compat --locked exact_crlf_and_trailing_break_ranges -- --exact` |
+| B-005 | grapheme tokenizer / Output grapheme cell | `cargo test --workspace --lib --locked layout::text_flow::tests::text_flow_graphemes -- --exact`；`cargo test --test text_flow_parity --locked unicode_graphemes_render_intact -- --exact` |
+| B-006 | tab expansion | `cargo test --workspace --lib --locked layout::text_flow::tests::text_flow_tabs -- --exact`，断言 stops 1/4/8、source range 与零值失败 |
+| B-007 | wrap row builder | `cargo test --workspace --lib --locked layout::text_flow::tests::text_flow_wrap -- --exact`；长 ASCII/CJK/emoji token parity |
+| B-008 | truncate/ellipsis builder | `cargo test --workspace --lib --locked layout::text_flow::tests::text_flow_truncate -- --exact`，覆盖五种 enum、无截断/窄 ellipsis 与 synthetic mapping |
+| B-009 | zero/narrow width + overwide disposition | `cargo test --workspace --lib --locked layout::text_flow::tests::text_flow_narrow_width -- --exact`；Output bounds 断言 |
+| B-010 | frame-local renderer projection | `cargo test --workspace --lib --locked renderer::output::tests::active_clips_report_grapheme_visibility -- --exact`；`cargo test --workspace --lib --locked renderer::output::tests::staged_snapshot_and_write_footprint_are_isolated -- --exact`；`cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_source_cell_round_trip_records_visible_clipped_and_synthetic_cells -- --exact`；`cargo test --test text_flow_parity --locked viewport_projection_tracks_overflow_scroll_and_clip -- --exact` |
+| B-011 | logical source map + render projection | T2：`cargo test --test property_tests --locked text_flow_logical_source_round_trip -- --exact`；T5：`cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_source_cell_round_trip_records_visible_clipped_and_synthetic_cells -- --exact`；`cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_round_trip_validation_is_linear -- --exact`；`cargo test --test text_flow_parity --locked projection_source_cell_round_trip -- --exact` |
+| B-012 | exact logical cache key | `cargo test --workspace --lib --locked layout::text_flow::tests::text_flow_cache_invalidation -- --exact`，逐项变更 source/style/width/wrap/overflow/tab/ellipsis/policy；`cargo test --workspace --lib --locked layout::engine::tests::incremental_no_patch_refreshes_source_and_style -- --exact` |
+| B-013 | immutable cache reuse | `cargo test --workspace --lib --locked layout::text_flow::tests::text_flow_cache_reuse -- --exact`，比较复用与冷算完整 logical result |
+| B-014 | resize/overflow invalidation and reprojection | `cargo test --workspace --lib --locked layout::engine::tests::known_dimensions_publish_final_width_flow -- --exact`；`cargo test --test text_flow_parity --locked resize_reflows_or_reprojects_before_render -- --exact`；`cargo test --test text_flow_parity --locked overflow_change_recomputes_flow_and_projection -- --exact` |
+| B-015 | finalized-range `TextFlowError` + atomic publish | `cargo test --workspace --lib --locked layout::text_flow::tests::finalized_non_grapheme_range_is_error -- --exact`；`cargo test --workspace --lib --locked layout::engine::tests::text_flow_failure_is_atomic -- --exact` |
+| B-016 | immutable readers / interrupted compute | `cargo test --workspace --lib --locked layout::text_flow::tests::text_flow_interruption -- --exact` |
+| B-017 | compatibility wrappers/public surface | `cargo test --test text_source_compat --locked plain_multiline_compatibility -- --exact`；`cargo test --test text_source_compat --locked external_element_struct_literal_compiles -- --exact`；`cargo check --workspace --all-targets --all-features --locked` |
+| B-018 | structured style only / no raw controls | `cargo test --test text_flow_parity --locked source_controls_are_not_terminal_sequences -- --exact` |
 | B-019 | current-head evidence/coverage | `cargo fmt --all -- --check`; exact CI clippy command；`cargo test --workspace --all-targets --all-features --locked`；CodeCov patch coverage >=80%，TextFlow core tarpaulin report =100% |
-| B-020 | Text private source -> existing Element fields | T7：`verify_integration_exact text_source_compat exact_crlf_and_trailing_break_ranges`；`verify_integration_exact text_source_compat structured_source_domain`；T3：`verify_lib_exact layout::engine::tests::alignable_crlf_spans_keep_exact_source_domain`；`verify_lib_exact layout::engine::tests::reconstructed_source_domain_uses_text_content_truth` |
-| B-021 | engine/render/App/string typed failure chain | T3 engine gate：`verify_lib_exact layout::engine::tests::try_compute_entrypoints_return_text_flow_error`；T5 crate-private unit gates：`verify_lib_exact renderer::tree_renderer::tests::text_flow_error_preserves_source_and_commits_no_partial_output`、`verify_lib_exact renderer::pipeline::tests::text_flow_error_keeps_previous_vnode`、`verify_lib_exact renderer::pipeline::tests::incremental_failure_retries_from_clean_layout_tree`；T5 public integration gates：`verify_integration_exact text_flow_renderer_error_paths try_render_to_string_preserves_source_and_returns_no_partial_string`、`verify_integration_exact prelude_surfaces try_render_to_string_surface`；T5/T8 从 T3 typed entrypoints 向 renderer、string、App 与其余 callers 传播同一 cause；T8：`verify_integration_exact text_flow_error_paths typed_error_reaches_remaining_callers`、`verify_integration_exact text_flow_error_paths caller_failure_commits_no_partial_output` |
-| B-022 | compositor control sanitization | `verify_lib_exact renderer::output::tests::source_controls_are_replaced`；`verify_integration_exact text_flow_parity source_controls_are_not_terminal_sequences` |
-| B-023 | uncached viewport projection | `verify_lib_exact renderer::output::tests::active_clips_report_grapheme_visibility`；`verify_lib_exact renderer::output::tests::staged_snapshot_and_write_footprint_are_isolated`；`verify_lib_exact renderer::tree_renderer::projection::tests::projection_source_cell_round_trip_records_visible_clipped_and_synthetic_cells`；`verify_lib_exact renderer::tree_renderer::projection::tests::projection_round_trip_validation_is_linear`；`verify_integration_exact text_flow_parity viewport_projection_tracks_overflow_scroll_and_clip`；`verify_integration_exact text_flow_parity overflow_change_recomputes_flow_and_projection` |
-| B-024 | Element literal compatibility | `verify_integration_exact text_source_compat external_element_struct_literal_compiles` |
+| B-020 | Text private source -> existing Element fields | T7：`cargo test --test text_source_compat --locked exact_crlf_and_trailing_break_ranges -- --exact`；`cargo test --test text_source_compat --locked structured_source_domain -- --exact`；T3：`cargo test --workspace --lib --locked layout::engine::tests::alignable_crlf_spans_keep_exact_source_domain -- --exact`；`cargo test --workspace --lib --locked layout::engine::tests::reconstructed_source_domain_uses_text_content_truth -- --exact` |
+| B-021 | engine/render/App/string typed failure chain | T3 engine gate：`cargo test --workspace --lib --locked layout::engine::tests::try_compute_entrypoints_return_text_flow_error -- --exact`；T5 crate-private unit gates：`cargo test --workspace --lib --locked renderer::tree_renderer::tests::text_flow_error_preserves_source_and_commits_no_partial_output -- --exact`、`cargo test --workspace --lib --locked renderer::pipeline::tests::text_flow_error_keeps_previous_vnode -- --exact`、`cargo test --workspace --lib --locked renderer::pipeline::tests::incremental_failure_retries_from_clean_layout_tree -- --exact`；T5 public integration gates：`cargo test --test text_flow_renderer_error_paths --locked try_render_to_string_preserves_source_and_returns_no_partial_string -- --exact`、`cargo test --test prelude_surfaces --locked try_render_to_string_surface -- --exact`；T5/T8 从 T3 typed entrypoints 向 renderer、string、App 与其余 callers 传播同一 cause；T8：`cargo test --test text_flow_error_paths --locked typed_error_reaches_remaining_callers -- --exact`、`cargo test --test text_flow_error_paths --locked caller_failure_commits_no_partial_output -- --exact` |
+| B-022 | compositor control sanitization | `cargo test --workspace --lib --locked renderer::output::tests::source_controls_are_replaced -- --exact`；`cargo test --test text_flow_parity --locked source_controls_are_not_terminal_sequences -- --exact` |
+| B-023 | uncached viewport projection | `cargo test --workspace --lib --locked renderer::output::tests::active_clips_report_grapheme_visibility -- --exact`；`cargo test --workspace --lib --locked renderer::output::tests::staged_snapshot_and_write_footprint_are_isolated -- --exact`；`cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_source_cell_round_trip_records_visible_clipped_and_synthetic_cells -- --exact`；`cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_round_trip_validation_is_linear -- --exact`；`cargo test --test text_flow_parity --locked viewport_projection_tracks_overflow_scroll_and_clip -- --exact`；`cargo test --test text_flow_parity --locked overflow_change_recomputes_flow_and_projection -- --exact` |
+| B-024 | Element literal compatibility | `cargo test --test text_source_compat --locked external_element_struct_literal_compiles -- --exact` |
 
 ## 数据流
 
@@ -539,8 +506,3 @@ immutable logical TextFlow、frame-local RenderProjection 与终端 cell buffer�
   ```
 
 ## 回滚方案
-
-实现 PR 必须保持现有 public 构造器和 helper。若新 flow 出现回归，回滚整个 GH-58
-implementation commit/PR，恢复此前 renderer 与 measure 路径；不得在运行时静默切回只写
-第一行的 legacy fallback。若仅 cache 引发问题，可在后续修复中禁用复用但仍每次运行同一个
-TextFlow core；不能恢复两套换行语义。
