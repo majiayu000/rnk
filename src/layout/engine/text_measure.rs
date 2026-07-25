@@ -25,6 +25,13 @@ impl NodeContext {
             cache: None,
         }
     }
+
+    pub(super) fn update_text_wrap(&mut self, text_wrap: TextWrap) {
+        if self.text_wrap != text_wrap {
+            self.text_wrap = text_wrap;
+            self.cache = None;
+        }
+    }
 }
 
 /// A measurement together with the inputs that produced it.
@@ -163,6 +170,46 @@ mod tests {
 
         let second = measure_text_node(unknown(), definite(10.0), Some(&mut ctx));
         assert_eq!((first.width, first.height), (second.width, second.height));
+    }
+
+    #[test]
+    fn wrap_change_invalidates_only_affected_measurement() {
+        let source = Some("abcdefgh".to_owned());
+        let mut ctx = NodeContext::new(source.clone(), TextWrap::Wrap);
+        let wrapped = measure_text_node(unknown(), definite(4.0), Some(&mut ctx));
+        assert_eq!(wrapped.height, 2.0);
+        assert!(ctx.cache.is_some());
+
+        ctx.update_text_wrap(TextWrap::Wrap);
+        assert!(
+            ctx.cache.is_some(),
+            "an unchanged wrap mode must preserve its valid measurement"
+        );
+        assert_eq!(ctx.text_content, source);
+
+        ctx.update_text_wrap(TextWrap::Truncate);
+        assert_eq!(ctx.text_wrap, TextWrap::Truncate);
+        assert!(
+            ctx.cache.is_none(),
+            "a changed wrap mode must invalidate the old measurement"
+        );
+        assert_eq!(ctx.text_content, source);
+
+        let truncated = measure_text_node(unknown(), definite(4.0), Some(&mut ctx));
+        assert_eq!(truncated.height, 1.0);
+        assert!(ctx.cache.is_some());
+
+        ctx.update_text_wrap(TextWrap::Truncate);
+        assert!(
+            ctx.cache.is_some(),
+            "the replacement measurement stays valid while the mode is unchanged"
+        );
+
+        ctx.update_text_wrap(TextWrap::Wrap);
+        assert!(ctx.cache.is_none());
+        let wrapped_again = measure_text_node(unknown(), definite(4.0), Some(&mut ctx));
+        assert_eq!(wrapped_again.height, 2.0);
+        assert_eq!(ctx.text_content, source);
     }
 
     #[test]
