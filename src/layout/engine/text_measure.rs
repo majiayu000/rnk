@@ -37,29 +37,29 @@ impl NodeContext {
 /// A measurement together with the inputs that produced it.
 #[derive(Clone, Copy)]
 struct CacheEntry {
-    known_width: Option<f32>,
+    effective_width: EffectiveWidth,
     known_height: Option<f32>,
-    available_width: AvailableWidthKey,
+    text_wrap: TextWrap,
     size: taffy::Size<f32>,
 }
 
-/// The part of `AvailableSpace` that changes a text measurement.
+/// Width that controls both wrapping and the returned measurement.
 ///
-/// `AvailableSpace` is not `PartialEq`, and the height axis never affects the
-/// result, so the key carries only what matters.
+/// Resolved and available widths retain their provenance because a resolved
+/// width is authoritative, while an available width only caps intrinsic text
+/// width. Intrinsic probes have no finite wrapping width.
 #[derive(Clone, Copy, PartialEq)]
-enum AvailableWidthKey {
-    Definite(f32),
-    MinContent,
-    MaxContent,
+enum EffectiveWidth {
+    Resolved(f32),
+    Available(f32),
+    Intrinsic,
 }
 
-impl From<AvailableSpace> for AvailableWidthKey {
-    fn from(space: AvailableSpace) -> Self {
-        match space {
-            AvailableSpace::Definite(width) => Self::Definite(width),
-            AvailableSpace::MinContent => Self::MinContent,
-            AvailableSpace::MaxContent => Self::MaxContent,
+impl EffectiveWidth {
+    fn value(self) -> Option<f32> {
+        match self {
+            Self::Resolved(width) | Self::Available(width) => Some(width),
+            Self::Intrinsic => None,
         }
     }
 }
@@ -87,50 +87,49 @@ pub(super) fn measure_text_node(
         return fallback;
     }
 
-    let available_width = AvailableWidthKey::from(available_space.width);
+    let effective_width = match (known_dimensions.width, available_space.width) {
+        (Some(width), _) => EffectiveWidth::Resolved(width),
+        (None, AvailableSpace::Definite(width)) => EffectiveWidth::Available(width),
+        (None, AvailableSpace::MinContent | AvailableSpace::MaxContent) => {
+            EffectiveWidth::Intrinsic
+        }
+    };
+    let text_wrap = context.text_wrap;
     if let Some(hit) = context.cache.filter(|entry| {
-        entry.known_width == known_dimensions.width
+        entry.effective_width == effective_width
             && entry.known_height == known_dimensions.height
-            && entry.available_width == available_width
+            && entry.text_wrap == text_wrap
     }) {
         return hit.size;
     }
 
-    let text_wrap = context.text_wrap;
     let text = context.text_content.as_deref().unwrap_or_default();
 
     let text_width = measure_text_width(text) as f32;
 
-    let definite_width = match available_space.width {
-        AvailableSpace::Definite(width) => Some(width as usize),
-        _ => None,
-    };
-
     // Height comes from the same flow the renderer will draw.
-    let text_height = match definite_width {
-        Some(max_width) if max_width > 0 => {
-            flow_text(text, max_width, text_wrap).row_count() as f32
-        }
+    let text_height = match effective_width.value() {
+        Some(width) if width > 0.0 => flow_text(text, width as usize, text_wrap).row_count() as f32,
         _ => text.lines().count().max(1) as f32,
     };
 
-    let width = known_dimensions
-        .width
-        .unwrap_or_else(|| match available_space.width {
-            AvailableSpace::Definite(width) => text_width.min(width),
-            AvailableSpace::MinContent => text_width,
-            AvailableSpace::MaxContent => text_width,
-        });
+    let width = match effective_width {
+        EffectiveWidth::Resolved(width) => width,
+        EffectiveWidth::Available(width) => text_width.min(width),
+        EffectiveWidth::Intrinsic => text_width,
+    };
 
     let size = taffy::Size {
         width,
+        // A resolved height remains authoritative even though wrapping is
+        // always derived from the effective width above.
         height: known_dimensions.height.unwrap_or(text_height),
     };
 
     context.cache = Some(CacheEntry {
-        known_width: known_dimensions.width,
+        effective_width,
         known_height: known_dimensions.height,
-        available_width,
+        text_wrap,
         size,
     });
 
@@ -160,6 +159,98 @@ mod tests {
         let mut ctx = NodeContext::new(Some("aaaa bbbb cccc dddd".into()), TextWrap::Wrap);
         let size = measure_text_node(unknown(), definite(10.0), Some(&mut ctx));
         assert_eq!(size.height, 2.0);
+    }
+
+    #[test]
+    fn known_width_drives_wrapped_height() {
+        let mut ctx = NodeContext::new(Some("abcdefghijabcdefghij".into()), TextWrap::Wrap);
+        let size = measure_text_node(
+            taffy::Size {
+                width: Some(10.0),
+                height: None,
+            },
+            definite(80.0),
+            Some(&mut ctx),
+        );
+
+        assert_eq!(
+            (size.width, size.height),
+            (10.0, 2.0),
+            "height must describe the same resolved width returned to Taffy"
+        );
+    }
+
+    #[test]
+    fn different_known_widths_do_not_share_measurement() {
+        let mut ctx = NodeContext::new(Some("abcdefghijabcdefghij".into()), TextWrap::Wrap);
+        let narrow = measure_text_node(
+            taffy::Size {
+                width: Some(10.0),
+                height: None,
+            },
+            definite(80.0),
+            Some(&mut ctx),
+        );
+        let wide = measure_text_node(
+            taffy::Size {
+                width: Some(20.0),
+                height: None,
+            },
+            definite(80.0),
+            Some(&mut ctx),
+        );
+
+        assert_eq!((narrow.width, narrow.height), (10.0, 2.0));
+        assert_eq!((wide.width, wide.height), (20.0, 1.0));
+    }
+
+    #[test]
+    fn known_height_remains_authoritative_at_effective_width() {
+        let mut ctx = NodeContext::new(Some("abcdefghijabcdefghij".into()), TextWrap::Wrap);
+        let constrained = measure_text_node(
+            taffy::Size {
+                width: Some(10.0),
+                height: Some(7.0),
+            },
+            definite(80.0),
+            Some(&mut ctx),
+        );
+        let unconstrained = measure_text_node(
+            taffy::Size {
+                width: Some(10.0),
+                height: None,
+            },
+            definite(80.0),
+            Some(&mut ctx),
+        );
+
+        assert_eq!((constrained.width, constrained.height), (10.0, 7.0));
+        assert_eq!((unconstrained.width, unconstrained.height), (10.0, 2.0));
+    }
+
+    #[test]
+    fn no_known_width_keeps_definite_available_width_behavior() {
+        let mut ctx = NodeContext::new(Some("abcdefghijabcdefghij".into()), TextWrap::Wrap);
+        let size = measure_text_node(unknown(), definite(10.0), Some(&mut ctx));
+
+        assert_eq!((size.width, size.height), (10.0, 2.0));
+    }
+
+    #[test]
+    fn resolved_and_available_widths_do_not_share_returned_size() {
+        let mut ctx = NodeContext::new(Some("abcde".into()), TextWrap::Wrap);
+        let resolved = measure_text_node(
+            taffy::Size {
+                width: Some(20.0),
+                height: None,
+            },
+            definite(80.0),
+            Some(&mut ctx),
+        );
+        let available = measure_text_node(unknown(), definite(20.0), Some(&mut ctx));
+
+        assert_eq!((resolved.width, resolved.height), (20.0, 1.0));
+        assert_eq!((available.width, available.height), (5.0, 1.0));
     }
 
     #[test]
