@@ -1,6 +1,8 @@
 //! Layout engine using Taffy
 
-use crate::core::{Dimension, Element, ElementId, ElementType, NodeKey, Props, VNode, VNodeType};
+use crate::core::{
+    Dimension, Element, ElementId, ElementType, NodeKey, Props, Style, VNode, VNodeType,
+};
 use crate::reconciler::{Patch, diff};
 use std::collections::HashMap;
 use taffy::{AvailableSpace, NodeId, TaffyTree};
@@ -69,8 +71,7 @@ impl LayoutEngine {
             return None;
         }
 
-        let mut taffy_style = element.style.to_taffy();
-        allow_text_to_shrink(&mut taffy_style, element.is_text(), element.style.min_width);
+        let taffy_style = normalized_taffy_style(&element.style, element.is_text());
 
         // Build children first
         let child_nodes: Vec<NodeId> = element
@@ -178,12 +179,7 @@ impl LayoutEngine {
     }
 
     fn build_vnode(&mut self, vnode: &VNode) -> Option<NodeId> {
-        let mut taffy_style = vnode.props.to_taffy();
-        allow_text_to_shrink(
-            &mut taffy_style,
-            vnode.is_text(),
-            vnode.props.style.min_width,
-        );
+        let taffy_style = normalized_taffy_style(&vnode.props.style, vnode.is_text());
 
         // Build children first
         let child_nodes: Vec<NodeId> = vnode
@@ -365,7 +361,11 @@ impl LayoutEngine {
     /// Update a node's props/style
     fn update_node_props(&mut self, key: NodeKey, props: &Props) -> bool {
         if let Some(&node_id) = self.vnode_map.get(&key) {
-            let new_style = props.to_taffy();
+            let is_text = self
+                .taffy
+                .get_node_context(node_id)
+                .is_some_and(|context| context.text_content.is_some());
+            let new_style = normalized_taffy_style(&props.style, is_text);
             if self.taffy.set_style(node_id, new_style).is_ok() {
                 return true;
             }
@@ -541,6 +541,12 @@ impl Default for LayoutEngine {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn normalized_taffy_style(style: &Style, is_text: bool) -> ::taffy::Style {
+    let mut taffy_style = style.to_taffy();
+    allow_text_to_shrink(&mut taffy_style, is_text, style.min_width);
+    taffy_style
 }
 
 /// Let a text node shrink below its own content width.
