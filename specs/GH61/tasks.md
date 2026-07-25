@@ -15,13 +15,18 @@ GH-61: https://github.com/majiayu000/rnk/issues/61
 - Required TextFlow dependency: [`../GH58/product.md`](../GH58/product.md)、
   [`../GH58/tech.md`](../GH58/tech.md)、[`../GH58/tasks.md`](../GH58/tasks.md)
 
+## 范围说明
+
+benchmark workload matrix、baseline artifact、promotion 流程与回归门已拆分到 #85，
+不在本 packet 内实现。
+
 ## 实现任务
 
 - [ ] `SP61-T1`（lane alias: `GH61-T1`）建立旧实现可重复失败的snapshot/parity根因fixture。Owner: `root-cause-test-lane` | Done when: 只使用GH60 merged public API的fixture证明nested fractional bounds/scroll入口仍由renderer独立解释，且full/incremental/static/testing/string尚无共同immutable snapshot；fixture在新API出现前可编译并产生预期red assertion，最终head通过 | Verify: `cargo test --test layout_snapshot_root_cause --locked nested_fractional_edges_need_one_cell_snapshot -- --exact`; `cargo test --test layout_snapshot_root_cause --locked render_entrypoints_must_share_snapshot_contract -- --exact`。
   - Dependencies: canonical `ready_to_implement`；fresh duplicate evidence；三个merged SHA
     ancestry gate。
   - File ownership: 独占 `tests/layout_snapshot_root_cause.rs`；不写production、spec、
-    benchmark或其他tests。
+    其他tests。
   - Covers: B-001, B-004, B-005, B-012, B-016。
   - Handoff: 提交red root-cause checkpoint后把fixture所需最小public assertions交给T2；
     T1 owner停止写该文件，最终只由T6接管。
@@ -46,7 +51,7 @@ GH-61: https://github.com/majiayu000/rnk/issues/61
     `tests/layout_snapshot_error_paths.rs`。不写renderer/runtime/bench。
   - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009, B-010, B-011, B-012, B-013, B-014, B-015, B-017, B-018, B-019, B-020, B-021, B-023。
   - Handoff: 向T4交付真实GH60 wrapper组合、prepared snapshot/report/error与current-frame
-    alias API；向T5交付per-frame read-only deterministic work counters/scenario builder
+    alias API；产出 per-frame read-only deterministic work counters
     requirements；T3停止写所有
     production和integration files。
 
@@ -63,48 +68,31 @@ GH-61: https://github.com/majiayu000/rnk/issues/61
     `tests/ui/gh61_snapshot_private_fields.stderr`、`tests/gh61_public_docs.rs`；接管T3的
     `tests/layout_snapshot_error_paths.rs`只补renderer/runtime cases，不写layout files。
   - Covers: B-001, B-003, B-007, B-008, B-009, B-010, B-016, B-017, B-018, B-019, B-020, B-021, B-022, B-023。
-  - Handoff: 向T6交付全部renderer/public surface与error fixtures；T4不修改benchmark/
-    workflow/Cargo paths，可与T5在T3之后并行。
+  - Handoff: 向T6交付全部renderer/public surface与error fixtures。
+    workflow/Cargo paths。
 
-- [ ] `SP61-T5`（lane alias: `GH61-T5`）实现固定chat workload matrix、work/allocation counters、versioned candidate artifact、coverage wrapper、bootstrap与抗噪声paired regression checker。Owner: `benchmark-evidence-lane` | Done when: scenario严格等于tech表中六个名称和最小operations；unchanged只允许full/incremental，其余必须full/incremental/recovered；row按scenario/strategy/batch聚合，recovered `rebuild_count == operation_count`，其他为0；schema/fixture/checker/tasks统一只定义`median_ns`一个timing字段；compare只从PR exact base tree读取canonical baseline并校验fingerprint；implementation bootstrap只写candidate且不能被后续PR复用；T5为trybuild新增`Cargo.toml` dev-dependency并同步`Cargo.lock`，所有`--locked`门可运行；coverage wrapper输出exact base/head、非零denominator | Verify: `cargo test --test layout_snapshot_benchmark_contract --locked fixed_six_scenario_matrix_has_minimum_nonzero_operations -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked recovered_rows_aggregate_one_rebuild_per_operation -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked median_ns_is_the_only_timing_field -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked artifact_binds_environment_and_exact_shas -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked timing_requires_two_of_three_paired_regressions -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked trusted_baseline_rejects_self_stale_and_untrusted_sources -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked implementation_writes_candidate_but_never_canonical_baseline -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked bootstrap_and_promotion_never_self_authorize -- --exact`; `cargo metadata --locked --format-version 1 | jq -e '.packages[] | select(.name == "trybuild")'`。
-  - Dependencies: GH61-T3 work-counter/read-only API handoff；不等待T4，且不写T4任何文件。
-  - File ownership: 独占 `.github/scripts/check_gh61_benchmark.py`、
-    `.github/workflows/quality.yml`、`Cargo.toml`、`Cargo.lock`、`benches/chat_layout.rs`、
-    `benches/support/chat_layout.rs`、`tests/fixtures/gh61_benchmark_schema.json`、
-    `tests/layout_snapshot_benchmark_contract.rs`；production snapshot/engine/renderer只读。
-  - Covers: B-024, B-025, B-026, B-027, B-028。
-  - Handoff: 向T6交付bootstrap exact-head candidate artifact路径、fixed
-    scenario/strategy/operation matrix、canonical baseline validation contract、schema
-    version、coverage schema和所有negative fixture结果；向后续独立baseline-promotion issue/PR
-    只交付candidate与exact merged implementation SHA要求，不写canonical文件，不得把
-    bootstrap表述为performance regression pass。
-
-- [ ] `SP61-T6`（lane alias: `GH61-T6`）完成root-cause、compatibility、compile immutability、coverage、full gates与exact-head GitHub/SpecRail evidence。Owner: `quality-evidence-lane` | Done when: 全部invariants exact test均由tech helper证明matched=1、passed=1、ignored=0；重跑T3两条明确quantizer integration tests、五seed/64-step generator、GH60真实wrapper/recovered aggregate；trybuild匹配stderr且`Cargo.toml`/`Cargo.lock`包含依赖；benchmark只含`median_ns`并聚合recovered rebuilds；docs/coverage、三dependency ancestry、full Rust、CI、reviewThreads与pr_gate绑定同一head | Verify: 重新运行T1-T5全部exact commands，包括`nested_shared_edges_do_not_gain_overlap`、`negative_and_overflow_cells_are_not_clamped_to_success`、`public_snapshot_mutation_surface_is_compile_fail`、GH60 wrapper/aggregate、seed generator与benchmark aggregate/timing-field tests；断言每个helper为`1 passed/0 ignored`；运行`cargo metadata --locked` trybuild断言、tech docs/coverage完整命令块、benchmark gates及所有full commands。
-  - Dependencies: GH61-T1至T5全部完成并显式handoff；T4/T5 writers停止；
+- [ ] `SP61-T6`（lane alias: `GH61-T6`）完成root-cause、compatibility、compile immutability、coverage、full gates与exact-head GitHub/SpecRail evidence。Owner: `quality-evidence-lane` | Done when: 全部invariants exact test均由tech helper证明matched=1、passed=1、ignored=0；重跑T3两条明确quantizer integration tests、五seed/64-step generator、GH60真实wrapper/recovered aggregate；trybuild匹配stderr且`Cargo.toml`/`Cargo.lock`包含依赖；docs/coverage、三dependency ancestry、full Rust、CI、reviewThreads与pr_gate绑定同一head | Verify: 重新运行T1-T4全部exact commands，包括`nested_shared_edges_do_not_gain_overlap`、`negative_and_overflow_cells_are_not_clamped_to_success`、`public_snapshot_mutation_surface_is_compile_fail`、GH60 wrapper/aggregate与seed generator tests；断言每个helper为`1 passed/0 ignored`；运行`cargo metadata --locked` trybuild断言、tech docs/coverage完整命令块及所有full commands。
+  - Dependencies: GH61-T1至T4全部完成并显式handoff；T4 writers停止；
     implementation PR exact base/head已知。
   - File ownership: 接管 `tests/layout_snapshot_root_cause.rs`、
     `tests/layout_snapshot_parity.rs`、`tests/layout_snapshot_state_machine.rs`、
     `tests/layout_snapshot_error_paths.rs`、`tests/layout_snapshot_compat.rs`、
     `tests/layout_snapshot_immutability.rs`、`tests/ui/gh61_snapshot_private_fields.rs`、
     `tests/ui/gh61_snapshot_private_fields.stderr`、
-    `tests/layout_snapshot_benchmark_contract.rs`、`tests/gh61_public_docs.rs`；
+    `tests/gh61_public_docs.rs`；
     production、bench、workflow与scripts只读，只允许修正tests/evidence；若生产缺陷暴露，
     退回对应owner新checkpoint，不在T6跨ownership偷改。
-  - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009, B-010, B-011, B-012, B-013, B-014, B-015, B-016, B-017, B-018, B-019, B-020, B-021, B-022, B-023, B-024, B-025, B-026, B-027, B-028, B-029, B-030。
+  - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009, B-010, B-011, B-012, B-013, B-014, B-015, B-016, B-017, B-018, B-019, B-020, B-021, B-022, B-023, B-029, B-030。
   - Handoff: independent reviewer必须与T1-T6 writers分离；只有current exact head的
     non-blocking review artifact、全部resolved threads、green CI、allowed `pr_gate`与当前
     `implx auto` authorization可进入merge step。
 
 ## 并行拆分
 
-- Writable dependency graph：`T1 -> T2 -> T3 -> {T4 || T5} -> T6`。
+- Writable dependency graph：`T1 -> T2 -> T3 -> T4 -> T6`。
 - T1只写root-cause fixture；T2只写snapshot core；T3接管snapshot并独占engine/parity。
-- T3完成并停止后，T4与T5可并行：
-  - T4仅写renderer/runtime/testing/public docs/compat/compile-immutability fixtures；
-  - T5仅写bench/Cargo/quality workflow/benchmark与coverage checker/contract test，并只输出
     untracked CI candidate evidence；canonical baseline由后续独立promotion PR唯一拥有。
-- T4接管error integration file，T5不得写它；T5的benchmark contract文件T4不得写。
-- T6只有在T4/T5都停止后接管全部tests。没有两个writable lane共享同一文件。
+- T6只有在T4都停止后接管全部tests。没有两个writable lane共享同一文件。
 - read-only reviewer、CI观察或coverage审计可与writer并行，但不得修改source、resolve
   threads或写同一review artifact。
 - 若merged upstream导致真实文件拆分不同，先更新ownership并复审spec；禁止临时共享写文件。
@@ -124,13 +112,6 @@ GH-61: https://github.com/majiayu000/rnk/issues/61
 - 所有filtered Rust tests先`--list --exact`且matched=1，执行输出跨workspace汇总后必须
   `passed=1`且`ignored=0`；只打印list、substring filter、零passed、ignored、旧SHA或其他
   issue test不算证据。
-- benchmark artifact必须严格列出tech固定六scenario与strategy matrix，达到每项minimum
-  operations，所有允许组合sample/median/visited/snapshot>0，其他counter存在且满足tech的
-  非负约束；recovered aggregate `rebuild_count == operation_count`，非recovered为0，
-  schema/checker/task只能定义`median_ns`一个timing字段；compare只能信任PR base tree的repo-owned ancestor baseline，
-  self/stale/untrusted/unauthorized promotion必须non-green；implementation只能输出CI
-  candidate且manifest/diff不得含canonical baseline，后者由独立promotion PR唯一写入；
-  bootstrap只验证candidate completeness，不能输出“no regression”。
 - coverage artifact的`pr_base_oid`、`coverage_merge_base_sha`、`head_sha`与GitHub exact
   head逐项相等；changed executable与每个critical line/branch denominator必须非零，并分别
   达到80%/100%；dependency SHAs只用于ancestry，不替代coverage base。
@@ -147,7 +128,7 @@ cargo test --workspace --all-targets --all-features --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
 ```
 
-- exact-head CI、bootstrap benchmark artifact、public docs、coverage、independent review
+- exact-head CI、public docs、coverage、independent review
   manifest/resolver map、reviewThreads与SpecRail `pr_gate`必须绑定同一head。
 
 ## Handoff Notes
@@ -165,5 +146,4 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --lock
   10%+8 allocations / 4096 bytes；fingerprint不兼容为`needs_rebaseline`，不是green；
   canonical baseline只能由implementation合入后的独立issue/spec/reviewed promotion PR作为
   唯一writer，重新测量exact merged SHA，并在成为未来PR base-tree内容后受信。
-- 首次GH61 benchmark是bootstrap，不是与不存在旧scenario的性能胜利声明。
 - GH-61完成后只解锁GH-68对应dependency；不直接完成任何chat shell或message list。

@@ -9,7 +9,7 @@ GH-61: https://github.com/majiayu000/rnk/issues/61
 见 [`product.md`](product.md)。
 
 本文件只定义 GH-61 的 immutable snapshot、terminal-cell quantization、跨 producer parity、
-state-machine 与 benchmark evidence。GH-58 TextFlow、GH-59 scoped identity/order 和 GH-60
+state-machine 与 parity evidence。GH-58 TextFlow、GH-59 scoped identity/order 和 GH-60
 transaction/recovery/prepared commit 是强依赖，不在本 issue 内复制或弱化。
 
 ## Codebase Context
@@ -387,7 +387,7 @@ identity/order输入仍由GH-59/GH-60测试负责。failure输出seed、PRNG sta
 draw、normalized operation、identity/field/full/incremental value；replay必须从seed重建
 完整前缀和首个difference，不允许实现后挑选更容易的seed/权重。
 
-### 7. Work counters 与 benchmark artifact
+### 7. Work counters
 
 per-frame `SnapshotWorkCounters`是closed、read-only report，不写全局历史：
 
@@ -399,45 +399,8 @@ snapshot_nodes
 rebuild_count
 ```
 
-其中GH-60单次frame `rebuild_count`只能为0或1。visited/mutated/TextFlow/snapshot/rebuild由
-engine seam确定性记录；allocation与timing只在bench binary采集，不进入production report。
-test seam保持
-crate-private或bench-only，不增加 `Any`/arbitrary closure public API。
-
-`benches/support/chat_layout.rs`构建确定corpus和scenario；名称、输入与最小operation数固定：
-
-| scenario | fixed input / minimum operations | required strategies |
-| --- | --- | --- |
-| `unchanged_frame` | 1000-message transcript；64个相同frame operations | full、incremental；recovered禁止且artifact不得出现 |
-| `streaming_delta` | 1000-message transcript；32个grapheme-safe ASCII/CJK/emoji/combining deltas | full、incremental、recovered |
-| `append_message` | 1000-message committed起点；64次single-message append | full、incremental、recovered |
-| `middle_insert` | 1000-message committed起点；32次在index 500附近insert | full、incremental、recovered |
-| `variable_height_transcript` | 1000 messages；64次update循环1..12 logical rows并包含CJK/emoji | full、incremental、recovered |
-| `resize_invalidation` | 1000 messages；30个完整`120x40 -> 80x24 -> 120x40` cycles | full、incremental、recovered |
-
-```text
-schema_version, mode, scenario, strategy, operation_count, seed, target_size, viewport_sequence,
-message_corpus_revision, rustc, target, cargo_lock_sha256, profile,
-runner_os, runner_arch, runner_cpu, runner_fingerprint, pr_base_oid, merge_base_sha, head_sha,
-warmup_iterations, sample_count, batch_index,
-median_ns, allocation_count, allocated_bytes,
-visited_nodes, mutated_nodes, text_flow_recomputes, snapshot_nodes, rebuild_count
-```
-
-benchmark artifact 由 `.github/scripts/check_gh61_benchmark.py` 生成与校验，其 CLI 契约为：
-
-- `--list-scenarios`：machine-readable exact scenario列表；
-- `--validate-artifact`：schema、closed enum、nonzero sample、counter、SHA/fingerprint完整性；
-- `--mode bootstrap --candidate-out target/gh61-baseline-candidate.json`：只生成non-authoritative candidate
-  evidence，不写canonical baseline、不输出“no regression”；成功只返回
-  `decision=bootstrap_valid`、`comparison_status=not_available`、
-  `promotion_required=true`，作为首次implementation的required contract gate，而不是
-  performance-green decision；
-- `--mode compare --repo . --pr-base-oid ... --head-artifact ...`：同runner ABBA paired
-  3 batches；不接受调用方任意`--base`文件；
-- timing fail：`head/base > 1.20` 且 `head-base > 50_000ns`，3 batches中至少2个满足；
-- allocation fail：count同时超过10%与8，或bytes同时超过10%与4096；
-- fingerprint不兼容返回明确 `needs_rebaseline` 非green exit；missing/invalid返回blocked exit。
+这些 counters 是 `SnapshotBuildReport` 的一部分。以它们为输入的 benchmark
+workload matrix、baseline artifact 与回归门属于 #85，不在本 packet 内定义。
 
 ### 8. Verification、public docs 与 coverage
 
@@ -473,11 +436,6 @@ line 与 branch 均 100%，由既有 CI Coverage job 报告。
 | B-021 | closed typed failures/GH60 three-route source chain | `cargo test --test layout_snapshot_error_paths --locked every_snapshot_failure_variant_preserves_payload_and_source_chain -- --exact`; `cargo test --test layout_snapshot_error_paths --locked every_layout_alias_variant_preserves_payload_and_source -- --exact`; `cargo test --test layout_snapshot_error_paths --locked gh60_frame_wrapper_routes_snapshot_failures_without_fictitious_initial_variant -- --exact` |
 | B-022 | compatibility | `cargo test --test layout_snapshot_compat --locked existing_layout_engine_renderer_and_testing_surface_compiles -- --exact` |
 | B-023 | no-op alias overlay | `cargo test --test layout_snapshot_parity --locked reused_snapshot_accepts_target_exact_frame_aliases -- --exact` |
-| B-024 | fixed matrix/recovered aggregate | `cargo test --test layout_snapshot_benchmark_contract --locked fixed_six_scenario_matrix_has_minimum_nonzero_operations -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked recovered_rows_aggregate_one_rebuild_per_operation -- --exact` |
-| B-025 | reproducible environment/canonical timing field | `cargo test --test layout_snapshot_benchmark_contract --locked artifact_binds_environment_and_exact_shas -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked median_ns_is_the_only_timing_field -- --exact` |
-| B-026 | paired timing threshold | `cargo test --test layout_snapshot_benchmark_contract --locked timing_requires_two_of_three_paired_regressions -- --exact` |
-| B-027 | allocation/trusted fingerprint gate | `cargo test --test layout_snapshot_benchmark_contract --locked trusted_baseline_rejects_self_stale_and_untrusted_sources -- --exact` |
-| B-028 | candidate/bootstrap and exclusive promotion ownership | `cargo test --test layout_snapshot_benchmark_contract --locked implementation_writes_candidate_but_never_canonical_baseline -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked bootstrap_and_promotion_never_self_authorize -- --exact` |
 | B-029 | exact head/coverage/docs gates | direct execution of the two exact command blocks、full Rust gates、CI/reviewThreads/`pr_gate` |
 | B-030 | merged dependencies | 三次 `git merge-base --is-ancestor "$GH*_MERGED_SHA" HEAD` 与 GitHub merged evidence |
 
@@ -497,7 +455,7 @@ Element target + viewport
   -> atomic publication of engine/snapshot/previous/aliases/measurements/static state
 ```
 
-full/incremental/recovered只改变producer report，不改变snapshot semantic data。benchmark
+full/incremental/recovered只改变producer report，不改变snapshot semantic data。#85 的 benchmark
 runner对等价起点执行同一data flow并把report、allocation与timing写成CI artifact；artifact
 不进入运行时持久化。生产snapshot只保存在当前App/checked caller内，无磁盘或全局跨App cache。
 
@@ -539,8 +497,6 @@ runner对等价起点执行同一data flow并把report、allocation与timing写�
   base/head ABBA、3 batches、双threshold和fingerprint；不可比较时needs_rebaseline。
 - **Maintenance**：布局、renderer与benchmark文件多。按模块拆分，保持每文件低于800行；
   state-machine fixture与benchmark corpus共享只读builder但不共享writer ownership。
-- **Evidence**：bootstrap没有旧scenario baseline。必须明确标记bootstrap，不能生成虚假
-  “no regression”结论。
 
 ## 测试计划
 
@@ -577,7 +533,6 @@ GH-61 implementation 使用独立PR。若snapshot migration引入正确性回归
 恢复GH-60已合入的prepared renderer/transaction行为；不得只恢复某个renderer的live-engine
 lookup、default layout或独立float cast，否则重新形成多套布局语义。
 
-若只有timing gate噪声，可临时把timing result降为`needs_rebaseline`并保留required parity、
 work与allocation gate；不得删除artifact schema、exact-head binding或把invalid evidence判
 green。若allocation/CPU成本确实过高，保留snapshot/correctness合同，另开spec优化storage、
 incremental snapshot reuse或GH-60 candidate strategy。回滚后GH-61保持打开且
