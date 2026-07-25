@@ -47,25 +47,34 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    TextFlow recomputes、snapshot nodes 与 rebuild count。row 按
    scenario/strategy/batch 聚合；recovered row 必须满足
    `rebuild_count == operation_count`，非 recovered row 必须为 0。缺字段、负 counter、
-   operation/sample 未达下限或不满足各 strategy 约束时 artifact 无效。
+   operation/sample 未达下限、不满足各 strategy 约束或出现 schema 未声明字段时 artifact
+   无效；candidate、current-run compare artifact 与 canonical baseline 均适用 closed schema。
 3. **B-003** benchmark 必须固定 seed、target size、viewport 序列、message corpus、
    toolchain、`Cargo.lock`、profile、runner fingerprint、warmup、sample/batch 数及 exact
-   head/base SHA。setup/tree construction 不得计入 operation；full/incremental 必须从等价
-   起点对同一 target 测量。
+   head/base SHA。每个 artifact 必须记录闭合 role、`source_sha`、内容/config/corpus hash 与
+   `paired_order`；hash 不匹配时不得消费。setup/tree construction 不得计入 operation；
+   full/incremental 必须从等价起点对同一 target 测量。
 4. **B-004** PR required gate 必须先通过不依赖 wall clock 的 parity、work-counter 与
    allocation contract checks；任一前置检查失败、缺失或证据不完整时，不得继续给出
    performance-green 结论。
-5. **B-005** 存在 trusted canonical baseline 时，timing 比较必须在同一 runner 上对
-   base/head 运行交错 paired batches。只有 `head/base > 1.20` 且
+5. **B-005** 存在 trusted canonical baseline 时，timing 比较必须在同一 runner 上从 PR
+   exact base checkout 与 current head 分别 build/run，并按每个 pair/batch 的 ABBA 顺序
+   交错采集 current-run base/head artifacts；跨 run、错序或 pair identity 不一致的 row 无效。
+   只有 `head/base > 1.20` 且
    `head-base > 50_000ns`，并在 3 个 batch 中至少 2 个复现时才判回归；单次 outlier
-   不得阻断。
-6. **B-006** allocation count 相对 trusted base 同时超过 10% 与 8 allocations，或
+   不得阻断。base 或 head 的 `median_ns == 0` 时 timing denominator 无效，结果必须 blocked，
+   不得以无穷比率或零差值继续比较。
+6. **B-006** allocation count 相对本次 trusted compare 的 current-run base 同时超过
+   10% 与 8 allocations，或
    allocated bytes 同时超过 10% 与 4096 bytes 时，required gate 必须判回归；相对或绝对
-   阈值仅单独超过时不得误报。
+   阈值仅单独超过时不得误报。base allocation denominator 为 0 时，head 也为 0 表示该 metric
+   无回归；head 大于 0 时相对条件视为满足，但仍须严格超过对应绝对阈值才判回归。
 7. **B-007** compare 的 base 只能来自 PR exact base tree 中 repo-owned canonical
    baseline，且 source SHA 必须是 PR base 的祖先、不得等于 current head。baseline
-   missing、stale、self-authored、untrusted，或 runner/schema/corpus/scenario/toolchain
-   fingerprint 不兼容时，结果必须为 blocked 或明确的 `needs_rebaseline`，不得判 green。
+   missing、closed-schema/content-hash 无效、source 不在 ancestry 中或由 current head
+   self-authored 时必须 blocked；已验证来源但 schema/config/corpus/toolchain/runner
+   fingerprint 与 current compare 不兼容时必须明确为 `needs_rebaseline`。stale 与 trust
+   predicate 必须输出具体失败字段，二者均不得判 green。
 8. **B-008** 首次引入 benchmark 的 implementation PR 只能运行 bootstrap，并生成绑定 exact
    head 的 non-authoritative candidate artifact。成功状态只能是
    `bootstrap_valid`、`comparison_status=not_available`、
@@ -79,10 +88,11 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
 
 ## 验收标准
 
-- [ ] 固定六 scenario、strategy matrix、minimum operations 与所有 artifact 字段均由
-      schema/checker 的正负 fixture 验证，覆盖 B-001 至 B-003。
-- [ ] required job 证明前置确定性门、timing 2-of-3 双阈值与 allocation 双阈值，覆盖
-      B-004 至 B-006。
+- [ ] 固定六 scenario、strategy matrix、minimum operations、closed schema、artifact role、
+      source/hash/paired-order 字段均由 schema/checker 的正负 fixture 验证，覆盖
+      B-001 至 B-003。
+- [ ] required job 证明前置确定性门、exact-checkout same-runner ABBA、timing 2-of-3
+      双阈值、allocation 双阈值与两个 zero-denominator 分支，覆盖 B-004 至 B-006。
 - [ ] self/stale/untrusted/fingerprint-mismatch/missing baseline 均产生 non-green 结果，
       覆盖 B-007。
 - [ ] 首次 implementation 只产生 exact-head candidate；独立 promotion 重新测量并保留所有
