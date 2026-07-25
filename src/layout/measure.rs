@@ -4,7 +4,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 #[inline]
-fn grapheme_width(grapheme: &str) -> usize {
+pub(crate) fn grapheme_width(grapheme: &str) -> usize {
     UnicodeWidthStr::width(grapheme)
 }
 

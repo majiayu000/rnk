@@ -2,6 +2,7 @@
 
 mod engine;
 pub mod measure;
+pub(crate) mod text_flow;
 mod utils;
 
 pub use engine::{Layout, LayoutEngine};

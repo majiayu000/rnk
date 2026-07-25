@@ -1,7 +1,6 @@
 //! Layout engine using Taffy
 
-use crate::core::{Element, ElementId, ElementType, NodeKey, Props, VNode, VNodeType};
-use crate::layout::measure::measure_text_width;
+use crate::core::{Dimension, Element, ElementId, ElementType, NodeKey, Props, VNode, VNodeType};
 use crate::reconciler::{Patch, diff};
 use std::collections::HashMap;
 use taffy::{AvailableSpace, NodeId, TaffyTree};
@@ -24,12 +23,6 @@ pub struct IncrementalLayoutOutcome {
     pub patch_count: usize,
     /// Whether incremental path failed and full rebuild was used.
     pub fallback_full_rebuild: bool,
-}
-
-/// Context stored for each node (for text measurement)
-#[derive(Clone)]
-struct NodeContext {
-    text_content: Option<String>,
 }
 
 /// Layout engine that computes element positions
@@ -76,7 +69,8 @@ impl LayoutEngine {
             return None;
         }
 
-        let taffy_style = element.style.to_taffy();
+        let mut taffy_style = element.style.to_taffy();
+        allow_text_to_shrink(&mut taffy_style, element.is_text(), element.style.min_width);
 
         // Build children first
         let child_nodes: Vec<NodeId> = element
@@ -85,9 +79,7 @@ impl LayoutEngine {
             .filter_map(|child| self.build_node(child))
             .collect();
 
-        let context = NodeContext {
-            text_content: element.text_content.clone(),
-        };
+        let context = NodeContext::new(element.text_content.clone(), element.style.text_wrap);
 
         // Create node with measure function for text
         let node_id = if element.is_text() {
@@ -186,7 +178,12 @@ impl LayoutEngine {
     }
 
     fn build_vnode(&mut self, vnode: &VNode) -> Option<NodeId> {
-        let taffy_style = vnode.props.to_taffy();
+        let mut taffy_style = vnode.props.to_taffy();
+        allow_text_to_shrink(
+            &mut taffy_style,
+            vnode.is_text(),
+            vnode.props.style.min_width,
+        );
 
         // Build children first
         let child_nodes: Vec<NodeId> = vnode
@@ -200,7 +197,7 @@ impl LayoutEngine {
             _ => None,
         };
 
-        let context = NodeContext { text_content };
+        let context = NodeContext::new(text_content, vnode.props.style.text_wrap);
 
         // Create node
         let node_id = if vnode.is_text() {
@@ -546,327 +543,26 @@ impl Default for LayoutEngine {
     }
 }
 
-/// Measure text content for layout
-fn measure_text_node(
-    known_dimensions: taffy::Size<Option<f32>>,
-    available_space: taffy::Size<AvailableSpace>,
-    node_context: Option<&mut NodeContext>,
-) -> taffy::Size<f32> {
-    let text = node_context
-        .and_then(|ctx| ctx.text_content.as_ref())
-        .map(|s| s.as_str())
-        .unwrap_or("");
-
-    if text.is_empty() {
-        return taffy::Size {
-            width: known_dimensions.width.unwrap_or(0.0),
-            height: known_dimensions.height.unwrap_or(0.0),
-        };
+/// Let a text node shrink below its own content width.
+///
+/// A flex item's automatic minimum size is its min-content width, so a text
+/// node would otherwise refuse to be narrowed and would overflow its parent
+/// instead of wrapping. `min-width: 0` is the standard CSS remedy.
+///
+/// The alternative — reporting a smaller min-content from the measure callback
+/// — makes Taffy's sizing search explode: a 40-deep tree went from 140 measure
+/// calls to 396k.
+///
+/// An explicit `min_width` from the caller always wins.
+fn allow_text_to_shrink(style: &mut ::taffy::Style, is_text: bool, explicit_min_width: Dimension) {
+    if is_text && matches!(explicit_min_width, Dimension::Auto) {
+        style.min_size.width = ::taffy::Dimension::Length(0.0);
     }
-
-    // Measure text using unicode-width
-    let text_width = measure_text_width(text) as f32;
-
-    // Calculate height considering text wrapping
-    let available_width = match available_space.width {
-        AvailableSpace::Definite(w) => Some(w as usize),
-        _ => None,
-    };
-
-    let text_height = if let Some(max_width) = available_width {
-        if max_width > 0 && text_width > max_width as f32 {
-            // Text needs wrapping - count wrapped lines without allocation
-            use super::measure::count_wrapped_lines_by_width;
-            count_wrapped_lines_by_width(text, max_width) as f32
-        } else {
-            text.lines().count().max(1) as f32
-        }
-    } else {
-        text.lines().count().max(1) as f32
-    };
-
-    let width = known_dimensions
-        .width
-        .unwrap_or_else(|| match available_space.width {
-            AvailableSpace::Definite(w) => text_width.min(w),
-            AvailableSpace::MinContent => text_width,
-            AvailableSpace::MaxContent => text_width,
-        });
-
-    let height = known_dimensions.height.unwrap_or(text_height);
-
-    taffy::Size { width, height }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::{Element, Props, Style, VNode};
-    use crate::reconciler::Patch;
+mod tests;
 
-    #[test]
-    fn test_layout_engine_creation() {
-        let engine = LayoutEngine::new();
-        assert!(engine.node_map.is_empty());
-        assert!(engine.vnode_map.is_empty());
-        assert!(!engine.has_tree());
-    }
+mod text_measure;
 
-    #[test]
-    fn test_simple_layout() {
-        let mut engine = LayoutEngine::new();
-
-        let mut root = Element::root();
-        root.add_child(Element::text("Hello"));
-
-        engine.compute(&root, 80, 24);
-
-        let layout = engine.get_layout(root.id);
-        assert!(layout.is_some());
-    }
-
-    #[test]
-    fn test_text_measurement() {
-        let mut engine = LayoutEngine::new();
-
-        let root = Element::text("Hello World");
-        engine.compute(&root, 80, 24);
-
-        let layout = engine.get_layout(root.id);
-        assert!(layout.is_some());
-
-        let layout = layout.unwrap();
-        // "Hello World" is 11 characters wide
-        assert!(layout.width >= 11.0);
-    }
-
-    // ==================== VNode Layout Tests ====================
-
-    #[test]
-    fn test_vnode_layout() {
-        let mut engine = LayoutEngine::new();
-
-        let root = VNode::box_node()
-            .child(VNode::text("Hello"))
-            .child(VNode::text("World"));
-
-        engine.compute_vnode(&root, 80, 24);
-
-        assert!(engine.has_tree());
-        let layout = engine.get_vnode_layout(root.key);
-        assert!(layout.is_some());
-    }
-
-    #[test]
-    fn test_compute_element_incremental_maps_layouts() {
-        let mut engine = LayoutEngine::new();
-
-        let mut root = Element::root();
-        let root_id = root.id;
-
-        let mut left = Element::box_element();
-        let left_id = left.id;
-        let left_text = Element::text("L");
-        let left_text_id = left_text.id;
-        left.add_child(left_text);
-
-        let mut right = Element::box_element();
-        let right_id = right.id;
-        let right_text = Element::text("R");
-        let right_text_id = right_text.id;
-        right.add_child(right_text);
-
-        root.add_child(left);
-        root.add_child(right);
-
-        let (_vnode, outcome) = engine.compute_element_incremental(&root, None, 80, 24);
-        assert!(!outcome.used_reconciler);
-        assert!(engine.get_layout(root_id).is_some());
-        assert!(engine.node_key_for_element(root_id).is_some());
-        assert!(engine.get_layout(left_id).is_some());
-        assert!(engine.node_key_for_element(left_id).is_some());
-        assert!(engine.get_layout(left_text_id).is_some());
-        assert!(engine.get_layout(right_id).is_some());
-        assert!(engine.get_layout(right_text_id).is_some());
-    }
-
-    #[test]
-    fn test_compute_element_incremental_uses_reconciler_on_next_frame() {
-        let mut engine = LayoutEngine::new();
-
-        let mut first = Element::root();
-        let mut box_a = Element::box_element();
-        box_a.add_child(Element::text("A"));
-        first.add_child(box_a);
-
-        let (previous_vnode, first_outcome) =
-            engine.compute_element_incremental(&first, None, 80, 24);
-        assert!(!first_outcome.used_reconciler);
-
-        let mut second = Element::root();
-        let mut box_b = Element::box_element();
-        box_b.add_child(Element::text("B"));
-        second.add_child(box_b);
-        let second_root_id = second.id;
-
-        let (_current_vnode, second_outcome) =
-            engine.compute_element_incremental(&second, Some(&previous_vnode), 80, 24);
-        assert!(second_outcome.used_reconciler);
-        assert!(engine.get_layout(second_root_id).is_some());
-    }
-
-    #[test]
-    fn test_incremental_layout_avoids_key_collision_across_branches() {
-        let mut engine = LayoutEngine::new();
-
-        let mut root = Element::root();
-
-        let mut left = Element::box_element();
-        let left_text = Element::text("left").with_key("item");
-        let left_text_id = left_text.id;
-        left.add_child(left_text);
-
-        let mut right = Element::box_element();
-        let right_text = Element::text("right").with_key("item");
-        let right_text_id = right_text.id;
-        right.add_child(right_text);
-
-        root.add_child(left);
-        root.add_child(right);
-
-        let (_vnode, _outcome) = engine.compute_element_incremental(&root, None, 80, 24);
-
-        assert!(engine.get_layout(left_text_id).is_some());
-        assert!(engine.get_layout(right_text_id).is_some());
-    }
-
-    #[test]
-    fn test_incremental_layout_keyed_reorder_no_fallback() {
-        let mut engine = LayoutEngine::new();
-
-        let mut first = Element::root();
-        first.add_child(Element::box_element().with_key("a"));
-        first.add_child(Element::box_element().with_key("b"));
-        let (previous_vnode, first_outcome) =
-            engine.compute_element_incremental(&first, None, 80, 24);
-        assert!(!first_outcome.used_reconciler);
-
-        let mut second = Element::root();
-        let second_a = Element::box_element().with_key("a");
-        let second_a_id = second_a.id;
-        let second_b = Element::box_element().with_key("b");
-        let second_b_id = second_b.id;
-        second.add_child(second_b);
-        second.add_child(second_a);
-
-        let (_current_vnode, second_outcome) =
-            engine.compute_element_incremental(&second, Some(&previous_vnode), 80, 24);
-
-        assert!(second_outcome.used_reconciler);
-        assert!(!second_outcome.fallback_full_rebuild);
-        assert!(engine.get_layout(second_a_id).is_some());
-        assert!(engine.get_layout(second_b_id).is_some());
-    }
-
-    #[test]
-    fn test_vnode_text_measurement() {
-        let mut engine = LayoutEngine::new();
-
-        let root = VNode::text("Hello World");
-        engine.compute_vnode(&root, 80, 24);
-
-        let layout = engine.get_vnode_layout(root.key);
-        assert!(layout.is_some());
-
-        let layout = layout.unwrap();
-        assert!(layout.width >= 11.0);
-    }
-
-    #[test]
-    fn test_apply_patches_update() {
-        let mut engine = LayoutEngine::new();
-
-        let root = VNode::box_node().child(VNode::text("Hello"));
-        engine.compute_vnode(&root, 80, 24);
-
-        // Create an update patch
-        let mut new_style = Style::new();
-        new_style.padding.top = 5.0;
-        let new_props = Props::with_style(new_style);
-
-        let patches = vec![Patch::update(root.key, Props::new(), new_props)];
-
-        let changed = engine.apply_patches(&patches);
-        assert!(changed);
-    }
-
-    #[test]
-    fn test_apply_patches_empty() {
-        let mut engine = LayoutEngine::new();
-
-        let root = VNode::box_node();
-        engine.compute_vnode(&root, 80, 24);
-
-        let changed = engine.apply_patches(&[]);
-        assert!(!changed);
-    }
-
-    #[test]
-    fn test_apply_patches_create() {
-        let mut engine = LayoutEngine::new();
-
-        let root = VNode::box_node();
-        engine.compute_vnode(&root, 80, 24);
-
-        let new_child = VNode::text("New child");
-        let patches = vec![Patch::create(new_child, root.key)];
-
-        let changed = engine.apply_patches(&patches);
-        assert!(changed);
-    }
-
-    #[test]
-    fn test_apply_patches_remove() {
-        let mut engine = LayoutEngine::new();
-
-        let child = VNode::text("Child");
-        let child_key = child.key;
-        let root = VNode::box_node().child(child);
-        engine.compute_vnode(&root, 80, 24);
-
-        let patches = vec![Patch::remove(child_key)];
-
-        let changed = engine.apply_patches(&patches);
-        assert!(changed);
-        assert!(engine.get_vnode_layout(child_key).is_none());
-    }
-
-    #[test]
-    fn test_get_all_vnode_layouts() {
-        let mut engine = LayoutEngine::new();
-
-        let root = VNode::box_node()
-            .child(VNode::text("A"))
-            .child(VNode::text("B"));
-
-        engine.compute_vnode(&root, 80, 24);
-
-        let layouts = engine.get_all_vnode_layouts();
-        assert_eq!(layouts.len(), 3); // root + 2 children
-    }
-
-    #[test]
-    fn test_node_count() {
-        let mut engine = LayoutEngine::new();
-
-        // Use unique keys to avoid collision
-        let root = VNode::box_node()
-            .child(VNode::text("A").with_key("a"))
-            .child(VNode::box_node().child(VNode::text("B").with_key("b")));
-
-        engine.compute_vnode(&root, 80, 24);
-
-        // root + text "A" + inner box + text "B" = 4 nodes
-        assert_eq!(engine.node_count(), 4);
-    }
-}
+use text_measure::{NodeContext, measure_text_node};
