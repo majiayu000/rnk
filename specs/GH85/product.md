@@ -52,14 +52,18 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
 3. **B-003** benchmark 必须固定 seed、target size、viewport 序列、message corpus、
    toolchain、`Cargo.lock`、profile、runner fingerprint、warmup、sample/batch 数及 exact
    head/base SHA。每个 artifact 必须记录闭合 role、`source_sha`、内容/config/corpus hash 与
-   `paired_order`；hash 不匹配时不得消费。setup/tree construction 不得计入 operation；
-   full/incremental 必须从等价起点对同一 target 测量。
+   `paired_order`，并以闭合 build provenance 记录实际 executable hash/source；hash 或 build
+   source 不匹配时不得消费。setup/tree construction 不得计入 operation；full/incremental
+   必须从等价起点对同一 target 测量。
 4. **B-004** PR required gate 必须先通过不依赖 wall clock 的 parity、work-counter 与
-   allocation contract checks；任一前置检查失败、缺失或证据不完整时，不得继续给出
-   performance-green 结论。
+   allocation contract checks。GH-61 合入后解析出的 prerequisite test command manifest
+   必须非空、闭合且逐条执行/记录；任一 command 缺失、重复、未知、失败或证据不完整时，
+   不得继续给出 performance-green 结论。
 5. **B-005** 存在 trusted canonical baseline 时，timing 比较必须在同一 runner 上从 PR
    exact base checkout 与 current head 分别 build/run，并按每个 pair/batch 的 ABBA 顺序
    交错采集 current-run base/head artifacts；跨 run、错序或 pair identity 不一致的 row 无效。
+   exact refs 只能来自 pull request event 的 head/base SHA；checkout merge ref、`GITHUB_SHA`
+   或未验证的 shallow object 均不得作为 head/base。
    只有 `head/base > 1.20` 且
    `head-base > 50_000ns`，并在 3 个 batch 中至少 2 个复现时才判回归；单次 outlier
    不得阻断。base 或 head 的 `median_ns == 0` 时 timing denominator 无效，结果必须 blocked，
@@ -82,9 +86,11 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    或宣称“无性能回归”。中断或部分生成的 candidate 不具备任何授权效力。
 9. **B-009** canonical baseline 的唯一 writer 是 implementation 合入后的独立
    baseline-promotion PR。promotion 必须在 exact merged implementation SHA 的隔离 checkout
-   重新测量，不得只改写 candidate SHA；只有独立 review、current CI、SpecRail gate 与明确
-   merge authorization 全部满足后才能合入。checker、feature head 与 promotion head 均不得
-   信任自身写入的 baseline；只有 baseline 成为未来 PR base-tree 内容后才可用于 compare。
+   重新测量；checker 必须验证 source worktree exact HEAD、promotion-base ancestry、dependency
+   manifest、prerequisite commands、build/config/corpus hashes 后才可写 canonical，不得只
+   改写 candidate SHA。只有独立 review、current CI、SpecRail gate 与明确 merge
+   authorization 全部满足后才能合入。checker、feature head 与 promotion head 均不得信任
+   自身写入的 baseline；只有 baseline 成为未来 PR base-tree 内容后才可用于 compare。
 
 ## 验收标准
 
