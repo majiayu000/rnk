@@ -207,9 +207,17 @@ impl From<Vec<Span>> for Line {
 /// 1. Simple text with a single style: `Text::new("Hello").color(Color::Green)`
 /// 2. Rich text with multiple spans: `Text::spans(vec![Span::new("Hello").bold(), Span::new(" World")])`
 #[derive(Debug, Clone)]
+enum TextSourceState {
+    Exact(String),
+    Structured,
+}
+
+#[derive(Debug, Clone)]
 pub struct Text {
     /// The lines of text (each line contains spans)
     lines: Vec<Line>,
+    /// Source ownership before line normalization.
+    source: TextSourceState,
     /// Default style applied to spans without explicit styling
     style: Style,
     /// Key for reconciliation
@@ -228,6 +236,7 @@ impl Text {
             } else {
                 lines
             },
+            source: TextSourceState::Exact(content_str),
             style: Style::new(),
             key: None,
         }
@@ -237,6 +246,7 @@ impl Text {
     pub fn spans(spans: Vec<Span>) -> Self {
         Self {
             lines: vec![Line::from_spans(spans)],
+            source: TextSourceState::Structured,
             style: Style::new(),
             key: None,
         }
@@ -246,6 +256,7 @@ impl Text {
     pub fn line(line: Line) -> Self {
         Self {
             lines: vec![line],
+            source: TextSourceState::Structured,
             style: Style::new(),
             key: None,
         }
@@ -255,6 +266,7 @@ impl Text {
     pub fn from_lines(lines: Vec<Line>) -> Self {
         Self {
             lines,
+            source: TextSourceState::Structured,
             style: Style::new(),
             key: None,
         }
@@ -331,40 +343,46 @@ impl Text {
 
     /// Convert to Element
     ///
-    /// For simple text (single span per line), uses text_content.
-    /// For rich text (multiple spans), stores spans in the element.
+    /// Plain text publishes the exact constructor input through `text_content`.
+    /// Structured text publishes a canonical LF-separated source and retains
+    /// spans when rich or multiline rendering requires them.
     pub fn into_element(self) -> Element {
         let mut element = Element::new(ElementType::Text);
         element.style = self.style;
         element.key = self.key;
 
-        // Check if this is simple text (single span per line, no mixed styles)
-        let is_simple = self.lines.len() == 1 && self.lines[0].spans.len() == 1;
+        let is_single_line_plain = self.lines.len() == 1 && self.lines[0].spans.len() == 1;
 
-        if is_simple {
-            // Simple text: use text_content for backward compatibility
-            element.text_content = Some(self.lines[0].spans[0].content.clone());
+        element.text_content = Some(match &self.source {
+            TextSourceState::Exact(source) => source.clone(),
+            TextSourceState::Structured => canonical_source(&self.lines),
+        });
+
+        if is_single_line_plain {
             // Merge span style into element style (span takes precedence)
             let span_style = &self.lines[0].spans[0].style;
             element.style = element.style.merge(span_style);
         } else {
-            // Rich text: concatenate plain text for layout measurement
-            let mut full_text = String::new();
-            for (i, line) in self.lines.iter().enumerate() {
-                if i > 0 {
-                    full_text.push('\n');
-                }
-                for span in &line.spans {
-                    full_text.push_str(&span.content);
-                }
-            }
-            element.text_content = Some(full_text);
-            // Store spans for styled rendering (renderer prioritizes spans over text_content)
+            // Preserve structured styles and the legacy normalized multiline
+            // view until exact-source layout becomes the renderer source of truth.
             element.spans = Some(self.lines);
         }
 
         element
     }
+}
+
+fn canonical_source(lines: &[Line]) -> String {
+    let mut source = String::new();
+    for (line_index, line) in lines.iter().enumerate() {
+        if line_index > 0 {
+            source.push('\n');
+        }
+        for span in &line.spans {
+            source.push_str(&span.content);
+        }
+    }
+    source
 }
 
 impl Default for Text {
