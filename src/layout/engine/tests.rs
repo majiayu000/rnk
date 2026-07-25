@@ -6,7 +6,7 @@
 #[allow(unused_imports)]
 use super::*;
 use crate::components::{Span, Text};
-use crate::core::{Element, Props, Style, VNode};
+use crate::core::{Element, Props, Style, TextWrap, VNode};
 use crate::reconciler::Patch;
 
 #[test]
@@ -117,6 +117,98 @@ fn test_compute_element_incremental_uses_reconciler_on_next_frame() {
         engine.compute_element_incremental(&second, Some(&previous_vnode), 80, 24);
     assert!(second_outcome.used_reconciler);
     assert!(engine.get_layout(second_root_id).is_some());
+}
+
+#[test]
+fn incremental_wrap_modes_refresh_context_bidirectionally() {
+    for truncate_mode in [
+        TextWrap::Truncate,
+        TextWrap::TruncateStart,
+        TextWrap::TruncateMiddle,
+        TextWrap::TruncateEnd,
+    ] {
+        let mut engine = LayoutEngine::new();
+
+        let initial_text = Text::new("abcdefgh")
+            .key("wrap-context")
+            .wrap(TextWrap::Wrap)
+            .into_element();
+        let initial_text_id = initial_text.id;
+        let initial = fixed_width_parent(initial_text);
+        let (wrapped_vnode, initial_outcome) =
+            engine.compute_element_incremental(&initial, None, 80, 10);
+        assert!(!initial_outcome.used_reconciler);
+        let initial_layout = engine
+            .get_layout(initial_text_id)
+            .expect("initial wrapped layout should be available");
+        assert_eq!((initial_layout.width, initial_layout.height), (4.0, 2.0));
+
+        let truncated_text = Text::new("abcdefgh")
+            .key("wrap-context")
+            .wrap(truncate_mode)
+            .into_element();
+        let truncated_text_id = truncated_text.id;
+        let truncated = fixed_width_parent(truncated_text);
+        let (truncated_vnode, truncate_outcome) =
+            engine.compute_element_incremental(&truncated, Some(&wrapped_vnode), 80, 10);
+        assert!(truncate_outcome.used_reconciler);
+        assert_eq!(truncate_outcome.patch_count, 1);
+        assert!(!truncate_outcome.fallback_full_rebuild);
+        let incremental_truncated = engine
+            .get_layout(truncated_text_id)
+            .expect("incrementally truncated layout should be available");
+
+        let mut rebuilt_truncated_engine = LayoutEngine::new();
+        let (_rebuilt_vnode, rebuilt_outcome) =
+            rebuilt_truncated_engine.compute_element_incremental(&truncated, None, 80, 10);
+        assert!(!rebuilt_outcome.used_reconciler);
+        let rebuilt_truncated = rebuilt_truncated_engine
+            .get_layout(truncated_text_id)
+            .expect("rebuilt truncated layout should be available");
+        assert_eq!(
+            (incremental_truncated.width, incremental_truncated.height),
+            (rebuilt_truncated.width, rebuilt_truncated.height),
+            "Wrap -> {truncate_mode:?} must match a full rebuild"
+        );
+        assert_eq!(
+            (incremental_truncated.width, incremental_truncated.height),
+            (4.0, 1.0),
+            "Wrap -> {truncate_mode:?} must update in the same frame"
+        );
+
+        let wrapped_again_text = Text::new("abcdefgh")
+            .key("wrap-context")
+            .wrap(TextWrap::Wrap)
+            .into_element();
+        let wrapped_again_text_id = wrapped_again_text.id;
+        let wrapped_again = fixed_width_parent(wrapped_again_text);
+        let (_current_vnode, wrap_outcome) =
+            engine.compute_element_incremental(&wrapped_again, Some(&truncated_vnode), 80, 10);
+        assert!(wrap_outcome.used_reconciler);
+        assert_eq!(wrap_outcome.patch_count, 1);
+        assert!(!wrap_outcome.fallback_full_rebuild);
+        let incremental_wrapped = engine
+            .get_layout(wrapped_again_text_id)
+            .expect("incrementally wrapped layout should be available");
+
+        let mut rebuilt_wrapped_engine = LayoutEngine::new();
+        let (_rebuilt_vnode, rebuilt_outcome) =
+            rebuilt_wrapped_engine.compute_element_incremental(&wrapped_again, None, 80, 10);
+        assert!(!rebuilt_outcome.used_reconciler);
+        let rebuilt_wrapped = rebuilt_wrapped_engine
+            .get_layout(wrapped_again_text_id)
+            .expect("rebuilt wrapped layout should be available");
+        assert_eq!(
+            (incremental_wrapped.width, incremental_wrapped.height),
+            (rebuilt_wrapped.width, rebuilt_wrapped.height),
+            "{truncate_mode:?} -> Wrap must match a full rebuild"
+        );
+        assert_eq!(
+            (incremental_wrapped.width, incremental_wrapped.height),
+            (4.0, 2.0),
+            "{truncate_mode:?} -> Wrap must update in the same frame"
+        );
+    }
 }
 
 #[test]
