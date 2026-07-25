@@ -4,11 +4,36 @@
 //! (runtime, render_to_string, static content, tests) use one code path.
 
 use crate::components::text::Line;
-use crate::core::{Display, Element, Overflow};
+use crate::core::{Display, Element, Overflow, Style};
 use crate::layout::LayoutEngine;
 use crate::layout::text_flow::flow_text;
 use crate::renderer::Output;
 use crate::renderer::output::ClipRegion;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ContentRect {
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+}
+
+impl ContentRect {
+    fn from_border(style: &Style, width: u16, height: u16) -> Self {
+        let visible = style.border_style.is_visible();
+        let left = u16::from(visible && style.border_left);
+        let right = u16::from(visible && style.border_right);
+        let top = u16::from(visible && style.border_top);
+        let bottom = u16::from(visible && style.border_bottom);
+
+        Self {
+            x: left.min(width),
+            y: top.min(height),
+            width: width.saturating_sub(left).saturating_sub(right),
+            height: height.saturating_sub(top).saturating_sub(bottom),
+        }
+    }
+}
 
 /// Convert a float screen coordinate to u16.
 ///
@@ -57,20 +82,45 @@ pub(crate) fn render_element_tree(
     let y = screen_coord(raw_y);
     let width = clamp_extent(layout.width);
     let height = clamp_extent(layout.height);
+    let content_rect = ContentRect::from_border(&element.style, width, height);
+
+    if let (Some(x), Some(y)) = (x, y)
+        && element.style.background_color.is_some()
+    {
+        output.fill_rect(x, y, width, height, ' ', &element.style);
+    }
+
+    let needs_clip = matches!(
+        element.style.overflow_x,
+        Overflow::Hidden | Overflow::Scroll
+    ) || matches!(
+        element.style.overflow_y,
+        Overflow::Hidden | Overflow::Scroll
+    );
+
+    let clip_x = screen_coord(raw_x + f32::from(content_rect.x));
+    let clip_y = screen_coord(raw_y + f32::from(content_rect.y));
+    let clip_width = content_rect.width;
+    let clip_height = content_rect.height;
+
+    let mut clip_pushed = false;
+    if needs_clip && let (Some(clip_x), Some(clip_y)) = (clip_x, clip_y) {
+        output.clip(ClipRegion {
+            x1: clip_x,
+            y1: clip_y,
+            x2: clip_x.saturating_add(clip_width),
+            y2: clip_y.saturating_add(clip_height),
+        });
+        clip_pushed = true;
+    }
 
     if let (Some(x), Some(y)) = (x, y) {
-        if element.style.background_color.is_some() {
-            output.fill_rect(x, y, width, height, ' ', &element.style);
-        }
-
-        if element.style.has_border() {
-            render_border(element, output, x, y, width, height);
-        }
-
-        let text_x =
-            x + if element.style.has_border() { 1 } else { 0 } + element.style.padding.left as u16;
-        let text_y =
-            y + if element.style.has_border() { 1 } else { 0 } + element.style.padding.top as u16;
+        let text_x = x
+            .saturating_add(content_rect.x)
+            .saturating_add(element.style.padding.left as u16);
+        let text_y = y
+            .saturating_add(content_rect.y)
+            .saturating_add(element.style.padding.top as u16);
 
         if let Some(spans) = &element.spans {
             render_spans(spans, output, text_x, text_y);
@@ -78,8 +128,8 @@ pub(crate) fn render_element_tree(
             // Draw the same rows layout reserved height for. Writing the raw
             // string instead stops at the first hard break or at the right
             // edge, silently dropping everything after it.
-            let content_width = width
-                .saturating_sub(if element.style.has_border() { 2 } else { 0 })
+            let content_width = content_rect
+                .width
                 .saturating_sub(element.style.padding.left as u16)
                 .saturating_sub(element.style.padding.right as u16);
             let flow = flow_text(text, content_width as usize, element.style.text_wrap);
@@ -95,32 +145,6 @@ pub(crate) fn render_element_tree(
         }
     }
 
-    let needs_clip = matches!(
-        element.style.overflow_x,
-        Overflow::Hidden | Overflow::Scroll
-    ) || matches!(
-        element.style.overflow_y,
-        Overflow::Hidden | Overflow::Scroll
-    );
-
-    let clip_x = screen_coord(raw_x + if element.style.has_border() { 1.0 } else { 0.0 });
-    let clip_y = screen_coord(raw_y + if element.style.has_border() { 1.0 } else { 0.0 });
-    let clip_width = width.saturating_sub(if element.style.has_border() { 2 } else { 0 });
-    let clip_height = height.saturating_sub(if element.style.has_border() { 2 } else { 0 });
-
-    let mut clip_pushed = false;
-    if needs_clip && clip_width > 0 && clip_height > 0 {
-        if let (Some(clip_x), Some(clip_y)) = (clip_x, clip_y) {
-            output.clip(ClipRegion {
-                x1: clip_x,
-                y1: clip_y,
-                x2: clip_x.saturating_add(clip_width),
-                y2: clip_y.saturating_add(clip_height),
-            });
-            clip_pushed = true;
-        }
-    }
-
     let scroll_offset_x = element.scroll_offset_x.unwrap_or(0) as f32;
     let scroll_offset_y = element.scroll_offset_y.unwrap_or(0) as f32;
     let child_offset_x = offset_x + layout.x - scroll_offset_x;
@@ -133,9 +157,22 @@ pub(crate) fn render_element_tree(
     if clip_pushed {
         output.unclip();
     }
+
+    // Borders are the final paint owner of their enabled cells. This keeps
+    // visible overflow available through disabled sides without letting
+    // content or descendants overwrite an enabled border.
+    if let (Some(x), Some(y)) = (x, y)
+        && element.style.has_border()
+    {
+        render_border(element, output, x, y, width, height);
+    }
 }
 
 fn render_border(element: &Element, output: &mut Output, x: u16, y: u16, width: u16, height: u16) {
+    if width == 0 || height == 0 {
+        return;
+    }
+
     let (tl, tr, bl, br, h, v) = element.style.border_style.chars();
     let tl = border_char(tl);
     let tr = border_char(tr);
@@ -147,44 +184,50 @@ fn render_border(element: &Element, output: &mut Output, x: u16, y: u16, width: 
     let mut style = element.style.clone();
     style.dim = element.style.border_dim;
 
-    if element.style.border_top && height > 0 && width > 0 {
+    let right_x = x.saturating_add(width - 1);
+    let bottom_y = y.saturating_add(height - 1);
+
+    if element.style.border_top {
         style.color = element.style.get_border_top_color();
         output.write_char(x, y, tl, &style);
         if width > 2 {
-            for col in (x + 1)..(x + width - 1) {
-                output.write_char(col, y, h, &style);
+            for col_offset in 1..(width - 1) {
+                output.write_char(x.saturating_add(col_offset), y, h, &style);
             }
         }
         if width > 1 {
-            output.write_char(x + width - 1, y, tr, &style);
+            output.write_char(right_x, y, tr, &style);
         }
     }
 
-    if element.style.border_bottom && height > 1 && width > 0 {
-        style.color = element.style.get_border_bottom_color();
-        let bottom_y = y + height - 1;
-        output.write_char(x, bottom_y, bl, &style);
-        if width > 2 {
-            for col in (x + 1)..(x + width - 1) {
-                output.write_char(col, bottom_y, h, &style);
-            }
-        }
-        if width > 1 {
-            output.write_char(x + width - 1, bottom_y, br, &style);
-        }
-    }
-
-    if element.style.border_left && height > 1 {
-        style.color = element.style.get_border_left_color();
-        for row in (y + 1)..(y + height - 1) {
+    // Horizontal rows own shared cells. On rows without a horizontal border,
+    // the right side writes after the left side when width is one.
+    let first_vertical_row = u16::from(element.style.border_top);
+    let vertical_end = height.saturating_sub(u16::from(element.style.border_bottom));
+    for row_offset in first_vertical_row..vertical_end {
+        let row = y.saturating_add(row_offset);
+        if element.style.border_left {
+            style.color = element.style.get_border_left_color();
             output.write_char(x, row, v, &style);
         }
+        if element.style.border_right {
+            style.color = element.style.get_border_right_color();
+            output.write_char(right_x, row, v, &style);
+        }
     }
 
-    if element.style.border_right && width > 1 && height > 1 {
-        style.color = element.style.get_border_right_color();
-        for row in (y + 1)..(y + height - 1) {
-            output.write_char(x + width - 1, row, v, &style);
+    // Paint bottom last so it deterministically wins when top and bottom
+    // occupy the same row (for example, a one-cell-high layout).
+    if element.style.border_bottom {
+        style.color = element.style.get_border_bottom_color();
+        output.write_char(x, bottom_y, bl, &style);
+        if width > 2 {
+            for col_offset in 1..(width - 1) {
+                output.write_char(x.saturating_add(col_offset), bottom_y, h, &style);
+            }
+        }
+        if width > 1 {
+            output.write_char(right_x, bottom_y, br, &style);
         }
     }
 }
@@ -206,41 +249,4 @@ fn border_char(raw: &str) -> char {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::components::{Box, Text};
-    use crate::core::Overflow;
-
-    #[test]
-    fn scrolled_out_negative_rows_do_not_paint_at_top() {
-        let element = Box::new()
-            .flex_direction(crate::core::FlexDirection::Column)
-            .width(12)
-            .height(1)
-            .overflow_y(Overflow::Hidden)
-            .scroll_offset_y(1)
-            .child(
-                Box::new()
-                    .height(1)
-                    .flex_shrink(0.0)
-                    .child(Text::new("hiddenxxxxx").into_element())
-                    .into_element(),
-            )
-            .child(
-                Box::new()
-                    .height(1)
-                    .flex_shrink(0.0)
-                    .child(Text::new("ok").into_element())
-                    .into_element(),
-            )
-            .into_element();
-
-        let mut engine = LayoutEngine::new();
-        engine.compute(&element, 12, 1);
-
-        let mut output = Output::new(12, 1);
-        render_element_tree(&element, &engine, &mut output, 0.0, 0.0);
-
-        assert_eq!(output.render(), "ok");
-    }
-}
+mod tests;
