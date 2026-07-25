@@ -367,6 +367,11 @@ impl LayoutEngine {
                 .is_some_and(|context| context.text_content.is_some());
             let new_style = normalized_taffy_style(&props.style, is_text);
             if self.taffy.set_style(node_id, new_style).is_ok() {
+                if is_text {
+                    if let Some(context) = self.taffy.get_node_context_mut(node_id) {
+                        context.update_text_wrap(props.style.text_wrap);
+                    }
+                }
                 return true;
             }
         }
