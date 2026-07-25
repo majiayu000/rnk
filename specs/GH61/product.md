@@ -20,7 +20,7 @@ CJK/emoji 重排和 resize。用户需要一个唯一、不可变、后端无关
 
 本规格是 GH-61 的独立产品合同。GH-58 提供 TextFlow 与 frame-local projection，GH-59
 提供 scoped identity/final order，GH-60 提供 prepared candidate、transaction/recovery 与
-整帧提交；GH-61 只把这些已完成结果投影为统一 cell snapshot、验证 parity 并建立 benchmark
+整帧提交；GH-61 只把这些已完成结果投影为统一 cell snapshot 并验证 parity
 门，不重新实现三个上游合同。
 
 ## 目标
@@ -31,8 +31,7 @@ CJK/emoji 重排和 resize。用户需要一个唯一、不可变、后端无关
   effective clip、scroll transform 与 TextFlow semantic revision 完整描述一帧布局。
 - 证明 full、incremental 与 recovered-full 对同一 target/viewport 产生语义等价 snapshot。
 - 对负坐标、非有限值、溢出、裁剪、边框、scroll 与 resize 给出 fail-closed 的 cell 语义。
-- 用确定性 work counters、allocation evidence 和抗噪声的 paired benchmark 建立聊天负载
-  baseline 与后续回归阈值。
+- 用确定性 work counters 暴露每帧成本，供 #85 的聊天负载 benchmark 消费。
 - 保持现有 `Layout`、engine getters、render wrappers、testing helpers 与公开 struct
   literal 的源码兼容。
 
@@ -45,7 +44,8 @@ CJK/emoji 重排和 resize。用户需要一个唯一、不可变、后端无关
 - 不实现 MessageList 高度索引、虚拟化、ChatComposer、shell 或模型 provider。
 - 不承诺 incremental 在所有规模和场景都快于 full；本 issue 先建立可解释 baseline 和
   回归门，性能优化不能牺牲正确性。
-- 不用 benchmark 结果替代 snapshot parity、typed error 或 transaction 测试。
+- 不定义 benchmark workload matrix、baseline artifact、promotion 流程或回归门；
+  这些是 #85 的范围。本 issue 只交付 snapshot、量化与 parity。
 - 不保证不同终端字体的像素级一致，只保证选定 terminal cell 模型中的一致结果。
 
 ## Behavior Invariants
@@ -143,48 +143,14 @@ CJK/emoji 重排和 resize。用户需要一个唯一、不可变、后端无关
 23. **B-023** unchanged target/viewport 可复用已发布 immutable snapshot，但必须采用 GH-60
     当前 frame 的 target-exact `ElementId` alias overlay；复用不能保留 stale frame aliases，
     也不能把 report counters 伪装为新计算。
-24. **B-024** benchmark scenario 集必须严格等于
-    `unchanged_frame`、`streaming_delta`、`append_message`、`middle_insert`、
-    `variable_height_transcript`、`resize_invalidation`。除 `unchanged_frame` 明确禁止
-    recovery 外，每个 scenario 都必须记录 full、incremental、recovered；每个允许组合的
-    operation/sample必须非零且达到tech spec固定最小次数，`median_ns`、allocation count/bytes、
-    visited/mutated nodes、TextFlow recomputes、snapshot nodes与rebuild count必须完整且满足
-    各strategy的非负/非零约束（unchanged incremental允许`mutated_nodes=0`）。artifact row
-    按scenario/strategy/batch聚合，因此每个recovered row必须
-    `rebuild_count == operation_count`，所有非recovered row必须为0。缺组合、额外名称、
-    零operation/sample或counter缺字段时artifact无效。
-25. **B-025** benchmark 必须使用确定的 seed、target size、viewport 序列、message corpus、
-    toolchain、Cargo.lock、profile、runner fingerprint、warmup、sample/batch 数与 exact
-    head/base SHA；setup/tree construction 不得混入被计时 operation，full/incremental 必须
-    对同一 target 与等价起点测量。
-26. **B-026** PR required gate必须先执行无时钟依赖的parity、work-counter与allocation
-    checks；存在trusted canonical baseline时，timing比较必须在同一runner内对base/head采用
-    交错paired batches，只有回归同时超过20%与50µs、并在3个batch中至少2个复现时才失败，
-    单次outlier不得阻断。首次implementation严格走B-028 bootstrap route，不伪造compare。
-27. **B-027** allocation count/bytes 相对 trusted base 同时超过 10% 与绝对
-    8 allocations / 4096 bytes时必须失败。compare 的 base 只能来自 PR exact base tree 中
-    repo-owned baseline，且其 source SHA 必须是 PR base 的 ancestor、不得等于 current head；
-    runner/schema/corpus/scenario/toolchain fingerprint 不一致、stale/self/untrusted baseline、
-    缺失/负 counter 都必须 blocked 或明确 `needs_rebaseline`，不得判 green。
-28. **B-028** GH-61 implementation PR首次引入benchmark时只运行bootstrap并生成绑定exact
-    head的non-authoritative candidate artifact，验证固定scenario matrix、schema、nonzero
-    operations/samples与counter completeness；它不得新增/修改canonical baseline，也不得
-    伪称“无性能回归”。`.github/benchmarks/gh61-baseline.json`的唯一writer是implementation
-    合入后的独立baseline-promotion PR；该PR须在exact merged implementation SHA的隔离
-    checkout重新运行bootstrap（不得仅改写candidate SHA），并通过独立review、current CI、
-    SpecRail gate与merge authorization后合入default branch。首次implementation required job
-    只允许`bootstrap_valid`/`comparison_status=not_available`/`promotion_required=true`，
-    明确不是performance green。checker不得自行提升，feature/promotion head不得信任自身baseline。后续compare
-    只能读取PR base tree已存在且通过ancestry/content-hash验证的canonical baseline；文件尚未
-    promotion时必须`needs_rebaseline`。
 29. **B-029** GH-61 只有在当前 implementation head 的 unit、property、seeded state-machine、
-    all-entrypoint parity、error、compile-immutability、compatibility 与 benchmark-contract
+    all-entrypoint parity、error、compile-immutability 与 compatibility
     测试通过，新代码 executable changed-line coverage 至少80%，且 snapshot、quantizer、
     parity、error 核心文件 line/branch 都为100%且 denominator非零时才能声明完成。public API
     manifest必须双向匹配，所有指定 doctest须 exact执行、非`ignore`、非`no_run`且非零；
     coverage/docs artifact必须绑定GitHub PR exact base/head。所有required exact Rust helper
     必须汇总证明`1 passed; 0 ignored`；零匹配、仅listed、ignored、旧SHA、人工截图、
-    compile-only docs或只运行benchmark不算证据。
+    compile-only docs不算证据。
 30. **B-030** GH-61 implementation 必须基于 GH-58、GH-59、GH-60 三个 implementation
     PR 的已合入 exact SHA，并重新核对 merged public types、module paths 与 prepared-frame
     boundary；任一依赖只是 spec head、open PR 或未合入 branch 时 implementation 保持 blocked。
@@ -202,9 +168,6 @@ CJK/emoji 重排和 resize。用户需要一个唯一、不可变、后端无关
       snapshot/node字段与任意-state constructors无法从crate外访问；compile-fail必须由
       独立exact trybuild测试实际执行并匹配checked-in stderr；旧wrapper最终失败fail loudly，
       覆盖 B-020、B-022、B-023。
-- [ ] benchmark artifact 完整覆盖固定六类chat workload及其明确strategy matrix（unchanged
-      不含recovery）、minimum operations、时间/allocation/work counters、trusted
-      baseline、bootstrap/promotion与regression negative fixtures，覆盖 B-024 至 B-028。
 - [ ] exact merged dependency SHA、current-head coverage、全量 Rust、CI、independent review、
       reviewThreads 与 SpecRail `pr_gate` 证据满足 B-029、B-030。
 
@@ -212,15 +175,15 @@ CJK/emoji 重排和 resize。用户需要一个唯一、不可变、后端无关
 
 | 类别 | 判定（covered: B-xxx / N/A + 原因） |
 | --- | --- |
-| 空/缺失输入 | covered: B-003、B-008、B-021、B-024 |
-| 错误与失败路径 | covered: B-003、B-007、B-018、B-019、B-021、B-024 至 B-028 |
-| 授权/权限 | N/A：本地布局与 benchmark 不读取权限、不执行用户工具；exact-head/runner evidence 完整性由 B-025 至 B-030 约束 |
+| 空/缺失输入 | covered: B-003、B-008、B-021 |
+| 错误与失败路径 | covered: B-003、B-007、B-018、B-019、B-021 |
+| 授权/权限 | N/A：本地布局不读取权限、不执行用户工具；exact-head evidence 完整性由 B-029、B-030 约束 |
 | 并发/竞态 | covered: B-017、B-018、B-020、B-023 |
-| 重试/幂等 | covered: B-012、B-014、B-015、B-019、B-023、B-026 |
-| 非法状态转换 | covered: B-003、B-017 至 B-021、B-028、B-030 |
-| 兼容/迁移 | covered: B-010、B-016、B-022、B-023、B-028、B-030 |
-| 降级/回退 | covered: B-018、B-019、B-021、B-026 至 B-028 |
-| 证据与审计完整性 | covered: B-011、B-014、B-024 至 B-030 |
+| 重试/幂等 | covered: B-012、B-014、B-015、B-019、B-023 |
+| 非法状态转换 | covered: B-003、B-017 至 B-021、B-030 |
+| 兼容/迁移 | covered: B-010、B-016、B-022、B-023、B-030 |
+| 降级/回退 | covered: B-018、B-019、B-021 |
+| 证据与审计完整性 | covered: B-011、B-014、B-029、B-030 |
 | 取消/中断 | covered: B-017、B-018、B-020 |
 
 ## 发布说明
@@ -228,5 +191,5 @@ CJK/emoji 重排和 resize。用户需要一个唯一、不可变、后端无关
 GH-61 将新增公开但不可变的 snapshot/cell/checked error surface，并让所有 renderer 入口收敛
 到这一边界。现有 float `Layout` 与旧 render/testing helper 保留；它们成为 snapshot 或
 checked producer 的 compatibility projection/wrapper。发布说明必须列出 signed half-open
-cell 语义、semantic parity、typed overflow behavior、benchmark bootstrap 与回归阈值，并明确
+cell 语义、semantic parity 与 typed overflow behavior，并明确
 它不交付聊天组件、虚拟列表或新的 Taffy 算法。
