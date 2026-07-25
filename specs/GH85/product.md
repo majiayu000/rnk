@@ -56,14 +56,22 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    source 不匹配时不得消费。setup/tree construction 不得计入 operation；full/incremental
    必须从等价起点对同一 target 测量。
 4. **B-004** PR required gate 必须先通过不依赖 wall clock 的 parity、work-counter 与
-   allocation contract checks。GH-61 合入后解析出的 prerequisite test command manifest
-   必须非空、闭合且逐条执行/记录；任一 command 缺失、重复、未知、失败或证据不完整时，
-   不得继续给出 performance-green 结论。
+   allocation-correctness contract checks。prerequisite category 必须严格且各一次覆盖
+   `{parity, work_counter, allocation_correctness}`，按该顺序执行，并以闭合 `spec_ref`
+   绑定证明目标。parity/work-counter command 从 GH-61 merged tree 的真实 exact tests
+   解析；若 GH-61 没有 allocation-correctness test，则必须先运行 GH-85 自有
+   `tests/layout_snapshot_benchmark_contract.rs` 中的 exact allocation contract test。
+   任一 category/command/spec_ref 缺失、重复、未知、失败、错序或证据不完整时，不得开始
+   benchmark 或给出 performance-green 结论。PR 外的 push 可以跳过 benchmark job，但
+   `ci-gate` 只能在 `github.event_name != 'pull_request'` 且该 job result 精确为
+   `skipped` 时接受；PR 中 benchmark 的 `failure`、`cancelled` 或 `skipped` 均必须使 gate
+   失败。
 5. **B-005** 存在 trusted canonical baseline 时，timing 比较必须在同一 runner 上从 PR
    exact base checkout 与 current head 分别 build/run，并按每个 pair/batch 的 ABBA 顺序
    交错采集 current-run base/head artifacts；跨 run、错序或 pair identity 不一致的 row 无效。
    exact refs 只能来自 pull request event 的 head/base SHA；checkout merge ref、`GITHUB_SHA`
-   或未验证的 shallow object 均不得作为 head/base。
+   或未验证的 shallow object 均不得作为 head/base。push-mode 不运行 compare，也不得构造
+   虚假的 PR refs 或把 skipped benchmark 解释为 performance pass。
    只有 `head/base > 1.20` 且
    `head-base > 50_000ns`，并在 3 个 batch 中至少 2 个复现时才判回归；单次 outlier
    不得阻断。base 或 head 的 `median_ns == 0` 时 timing denominator 无效，结果必须 blocked，

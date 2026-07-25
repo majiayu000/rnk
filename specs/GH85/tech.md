@@ -94,16 +94,31 @@ cargo test --test layout_snapshot_benchmark_contract --locked \
 symbol object 只允许 `path`、`symbol`；三个 strategy entry 只允许 `strategy`、`path`、
 `symbol`，且 strategy 集合严格等于 `{full, incremental, recovered}`；`counter_fields` 严格等于
 `{visited_nodes, mutated_nodes, text_flow_recomputes, snapshot_nodes, rebuild_count}`。
-`prerequisite_commands` 必须是非空 array；每项 exact keys 为 `id`、`argv`、
-`working_directory`、`expected_exit_code`、`expected_matched`、`expected_passed`、
-`expected_ignored`。`id` 与完整 `argv` 均唯一；`argv` 是非空 string array，不是 shell
-string，必须绑定 GH-61 merged tree 中实际存在的 exact Rust test（包含 `-- --exact`）；
-expected 值固定为 exit 0、matched 1、passed 1、ignored 0。
+`prerequisite_commands` 必须恰有三项；每项 exact keys 为 `id`、`category`、`spec_ref`、
+`argv`、`working_directory`、`expected_exit_code`、`expected_matched`、`expected_passed`、
+`expected_ignored`。`category` 是闭合 enum，必须按
+`[parity, work_counter, allocation_correctness]` 顺序各出现一次；对应 `spec_ref` 必须严格为
+`specs/GH61/product.md#B-012`、`specs/GH61/product.md#B-011`、
+`specs/GH85/product.md#B-004`，不接受其他 category/ref pairing。`id` 与完整 `argv`
+均唯一；`argv` 是非空 string array，不是 shell string，并包含 `-- --exact`。parity 与
+work-counter argv 必须由 GH-61 merged tree 中实际存在的 exact Rust tests 解析，不在本
+spec 预写未来 GH-61 test 名。T7 还必须 search merged GH-61 tests/tasks verification：
+若其中存在明确断言 allocation counter 归属、计数与 reset 语义的 exact Rust test，第三项
+绑定该真实 argv；若不存在，则必须绑定 GH-85 已规划
+`tests/layout_snapshot_benchmark_contract.rs` 的 fallback，argv 严格等于
+`["cargo","test","--test","layout_snapshot_benchmark_contract","--locked",
+"allocation_counter_contract_is_correct_before_benchmark","--","--exact"]`，且
+`working_directory="."`。两条分支的 category/spec_ref 均保持
+`allocation_correctness`/`specs/GH85/product.md#B-004`。expected 值固定为 exit 0、
+matched 1、passed 1、ignored 0。
 每个 path/symbol 必须在 `GH61_MERGED_SHA` tree 与 current HEAD 中唯一解析，merged SHA
 必须是 HEAD 祖先。SP85-T7 只能在 GH-61 合入后从其真实 tests/tasks/verification evidence
-解析 command argv，不得在本 spec 预写未来 test 名。wiring test 必须实际调用三个 strategy
-并读取所有 counters；缺字段、empty/missing/duplicate/unknown command、placeholder、
-零匹配、多匹配、非祖先或任一 strategy 未接线都 blocked。
+解析前两项 command argv，并按上述 search-first 规则选择第三项；allocation fallback 的
+exact test/path 由 SP85-T1 创建、SP85-T2 实现，选择 fallback 时必须在 benchmark 前通过。
+wiring test 必须实际调用三个 strategy 并读取所有
+counters；缺字段、category 集不完整/重复/未知/错序、spec_ref 不匹配、
+empty/missing/duplicate/unknown command、placeholder、零匹配、多匹配、非祖先或任一
+strategy 未接线都 blocked。
 
 任何前置条件缺失均保持 blocked，不以本 spec 中的拟议类型或未来 GH-61 test 名替代真实
 merged API。
@@ -166,9 +181,10 @@ runner, workload, build, prerequisite_results, paired_order, comparison_id, exec
   `head_sha`。即使 `execution_trace=[]`，candidate/canonical 也必须有 nonempty
   `executable_sha256`。build `cargo_lock_sha256`/`target`/`profile` 必须分别等于 top-level
   同名值。
-- `prerequisite_results` 是非空 array，顺序/数量/id 必须与 dependency manifest commands
-  精确一致；entry exact keys 为 `id`、`argv_sha256`、`source_sha`、`exit_code`、
-  `matched`、`passed`、`ignored`。每项必须 exit 0、matched 1、passed 1、ignored 0；
+- `prerequisite_results` 必须恰有三项，顺序/数量/id/category/spec_ref 必须与 dependency
+  manifest commands 精确一致；entry exact keys 为 `id`、`category`、`spec_ref`、
+  `argv_sha256`、`source_sha`、`exit_code`、`matched`、`passed`、`ignored`。category 闭集、
+  顺序与 category/ref pairing 仍适用；每项必须 exit 0、matched 1、passed 1、ignored 0；
   candidate/current compare 的 result source 为 exact PR head，canonical 为 promotion
   source SHA。
 - `paired_order` 只允许 `not_applicable` 或 `ABBA`；candidate/canonical 必须是
@@ -221,7 +237,8 @@ bytes 求 SHA-256；current-run row 使用 compare protocol 的 `pair_id`。
 negative fixtures 至少包含：top-level/nested unknown key、duplicate JSON key、missing row
 key、unknown role/order、role/source/build mismatch、missing/unknown build key、
 content/config/corpus/binary hash mismatch、empty/missing/duplicate/unknown/failed
-prerequisite command/result、
+prerequisite command/result、prerequisite category missing/duplicate/unknown/wrong-order、
+category/spec_ref mismatch、allocation fallback missing 或 benchmark-before-prerequisite、
 zero timing、negative allocation、candidate-as-canonical、canonical-as-current-run、
 missing/duplicate/cross-run/wrong-order pair、source-not-ancestor、source-equals-head、
 caller-supplied baseline 与 incompatible fingerprint。每个 fixture 必须 schema-targeted，
@@ -246,13 +263,16 @@ caller-supplied baseline 与 incompatible fingerprint。每个 fixture 必须 sc
   baseline，并在一个 checker process 内 build/run current base/head；不接受调用方任意
   `--base` artifact 或跨 run raw measurement。
 
-checker 读取 dependency manifest 后按 array 顺序、以 `shell=false` 和声明的
-`working_directory` 执行每个 prerequisite `argv`，并把每个 exact result 写入
-`prerequisite_results`。command array empty、id/argv duplicate、unknown key、test
-zero-match、failed/ignored 或 result 缺失/多出时，在 build/benchmark 前 blocked。CI
-required job 先运行 dependency wiring 与全部 prerequisite commands，再执行 artifact
-validation；任何前置失败都停止 performance decision，但上传诊断 artifact，禁止捕获异常后
-返回 success。
+checker 读取 dependency manifest 后严格按
+`parity -> work_counter -> allocation_correctness` 顺序、以 `shell=false` 和声明的
+`working_directory` 执行三个 prerequisite `argv`，并把每个 exact category/spec_ref/result
+写入 `prerequisite_results`。command array 长度不为 3、category 缺失/重复/未知/错序、
+spec_ref pairing 错误、id/argv duplicate、unknown key、test zero-match、failed/ignored 或
+result 缺失/多出时，在 build/benchmark 前 blocked。allocation fallback 必须先由 GH-85
+contract test 证明 allocation counter 对 operation 的归属、计数和 reset 语义，不能用一次
+非零观察值替代 correctness。CI required job 先运行 dependency wiring 与全部 prerequisite
+commands，再执行 artifact validation；任何前置失败都停止 performance decision，但上传
+诊断 artifact，禁止捕获异常后返回 success。
 
 ### 5. Trusted baseline 与 compare
 
@@ -278,7 +298,8 @@ canonical baseline 只授权 workload/config/fingerprint 可比较性与历史 p
 threshold denominator 必须来自本次 run 的 `compare_base_current_run`，不能直接用 canonical
 row，也不能复用 candidate 或旧 CI 的 raw base artifact。
 
-workflow 必须直接绑定 pull request event refs，不能使用 GitHub 的 synthetic merge ref：
+workflow 的 job id 固定为 `layout_benchmark`，只在 PR 运行，并直接绑定 pull request event
+refs，不能使用 GitHub 的 synthetic merge ref：
 
 ```yaml
 if: github.event_name == 'pull_request'
@@ -295,6 +316,55 @@ steps:
 job 不得从 `GITHUB_SHA`、`github.sha`、`refs/pull/*/merge` 或本地当前 branch 名推导 refs。
 `fetch-depth: 0` 必须保留；若未来改为显式 fetch，必须 fetch 两个 exact SHA 后执行同一
 object/HEAD validation，不能只验证 ref 名。
+
+push-mode 语义闭合：当前 workflow 仅接收 `push` 到 `main` 与 `pull_request`；
+`layout_benchmark` 在非 PR push 上必须为 `skipped`，不运行 bootstrap/compare，也不构造
+head/base PR refs。现有 `ci-gate` 必须把 `layout_benchmark` 加入 `needs`，以
+`if: ${{ always() }}` 保证 dependency non-green 时仍实际运行，再由显式 rejection step
+执行以下等价 condition/result contract；不得让非法组合仅得到 skipped gate，也不得用
+`success() || skipped` 一类不区分 event 的宽松表达式：
+
+```yaml
+ci-gate:
+  if: ${{ always() }}
+  needs:
+    - test
+    - workspace
+    - msrv
+    - feature-matrix
+    - clippy
+    - fmt
+    - docs
+    - doc-tests
+    - layout_benchmark
+  steps:
+    - name: Reject non-green required result
+      if: >-
+        ${{
+          needs.test.result != 'success' ||
+          needs.workspace.result != 'success' ||
+          needs.msrv.result != 'success' ||
+          needs.feature-matrix.result != 'success' ||
+          needs.clippy.result != 'success' ||
+          needs.fmt.result != 'success' ||
+          needs.docs.result != 'success' ||
+          needs.doc-tests.result != 'success' ||
+          !(
+            (github.event_name == 'pull_request' &&
+             needs.layout_benchmark.result == 'success') ||
+            (github.event_name != 'pull_request' &&
+             needs.layout_benchmark.result == 'skipped')
+          )
+        }}
+      run: exit 1
+    - name: Required checks passed
+      run: echo "Required CI checks passed"
+```
+
+因此 PR 上 `layout_benchmark` 的 `failure`、`cancelled`、`skipped` 均执行 rejection step
+并令 `ci-gate` failure；push 只接受精确 `skipped`，若 benchmark 意外运行并返回 success/
+failure/cancelled 也必须拒绝。无论 event，八个既有 required job 任一非 `success` 均拒绝，
+新增 gate 不得削弱原 required 集合。
 
 CI 在同一 runner 上执行以下协议：
 
@@ -401,8 +471,8 @@ script-relative 猜测。`promotion_base_oid` 必须由 promotion PR
 | B-001 | fixed workload matrix | `cargo test --test layout_snapshot_benchmark_contract --locked fixed_six_scenario_matrix_has_minimum_nonzero_operations -- --exact` |
 | B-002 | artifact aggregation/closed schema | `cargo test --test layout_snapshot_benchmark_contract --locked recovered_rows_aggregate_one_rebuild_per_operation -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked closed_schema_rejects_unknown_duplicate_and_partial_rows -- --exact` |
 | B-003 | roles/source/build/hash/environment | `cargo test --test layout_snapshot_benchmark_contract --locked artifact_hashes_cover_roles_sources_config_corpus_trace_and_rows -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked all_roles_require_closed_build_provenance -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked candidate_canonical_and_current_run_roles_are_not_interchangeable -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked median_ns_is_the_only_timing_field -- --exact` |
-| B-004 | dependency/prerequisite gates | `cargo test --test layout_snapshot_benchmark_contract --locked dependency_manifest_matches_merged_gh61_and_all_strategies -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked dependency_manifest_rejects_invalid_prerequisite_command_arrays -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked prerequisite_commands_execute_and_record_before_benchmark -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked failed_prerequisite_never_reports_performance_green -- --exact` |
-| B-005 | event refs/exact-checkout ABBA/timing | `cargo test --test layout_snapshot_benchmark_contract --locked workflow_binds_event_head_and_base_without_merge_ref -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked same_runner_abba_builds_exact_base_and_head_and_rejects_pair_mismatch -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked timing_requires_two_of_three_paired_regressions -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked zero_timing_denominator_is_blocked -- --exact` |
+| B-004 | dependency/prerequisite/push-result gates | `cargo test --test layout_snapshot_benchmark_contract --locked dependency_manifest_matches_merged_gh61_and_all_strategies -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked dependency_manifest_requires_complete_prerequisite_category_set -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked dependency_manifest_rejects_missing_duplicate_unknown_categories_and_spec_refs -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked allocation_correctness_fallback_runs_before_benchmark -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked prerequisite_commands_execute_and_record_before_benchmark -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked failed_prerequisite_never_reports_performance_green -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked ci_gate_accepts_benchmark_skip_only_for_non_pr_push -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked ci_gate_rejects_pr_benchmark_failed_cancelled_or_skipped -- --exact` |
+| B-005 | event refs/exact-checkout ABBA/timing | `cargo test --test layout_snapshot_benchmark_contract --locked workflow_binds_event_head_and_base_without_merge_ref -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked workflow_runs_prerequisites_before_benchmark_and_ci_gate -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked ci_gate_preserves_all_existing_required_jobs -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked same_runner_abba_builds_exact_base_and_head_and_rejects_pair_mismatch -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked timing_requires_two_of_three_paired_regressions -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked zero_timing_denominator_is_blocked -- --exact` |
 | B-006 | allocation comparator | `cargo test --test layout_snapshot_benchmark_contract --locked allocation_requires_relative_and_absolute_thresholds -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked zero_allocation_denominator_uses_absolute_floor -- --exact` |
 | B-007 | base-tree trust/fingerprint gate | `cargo test --test layout_snapshot_benchmark_contract --locked trusted_baseline_rejects_self_stale_and_untrusted_sources -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked trust_predicates_distinguish_blocked_from_needs_rebaseline -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked fingerprint_mismatch_needs_rebaseline -- --exact` |
 | B-008 | implementation bootstrap | `cargo test --test layout_snapshot_benchmark_contract --locked implementation_writes_candidate_but_never_canonical_baseline -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked partial_candidate_never_authorizes_promotion -- --exact` |

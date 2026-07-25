@@ -25,9 +25,14 @@ GH-85: https://github.com/majiayu000/rnk/issues/85
       Done when: `tests/fixtures/gh85_gh61_dependency.json` 记录 real
       `SnapshotBuildReport`/`SnapshotWorkCounters` 与 full/incremental/recovered entrypoint
       path/symbol；所有 anchor 在 merged SHA 与 current HEAD 唯一解析；closed counter set
-      完整；从 merged GH61 的实际 tests/tasks/verification 解析非空 closed
-      `prerequisite_commands` argv array，不预写未来 test 名；command id/argv 唯一并绑定
-      exact test，缺失/empty/duplicate/unknown/placeholder/零匹配/多匹配均 blocked | Verify:
+      完整；`prerequisite_commands` 恰有三项，category 按
+      `parity -> work_counter -> allocation_correctness` 各一次且绑定 tech 定义的 closed
+      `spec_ref`；前两项从 merged GH61 的实际 tests/tasks/verification 解析 exact argv，
+      不预写未来 GH61 test 名；第三项 search-first 使用 merged GH61 中明确证明 allocation
+      counter correctness 的 exact test，缺失时使用已规划
+      `tests/layout_snapshot_benchmark_contract.rs` 的 exact GH85 allocation fallback argv；
+      command id/argv 唯一，category 缺失/重复/未知/错序、spec_ref mismatch、
+      empty/duplicate/unknown/placeholder/零匹配/多匹配均 blocked | Verify:
       `git merge-base --is-ancestor "$GH61_MERGED_SHA" HEAD`；
       `test "$(git show -s --format=%H "$GH61_MERGED_SHA")" = "$GH61_MERGED_SHA"`；
       `rg -n 'SnapshotBuildReport|SnapshotWorkCounters|visited_nodes|mutated_nodes|text_flow_recomputes|snapshot_nodes|rebuild_count' src tests`；
@@ -44,11 +49,15 @@ GH-85: https://github.com/majiayu000/rnk/issues/85
       evidence 与 implement route gate | Done when: fixtures 在实现前证明现有 generic layout benches
       缺少固定 chat matrix/versioned artifact/trusted-baseline lifecycle，并列出所有
       positive/negative case 名称；dependency wiring、closed/unknown-key schema、roles/hashes、
-      closed build provenance、prerequisite command/result、event exact refs、exact-checkout
-      ABBA/pair mismatch、zero denominators 与 promotion source-worktree/rerun 都有命名 red
-      fixture；不得修改 test assertion 基础设施 | Verify:
+      closed build provenance、prerequisite category/spec_ref/command/result、allocation
+      fallback-before-benchmark、PR/push `ci-gate` result matrix、event exact refs、
+      exact-checkout ABBA/pair mismatch、zero denominators 与 promotion source-worktree/rerun
+      都有命名 red fixture；不得修改 test assertion 基础设施 | Verify:
       `cargo test --test layout_snapshot_benchmark_contract --locked -- --list`；
       `cargo test --test layout_snapshot_benchmark_contract --locked dependency_manifest_matches_merged_gh61_and_all_strategies -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked dependency_manifest_requires_complete_prerequisite_category_set -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked dependency_manifest_rejects_missing_duplicate_unknown_categories_and_spec_refs -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked allocation_correctness_fallback_runs_before_benchmark -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked fixed_six_scenario_matrix_has_minimum_nonzero_operations -- --exact`。
   - File ownership: 独占 `tests/layout_snapshot_benchmark_contract.rs`；不写 production、
     bench、Cargo、workflow、checker 或 baseline。
@@ -60,7 +69,9 @@ GH-85: https://github.com/majiayu000/rnk/issues/85
       T1 writer 已停止；#61 merged counter seam 已按 exact SHA 重新定位 | Done when: matrix
       严格等于 tech 表；row 聚合与 counters 完整；closed schema 拒绝 unknown/duplicate
       keys；每个 role 都有 closed build provenance；role/source/config/corpus/content/binary
-      hash、prerequisite results 与 ABBA trace/pair identity 完整；
+      hash、三个按 closed category/spec_ref 顺序记录的 prerequisite results 与 ABBA
+      trace/pair identity 完整；allocation fallback 证明 counter 的 operation 归属、计数与
+      reset 语义且先于任何 benchmark；
       `median_ns` 是唯一 timing 字段；checker CLI 只从 exact base tree 取 canonical baseline，正确返回 blocked/
       `needs_rebaseline`/regression/bootstrap 状态；implementation bootstrap 只写 candidate，
       zero denominators 与所有 trust/promotion 负例均 fail closed | Verify:
@@ -73,6 +84,9 @@ GH-85: https://github.com/majiayu000/rnk/issues/85
       `cargo test --test layout_snapshot_benchmark_contract --locked candidate_canonical_and_current_run_roles_are_not_interchangeable -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked median_ns_is_the_only_timing_field -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked dependency_manifest_rejects_invalid_prerequisite_command_arrays -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked dependency_manifest_requires_complete_prerequisite_category_set -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked dependency_manifest_rejects_missing_duplicate_unknown_categories_and_spec_refs -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked allocation_correctness_fallback_runs_before_benchmark -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked prerequisite_commands_execute_and_record_before_benchmark -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked failed_prerequisite_never_reports_performance_green -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked workflow_binds_event_head_and_base_without_merge_ref -- --exact`；
@@ -100,8 +114,9 @@ GH-85: https://github.com/majiayu000/rnk/issues/85
 
 - [ ] `SP85-T3` 把 benchmark contract 接入现有 required CI。Owner:
       `benchmark-ci-lane` | Dependencies: SP85-T2 complete handoff；T2 writer 已停止 |
-      Done when: `.github/workflows/ci.yml` 的独立 benchmark job 先运行 dependency wiring 与
-      dependency manifest 的每个 prerequisite argv，以 `shell=false` 逐条执行并记录
+      Done when: `.github/workflows/ci.yml` 的独立 `layout_benchmark` job 先运行 dependency
+      wiring，再按 parity/work-counter/allocation-correctness 顺序以 `shell=false` 执行
+      dependency manifest 的三个 prerequisite argv，并记录 category/spec_ref 与
       exit/matched/passed/ignored，全部成功后才运行 bootstrap 或 trusted compare；workflow
       env 只绑定 `${{ github.event.pull_request.head.sha }}`/
       `${{ github.event.pull_request.base.sha }}`，checkout `ref` 是 exact head 且
@@ -110,7 +125,10 @@ GH-85: https://github.com/majiayu000/rnk/issues/85
       checker 单进程按每 pair/batch ABBA 运行并产出互补 current-run artifacts；artifact 即使
       non-green 也上传诊断，required summary 不把 blocked/`needs_rebaseline`/bootstrap
       解释为 performance pass；job 使用 GitHub exact base/head 与 existing concurrency
-      cancellation contract |
+      cancellation contract；非 PR push 上该 job 精确 skipped，`ci-gate` 使用 `always()`、
+      保留八个既有 required job 的 success checks，并且只允许
+      `(pull_request, success)` 或 `(event_name != pull_request, skipped)` 的 benchmark
+      result pairing；PR 的 failure/cancelled/skipped 均 non-green |
       Verify: `python3 .github/scripts/check_gh61_benchmark.py --list-scenarios`；
       `python3 .github/scripts/check_gh61_benchmark.py --validate-dependency-manifest tests/fixtures/gh85_gh61_dependency.json --repo . --gh61-merged-sha "$GH61_MERGED_SHA"`；
       `python3 .github/scripts/check_gh61_benchmark.py --validate-artifact tests/fixtures/gh61_benchmark_schema.json --expected-role candidate`；
@@ -124,8 +142,13 @@ GH-85: https://github.com/majiayu000/rnk/issues/85
       `python3 .github/scripts/check_gh61_benchmark.py --mode compare --repo "$GITHUB_WORKSPACE" --base-worktree "$RUNNER_TEMP/gh85-base" --pr-base-oid "$PR_BASE_OID" --head-sha "$HEAD_SHA" --run-id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --target-root "$RUNNER_TEMP/gh85-targets" --artifact-dir "$RUNNER_TEMP/gh85-artifacts"`；
       `cargo test --test layout_snapshot_benchmark_contract --locked workflow_binds_event_head_and_base_without_merge_ref -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked prerequisite_commands_execute_and_record_before_benchmark -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked workflow_runs_prerequisites_before_benchmark_and_ci_gate -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked ci_gate_accepts_benchmark_skip_only_for_non_pr_push -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked ci_gate_rejects_pr_benchmark_failed_cancelled_or_skipped -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked ci_gate_preserves_all_existing_required_jobs -- --exact`；
       manual workflow inspection：checkout exact `ref`/`fetch-depth: 0`、benchmark job 是
-      `ci-gate` required dependency，且 implementation diff 不含
+      `ci-gate` required dependency，push skip/PR success result expression 精确，且
+      implementation diff 不含
       `.github/benchmarks/gh61-baseline.json`。
   - File ownership: 独占 `.github/workflows/ci.yml`；其他文件只读。
   - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008。
@@ -203,8 +226,14 @@ GH-85: https://github.com/majiayu000/rnk/issues/85
   `.github/benchmarks/gh61-baseline.json`，promotion diff 必须只包含该文件。
 - 所有 filtered Rust tests 先 `--list --exact`，再执行并证明 matched=1、passed=1、ignored=0。
 - dependency manifest 必须绑定 GH61 merged ancestry、真实 unique anchors、三种 strategy 与
-  五个 counter fields，以及 merged GH61 解析出的非空、唯一 closed prerequisite argv；
-  T3 未执行/记录任一 command 或 wiring test 未实际消费任一 entry 时 blocked。
+  五个 counter fields；prerequisite commands 必须按闭合 category/spec_ref 精确覆盖
+  parity、work-counter、allocation-correctness；allocation 必须先 search merged GH61 的
+  correctness test，缺失时使用已规划 GH85 contract fallback。T3 未按序执行/记录任一
+  command、所选 allocation correctness command 未先于 benchmark 或 wiring test 未实际消费
+  任一 entry 时 blocked。
+- workflow contract 必须证明 `layout_benchmark` 在 PR 仅 success 可通过，在非 PR push 仅
+  skipped 可通过；PR failure/cancelled/skipped、push 上意外 success/failure/cancelled 或任一
+  既有 required job 非 success 均不得让 `ci-gate` green。
 - artifact 的 scenario/strategy/minimum operation matrix、closed/unknown-key schema、
   role/source/closed build/config/corpus/content/binary hashes、prerequisite results、
   ABBA trace/pair identity、event exact head/base SHA/fingerprint、
