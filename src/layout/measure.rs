@@ -3,8 +3,6 @@
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::core::TextWrap;
-
 #[inline]
 pub(crate) fn grapheme_width(grapheme: &str) -> usize {
     UnicodeWidthStr::width(grapheme)
@@ -504,33 +502,6 @@ pub enum TextAlign {
     Left,
     Right,
     Center,
-}
-
-/// Width of the widest unbreakable unit in `text` under `wrap`.
-///
-/// This is the CSS `min-content` width: the narrowest the box can be without
-/// breaking something it is not allowed to break. Reporting the full line
-/// width here instead would tell the layout engine the box cannot shrink at
-/// all, so a flex parent would never constrain it and wrapping would never
-/// trigger.
-///
-/// Under [`TextWrap::Wrap`] a long word may be broken mid-word, so the only
-/// truly unbreakable unit is a single grapheme. Under the truncating modes the
-/// word is the unit.
-pub(crate) fn min_content_text_width(text: &str, wrap: TextWrap) -> usize {
-    match wrap {
-        TextWrap::Wrap => text
-            .graphemes(true)
-            .filter(|g| !g.chars().all(char::is_whitespace))
-            .map(grapheme_width)
-            .max()
-            .unwrap_or(0),
-        _ => text
-            .split_whitespace()
-            .map(measure_text_width)
-            .max()
-            .unwrap_or(0),
-    }
 }
 
 #[cfg(test)]
