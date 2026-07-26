@@ -35,14 +35,24 @@ pub(super) fn wrap_line(
                 TokenClass::Whitespace | TokenClass::Tab
             )
         {
+            if interrupted() {
+                return Err(TextFlowError::Interrupted);
+            }
             cursor += 1;
         }
         let word: Vec<usize> = (word_start..cursor).collect();
-        let pending_width = sequence_width(tokens, &pending, current_width, options.tab_stop)?;
+        let pending_width = sequence_width(
+            tokens,
+            &pending,
+            current_width,
+            options.tab_stop,
+            interrupted,
+        )?;
         let after_pending = current_width
             .checked_add(pending_width)
             .ok_or(TextFlowError::ArithmeticOverflow)?;
-        let word_width = sequence_width(tokens, &word, after_pending, options.tab_stop)?;
+        let word_width =
+            sequence_width(tokens, &word, after_pending, options.tab_stop, interrupted)?;
         let combined = after_pending
             .checked_add(word_width)
             .ok_or(TextFlowError::ArithmeticOverflow)?;
@@ -59,9 +69,11 @@ pub(super) fn wrap_line(
             &mut current_width,
             options,
             rows,
+            interrupted,
         )?;
         pending.clear();
-        let word_width = sequence_width(tokens, &word, current_width, options.tab_stop)?;
+        let word_width =
+            sequence_width(tokens, &word, current_width, options.tab_stop, interrupted)?;
         let with_word = current_width
             .checked_add(word_width)
             .ok_or(TextFlowError::ArithmeticOverflow)?;
@@ -70,10 +82,10 @@ pub(super) fn wrap_line(
             current_width = with_word;
             continue;
         }
-        let fresh_width = sequence_width(tokens, &word, 0, options.tab_stop)?;
+        let fresh_width = sequence_width(tokens, &word, 0, options.tab_stop, interrupted)?;
         if fresh_width <= options.max_width {
             if !current.is_empty() {
-                place_row(tokens, &current, options.tab_stop, rows)?;
+                place_row_interruptible(tokens, &current, options.tab_stop, rows, interrupted)?;
                 current.clear();
             }
             current.extend(word);
@@ -87,6 +99,7 @@ pub(super) fn wrap_line(
             &mut current_width,
             options,
             rows,
+            interrupted,
         )?;
     }
     append_wrapped(
@@ -96,8 +109,9 @@ pub(super) fn wrap_line(
         &mut current_width,
         options,
         rows,
+        interrupted,
     )?;
-    place_row(tokens, &current, options.tab_stop, rows)
+    place_row_interruptible(tokens, &current, options.tab_stop, rows, interrupted)
 }
 
 fn append_wrapped(
@@ -107,14 +121,18 @@ fn append_wrapped(
     current_width: &mut usize,
     options: &TextFlowOptions,
     rows: &mut Vec<TextFlowRow>,
+    interrupted: &mut impl FnMut() -> bool,
 ) -> Result<(), TextFlowError> {
     for index in indices {
+        if interrupted() {
+            return Err(TextFlowError::Interrupted);
+        }
         let width = token_width_at(&mut tokens[*index], *current_width, options.tab_stop)?;
         let combined = current_width
             .checked_add(width)
             .ok_or(TextFlowError::ArithmeticOverflow)?;
         if combined > options.max_width && !current.is_empty() {
-            place_row(tokens, current, options.tab_stop, rows)?;
+            place_row_interruptible(tokens, current, options.tab_stop, rows, interrupted)?;
             current.clear();
             *current_width = 0;
         }
@@ -132,13 +150,30 @@ fn sequence_width(
     indices: &[usize],
     start: usize,
     tab_stop: usize,
+    interrupted: &mut impl FnMut() -> bool,
 ) -> Result<usize, TextFlowError> {
     let mut column = start;
     for index in indices {
+        if interrupted() {
+            return Err(TextFlowError::Interrupted);
+        }
         let width = token_width_at(&mut tokens[*index], column, tab_stop)?;
         column = column
             .checked_add(width)
             .ok_or(TextFlowError::ArithmeticOverflow)?;
     }
     Ok(column - start)
+}
+
+fn place_row_interruptible(
+    tokens: &mut [TextFlowToken],
+    indices: &[usize],
+    tab_stop: usize,
+    rows: &mut Vec<TextFlowRow>,
+    interrupted: &mut impl FnMut() -> bool,
+) -> Result<(), TextFlowError> {
+    if interrupted() {
+        return Err(TextFlowError::Interrupted);
+    }
+    place_row(tokens, indices, tab_stop, rows)
 }
