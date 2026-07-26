@@ -671,54 +671,52 @@ fn exercise_retention_and_exhaustion() {
     assert_eq!(fresh.evicted_through(), None);
 }
 
+#[rustfmt::skip]
 fn exercise_determinism() {
-    fn run() -> (ConversationState, Vec<ApplyOutcome>) {
-        let mut state = ConversationState::new(0, std::num::NonZeroUsize::new(4).unwrap());
-        let first = apply_push(
-            &mut state,
-            "p",
-            0,
-            message(1, ChatRole::Assistant, vec![text_entry(1, "")]),
-        );
-        let append = ConversationUpdate::append_text(
-            guard(&state, MessageId::new(1)),
-            BlockId::new(1),
-            "same",
-        )
-        .unwrap();
-        let second = state.apply_event(event("a", 1, append)).unwrap();
-        (state, vec![first, second])
+    struct Alpha<'a> { event: &'a str, text: &'a str }
+    struct Beta<'a> { key: &'a str, chunks: Vec<&'a str> }
+    fn core_events(event_id: &str, text: &str) -> Vec<ConversationEvent> {
+        let pushed = message(1, ChatRole::Assistant, vec![text_entry(1, "")]);
+        let push = ConversationUpdate::push(ConversationGuard::new(
+            ConversationRevision::INITIAL), pushed);
+        let append = ConversationUpdate::append_text(MessageMutationGuard::new(
+            ConversationGuard::new(ConversationRevision::new(1)), MessageId::new(1),
+            MessageRevision::INITIAL), BlockId::new(1), text).unwrap();
+        vec![event(event_id, 0, push), event("append", 1, append)]
     }
-    assert_eq!(run(), run());
+    fn alpha(value: Alpha<'_>) -> Vec<ConversationEvent> { core_events(value.event, value.text) }
+    fn beta(value: Beta<'_>) -> Vec<ConversationEvent> { core_events(value.key, &value.chunks.concat()) }
+    fn run(events: Vec<ConversationEvent>) -> (ConversationState, Vec<ApplyOutcome>) {
+        let mut state = ConversationState::new(0, std::num::NonZeroUsize::new(4).unwrap());
+        let outcomes = events.into_iter().map(|value| state.apply_event(value).unwrap()).collect();
+        (state, outcomes)
+    }
+    fn checked_adapter(revision: i128, block_id: i128, value: Option<TypedValue>) -> Result<(MessageRevision, BlockId, TypedValue), ConversationError> {
+        let revision = u64::try_from(revision).map_err(|_| ConversationError::InvalidValue { field: "message_revision", reason: "adapter revision is out of range" })?;
+        let revision = MessageRevision::new(revision)?;
+        let block_id = u64::try_from(block_id).map_err(|_| ConversationError::InvalidValue { field: "block_id", reason: "adapter block id is out of range" })?;
+        let value = value.ok_or(ConversationError::InvalidValue { field: "typed_value", reason: "adapter value is required" })?;
+        Ok((revision, BlockId::new(block_id), value))
+    }
+    let left = alpha(Alpha { event: "push", text: "same" });
+    let right = beta(Beta { key: "push", chunks: vec!["sa", "me"] });
+    assert_eq!(left, right);
+    assert_eq!(run(left), run(right));
+    assert!(checked_adapter(0, 1, Some(TypedValue::Null)).is_err());
+    assert!(checked_adapter(1, -1, Some(TypedValue::Null)).is_err());
+    assert!(checked_adapter(1, 1, None).is_err());
     let mut empty = ConversationState::new(0, std::num::NonZeroUsize::new(2).unwrap());
-    apply_push(
-        &mut empty,
-        "empty",
-        0,
-        message(1, ChatRole::Assistant, vec![text_entry(1, "")]),
-    );
+    apply_push(&mut empty, "empty", 0,
+        message(1, ChatRole::Assistant, vec![text_entry(1, "")]));
     let complete = ConversationUpdate::complete(guard(&empty, MessageId::new(1)));
     assert!(matches!(
         assert_atomic_error(&mut empty, event("complete-empty", 1, complete)),
         ConversationError::InvalidTransition { .. }
     ));
     let mut nested = ConversationState::new(0, std::num::NonZeroUsize::new(2).unwrap());
-    apply_push(
-        &mut nested,
-        "nested",
-        0,
-        message(
-            1,
-            ChatRole::Assistant,
-            vec![MessageBlockEntry::new(
-                BlockId::new(1),
-                MessageBlock::Thinking(ThinkingContent::new(
-                    ThinkingId::new("active").unwrap(),
-                    "",
-                )),
-            )],
-        ),
-    );
+    apply_push(&mut nested, "nested", 0, message(1, ChatRole::Assistant,
+        vec![MessageBlockEntry::new(BlockId::new(1), MessageBlock::Thinking(
+            ThinkingContent::new(ThinkingId::new("active").unwrap(), "")))]));
     let complete = ConversationUpdate::complete(guard(&nested, MessageId::new(1)));
     assert!(matches!(
         assert_atomic_error(&mut nested, event("complete-active", 1, complete)),
@@ -786,6 +784,7 @@ cases!(exercise_retention_and_exhaustion =>
 );
 cases!(exercise_determinism =>
     identical_sequences_produce_identical_state_and_outcomes,
+    distinct_mock_adapters_produce_equal_core_events,
     empty_static_message_requires_content_before_complete,
     pending_message_with_active_nested_block_cannot_complete,
 );
