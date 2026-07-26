@@ -44,6 +44,12 @@ fn build(source: &str, width: usize, wrap: TextWrap) -> TextFlow {
     TextFlow::try_build(&plain_input(source), &TextFlowOptions::new(width, wrap)).unwrap()
 }
 
+fn build_with_ellipsis(source: &str, width: usize, wrap: TextWrap, ellipsis: &str) -> TextFlow {
+    let mut options = TextFlowOptions::new(width, wrap);
+    options.ellipsis = ellipsis.to_string();
+    TextFlow::try_build(&plain_input(source), &options).unwrap()
+}
+
 fn source_from_rows(flow: &TextFlow, source: &str) -> String {
     let mut reconstructed = String::new();
     for run in flow.logical_rows.iter().flat_map(|row| &row.runs) {
@@ -494,23 +500,105 @@ fn wrap_preserves_whitespace_extremes_and_keeps_hard_breaks_distinct() {
 
 #[test]
 fn text_flow_truncate() {
+    for (wrap, expected) in [
+        (TextWrap::Truncate, "abc…"),
+        (TextWrap::TruncateStart, "…fgh"),
+        (TextWrap::TruncateMiddle, "a…gh"),
+        (TextWrap::TruncateEnd, "abc…"),
+    ] {
+        let flow = build("abcdefgh", 4, wrap);
+        assert_eq!(flow.rows(), &[expected.to_string()]);
+        assert_eq!(flow.logical_rows()[0].width, 4);
+        assert_eq!(flow.tokens().len(), 9);
+        assert!(matches!(
+            flow.tokens()[8].placement(),
+            TextFlowPlacement::Synthetic { row: 0, .. }
+        ));
+        assert_eq!(flow.tokens()[8].source_range(), None);
+        assert!(flow.tokens()[..8].iter().all(|token| matches!(
+            token.placement(),
+            TextFlowPlacement::Positioned { row: 0, .. } | TextFlowPlacement::Truncated { row: 0 }
+        )));
+    }
+
+    for (wrap, expected) in [
+        (TextWrap::Truncate, "ab.."),
+        (TextWrap::TruncateStart, "..gh"),
+        (TextWrap::TruncateMiddle, "a..h"),
+        (TextWrap::TruncateEnd, "ab.."),
+    ] {
+        let flow = build_with_ellipsis("abcdefgh", 4, wrap, "..");
+        assert_eq!(flow.rows(), &[expected.to_string()]);
+        assert_eq!(flow.logical_rows()[0].width, 4);
+        assert_eq!(
+            flow.tokens()
+                .iter()
+                .filter(|token| token.source == TextFlowSource::Synthetic)
+                .count(),
+            2
+        );
+    }
+}
+
+#[test]
+fn text_flow_truncate_respects_cell_and_grapheme_boundaries() {
     for wrap in [
         TextWrap::Truncate,
         TextWrap::TruncateStart,
         TextWrap::TruncateMiddle,
         TextWrap::TruncateEnd,
     ] {
-        let flow = build("abcdef", 3, wrap);
-        assert_eq!(flow.rows(), &["abc".to_string()]);
+        let exact = build("abc", 3, wrap);
+        assert_eq!(exact.rows(), &["abc".to_string()]);
         assert!(
-            flow.tokens[3..]
-                .iter()
-                .all(|token| token.placement == TextFlowPlacement::Truncated { row: 0 })
-        );
-        assert!(
-            flow.tokens
+            exact
+                .tokens()
                 .iter()
                 .all(|token| token.source != TextFlowSource::Synthetic)
+        );
+    }
+
+    let zero = build("ab", 0, TextWrap::Truncate);
+    assert_eq!(zero.rows(), &["".to_string()]);
+    assert!(
+        zero.tokens()
+            .iter()
+            .all(|token| matches!(token.placement(), TextFlowPlacement::Omitted { row: 0 }))
+    );
+
+    for (ellipsis, expected, synthetic_count) in [("…", "…", 1), ("..", ".", 1), ("界", "", 0)]
+    {
+        let flow = build_with_ellipsis("ab", 1, TextWrap::Truncate, ellipsis);
+        assert_eq!(flow.rows(), &[expected.to_string()]);
+        assert!(flow.logical_rows()[0].width <= 1);
+        assert_eq!(
+            flow.tokens()
+                .iter()
+                .filter(|token| token.source == TextFlowSource::Synthetic)
+                .count(),
+            synthetic_count
+        );
+        assert!(
+            flow.tokens()[..2]
+                .iter()
+                .all(|token| matches!(token.placement(), TextFlowPlacement::Truncated { row: 0 }))
+        );
+    }
+
+    for (source, expected) in [
+        ("界ab", "界…"),
+        ("e\u{301}abcd", "e\u{301}a…"),
+        ("👨‍👩‍👧‍👦ab", "👨‍👩‍👧‍👦…"),
+    ] {
+        let flow = build(source, 3, TextWrap::TruncateEnd);
+        assert_eq!(flow.rows(), &[expected.to_string()]);
+        assert!(flow.logical_rows()[0].width <= 3);
+        assert_eq!(
+            flow.tokens()
+                .iter()
+                .filter_map(TextFlowToken::source_range)
+                .count(),
+            source.graphemes(true).count()
         );
     }
 }
@@ -671,7 +759,7 @@ fn a_wide_grapheme_straddling_the_edge_is_not_half_written() {
 fn truncate_keeps_one_row_per_logical_line() {
     assert_eq!(
         flow_rows("aaaa bbbb cccc", 6, TextWrap::Truncate),
-        vec!["aaaa b"]
+        vec!["aaaa …"]
     );
     assert_eq!(flow_rows("ab\ncd", 6, TextWrap::Truncate), vec!["ab", "cd"]);
 }
