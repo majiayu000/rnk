@@ -557,15 +557,13 @@ fn validate_conversation(state: &ConversationState) -> Result<(), ConversationEr
                         });
                     }
                 }
-                MessageBlock::ToolResult(value) => {
+                MessageBlock::ToolResult(value)
                     if results.insert(value.call_id.clone(), (&value.status,
-                        ToolResultLocation::new(message.id, entry.id))).is_some() {
-                        return Err(ConversationError::InvalidCorrelation {
-                            call_id: value.call_id.as_str().to_owned(),
-                            reason: "tool call has more than one result",
-                        });
-                    }
-                }
+                        ToolResultLocation::new(message.id, entry.id))).is_some() =>
+                    return Err(ConversationError::InvalidCorrelation {
+                        call_id: value.call_id.as_str().to_owned(),
+                        reason: "tool call has more than one result",
+                    }),
                 _ => {}
             }
         }
@@ -739,7 +737,7 @@ mod coverage_tests {
             ConversationUpdate::edit_message(mutation, vec![entry.clone()])
         {
             assert_eq!(value.guard(), mutation);
-            assert_eq!(value.entries(), &[entry.clone()]);
+            assert_eq!(value.entries(), std::slice::from_ref(&entry));
         }
         if let ConversationUpdate::Resend(value) = ConversationUpdate::resend(mutation, message()) {
             assert_eq!(value.source_guard(), mutation);
