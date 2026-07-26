@@ -649,15 +649,20 @@ pub(in crate::components::chat) fn same_block_identity(old: &MessageBlock,
 }
 pub(in crate::components::chat) fn static_complete_ready(message: &ChatMessage,
     mut visit: impl FnMut()) -> bool {
-    !message.blocks.iter().any(|entry| { visit(); matches!(entry.block,
-        MessageBlock::Thinking(_) | MessageBlock::ToolCall(_) | MessageBlock::ToolResult(_)) })
-        && message.blocks.iter().any(|entry| { visit(); match &entry.block {
+    let mut has_static_content = false;
+    for entry in &message.blocks {
+        visit();
+        has_static_content |= match &entry.block {
+            MessageBlock::Thinking(_) | MessageBlock::ToolCall(_) | MessageBlock::ToolResult(_) => {
+                return false;
+            }
             MessageBlock::Text(value) | MessageBlock::Markdown(value) => !value.is_empty(),
             MessageBlock::Code(value) => !value.content().is_empty(),
             MessageBlock::Error(_) | MessageBlock::Diff(_) | MessageBlock::Quote(_)
             | MessageBlock::Link(_) | MessageBlock::TerminalAttachmentSummary(_) => true,
-            _ => false,
-        }})
+        };
+    }
+    has_static_content
 }
 
 #[cfg(test)]

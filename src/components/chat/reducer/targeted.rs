@@ -1,6 +1,6 @@
 //! Single-target reducer path and deterministic cost evidence.
 
-use super::super::state::{message_active, nested_active, nested_terminal};
+use super::super::state::{message_active, nested_active, nested_terminal, static_complete_ready};
 use super::super::*;
 use std::collections::BTreeSet;
 
@@ -230,7 +230,7 @@ fn append_text_at(
 
 fn complete_at(message: &mut ChatMessage) -> Result<(), ConversationError> {
     let ready = match message.status {
-        MessageStatus::Pending => static_complete_ready(message),
+        MessageStatus::Pending => static_complete_ready(message, record_block_visit),
         MessageStatus::Streaming => {
             let mut ready = true;
             for entry in &message.blocks {
@@ -248,28 +248,6 @@ fn complete_at(message: &mut ChatMessage) -> Result<(), ConversationError> {
     }
     message.status = MessageStatus::Complete;
     Ok(())
-}
-
-fn static_complete_ready(message: &ChatMessage) -> bool {
-    let mut has_static_content = false;
-    for entry in &message.blocks {
-        record_block_visit();
-        match &entry.block {
-            MessageBlock::Thinking(_) | MessageBlock::ToolCall(_) | MessageBlock::ToolResult(_) => {
-                return false;
-            }
-            MessageBlock::Text(value) | MessageBlock::Markdown(value) => {
-                has_static_content |= !value.is_empty();
-            }
-            MessageBlock::Code(value) => has_static_content |= !value.content().is_empty(),
-            MessageBlock::Error(_)
-            | MessageBlock::Diff(_)
-            | MessageBlock::Quote(_)
-            | MessageBlock::Link(_)
-            | MessageBlock::TerminalAttachmentSummary(_) => has_static_content = true,
-        }
-    }
-    has_static_content
 }
 
 fn require_active(message: &ChatMessage) -> Result<(), ConversationError> {
