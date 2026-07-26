@@ -188,6 +188,61 @@ fn tool_and_thinking_models_have_no_execution_surface() {
 }
 
 #[test]
+fn public_update_payload_accessors_preserve_exact_inputs() {
+    let conversation = ConversationGuard::new(ConversationRevision::new(3));
+    let mutation = MessageMutationGuard::new(
+        conversation,
+        MessageId::new(7),
+        MessageRevision::new(4).unwrap(),
+    );
+    let entry = text_entry(9, "entry");
+    let pushed = message(8, ChatRole::User, vec![text_entry(8, "push")]);
+    assert!(
+        matches!(ConversationUpdate::push(conversation, pushed), ConversationUpdate::Push(value)
+            if value.guard() == conversation && value.message().id() == MessageId::new(8))
+    );
+    assert!(
+        matches!(ConversationUpdate::append_text(mutation, BlockId::new(9), "delta").unwrap(),
+            ConversationUpdate::AppendText(value)
+            if value.guard() == mutation && value.block_id() == BlockId::new(9)
+                && value.delta() == "delta")
+    );
+    assert!(
+        matches!(ConversationUpdate::append_message_block(mutation, entry.clone()),
+            ConversationUpdate::AppendMessageBlock(value)
+            if value.guard() == mutation && value.entry() == &entry)
+    );
+    assert!(
+        matches!(ConversationUpdate::insert_message_block(mutation, 2, entry.clone()),
+            ConversationUpdate::InsertMessageBlock(value)
+            if value.guard() == mutation && value.position() == 2 && value.entry() == &entry)
+    );
+    assert!(matches!(ConversationUpdate::replace_block(
+            mutation, BlockId::new(9), MessageBlock::Text("replacement".into())),
+            ConversationUpdate::ReplaceBlock(value)
+            if value.guard() == mutation && value.block_id() == BlockId::new(9)
+                && matches!(value.replacement(), MessageBlock::Text(text) if text == "replacement")));
+    assert!(
+        matches!(ConversationUpdate::complete(mutation), ConversationUpdate::Complete(value)
+            if value.guard() == mutation)
+    );
+    let cause = FailureCause::new("cause").unwrap();
+    assert!(
+        matches!(ConversationUpdate::fail(mutation, cause.clone()), ConversationUpdate::Fail(value)
+            if value.guard() == mutation && value.cause() == &cause)
+    );
+    assert!(
+        matches!(ConversationUpdate::edit_message(mutation, vec![entry.clone()]),
+            ConversationUpdate::EditMessage(value)
+            if value.guard() == mutation && value.entries() == std::slice::from_ref(&entry))
+    );
+    assert!(matches!(ConversationUpdate::resend(
+            mutation, message(10, ChatRole::User, vec![text_entry(10, "resend")])),
+            ConversationUpdate::Resend(value)
+            if value.source_guard() == mutation && value.message().id() == MessageId::new(10)));
+}
+
+#[test]
 fn legacy_message_and_new_chat_surface_coexist() {
     let _legacy = Message::new(MessageRole::User, "legacy");
     let _tool = ToolCall::new("legacy", "args");
@@ -363,6 +418,11 @@ exact!(append_block_supports_late_discovered_typed_blocks, {
 exact!(append_block_rejects_invalid_blocks_atomically, {
     let mut state = text_state(4); let update = ConversationUpdate::append_message_block(guard(&state, MessageId::new(1)), text_entry(2, ""));
     assert!(matches!(assert_atomic_error(&mut state, event("empty", 1, update)), ConversationError::InvalidMessage { .. }));
+});
+exact!(failed_push_rolls_back_new_message_and_identity_indexes, {
+    let mut state = setup_correlated(); let cancel = ConversationUpdate::cancel(guard(&state, MessageId::new(1))); state.apply_event(event("cancel-call", 3, cancel)).unwrap();
+    let pending = MessageBlockEntry::new(BlockId::new(3), MessageBlock::ToolResult(ToolResultContent::new(ToolCallId::new("call").unwrap(), ""))); let update = ConversationUpdate::push(ConversationGuard::new(state.revision()), message(3, ChatRole::Tool, vec![pending]));
+    assert!(matches!(assert_atomic_error(&mut state, event("invalid-result", 4, update)), ConversationError::InvalidCorrelation { .. })); assert!(state.message(MessageId::new(3)).is_none());
 });
 exact!(replace_block_validates_before_commit, {
     let mut state = terminal_call_state(); let rewritten = ToolCallContent::new(ToolCallId::new("call").unwrap(), "rewritten", vec![]).unwrap().with_status(ToolCallStatus::Succeeded);
