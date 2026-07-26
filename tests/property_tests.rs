@@ -8,7 +8,9 @@ use unicode_segmentation::UnicodeSegmentation;
 use rnk::components::{Box as RnkBox, Text};
 use rnk::core::{Dimension, Element, FlexDirection, Style, TextWrap};
 use rnk::layout::measure::measure_text_width;
-use rnk::layout::{TextFlow, TextFlowInput, TextFlowOptions, TextFlowSourceKind};
+use rnk::layout::{
+    TextFlow, TextFlowInput, TextFlowOptions, TextFlowPlacement, TextFlowSource, TextFlowSourceKind,
+};
 use rnk::testing::{TestRenderer, display_width};
 
 // ============================================================================
@@ -131,6 +133,61 @@ proptest! {
                 }
             }
             prop_assert_eq!(&reconstructed, &expected_non_break);
+        }
+    }
+
+    /// Truncation preserves a total source map and never exceeds its cell budget.
+    #[test]
+    fn text_flow_truncate_map_is_total(
+        scalars in proptest::collection::vec(any::<char>(), 0..80),
+        width in 0usize..20,
+        wrap in prop_oneof![
+            Just(TextWrap::Truncate),
+            Just(TextWrap::TruncateStart),
+            Just(TextWrap::TruncateMiddle),
+            Just(TextWrap::TruncateEnd),
+        ],
+        ellipsis in prop::sample::select(vec!["…", "..", "界", ""])
+    ) {
+        let source: String = scalars.into_iter().collect();
+        let input = TextFlowInput::plain(
+            source.clone(),
+            TextFlowSourceKind::Exact,
+            Style::new(),
+        );
+        let mut options = TextFlowOptions::new(width, wrap);
+        options.ellipsis = ellipsis.to_string();
+        let flow = TextFlow::try_build(&input, &options)
+            .expect("valid UTF-8 truncation must produce a complete logical map");
+
+        prop_assert!(flow.logical_rows().iter().all(|row| row.width <= width));
+        let grapheme_ranges: Vec<_> = source
+            .grapheme_indices(true)
+            .map(|(start, grapheme)| start..start + grapheme.len())
+            .collect();
+        let source_ranges: Vec<_> = flow
+            .tokens()
+            .iter()
+            .filter_map(|token| token.source_range())
+            .collect();
+        prop_assert_eq!(source_ranges, grapheme_ranges);
+        prop_assert_eq!(flow.position_map().len(), flow.tokens().len());
+
+        for (token_index, token) in flow.tokens().iter().enumerate() {
+            prop_assert_eq!(flow.position_map()[token_index].token_index, token_index);
+            prop_assert_eq!(&flow.position_map()[token_index].source, &token.source);
+            prop_assert_eq!(
+                &flow.position_map()[token_index].placement,
+                token.placement()
+            );
+            if token.source == TextFlowSource::Synthetic {
+                prop_assert_eq!(token.source_range(), None);
+                let synthetic_placed = matches!(
+                    token.placement(),
+                    TextFlowPlacement::Synthetic { .. }
+                );
+                prop_assert!(synthetic_placed);
+            }
         }
     }
 }
