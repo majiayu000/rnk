@@ -397,14 +397,23 @@ impl Output {
                         break;
                     }
                     let outcome = self.write_grapheme(col as i64, row as i64, &safe, style);
-                    let merged_into_previous = matches!(
-                        &outcome,
+                    let merged_owner_end = match &outcome {
                         GraphemeWriteOutcome::Committed(footprint)
-                            if footprint.target_cells.first().is_some_and(
-                                |first| usize::from(first.x) < col
-                            )
-                    );
-                    if !merged_into_previous {
+                            if footprint
+                                .target_cells
+                                .first()
+                                .is_some_and(|first| usize::from(first.x) < col) =>
+                        {
+                            footprint
+                                .target_cells
+                                .last()
+                                .map(|last| usize::from(last.x).saturating_add(1))
+                        }
+                        _ => None,
+                    };
+                    if let Some(owner_end) = merged_owner_end {
+                        col = owner_end;
+                    } else {
                         col = col.saturating_add(grapheme_width);
                     }
                 }

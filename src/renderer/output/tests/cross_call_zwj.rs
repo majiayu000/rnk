@@ -208,6 +208,35 @@ fn completion_at_the_right_boundary_reuses_the_existing_owner_cells() {
 }
 
 #[test]
+fn split_write_advances_past_the_recomputed_merged_owner_width() {
+    let style = Style::default();
+    let mut split = Output::new(5, 1);
+    split.write(0, 0, "❤", &style);
+    split.write(1, 0, "\u{fe0f}", &style);
+    split.write(1, 0, "\u{200d}", &style);
+    split.write(1, 0, "🔥X", &style);
+
+    let mut whole = Output::new(5, 1);
+    whole.write(0, 0, "❤️\u{200d}🔥X", &style);
+
+    assert_eq!(split.render(), "❤️\u{200d}🔥X");
+    assert_eq!(split.render(), whole.render());
+    assert_eq!(split.grapheme_cells, whole.grapheme_cells);
+    assert_eq!(
+        split.dirty_cell_positions().collect::<Vec<_>>(),
+        whole.dirty_cell_positions().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        split.owner_footprint(CellPosition { x: 0, y: 0 }),
+        vec![CellPosition { x: 0, y: 0 }, CellPosition { x: 1, y: 0 }]
+    );
+    assert_eq!(
+        split.owner_footprint(CellPosition { x: 2, y: 0 }),
+        vec![CellPosition { x: 2, y: 0 }]
+    );
+}
+
+#[test]
 fn completion_recomputes_a_changed_candidate_width_before_publication() {
     let mut output = Output::new(5, 1);
     let style = Style::default();
