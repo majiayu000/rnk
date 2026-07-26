@@ -6,6 +6,7 @@
 use crate::core::{Display, Element, Overflow, Style};
 use crate::layout::LayoutEngine;
 use crate::renderer::Output;
+use crate::renderer::TextRenderError;
 use crate::renderer::output::ClipRegion;
 
 mod projection;
@@ -125,6 +126,7 @@ fn clamp_extent(v: f32) -> Result<u16, ProjectionError> {
 }
 
 /// Render an element tree into the provided output buffer.
+#[allow(dead_code)]
 pub(crate) fn render_element_tree(
     element: &Element,
     layout_engine: &LayoutEngine,
@@ -132,8 +134,20 @@ pub(crate) fn render_element_tree(
     offset_x: f32,
     offset_y: f32,
 ) {
+    try_render_element_tree(element, layout_engine, output, offset_x, offset_y)
+        .unwrap_or_else(|error| panic!("text render failed: {error}"));
+}
+
+pub(crate) fn try_render_element_tree(
+    element: &Element,
+    layout_engine: &LayoutEngine,
+    output: &mut Output,
+    offset_x: f32,
+    offset_y: f32,
+) -> Result<(), TextRenderError> {
     projection::try_render_tree(element, layout_engine, output, offset_x, offset_y)
-        .unwrap_or_else(|error| panic!("text projection failed: {error}"));
+        .map(|_| ())
+        .map_err(|error| error.into_text_render_error(element.id))
 }
 
 fn render_element_tree_staged(
@@ -148,7 +162,9 @@ fn render_element_tree_staged(
         return Ok(());
     }
 
-    let layout = layout_engine.get_layout(element.id).unwrap_or_default();
+    let layout = layout_engine
+        .get_layout(element.id)
+        .ok_or(ProjectionError::MissingLayout(element.id))?;
 
     let raw_x = offset_x + layout.x;
     let raw_y = offset_y + layout.y;
@@ -394,3 +410,116 @@ fn render_border(element: &Element, output: &mut Output, x: u16, y: u16, width: 
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod typed_error_tests {
+    use std::error::Error;
+
+    use super::*;
+    use crate::components::{Box, Text};
+    use crate::layout::TextFlowError;
+    use crate::renderer::{TextCoordinateError, TextProjectionError};
+
+    #[test]
+    fn text_flow_error_preserves_source_and_commits_no_partial_output() {
+        let mut tree = Box::new()
+            .width(10)
+            .height(2)
+            .child(Text::new("first").into_element())
+            .into_element();
+        let mut engine = LayoutEngine::new();
+        engine.try_compute(&tree, 10, 2).unwrap();
+        let missing = Text::new("missing").into_element();
+        let missing_id = missing.id;
+        tree.add_child(missing);
+
+        let mut output = Output::new(10, 2);
+        output.write(0, 0, "stable", &Style::default());
+        let before = output.render();
+        let failure = try_render_element_tree(&tree, &engine, &mut output, 0.0, 0.0);
+        assert!(matches!(
+            failure,
+            Err(TextRenderError::MissingCurrentFlow { element_id })
+                if element_id == missing_id
+        ));
+        assert_eq!(output.render(), before);
+        assert!(!output.render().starts_with("first"));
+
+        let flow_error = TextRenderError::flow(tree.id, TextFlowError::InvalidTabStop);
+        assert!(matches!(
+            flow_error
+                .source()
+                .and_then(|source| { source.downcast_ref::<TextFlowError>() }),
+            Some(TextFlowError::InvalidTabStop)
+        ));
+
+        let coordinate_tree = Element::text("coordinate");
+        let mut coordinate_engine = LayoutEngine::new();
+        coordinate_engine
+            .try_compute(&coordinate_tree, 10, 2)
+            .unwrap();
+        let mut coordinate_output = Output::new(10, 2);
+        coordinate_output.write(0, 0, "stable", &Style::default());
+        let coordinate_before = coordinate_output.render();
+        assert!(matches!(
+            try_render_element_tree(
+                &coordinate_tree,
+                &coordinate_engine,
+                &mut coordinate_output,
+                f32::NAN,
+                0.0,
+            ),
+            Err(TextRenderError::Coordinate {
+                source: TextCoordinateError::NonFinite,
+                ..
+            })
+        ));
+        assert_eq!(coordinate_output.render(), coordinate_before);
+
+        assert!(matches!(
+            try_render_element_tree(
+                &coordinate_tree,
+                &coordinate_engine,
+                &mut coordinate_output,
+                f32::MAX,
+                0.0,
+            ),
+            Err(TextRenderError::Coordinate {
+                source: TextCoordinateError::Overflow,
+                ..
+            })
+        ));
+        assert_eq!(coordinate_output.render(), coordinate_before);
+
+        let injected = projection::try_render_tree_with_options(
+            &coordinate_tree,
+            &coordinate_engine,
+            &mut coordinate_output,
+            0.0,
+            0.0,
+            projection::ProjectionOptions {
+                fail_after_writes: Some(0),
+                validation_rows: None,
+            },
+        )
+        .unwrap_err()
+        .into_text_render_error(coordinate_tree.id);
+        assert!(matches!(
+            injected,
+            TextRenderError::Projection {
+                source: TextProjectionError::InjectedFailure,
+                ..
+            }
+        ));
+        assert_eq!(coordinate_output.render(), coordinate_before);
+
+        let malformed =
+            projection::ProjectionError::MalformedProjection("test source map is incomplete")
+                .into_text_render_error(coordinate_tree.id);
+        assert!(matches!(
+            malformed,
+            TextRenderError::IncompleteSourceMap { element_id }
+                if element_id == coordinate_tree.id
+        ));
+    }
+}

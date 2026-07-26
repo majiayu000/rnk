@@ -142,6 +142,9 @@ pub use crate::renderer::{
     Printable,
     RenderHandle,
     RenderOptions,
+    TextCoordinateError,
+    TextProjectionError,
+    TextRenderError,
     // Alt screen control
     enter_alt_screen,
     exit_alt_screen,
@@ -162,6 +165,11 @@ pub use crate::renderer::{
     render_to_string_with_options,
     // Cross-thread APIs
     request_render,
+    try_render_to_string,
+    try_render_to_string_auto,
+    try_render_to_string_no_trim,
+    try_render_to_string_raw,
+    try_render_to_string_with_options,
 };
 
 // =============================================================================

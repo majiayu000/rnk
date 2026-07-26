@@ -54,3 +54,12 @@ fn testing_prelude_exports_snapshot_helpers() {
     let snapshot = Snapshot::new("prelude_surface", "testing prelude");
     snapshot.assert_match("testing prelude");
 }
+
+#[test]
+fn try_render_to_string_surface() {
+    use rnk::prelude::{Text, TextRenderError, try_render_to_string};
+
+    let element = Text::new("typed surface").into_element();
+    let rendered: Result<String, TextRenderError> = try_render_to_string(&element, 30);
+    assert_eq!(rendered.unwrap(), "typed surface");
+}

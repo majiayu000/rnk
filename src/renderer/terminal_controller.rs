@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use super::Terminal;
 use super::registry::{AppRuntime, ModeSwitch, Printable};
-use super::render_to_string::render_to_string;
+use super::render_to_string::try_render_to_string;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ResizeAction {
@@ -134,22 +134,30 @@ impl TerminalController {
         }
 
         // Get terminal width for rendering elements.
-        let (width, _) = Terminal::size().unwrap_or((80, 24));
+        let (width, _) = Terminal::size()?;
 
-        for message in messages {
-            match message {
-                Printable::Text(text) => {
-                    terminal.println(text)?;
-                }
-                Printable::Element(element) => {
-                    let rendered = render_to_string(element, width);
-                    terminal.println(&rendered)?;
-                }
-            }
+        let prepared = Self::try_prepare_println_messages(messages, width)
+            .map_err(crate::renderer::TextRenderError::into_io)?;
+
+        for rendered in prepared {
+            terminal.println(&rendered)?;
         }
 
         terminal.repaint();
         Ok(())
+    }
+
+    fn try_prepare_println_messages(
+        messages: &[Printable],
+        width: u16,
+    ) -> Result<Vec<String>, crate::renderer::TextRenderError> {
+        messages
+            .iter()
+            .map(|message| match message {
+                Printable::Text(text) => Ok(text.clone()),
+                Printable::Element(element) => try_render_to_string(element, width),
+            })
+            .collect()
     }
 
     pub(crate) fn handle_resize(
@@ -188,6 +196,8 @@ impl TerminalController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::Element;
+    use crate::renderer::{TextCoordinateError, TextRenderError};
 
     #[test]
     fn test_resize_action_no_change_is_noop() {
@@ -220,5 +230,23 @@ mod tests {
                 clear_screen: true
             }
         );
+    }
+
+    #[test]
+    fn println_render_failure_prepares_no_partial_messages() {
+        let mut invalid = Element::text("invalid");
+        invalid.style.padding.left = f32::NAN;
+        let messages = vec![
+            Printable::Text("before".to_string()),
+            Printable::Element(Box::new(invalid)),
+        ];
+
+        assert!(matches!(
+            TerminalController::try_prepare_println_messages(&messages, 20),
+            Err(TextRenderError::Coordinate {
+                source: TextCoordinateError::NonFinite,
+                ..
+            })
+        ));
     }
 }
