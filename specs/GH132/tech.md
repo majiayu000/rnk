@@ -19,10 +19,10 @@ selection；GH-131 继续拥有 VirtualText/span-only compatibility。GH-132 不
 两者。
 
 issue #132 当前 label 是 `ready_to_implement`，但起草前缺少本 packet。implx auto 的
-fresh route artifact
-`/private/tmp/tink-implx-resume-t04.xikkEQ/.specrail/runtime/artifacts/2026-07-26-rnk-resume-t04/gh132-route-gate.json`
-明确给出 `current_state=ready_to_spec`、`route=write_spec`、`decision=allowed`。该 artifact
-只授权写 spec；本 PR 不改 label，implementation 仍等待人工 spec approval 与 fresh
+creation-time route artifact `gh132-route-gate.json` 明确给出
+`current_state=ready_to_spec`、`route=write_spec`、`decision=allowed`。该 artifact 只授权
+写 spec；它不是后续实现的可执行 gate 依赖。本 PR 不改 label，implementation 仍等待人工
+spec approval，并按 Tasks 中文档化的 `SPEC_RAIL_ROOT` fail-closed 运行 fresh
 implementation gate。
 
 ## Codebase Context
@@ -175,26 +175,26 @@ MissingCurrentFlow和 PR #137 zero-width tests都是 mandatory regressions。
 
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
-| B-001 | `tree_renderer.rs` scoped floor helper | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::signed_coordinates_use_one_floor_conversion -- --exact` |
-| B-002 | tree/projection negative visibility | `cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::negative_fractional_x_and_y_clip_instead_of_painting_at_zero -- --exact` |
-| B-003 | conversion compatibility matrix | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::negative_zero_positive_fractional_and_integral_coordinates_are_compatible -- --exact` |
-| B-004 | recursive coordinate composition | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::signed_coordinate_composition_is_checked_and_axis_independent -- --exact` |
-| B-005 | signed clip/scroll/ancestor projection | `cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::negative_fractional_scroll_ancestor_and_clip_preserve_signed_disposition -- --exact` |
-| B-006 | finite bound/checked overflow | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::finite_coordinate_bounds_and_checked_arithmetic_classify_overflow -- --exact` |
-| B-007 | non-finite classification | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::nan_and_infinities_classify_as_non_finite_for_each_coordinate_source -- --exact` |
-| B-008 | scoped current owner | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::nested_coordinate_failures_report_exact_current_child -- --exact` |
-| B-009 | owner/fallback boundary | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinate_owner_survives_conversion_and_only_unscoped_failures_use_root_fallback -- --exact` |
+| B-001 | `tree_renderer.rs` scoped floor helper | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::signed_coordinates_use_one_floor_conversion -- --exact` |
+| B-002 | tree/projection negative visibility | `cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::negative_fractional_x_and_y_clip_instead_of_painting_at_zero -- --exact` |
+| B-003 | conversion compatibility matrix | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::negative_zero_positive_fractional_and_integral_coordinates_are_compatible -- --exact` |
+| B-004 | recursive coordinate composition | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::signed_coordinate_composition_is_checked_and_axis_independent -- --exact` |
+| B-005 | signed clip/scroll/ancestor projection | `cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::negative_fractional_scroll_ancestor_and_clip_preserve_signed_disposition -- --exact` |
+| B-006 | finite bound/checked overflow | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::finite_coordinate_bounds_and_checked_arithmetic_classify_overflow -- --exact` |
+| B-007 | non-finite classification | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::nan_and_infinities_classify_as_non_finite_for_each_coordinate_source -- --exact` |
+| B-008 | scoped current owner | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::nested_coordinate_failures_report_exact_current_child -- --exact` |
+| B-009 | owner/fallback boundary | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::coordinate_owner_survives_conversion_and_only_unscoped_failures_use_root_fallback -- --exact` |
 | B-010 | public string caller | `cargo test --test text_flow_renderer_error_paths --locked nested_child_coordinate_errors_reach_string_api_with_exact_id -- --exact` |
 | B-011 | public TestRenderer callers | `cargo test --test text_flow_renderer_error_paths --locked nested_child_coordinate_errors_reach_test_renderer_with_exact_id -- --exact` |
-| B-012 | dynamic/App typed chain | `cargo test --workspace --lib --locked renderer::pipeline::tests::nested_child_coordinate_errors_keep_id_and_candidate_state -- --exact` and `cargo test --workspace --lib --locked renderer::app::tests::nested_child_coordinate_error_reaches_app_io_source_chain -- --exact` |
+| B-012 | dynamic/App typed chain | `cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::nested_child_coordinate_errors_keep_id_and_candidate_state -- --exact` and `cargo test --workspace --lib --locked renderer::app::tests::nested_child_coordinate_error_reaches_app_io_source_chain -- --exact` |
 | B-013 | safe Display/source | `cargo test --workspace --lib --locked renderer::error::tests::coordinate_error_context_is_typed_and_does_not_leak_content -- --exact` |
-| B-014 | staged Output/projection atomicity | `cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinate_failure_commits_neither_output_nor_projection -- --exact` |
-| B-015 | VNode/runtime/cache atomicity | `cargo test --workspace --lib --locked renderer::pipeline::tests::nested_child_coordinate_errors_keep_id_and_candidate_state -- --exact` |
-| B-016 | late nested traversal failure | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::late_nested_coordinate_failure_discards_earlier_staged_paint -- --exact` |
-| B-017 | repeat/corrected retry | `cargo test --workspace --lib --locked renderer::pipeline::tests::repeated_coordinate_failure_then_correction_retries_cleanly -- --exact` |
-| B-018 | interruption/drop | `cargo test --workspace --lib --locked renderer::pipeline::tests::dropped_or_failed_coordinate_candidate_is_never_published -- --exact` |
+| B-014 | staged Output/projection atomicity | `cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::coordinate_failure_commits_neither_output_nor_projection -- --exact` |
+| B-015 | VNode/runtime/cache atomicity | `cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::nested_child_coordinate_errors_keep_id_and_candidate_state -- --exact` |
+| B-016 | late nested traversal failure | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::late_nested_coordinate_failure_discards_earlier_staged_paint -- --exact` |
+| B-017 | repeat/corrected retry | `cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::repeated_coordinate_failure_then_correction_retries_cleanly -- --exact` |
+| B-018 | interruption/drop | `cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::dropped_or_failed_coordinate_candidate_is_never_published -- --exact` |
 | B-019 | independent caller contexts | `cargo test --test text_flow_renderer_error_paths --locked independent_coordinate_failures_do_not_share_owner_or_frame_state -- --exact` |
-| B-020 | public/behavior compatibility | existing: `cargo test --test prelude_surfaces --locked try_render_to_string_surface -- --exact`; `cargo test --workspace --lib --locked renderer::pipeline::tests::incremental_failure_retries_from_clean_layout_tree -- --exact` |
+| B-020 | public/behavior compatibility | existing: `cargo test --test prelude_surfaces --locked try_render_to_string_surface -- --exact`; `cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::incremental_failure_retries_from_clean_layout_tree -- --exact` |
 | B-021 | exact-head evidence ledger | run every command below plus full fmt/check/clippy/test, coverage, CI, independent review and fresh reviewThreads query against one head SHA |
 
 ## Critical Test Ledger
@@ -205,7 +205,7 @@ Implementation tasks必须逐项创建并运行上表新 tests；以下现有 re
 cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_signed_coordinates_axis_clips_and_nested_active_clips_are_exact -- --exact
 cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_failure_commits_neither_cells_nor_projection -- --exact
 cargo test --workspace --lib --locked renderer::tree_renderer::tests::scrolled_out_negative_rows_do_not_paint_at_top -- --exact
-cargo test --workspace --lib --locked renderer::pipeline::tests::incremental_failure_retries_from_clean_layout_tree -- --exact
+cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::incremental_failure_retries_from_clean_layout_tree -- --exact
 cargo test --workspace --lib --locked renderer::app::tests::app_render_candidate_preserves_typed_error_source -- --exact
 cargo test --test text_flow_error_paths --locked typed_error_reaches_remaining_callers -- --exact
 cargo test --test text_flow_error_paths --locked caller_failure_commits_no_partial_output -- --exact

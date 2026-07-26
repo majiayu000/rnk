@@ -31,8 +31,11 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     5. worktree clean，base与预期main/依赖merge exact，GH132 manifest逐路径冻结。
   - Verify:
     ```sh
-    python3 /Users/apple/Desktop/code/AI/tool/specrail/checks/route_gate.py \
-      --repo /Users/apple/Desktop/code/AI/tool/specrail \
+    set -euo pipefail
+    : "${SPEC_RAIL_ROOT:?set SPEC_RAIL_ROOT to the checked-out SpecRail workflow-pack root}"
+    test -f "$SPEC_RAIL_ROOT/checks/route_gate.py"
+    python3 "$SPEC_RAIL_ROOT/checks/route_gate.py" \
+      --repo "$SPEC_RAIL_ROOT" \
       --route implement --issue 132 --state ready_to_implement \
       --artifact product_spec="$PWD/specs/GH132/product.md" \
       --artifact tech_spec="$PWD/specs/GH132/tech.md" --json
@@ -44,6 +47,8 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     test -n "$PR137_MERGE_SHA"
     git merge-base --is-ancestor "$PR137_MERGE_SHA" HEAD
     ```
+    `SPEC_RAIL_ROOT` 必须由执行环境显式设置为 SpecRail workflow pack checkout 根目录；
+    未设置、路径错误或 gate 文件缺失时上述命令立即失败，不得跳过或降级为 warning。
     人工核对 GH132 spec approval、#131 frozen manifest 与无共享writer。
   - Covers: B-020, B-021
 
@@ -70,17 +75,17 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
        production/test文件低于800行，不压缩旧测试、不用`#[rustfmt::skip]`。
   - Verify:
     ```sh
-    cargo test --workspace --lib --locked renderer::tree_renderer::tests::signed_coordinates_use_one_floor_conversion -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::tests::negative_zero_positive_fractional_and_integral_coordinates_are_compatible -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::tests::signed_coordinate_composition_is_checked_and_axis_independent -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::tests::finite_coordinate_bounds_and_checked_arithmetic_classify_overflow -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::tests::nan_and_infinities_classify_as_non_finite_for_each_coordinate_source -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::tests::nested_coordinate_failures_report_exact_current_child -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinate_owner_survives_conversion_and_only_unscoped_failures_use_root_fallback -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::tests::late_nested_coordinate_failure_discards_earlier_staged_paint -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::negative_fractional_x_and_y_clip_instead_of_painting_at_zero -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::negative_fractional_scroll_ancestor_and_clip_preserve_signed_disposition -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinate_failure_commits_neither_output_nor_projection -- --exact
+    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::signed_coordinates_use_one_floor_conversion -- --exact
+    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::negative_zero_positive_fractional_and_integral_coordinates_are_compatible -- --exact
+    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::signed_coordinate_composition_is_checked_and_axis_independent -- --exact
+    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::finite_coordinate_bounds_and_checked_arithmetic_classify_overflow -- --exact
+    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::nan_and_infinities_classify_as_non_finite_for_each_coordinate_source -- --exact
+    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::nested_coordinate_failures_report_exact_current_child -- --exact
+    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::coordinate_owner_survives_conversion_and_only_unscoped_failures_use_root_fallback -- --exact
+    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::late_nested_coordinate_failure_discards_earlier_staged_paint -- --exact
+    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::negative_fractional_x_and_y_clip_instead_of_painting_at_zero -- --exact
+    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::negative_fractional_scroll_ancestor_and_clip_preserve_signed_disposition -- --exact
+    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::coordinate_failure_commits_neither_output_nor_projection -- --exact
     ```
   - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009,
     B-014, B-016, B-020
@@ -128,10 +133,10 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     5. `App::run`既有I/O mapping保留同一`TextRenderError`和nested typed source chain。
   - Verify:
     ```sh
-    cargo test --workspace --lib --locked renderer::pipeline::tests::nested_child_coordinate_errors_keep_id_and_candidate_state -- --exact
-    cargo test --workspace --lib --locked renderer::pipeline::tests::repeated_coordinate_failure_then_correction_retries_cleanly -- --exact
-    cargo test --workspace --lib --locked renderer::pipeline::tests::dropped_or_failed_coordinate_candidate_is_never_published -- --exact
-    cargo test --workspace --lib --locked renderer::pipeline::tests::incremental_failure_retries_from_clean_layout_tree -- --exact
+    cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::nested_child_coordinate_errors_keep_id_and_candidate_state -- --exact
+    cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::repeated_coordinate_failure_then_correction_retries_cleanly -- --exact
+    cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::dropped_or_failed_coordinate_candidate_is_never_published -- --exact
+    cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::incremental_failure_retries_from_clean_layout_tree -- --exact
     cargo test --workspace --lib --locked renderer::app::tests::nested_child_coordinate_error_reaches_app_io_source_chain -- --exact
     cargo test --workspace --lib --locked renderer::app::tests::app_render_candidate_preserves_typed_error_source -- --exact
     ```
