@@ -137,11 +137,15 @@ identity 与 interruption 原子性。
     必须进入自然拆分文件，并让被触碰的 `src/layout/text_flow/tests.rs` 回到 800 行以内。
     exact-head gate 还必须强制实际 diff 为五路径 manifest 的非空子集、三个新文件存在；
     ledger selector 每项 `matched=1/passed=1/ignored=0`；coverage 前后 tracked/untracked
-    worktree 为空，且 LCOV `SF:` 是 repo-root canonical tracked Rust path，record 不重复、
-    不越界、不靠 suffix 命中，`LF/LH` 与 `DA`、`BRF/BRH` 与 `BRDA` 一致，两个 planned
-    production record 都有非空 changed-executable 交集。Cargo.toml allowlist、ignored
-    selector、empty/deleted DA、summary mismatch、bad hash 与 shell early-failure negative
-    fixtures 必须全部 fail closed。
+    worktree 为空；fresh GitHub implementation PR 的 `baseRefOid/headRefOid` 必须在 coverage
+    前后分别读取，并分别等于 caller `BASE_SHA`/local `HEAD`，同时单独证明
+    `merge-base(baseRefOid, headRefOid) == baseRefOid`。LCOV `SF:` 必须是 repo-root
+    canonical tracked Rust path，record 不重复、不靠 suffix 命中；每条 `DA/BRDA` line
+    必须在该 canonical source 的 1-based `1..=EOF` 范围内，且 `LF/LH` 与 `DA`、
+    `BRF/BRH` 与 `BRDA` 一致。两个 planned production record 都有非空
+    changed-executable 交集。Cargo.toml allowlist、ignored selector、line 0/超 EOF
+    `DA/BRDA`、empty/deleted DA、summary mismatch、bad hash 与 shell early-failure
+    negative fixtures 必须全部 fail closed。
 
 ## 验收标准
 
