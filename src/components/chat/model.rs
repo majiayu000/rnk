@@ -503,6 +503,14 @@ impl ChatMessage {
         Ok(Self { id, role, status: MessageStatus::Pending, revision: MessageRevision::INITIAL,
             blocks, metadata: ChatMessageMetadata::default() })
     }
+    /// Reconstructs persisted message state; snapshot restoration validates cross-state invariants.
+    pub fn try_restore(id: MessageId, role: ChatRole, status: MessageStatus,
+        revision: MessageRevision, blocks: Vec<MessageBlockEntry>,
+        metadata: ChatMessageMetadata) -> Result<Self, ConversationError> {
+        let mut value = Self::new(id, role, blocks)?;
+        value.status = status; value.revision = revision; value.metadata = metadata;
+        Ok(value)
+    }
     /// Sets optional display metadata.
     pub fn with_metadata(mut self, value: ChatMessageMetadata) -> Self { self.metadata = value; self }
     /// Returns stable identity.
