@@ -26,6 +26,8 @@ frame 与 alternate-screen 生命周期，并为布局、焦点、路由、resiz
   不再实现第二套高度或 item-count 滚动。
 - 提供 transcript/composer/overlay 的 caller-owned focus、嵌套 overlay 栈和唯一事件路由器。
 - 对 resize、streaming、prepend、Composer reflow 和 overlay 变化按到达顺序原子发布 frame。
+- 只有在 MessageList 与 Composer 提供已合并、先 prepare 后无失败 commit/abort 的
+  candidate capability 后，才允许开始实现跨组件原子 frame。
 - 正常、取消、typed failure、panic/unwind 和 suspend/resume 后恢复 raw mode、cursor、
   alternate screen、mouse/focus/paste 输入模式。
 - 手工迁移 `examples/rnk_chat.rs`，只组合公开 shell 与公开子组件。
@@ -74,9 +76,12 @@ frame 与 alternate-screen 生命周期，并为布局、焦点、路由、resiz
    disclosure、ToolResult preview/expansion 或完整 measurement config 改变时，shell 必须把
    typed change 交给 GH-65 的完整 cache identity/measurement transaction；无关 message 的
    active shared key handles 保持 O(1) identity，不深拷贝正文。
-9. **B-009 — Following behavior.** MessageList observation 为 `Following` 时，append 或 active
-   stream 增长使 viewport 跟随最新 bottom，`new_content_below=false`；Composer/status/overlay
-   变化不改变该状态。零-row 中间 resize 仍按 GH-65 logical-bottom 合同保留 Following。
+9. **B-009 — Following behavior in a supported shell viewport.** MessageList observation 为
+   `Following` 时，append 或 active stream 增长使 viewport 跟随最新 bottom，
+   `new_content_below=false`；Composer/status/overlay 变化不改变该状态。成功 shell frame
+   的 transcript rows 始终非零；zero-row/undersized terminal 按 B-004 在调用 MessageList
+   前失败。GH-65 自身的 zero-row logical-bottom 行为只由 GH-65 component contract验证，
+   不是 GH-67 shell 的可达成功状态。
 10. **B-010 — Paused behavior and new-content signal.** 用户显式滚离 bottom 后保持
     `Paused` 与 stored anchor；下方 append/stream 增长只设置可观察的 new-content 状态，
     不 bottom-jump。只有显式 jump/scroll 到 bottom 才恢复 Following；提示不能只靠颜色。
@@ -95,53 +100,72 @@ frame 与 alternate-screen 生命周期，并为布局、焦点、路由、resiz
     `ChatMessageView`、`ChatComposer`、`MessageList` 与 `FullscreenChatShell`；不得保留私有
     role/message、字符 editor、message-height、item scroll、focus/router、resize 或 terminal
     cleanup state machine，也不得直接输出 ANSI。
-15. **B-015 — Observable focus state.** focus target 是闭集 Transcript、Composer 或
-    `Overlay(OverlayId)`；初始 target 必须存在且可 focus，成功变化恰好推进一次 checked shell
-    revision。public observation 必须同时报告 target、scope、区域 rect、follow/new-content、
-    Composer clamp 与 top overlay，供测试/辅助技术观察，而非仅改变边框颜色。
-16. **B-016 — Deterministic key precedence.** Resize/shutdown 等 session event 先于普通输入；
-    top modal overlay 捕获后，Escape/overlay handler 先于 global focus keys；否则 Tab/BackTab
-    先改变 shell focus，再只把事件交给 focused Composer 或 Transcript。每个 key 最多调用一个
-    component handler一次；`Ignored`、`Handled`、`Changed`、`Submitted`、`Cancelled`
-    使用既有 `InteractionOutcome<T>` 语义，不能靠 hook 注册顺序决定。
-17. **B-017 — Nested overlay stack and z-order.** overlay 以 validated stable ID、closed
-    capture policy、checked rect/body 和进入前 focus 构成 LIFO stack；base frame 先绘制，
-    overlay 按栈顺序绘制且 topmost 最后、clip 到 terminal rect。重复 ID、body 缺失、越界
-    算术或关闭非 top overlay typed 失败且 full state/frame 不变。
+15. **B-015 — Observable and valid focus state.** focus target 是闭集 Transcript、Composer
+    或 `Overlay(OverlayId)`；只有存在且 kind 为 Modal/Pointer 的 focusable overlay 可成为
+    Overlay target，Passive overlay 永远不可 focus。初始 target 必须存在且可 focus，成功变化
+    恰好推进一次 checked shell revision。public observation 必须同时报告 target、scope、
+    区域 rect、follow/new-content、Composer clamp 与完整 top overlay state，供测试/辅助技术
+    观察，而非仅改变边框颜色。
+16. **B-016 — Total deterministic key/paste precedence.** Resize/shutdown 等 session event
+    先于普通输入；top Modal 对所有 key/paste 有唯一捕获结果，其他情况下 Escape、
+    Tab/BackTab、Transcript、Composer、focused Pointer overlay 与不可达 Passive focus
+    的每个组合都有闭合结果。一次事件最多调用一个 shell/component/overlay handler一次；
+    目标 handler 返回 `Ignored` 时是否 consumed/blocked 也由 overlay kind 固定，不能继续
+    猜测 fallthrough 或依赖 hook 注册顺序。
+17. **B-017 — Nested overlay state and z-order.** overlay 以 validated stable ID、closed
+    `OverlayKind`（Modal/Pointer/Passive）、focusability、checked rect/body、handler capability
+    和进入前 focus 构成 LIFO stack；base frame 先绘制，overlay 按栈顺序绘制且 topmost 最后、
+    clip 到 terminal rect。Passive 永不接收输入，Pointer 只在命中或显式 focus时接收，Modal
+    独占输入。重复 ID、非法 kind/focus 组合、body/handler缺失、越界算术或关闭非 top overlay
+    typed 失败且 full state/frame 不变。
 18. **B-018 — Overlay close and focus restoration.** top dismissible overlay 的 Escape 只关闭
-    一层并恢复该层保存的仍有效 focus；嵌套关闭逐层恢复。modal overlay 对未处理 key/paste/
-    mouse 仍返回 consumed，不允许穿透 Composer/Transcript；最后一层关闭后才恢复 base focus。
+    一层并恢复该层保存的仍有效 focus；嵌套关闭逐层恢复。Modal 对未处理 key/paste/mouse
+    仍 consumed；Pointer 一旦命中或持有 focus也不向 lower layer二次派发；Passive 始终
+    fall through且不抢 focus。最后一层关闭后才恢复 base focus。
 19. **B-019 — Committed text and paste exactly once.** multi-scalar committed input、
     CJK、emoji、combining、ZWJ 与 tab 只送给 focused Composer 的 GH-64 key ingress一次；
     `Event::Paste` 只送 paste ingress一次且绝不再作为 key/submit。ESC/C0/C1、CRLF 与失败的
     typed semantics 完全由 Composer 保留；shell 不 trim、删 control 或部分写草稿。
-20. **B-020 — Mouse hit testing and conflicts.** mouse 使用已提交的 checked region rect，
-    先按 top overlay→lower overlay→status→composer→transcript z-order hit-test；一次事件只到
-    一个 target。resize 后旧坐标、边界外坐标、scroll wheel/drag/key 同时到达均按串行事件
-    顺序处理，不重复滚动、不越界、不让 passive status 抢占 focus。
+20. **B-020 — Total mouse hit testing and fallthrough.** mouse 使用已提交的 checked region
+    rect，按 top→lower overlay 后再 status→composer→transcript扫描。Modal 无论命中与否
+    独占；Pointer miss继续扫描、hit后只调用该 overlay一次并停止；Passive 总是跳过；status
+    consumed但不抢 focus；Composer/Transcript 的 press、wheel、release、drag、move 与
+    terminal 外坐标均有唯一 handler/outcome。resize 后旧坐标或 mouse/key同时到达按串行事件
+    顺序处理，不重复滚动、不越界。
 21. **B-021 — Rapid event ordering and revision guard.** resize、conversation outcome、
     stream growth、prepend、Composer projection、overlay 与 input 按 shell 收到的顺序串行；
     每项带 expected shell revision，stale event typed 失败。相同初态和相同事件序列产生相同
     observation、visible slices、focus 与 frame；不得用全量重建/重排掩盖 update 顺序。
-22. **B-022 — Checked coordinates and fail-atomic state.** row/column、rect end、region sum、
-    list offset、revision 与 event sequence 只用 checked conversion/arithmetic；overflow、
-    stale revision、unknown ID、invalid anchor、missing measurement 或 Composer/List failure
-    返回具体 closed typed error。所有 callbacks、list/composer candidates 与 focus changes
-    通过后才一次 commit；失败前后 state/observation 相等。
-23. **B-023 — Atomic layout/render publication.** shell candidate 必须经最终 GH-60 checked
-    layout、required-layout 和 staged renderer成功后才替换 committed observation/frame；
-    layout、TextFlow、missing layout、coordinate、clip、renderer callback 或 injected failure
-    均保留旧 frame/state并携带原 typed source。不得 `unwrap_or_default`、panic、warning +
-    fallback、部分 output commit 或 catch panic 后显示旧/空内容为成功。
-24. **B-024 — Fullscreen terminal restoration.** public fullscreen session 在 normal exit、
-    cancel、typed shell/render failure 与 panic/unwind 四条路径都必须恢复进入前 screen、
-    raw mode、cursor visibility、alternate screen、mouse capture、focus reporting 与 bracketed
-    paste；每条路径由本 issue 自身 PTY/fake-terminal evidence 覆盖。cleanup 某一步失败必须
-    聚合为 typed terminal restoration failure，不能被 Drop 或 warning 静默吞掉。
-25. **B-025 — Suspend, restart and explicit capability boundary.** suspend 前恢复 terminal，
-    resume 后重新进入 fullscreen 并强制从显式 state 生成完整新 frame；fresh session 只从
-    constructor inputs 重建，不继承旧 overlay/focus/frame/measurement handle。不可用的可选
-    focus/mouse/paste capability可进入文档化显式状态；terminal/state 恢复不确定不得宣称成功。
+22. **B-022 — Checked coordinates and realizable fail-atomic state.** row/column、rect end、
+    region sum、list offset、revision 与 event sequence 只用 checked conversion/arithmetic；
+    overflow、stale revision、unknown ID、invalid anchor、missing measurement 或
+    Composer/List prepare failure返回具体 closed typed error。MessageList 与 Composer
+    必须先提供不修改 live state 的 prepared candidate；measurement/layout/render全部成功后，
+    只允许执行无 callback、无 allocation、无失败分支的 infallible commit。任一 prepare 或
+    render失败时显式 abort/discard全部 candidates，state/observation/frame逐值相等。
+23. **B-023 — Atomic layout/render publication and complete failure evidence.** shell
+    candidate 必须经最终 GH-60 checked layout、required-layout 和 staged renderer成功后才
+    替换 committed observation/frame；layout、TextFlow、missing layout、coordinate、clip、
+    renderer callback 或 injected failure均保留旧 frame/state并携带原 typed source。不得
+    `unwrap_or_default`、panic、warning + fallback、部分 output commit 或 catch panic 后显示
+    旧/空内容为成功。若 primary layout/render error 与 terminal cleanup error 同时发生，
+    top-level结果必须同时保留 primary typed source和全部 cleanup step failures，不能用后者
+    覆盖前者或只保留第一项。
+24. **B-024 — Concrete fullscreen session and restoration.** 应用必须能通过公开 session
+    config、backend/capability、pre-entry snapshot、constructor、run/render、shutdown API进入
+    fullscreen；缺失 snapshot、required capability或已有 active lease在任何terminal mutation
+    前 typed失败。normal exit、cancel、typed shell/render failure 与 panic/unwind 四条路径都
+    必须恢复 snapshot中的 screen、raw mode、cursor visibility、alternate screen、mouse
+    capture、focus reporting 与 bracketed paste。partial enter反向回滚全部已完成step；
+    cleanup尝试全部step并聚合失败，显式路径返回完整结果，panic路径报告后继续unwind，
+    Drop只重试未完成恢复且不声称成功。
+25. **B-025 — Suspend, resume, restart and capability boundary.** suspend停止事件 intake并
+    恢复当前 pre-entry snapshot；只有全部恢复成功才进入 Suspended。resume重新获取 exclusive
+    lease、读取/验证新 snapshot、按 staged enter进入 fullscreen并强制从显式 state完整重绘；
+    partial resume失败反向恢复到该新 snapshot并保持 Suspended。fresh session只从constructor
+    inputs重建，不继承旧 overlay/focus/frame/measurement handle。可选 mouse/focus/paste
+    capability只能按validated Require/Disable policy显式启用或保持不变；未知/不确定状态不得
+    宣称 Active、Suspended或restored成功。
 26. **B-026 — Accessibility and non-color semantics.** transcript 暴露 Viewport、Composer 暴露
     TextArea、status 暴露 Status、modal overlay 暴露 Dialog semantics；label/value/description、
     focus、paused/new-content、submitting/failed/cancelled 必须能通过 `accessible_text()` 或
@@ -153,28 +177,38 @@ frame 与 alternate-screen 生命周期，并为布局、焦点、路由、resiz
 28. **B-028 — Provider/tool security boundary.** shell 只显示应用已提交的 typed state；不读取
     env/secret、不调用 process/network、不执行 Tool Call、不从 block/overlay 文本推导授权。
     缺数据保持空白/typed pending，不能伪造模型、连接、权限或工具成功。
-29. **B-029 — Dependency and drift gate.** implementation 必须等待 #62/#63/#64/#65 全部
-    CLOSED、各自 final implementation PR/evidence merged，且完整 merge set 是 implementation
-    base 的祖先；还必须证明 GH-65 的传递依赖完成。spec-only、open、parked、cap-exhausted
-    review 或部分修复不满足。若最终 public API/manifest 与本 packet 漂移，先更新并重新 review
-    GH-67，禁止 alias、private field hack、sidecar cache 或复制未解决缺陷。
-30. **B-030 — Current-head evidence.** 完成声明必须绑定 implementation PR exact head：
-    Product-to-Test Mapping 每个 exact test matched=passed=1、ignored=0；plain/ANSI golden
-    不在测试中更新；changed executable coverage ≥80%，committed
+29. **B-029 — Dependency, capability and drift gate.** implementation 必须等待
+    #62/#63/#64/#65 全部 CLOSED、各自 final implementation PR/evidence merged，且完整 merge
+    set 是 implementation base 的祖先；还必须证明 GH-65 的传递依赖完成、GH-65 packet三路径
+    在该base真实存在，以及最终 GH-64/GH-65 public API提供 B-022 所需
+    prepare/view/infallible-commit/abort capability。当前base不存在的 GH-65 paths不得进入
+    `spec_refs`。spec-only、open、parked、cap-exhausted review、立即commit API或部分修复不
+    满足。若最终 public API/manifest 与本 packet漂移，先把真实 GH-65 refs/API加入并重新
+    review GH-67，禁止 alias、private field hack、全量clone rollback、sidecar cache或复制
+    未解决缺陷。
+30. **B-030 — Current-head and reproducible evidence.** 完成声明必须绑定 implementation PR
+    exact head：Product-to-Test Mapping 每个 exact test matched=passed=1、ignored=0；
+    plain/ANSI golden不在测试中更新；changed executable coverage ≥80%，committed
     `gh57-critical-paths-v1` 的 exact `file+name+command` 集合逐项 100%，producer/validator
-    可从 raw coverage、diff 和 ledger 确定性重算。fresh fmt/check/clippy/all-target tests、
-    example、PTY、CI、独立 review、reviewThreads 与 SpecRail PR gate 缺一不可。
+    可从 raw coverage、diff 和 ledger 确定性重算。SpecRail packet验证必须声明可获取的
+    repository URL、immutable commit、checkout步骤与checker checksum，fresh环境不得依赖
+    coordinator机器的绝对路径。fresh fmt/check/clippy/all-target tests、example、PTY、CI、
+    独立 review、reviewThreads 与 SpecRail PR gate 缺一不可。
 
 ## 验收标准
 
 - [ ] 支持尺寸内 partition 等式成立；零、窄、矮、Composer min/max、status absent/present、
       nested overlay 均有 typed 正负证据。
 - [ ] GH-65 Following/Paused、new-content、prepend、stream growth、expand/collapse 与
-      continuous resize在 shell 序列中保持相同 public observation。
+      continuous supported resize在 shell 序列中保持相同 public observation；zero/
+      undersized resize在调用 MessageList前typed失败。
 - [ ] Text/Markdown/Code/Thinking/ToolResult 单/多行 render、Composer committed text/paste、
       transcript/composer/overlay focus/key/mouse 冲突均 exact-once。
-- [ ] layout/render failure 前后 state/frame相等；normal/cancel/error/panic 与 suspend/resume
-      都恢复 raw/cursor/alternate-screen/mouse/focus/paste。
+- [ ] upstream prepare后任一late layout/render failure前后 List/Composer/shell/frame相等；
+      primary+cleanup双失败证据完整；normal/cancel/error/panic、partial enter与
+      suspend/resume都恢复 exact snapshot。
+- [ ] Modal/Pointer/Passive × focus × key/paste/mouse/fallthrough矩阵逐格只有一个目标与
+      明确 outcome。
 - [ ] `rnk_chat` 只使用 public shell；plain/ANSI golden 语义等价且 accessibility fallback
       不依赖颜色。
 - [ ] dependency final merged ancestry、fresh full tests、current-head coverage、CI/review/gate

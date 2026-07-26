@@ -17,6 +17,10 @@ GH-67: https://github.com/majiayu000/rnk/issues/67
 必须从 fresh `origin/main` 创建 implementation branch，并按 tech spec生成/验证四份
 `DependencyCompletionRecord`。#62/#63/#64/#65 必须 CLOSED；其 final closure evidence列出的
 完整 implementation PR set必须 merged且全部 merge commit是implementation base祖先。
+GH-65 的三份 spec paths必须在该base真实存在且由ancestor merge引入；当前spec base不存在，
+因此不得进入当前 `spec_refs`。final GH-64/GH-65还必须公开符合tech §1的
+prepare/read-only-view/infallible-commit/abort capability；只提供立即修改live state的API时
+门禁blocked，必须先修上游并更新/re-review本packet。
 
 GH-65 当前 packet/PR 的 cap-exhausted review、未解决 constructor/zero-row/active-handle/
 navigation/coverage-mode缺陷，或任一 open/partial PR都不能满足门禁。coordinator必须重读最终
@@ -27,7 +31,7 @@ merged public API并做manifest source-drift audit；漂移则停止、更新本
 zero-match、ignored或宽泛 workspace green不能替代。
 
 <!-- gh57-critical-paths-v1
-{"version":1,"issue":67,"critical_paths":[{"file":"src/components/chat/fullscreen/tests.rs","name":"gh67_fixed_bottom_resize_contract","verification_command":"cargo test --workspace --lib --locked components::chat::fullscreen::tests::gh67_fixed_bottom_resize_contract -- --exact"},{"file":"src/components/chat/fullscreen/tests.rs","name":"zero_and_undersized_terminals_fail_before_callbacks","verification_command":"cargo test --workspace --lib --locked components::chat::fullscreen::tests::zero_and_undersized_terminals_fail_before_callbacks -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"focus_overlay_key_routing_is_single_target_and_deterministic","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked focus_overlay_key_routing_is_single_target_and_deterministic -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"paste_and_committed_ime_text_dispatch_exactly_once","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked paste_and_committed_ime_text_dispatch_exactly_once -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"rapid_resize_stream_prepend_sequence_is_deterministic","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked rapid_resize_stream_prepend_sequence_is_deterministic -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"layout_render_failure_preserves_committed_state_and_frame","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked layout_render_failure_preserves_committed_state_and_frame -- --exact"},{"file":"tests/fullscreen_chat_shell_pty.rs","name":"fullscreen_terminal_restores_all_modes_on_every_exit_path","verification_command":"cargo test --test fullscreen_chat_shell_pty --locked fullscreen_terminal_restores_all_modes_on_every_exit_path -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"public_observation_reports_focus_regions_follow_and_overlay","verification_command":"cargo test --test fullscreen_chat_shell_public_api --locked public_observation_reports_focus_regions_follow_and_overlay -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"visible_frame_work_is_bounded_and_handles_are_o1_non_evictable","verification_command":"cargo test --test fullscreen_chat_shell_public_api --locked visible_frame_work_is_bounded_and_handles_are_o1_non_evictable -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"gh67_current_head_coverage_contract","verification_command":"GH67_COVERAGE_MODE=fixture cargo test --test fullscreen_chat_shell_public_api --locked gh67_current_head_coverage_contract -- --exact"}]}
+{"version":1,"issue":67,"critical_paths":[{"file":"src/components/chat/fullscreen/tests.rs","name":"gh67_fixed_bottom_resize_contract","verification_command":"cargo test --workspace --lib --locked components::chat::fullscreen::tests::gh67_fixed_bottom_resize_contract -- --exact"},{"file":"src/components/chat/fullscreen/tests.rs","name":"zero_and_undersized_terminals_fail_before_callbacks","verification_command":"cargo test --workspace --lib --locked components::chat::fullscreen::tests::zero_and_undersized_terminals_fail_before_callbacks -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"upstream_prepare_commit_abort_gate_and_late_failure_are_atomic","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked upstream_prepare_commit_abort_gate_and_late_failure_are_atomic -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"focus_overlay_key_routing_is_single_target_and_deterministic","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked focus_overlay_key_routing_is_single_target_and_deterministic -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"overlay_route_matrix_is_total_and_passive_focus_is_rejected","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked overlay_route_matrix_is_total_and_passive_focus_is_rejected -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"paste_and_committed_ime_text_dispatch_exactly_once","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked paste_and_committed_ime_text_dispatch_exactly_once -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"rapid_resize_stream_prepend_sequence_is_deterministic","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked rapid_resize_stream_prepend_sequence_is_deterministic -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"layout_render_failure_preserves_committed_state_and_frame","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked layout_render_failure_preserves_committed_state_and_frame -- --exact"},{"file":"tests/fullscreen_chat_shell_pty.rs","name":"fullscreen_terminal_restores_all_modes_on_every_exit_path","verification_command":"cargo test --test fullscreen_chat_shell_pty --locked fullscreen_terminal_restores_all_modes_on_every_exit_path -- --exact"},{"file":"tests/fullscreen_chat_shell_pty.rs","name":"partial_enter_and_suspend_resume_restore_exact_snapshot","verification_command":"cargo test --test fullscreen_chat_shell_pty --locked partial_enter_and_suspend_resume_restore_exact_snapshot -- --exact"},{"file":"tests/fullscreen_chat_shell_pty.rs","name":"primary_failure_and_all_cleanup_failures_are_preserved","verification_command":"cargo test --test fullscreen_chat_shell_pty --locked primary_failure_and_all_cleanup_failures_are_preserved -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"fullscreen_session_public_surface_and_capability_gate_are_typed","verification_command":"cargo test --test fullscreen_chat_shell_public_api --locked fullscreen_session_public_surface_and_capability_gate_are_typed -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"public_observation_reports_focus_regions_follow_and_overlay","verification_command":"cargo test --test fullscreen_chat_shell_public_api --locked public_observation_reports_focus_regions_follow_and_overlay -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"visible_frame_work_is_bounded_and_handles_are_o1_non_evictable","verification_command":"cargo test --test fullscreen_chat_shell_public_api --locked visible_frame_work_is_bounded_and_handles_are_o1_non_evictable -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"specrail_checker_checkout_is_reproducible","verification_command":"cargo test --test fullscreen_chat_shell_public_api --locked specrail_checker_checkout_is_reproducible -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"gh67_current_head_coverage_contract","verification_command":"GH67_COVERAGE_MODE=fixture cargo test --test fullscreen_chat_shell_public_api --locked gh67_current_head_coverage_contract -- --exact"}]}
 -->
 
 ## Durable coverage evidence
@@ -140,7 +144,7 @@ executable lines。它不能接收caller传入critical摘要。canonical artifac
 }
 ```
 
-数组包含ledger全部10项且严格保持ledger顺序；示例只展开一项。`generated_at`取HEAD commit
+数组包含ledger全部16项且严格保持ledger顺序；示例只展开一项。`generated_at`取HEAD commit
 timestamp而非wall clock，path只保存固定basename，JSON使用固定key order/UTF-8/LF与末尾
 newline，使相同head/base/raw/ledger byte-for-byte确定。validator重新hash raw、重算
 PR/head/base/merge-base/diff/executable/critical set/commands/count/percent并生成canonical
@@ -151,7 +155,8 @@ changed `total>0`且≥80%，每个critical `total>0`且100%。active test必须
 ## Implementation Tasks
 
 - [ ] `SP67-T1`（lane alias: `GH67-T1`）执行dependency/source-drift gate并建立contract/layout scaffold。 Covers: B-001, B-002, B-003, B-004, B-005, B-022, B-029 | Owner: `fullscreen-contract-layout-owner` | Done when: 下列completion criteria全部满足 | Verify: 下列exact commands和checkpoint check全部通过。
-  Completion criteria: 四份final completion record通过；新增全部八个fullscreen
+  Completion criteria: 四份final completion record通过，GH-65三条spec path在base存在，
+  GH-64/GH-65 prepared mutation capability inventory满足tech §1；新增八个chat fullscreen
   production/test files，parent `fullscreen.rs`、`state.rs`、
   `router.rs`、`session.rs`先提供private compile skeleton；`types.rs`/`error.rs`/`layout.rs`
   完成private-field constructors/accessors、zero-size reachable input、closed config/layout/
@@ -171,27 +176,32 @@ changed `total>0`且≥80%，每个critical `total>0`且100%。active test必须
     `src/components/chat/mod.rs`、`src/components/mod.rs`、`src/prelude.rs`、
     `tests/fullscreen_chat_shell_public_api.rs`。创建后冻结 `types.rs`/`error.rs`/`layout.rs`和
     export files；把四个skeleton、module tests与public test串行移交T2。
-  - Handoff: 保存dependency records、final API inventory、manifest drift decision、
-    exact outputs和checkpoint SHA；T1停止写后T2才能接管shared paths。
+  - Handoff: 保存dependency/path/capability records、final API inventory、manifest drift
+    decision、exact outputs和checkpoint SHA；冻结types/error/layout，把shared chat files交T2，
+    export files保留只读直至T3接管。
 
 - [ ] `SP67-T2`（lane alias: `GH67-T2`）实现state/router与GH-64/GH-65 candidate integration。 Covers: B-002, B-006, B-007, B-008, B-009, B-010, B-011, B-012, B-015, B-016, B-017, B-018, B-019, B-020, B-021, B-022, B-027 | Owner: `fullscreen-state-router-owner` | Done when: 下列completion criteria全部满足 | Verify: 下列exact commands和checkpoint check全部通过。
   Completion criteria: 接管 `state.rs`/`router.rs`/module tests/
   public test，constructor显式消费entries/config/projection/measurement并保有non-evictable
-  active O(1) handles；zero-row measurement可达typed fail；MessageList唯一处理
-  measurement/invalidation/slices/anchor/follow；Composer clamp和resize同candidate；
-  expected shell revision、Following/Paused/zero viewport/prepend、nested overlay LIFO、
-  committed text/paste/mouse/key route table逐项完成；explicit navigation优先且不会被
-  visible-top刷新覆盖；每个事件最多一个target/一次revision，失败full state相等。
+  active O(1) handles；zero/undersized在List prepare前typed fail；MessageList唯一处理
+  measurement/invalidation/slices/anchor/follow；Composer/List分别生成不修改live state的
+  prepared token/read-only view，commit infallible且abort discard-only；Composer clamp和
+  resize同candidate；expected shell revision、Following/Paused/nonzero viewport/prepend、
+  nested overlay LIFO与Modal/Pointer/Passive × focus × key/paste/mouse/fallthrough总表逐项
+  完成；explicit navigation优先且不会被visible-top刷新覆盖；每个事件最多一个target/一次
+  revision，prepare后late render failure仍使List/Composer/shell/frame逐值相等。
   `cargo test --workspace --lib --locked components::chat::fullscreen::tests::constructor_requires_complete_entries_config_projection_and_measurement -- --exact`；
   `cargo test --workspace --lib --locked components::chat::fullscreen::tests::gh67_fixed_bottom_resize_contract -- --exact`；
   `cargo test --workspace --lib --locked components::chat::fullscreen::tests::composer_projection_clamps_without_overlap_and_keeps_draft -- --exact`；
   `cargo test --test fullscreen_chat_shell_interactions --locked variable_height_transcript_uses_rows_not_item_count -- --exact`；
   `cargo test --test fullscreen_chat_shell_interactions --locked measurement_invalidation_and_active_handles_follow_exact_identity -- --exact`；
-  `cargo test --test fullscreen_chat_shell_interactions --locked following_stream_growth_and_zero_viewport_restore_latest_bottom -- --exact`；
+  `cargo test --test fullscreen_chat_shell_interactions --locked following_stream_growth_tracks_latest_bottom_in_supported_viewport -- --exact`；
   `cargo test --test fullscreen_chat_shell_interactions --locked paused_stream_growth_preserves_anchor_and_reports_new_content -- --exact`；
   `cargo test --test fullscreen_chat_shell_interactions --locked prepend_preserves_stable_message_and_intra_row_anchor -- --exact`；
   `cargo test --test fullscreen_chat_shell_interactions --locked continuous_resize_reflows_list_and_composer_in_one_frame -- --exact`；
+  `cargo test --test fullscreen_chat_shell_interactions --locked upstream_prepare_commit_abort_gate_and_late_failure_are_atomic -- --exact`；
   `cargo test --test fullscreen_chat_shell_interactions --locked focus_overlay_key_routing_is_single_target_and_deterministic -- --exact`；
+  `cargo test --test fullscreen_chat_shell_interactions --locked overlay_route_matrix_is_total_and_passive_focus_is_rejected -- --exact`；
   `cargo test --test fullscreen_chat_shell_interactions --locked nested_overlay_escape_restores_focus_lifo_without_fallthrough -- --exact`；
   `cargo test --test fullscreen_chat_shell_interactions --locked paste_and_committed_ime_text_dispatch_exactly_once -- --exact`；
   `cargo test --test fullscreen_chat_shell_interactions --locked mouse_hit_testing_uses_committed_z_order_without_double_dispatch -- --exact`；
@@ -201,37 +211,51 @@ changed `total>0`且≥80%，每个critical `total>0`且100%。active test必须
   - File ownership: 接管 `fullscreen/state.rs`、`fullscreen/router.rs`、
     `fullscreen/tests.rs`、`tests/fullscreen_chat_shell_public_api.rs`；独占新
     `tests/fullscreen_chat_shell_interactions.rs`。T1冻结文件只读。
-  - Handoff: 保存完整route matrix、constructor/callback count、pre/post equality和operation
-    counters；冻结router，移交state/tests/public/interactions给T3。
+  - Handoff: 保存upstream capability inventory/prepared-token trace、完整route cross-product、
+    constructor/callback count、pre/post equality和operation counters；冻结router，移交
+    state/tests/public/interactions给T3。
 
 - [ ] `SP67-T3`（lane alias: `GH67-T3`）实现facade、checked frame、terminal session与goldens。 Covers: B-001, B-005, B-007, B-008, B-013, B-015, B-017, B-022, B-023, B-024, B-025, B-026, B-027, B-028, B-030 | Owner: `fullscreen-frame-session-owner` | Done when: 下列completion criteria全部满足 | Verify: 下列exact commands和checkpoint check全部通过。
   Completion criteria: 接管 `fullscreen.rs`/`session.rs`/
   `state.rs`/module与integration tests；facade只从GH-65 visible slices调用一个GH-63 render
-  closure，base→overlay z-order确定；GH-60 checked layout/render成功才commit state/frame，
-  所有typed/injected failures保留旧frame；session显式聚合raw/cursor/alternate/mouse/focus/
-  paste restoration errors，normal/cancel/error/panic和suspend/resume/fresh restart完整；
+  closure，base→overlay z-order确定；GH-60 checked layout/render成功后才进入无失败upstream/
+  shell/frame commit section，所有typed/injected failures保留三个live states与旧frame；
+  public backend/session constructor、完整typed run参数、render/shutdown与capability/snapshot/
+  opaque lease/closed transition types可crate外使用；backend constructor零lease，session
+  try_enter唯一acquire token；native backend拥有exclusive lease和可证明pre-entry snapshot，
+  partial enter反向rollback，suspend restore+release，resume reacquire冲突保持Suspended且
+  零mutation，cleanup重试unfinished steps；session同时保留primary和全部raw/cursor/
+  alternate/mouse/focus/
+  paste/flush/lease restoration errors，normal/cancel/error/panic和suspend/resume/fresh restart完整；
   Viewport/TextArea/Status/Dialog metadata与public observation可读；plain/ANSI golden
   deterministic且测试禁止更新；实现coverage fixture/producer/validator。
   `cargo test --test fullscreen_chat_shell_interactions --locked typed_multiline_block_views_render_once_in_source_order -- --exact`；
   `cargo test --test fullscreen_chat_shell_interactions --locked nested_overlay_z_order_and_invalid_updates_are_atomic -- --exact`；
   `cargo test --test fullscreen_chat_shell_interactions --locked coordinate_revision_and_upstream_failures_are_atomic -- --exact`；
   `cargo test --test fullscreen_chat_shell_interactions --locked layout_render_failure_preserves_committed_state_and_frame -- --exact`；
+  `cargo test --test fullscreen_chat_shell_interactions --locked upstream_prepare_commit_abort_gate_and_late_failure_are_atomic -- --exact`；
+  `cargo test --test fullscreen_chat_shell_public_api --locked fullscreen_session_public_surface_and_capability_gate_are_typed -- --exact`；
   `cargo test --test fullscreen_chat_shell_public_api --locked public_observation_reports_focus_regions_follow_and_overlay -- --exact`；
   `cargo test --test fullscreen_chat_shell_public_api --locked accessibility_and_plain_ansi_semantics_do_not_depend_on_color -- --exact`；
   `cargo test --test fullscreen_chat_shell_public_api --locked visible_frame_work_is_bounded_and_handles_are_o1_non_evictable -- --exact`；
   `cargo test --test fullscreen_chat_shell_public_api --locked fullscreen_shell_has_no_provider_tool_or_secret_execution_surface -- --exact`；
   `GH67_COVERAGE_MODE=fixture cargo test --test fullscreen_chat_shell_public_api --locked gh67_current_head_coverage_contract -- --exact`；
   `cargo test --test fullscreen_chat_shell_pty --locked fullscreen_terminal_restores_all_modes_on_every_exit_path -- --exact`；
+  `cargo test --test fullscreen_chat_shell_pty --locked partial_enter_and_suspend_resume_restore_exact_snapshot -- --exact`；
+  `cargo test --test fullscreen_chat_shell_pty --locked primary_failure_and_all_cleanup_failures_are_preserved -- --exact`；
   `cargo test --test fullscreen_chat_shell_pty --locked suspend_resume_and_fresh_restart_rebuild_explicit_state -- --exact`；
   `cargo check --workspace --all-targets --all-features --locked`。
   - Dependencies: SP67-T2完整handoff；final GH-60 checked frame与terminal runtime inventory可用。
   - File ownership: 接管 `src/components/chat/fullscreen.rs`、
-    `fullscreen/{state,session,tests}.rs`、public/interactions tests；独占
-    `tests/fullscreen_chat_shell_pty.rs`与两个fullscreen golden files。router/types/errors/layout/
-    exports冻结只读。
-  - Handoff: 保存frame transaction failure injection、golden checksums、fake/PTY capability
-    ledger、restoration aggregation和coverage negative fixture；冻结production/session后移交
-    tests给T4。
+    `fullscreen/{state,session,tests}.rs`、`src/components/chat/mod.rs`、
+    `src/components/mod.rs`、`src/prelude.rs`与public/interactions tests；独占
+    `src/renderer/terminal.rs`（只加child module/export且保持<800）、
+    `src/renderer/terminal/fullscreen_backend.rs`、`tests/fullscreen_chat_shell_pty.rs`与两个
+    fullscreen golden files。router/types/errors/layout冻结只读。
+  - Handoff: 保存frame transaction failure injection、public API inventory、golden checksums、
+    fake/PTY snapshot/capability/lease ledger、nested/second-session rejection、suspended lease
+    handoff、resume-conflict零mutation、partial-enter rollback、primary+cleanup inspection和
+    coverage negative fixture；冻结production/session/exports后移交tests给T4。
 
 - [ ] `SP67-T4`（lane alias: `GH67-T4`）迁移public-only example并生成current-head evidence。 Covers: B-001, B-013, B-014, B-023, B-024, B-026, B-028, B-029, B-030 | Owner: `fullscreen-example-evidence-owner` | Done when: 下列completion criteria全部满足 | Verify: 下列coverage、exact和full gate commands全部通过。
   Completion criteria: example只组合public Conversation/
@@ -243,13 +267,15 @@ changed `total>0`且≥80%，每个critical `total>0`且100%。active test必须
   同一clean exact head。
   `cargo check --example rnk_chat --all-features --locked`；
   `cargo test --test fullscreen_chat_shell_public_api --locked rnk_chat_example_uses_only_public_fullscreen_composition -- --exact`；
+  `cargo test --test fullscreen_chat_shell_public_api --locked specrail_checker_checkout_is_reproducible -- --exact`；
   `cargo fmt --all -- --check`；
   `cargo check --workspace --all-targets --all-features --locked`；
   `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -A clippy::collapsible_if -A clippy::manual_is_multiple_of`；
   `cargo test --workspace --all-targets --all-features --locked`；
   `cargo test --doc --workspace --all-features --locked`；
   Durable coverage本节三条命令；
-  Product-to-Test Mapping全部exact tests与ledger全部10条命令。
+  Product-to-Test Mapping全部exact tests与ledger全部16条命令；tech §10 fixed
+  URL/commit/checksum workflow/depth命令。
   - Dependencies: SP67-T3完整handoff；所有production writers停止。
   - File ownership: 独占 `examples/rnk_chat.rs`；接管三个integration tests与goldens只修正
     example/evidence assertions，不修改冻结production files。发现生产缺陷退回对应owner新
@@ -260,11 +286,13 @@ changed `total>0`且≥80%，每个critical `total>0`且100%。active test必须
 - [ ] `SP67-T5`（lane alias: `GH67-T5`）执行只读closure audit。 Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009, B-010, B-011, B-012, B-013, B-014, B-015, B-016, B-017, B-018, B-019, B-020, B-021, B-022, B-023, B-024, B-025, B-026, B-027, B-028, B-029, B-030 | Owner: `fullscreen-independent-reviewer` | Done when: 下列closure criteria全部满足 | Verify: read-only重跑下列current-head evidence。
   Closure criteria: 独立核对B-001..B-030与tech mapping/tasks
   Covers集合严格相等；manifest/spec refs/line limits/ownership DAG/compile checkpoints完整；
-  dependency final evidence与ancestor set fresh；mapped/critical tests、raw/canonical coverage、
-  example/golden/PTY/full suite、CI、reviewThreads与SpecRail PR gate均指向current PR exact
-  head；任何head/worktree/remote drift都丢弃evidence并退回T4重建。read-only重跑tech
-  mapping、ledger commands、coverage validate、full Rust/docs/example gates及fresh PR
-  evidence；不得approve、resolve threads或merge。
+  当前`spec_refs`全部存在，GH-65三path只作为hard gate在implementation base验证
+  existence/ancestry后才可加入；dependency final evidence、prepared capability inventory与
+  ancestor set fresh；mapped/critical tests、raw/canonical coverage、example/golden/PTY/
+  full suite、fixed SpecRail checkout/checksums、CI、reviewThreads与SpecRail PR gate均指向
+  current PR exact head；任何head/worktree/remote drift都丢弃evidence并退回T4重建。
+  read-only重跑tech mapping、ledger commands、coverage validate、full Rust/docs/example
+  gates及fresh PR evidence；不得approve、resolve threads或merge。
   - Dependencies: SP67-T4完整evidence handoff；所有writers停止。
   - File ownership: 无writable path。
   - Handoff: 即使全部通过，最终implementation PR approval、merge、release、#67和GH-57
@@ -298,9 +326,14 @@ product、tech mapping、affected tasks、本审计与critical ledger（若criti
 
 - `git diff --check`
 - `python3 .github/scripts/check_markdown_links.py specs/GH67`
-- 使用固定 external SpecRail revision
-  `/private/tmp/gh65-specrail-round2-final.7VavlV` 在只含本packet diff的临时mirror运行
-  `checks/check_workflow.py --repo <mirror> --spec-dir specs/GH67`
+- 按tech §10从`https://github.com/majiayu000/specrail.git` fetch/checkout immutable commit
+  `bfc60f26164af5df1ebd3b5cb79d07379fc416b7`；要求Git、Python 3.9+与tar，零`pip install`；
+  校验`checks/check_workflow.py` SHA-256为
+  `c5bd73060037b0e8febace0e5ee8473e17973e1ca17257ea1517a94e05fa7549`、
+  `tools/spec_depth_audit.py`为
+  `380169fcbad509e6bc1b6a555ae0fa469744662af7120e20e999206c226e66c3`，在由该commit archive+
+  当前三spec构成的fresh mirror运行workflow和`--gate` depth；任何fetch/checkout/checksum失败
+  都blocked，禁止machine-local path/cached fallback。
 - B-ID连续为B-001..B-030；product=tech mapping=tasks Covers union。
 - planned-changes恰一份、issue=67、complete=true；path/spec_refs逐项存在于planned future
   manifest或当前repo，implementation diff exact相等。
@@ -309,10 +342,11 @@ product、tech mapping、affected tasks、本审计与critical ledger（若criti
 - dependency records fresh且#62/#63/#64/#65 closed/final merged/ancestor；GH-65 transitive
   records完整。
 - Product-to-Test Mapping每项exact test matched=passed=1 ignored=0。
-- ledger version/issue/10个unique `file+name`/nonempty command逐项执行；coverage
+- ledger version/issue/16个unique `file+name`/nonempty command逐项执行；coverage
   fixture/collect/produce/validate mode与absolute paths全部显式。
-- changed executable≥80%、10个critical各100%，artifact可canonical byte-for-byte重算。
-- golden checksum前后相等；normal/cancel/error/panic和suspend/resume restoration通过。
+- changed executable≥80%、16个critical各100%，artifact可canonical byte-for-byte重算。
+- golden checksum前后相等；public session/capability/exclusive lease、partial enter、
+  normal/cancel/error/panic、suspend/resume、primary+cleanup restoration通过。
 - fresh fmt/check/clippy/workspace all-target/all-feature tests/doc/example/CI/独立review/
   reviewThreads/PR gate绑定同一exact head；任何漂移重建evidence。
 
@@ -321,9 +355,11 @@ product、tech mapping、affected tasks、本审计与critical ledger（若criti
 - 本 packet不授权implementation、label change、approval或merge；spec PR body只用
   `Refs #67`，不能Fixes/Closes #67或GH-57。
 - GH-65 final实现必须先修复active handle、constructor、zero-row、typed navigation和
-  coverage mode缺陷；GH-67不得copy workaround。
+  coverage mode缺陷，并提供prepared mutation capability；GH-67不得copy workaround。
+- shell成功viewport永远nonzero；GH-65 zero-row只由其component suite验证。
 - offset/height/anchor/slices单位唯一为terminal row；GH-65 observation是follow truth。
 - Composer committed text/paste只经GH-64，message render只经GH-63，Conversation顺序只经
   GH-62；shell是orchestrator，不是第二实现。
-- terminal restoration失败必须显式返回；Drop/panic hook只是最后保险，不能构成成功证据。
+- terminal restoration失败必须显式返回；primary不能被cleanup覆盖；Drop/panic hook只是
+  最后保险，不能构成成功证据。
 - rollback使用普通revert，保留failure/dependency/coverage evidence，禁止force push。
