@@ -21,12 +21,13 @@ identity 与 interruption 原子性。
   ranges/boundaries 数量的线性函数，消除逐 grapheme 全量重扫。
 - 保持 combining sequence、emoji ZWJ sequence、adjacent/empty ranges、未排序合法 ranges
   及默认 style 的当前可观察语义。
-- 用 2k/4k/8k deterministic operation counter 证明复杂度；debug/release 使用同一逻辑
-  上界，wall-clock 只能作为非门控补充。
+- 用 2k/4k/8k deterministic operation counter 同时覆盖普通 ASCII ranges、跨
+  combining/ZWJ EGC 的内部 boundary，以及大量 event 集中在单个 EGC 的 skew；debug/release
+  使用同一逻辑上界，wall-clock 只能作为非门控补充。
 - 保持 invalid/overlapping range 的 closed typed errors、exact source/style/cache
   identity、cancellation/interruption 与上一已发布 cache 的原子性。
-- 与当前 main 已合入的 #128、#129、#130 及现有 TextFlow property/engine split-style
-  contracts 兼容；不抢占 #126 的 wrap interruption ownership。
+- 与当前 main 已合入的 #126、#128、#129、#130 及现有 TextFlow property/engine
+  split-style contracts 兼容；不修改 #126 的 wrap interruption paths/assertions。
 
 ## 非目标
 
@@ -46,15 +47,19 @@ identity 与 interruption 原子性。
    operation count 必须满足 `O(G + R)`，其中 `G` 是 source extended grapheme cluster
    数，`R` 是 caller 提供的 styled range 数；实现不得在任一 grapheme 内重新遍历全部
    ranges 或全部 boundary endpoints。
-2. **B-002** 独立 deterministic performance gate 必须对一 range/一 ASCII grapheme 的
-   2,000、4,000、8,000 三组 fixture 计数 normalization operations。每组必须满足
+2. **B-002** 独立 deterministic performance gate 必须对 2,000、4,000、8,000 三档规模
+   分别运行：(a) 一 non-empty range/一 ASCII grapheme；(b) combining/ZWJ EGC 内部的
+   adjacent、empty 与 shared endpoint events；(c) 大量 strict-interior events 集中于单个
+   combining EGC 的 skew。每个 family/size 必须满足
    `operations <= 12 * (G + R) + 64`，且相邻两组满足
    `next_operations <= 2 * previous_operations + 128`。计数项必须至少包含 grapheme merge
-   step、style-range cursor advance 与 boundary endpoint visit；结果不得依赖时钟、CPU、
-   optimizer 或采样噪声。
+   step、plan endpoint visit、style-range cursor advance、boundary endpoint visit 与 ordered
+   diagnostic projection；内部 boundary families 必须断言 projection count 非零并等于
+   exact expected event count。结果不得依赖时钟、CPU、optimizer 或采样噪声。
 3. **B-003** B-002 gate 必须在 debug 与 release 使用相同输入、计数定义和整数上界；
-   任一模式失败都必须显示 fixture size、`G`、`R`、observed operations、absolute bound
-   及前后两组 density，不得只输出“too slow”或以另一模式成功替代。
+   任一模式失败都必须显示 fixture family/size、`G`、`R`、internal/projected event counts、
+   每类 operation breakdown、observed total、absolute bound 及前后两组 density，不得只
+   输出“too slow”或以另一模式成功替代。
 4. **B-004** 每个 source grapheme 的 style 必须继续取其第一个 source byte 所落入的唯一
    non-empty styled range；没有 range 覆盖该 byte 时使用 exact caller
    `default_style`。range 在 grapheme 后续 byte 才开始时不得覆盖首 source style。
@@ -101,9 +106,10 @@ identity 与 interruption 原子性。
     无界不可取消区间。收到 cancellation 后返回 `TextFlowError::Interrupted`，不再处理
     后续 range/grapheme，也不产出部分结果。
 17. **B-017** cache miss 的 normalization 被取消或失败时，`TextFlowCache` 必须保留上一
-    completed `Arc<TextFlow>` 与原 build count；相同失败输入随后在不取消时必须得到与
-    direct cold build 完全相同的结果。重复取消不得累积部分 diagnostics、tokens 或 cache
-    identity。
+    completed `Arc<TextFlow>` 与原 build count；private build count 由 crate unit test 精确
+    断言，crate 外 integration 只经 public API 断言 Arc/cache identity/完整 flow 语义，不得
+    为测试新增 accessor。相同失败输入随后在不取消时必须得到与 direct cold build 完全相同
+    的结果。重复取消不得累积部分 diagnostics、tokens 或 cache identity。
 18. **B-018** 现有 public TextFlow API、closed error/diagnostic variants、GH-58
     first-source style、split combining/ZWJ tests、4096-case logical source round-trip
     property 与 engine cache identity tests 必须源码兼容且保持绿色；不得新增 public
@@ -111,32 +117,38 @@ identity 与 interruption 原子性。
 19. **B-019** 当前 main 中 #128 的四种 truncation mode/tab/linearity contracts、#129 的
     detached VNode flow cleanup 与 #130 的 unchanged context/Arc reuse contracts必须保持
     绿色；GH-127 不得修改这些 issue 的 owned source/test paths来“适配”优化。
-20. **B-020** #126 的 active PR #136 独占 `src/layout/text_flow/wrap.rs` 与其
-    long-word interruption integration test。GH-127 implementation 必须等待 #126
-    terminal；若合并则基于其 merge commit retarget，并运行其 exact interruption tests，
-    不得复制、覆盖或按旧 callback count 固化 wrap-owned 断言。
+20. **B-020** #126 已由 PR #136 合并为
+    `50f6a203c1861814d288d4bdeae0e28d877af34c`，继续独占
+    `src/layout/text_flow/wrap.rs` 与 `tests/text_flow_wrap_interruption.rs` 的行为合同。
+    GH-127 implementation base/head 必须包含该 merge commit，并运行其 exact interruption
+    target；不得复制、覆盖或按旧 callback count 固化 wrap-owned 断言。
 21. **B-021** GH-127 新 public-behavior fixtures 必须覆盖 combining、ZWJ、adjacent、
     empty、合法未排序、invalid、overlapping、`usize::MAX`、exact cache identity、
-    cancellation 与 retry；内部 counter gate 必须实际调用 production normalization，
-    不能测试一份复制算法或预制计数。
+    cancellation 与 retry；内部 counter gate 必须实际调用 production normalization，并
+    覆盖 ordered projection 的非零 strict-interior 与 one-EGC skew，不得测试一份复制算法、
+    预制计数或仅覆盖零 diagnostic 的 ASCII fast path。
 22. **B-022** 完成证据必须绑定同一 implementation PR exact head：B-002/B-003 counter、
     B-004 至 B-021 exact tests、4096-case property、#126/#128/#129/#130 regression、
-    fmt/check/clippy/all-target tests、至少 80% 新代码 line coverage、styled
-    normalization critical branch/line 100%、独立 review、零 unresolved non-outdated
-    actionable threads 与 required CI 全部 fresh 通过后，才能宣称完成。
+    fmt/check/clippy/all-target tests、至少 80% changed production line coverage、私有
+    styled-normalization module executable branch/line 各 100%、固定 revision 外部 SpecRail
+    mirror、独立 review、零 unresolved non-outdated actionable threads 与 required CI 全部
+    fresh 通过后，才能宣称完成。新增 unit tests 必须进入自然拆分文件，并让被触碰的
+    `src/layout/text_flow/tests.rs` 回到 800 行以内。
 
 ## 验收标准
 
-- [ ] 2k/4k/8k deterministic counter 同时满足 absolute bound 与 doubling slope，debug 和
-      release 共用同一 integer contract，失败信息包含全部诊断字段。
+- [ ] ASCII、combining/ZWJ internal-boundary 与 one-EGC skew 的 2k/4k/8k deterministic
+      counter 同时满足 absolute bound 与 doubling slope；debug/release 共用同一 integer
+      contract，projection action 在内部 boundary fixtures 中非零且失败信息完整。
 - [ ] 一 range/一 grapheme、合法未排序、adjacent、内部 empty、默认 style、combining 与
       ZWJ fixtures 的完整 tokens/runs/diagnostics/source map 与当前语义逐字段一致。
 - [ ] invalid、overlapping、char-boundary、reverse 与 `usize::MAX` fixtures 返回精确
       `TextFlowError`，零 panic、零 fallback、零 partial cache publication。
 - [ ] cache identity、Arc reuse/miss、interruption/retry 与 engine split-style/property
       regressions全部通过。
-- [ ] #126 已 terminal 并完成 ownership handoff；#128/#129/#130 与 full workspace gates
-      未被弱化。
+- [ ] implementation head 包含 #126 merge
+      `50f6a203c1861814d288d4bdeae0e28d877af34c`；#126/#128/#129/#130 与 full
+      workspace gates 未被弱化。
 - [ ] current exact head coverage、CI、SpecRail、独立 review 与 reviewThreads 证据完整。
 
 ## 边界情况清单
@@ -146,10 +158,10 @@ identity 与 interruption 原子性。
 | 1. 空/缺失输入 | covered: B-008、B-015；空 source/range vector 保持当前空 flow，empty range 单独定义 |
 | 2. 错误与失败路径 | covered: B-009、B-010、B-011、B-017；每个 range/cancellation/cache failure 都是 typed 且原子 |
 | 3. 授权/权限 | N/A：TextFlow 是纯本地数据变换，不读取权限、网络、凭据或执行工具 |
-| 4. 并发/竞态/顺序 | covered: B-006、B-007、B-013、B-020；输入/diagnostic 顺序与跨 issue owner 顺序均固定 |
+| 4. 并发/竞态/顺序 | covered: B-006、B-007、B-013、B-020；输入/diagnostic 顺序与已合并 #126 no-write ownership 均固定 |
 | 5. 重试/重复/幂等 | covered: B-014、B-017；cache hit/cold build/retry 必须逐字段等价 |
 | 6. 非法状态转换 | N/A：normalization 无业务状态机；未完成结果不得发布由 B-011、B-017 约束 |
-| 7. 兼容/迁移 | covered: B-012、B-018、B-019、B-020；public API、GH-58 及已合入/active follow-up contracts 保持 |
+| 7. 兼容/迁移 | covered: B-012、B-018、B-019、B-020；public API、GH-58 及已合入 follow-up contracts 保持 |
 | 8. 降级/回退 | covered: B-011；任何 error/cancellation 都不得伪装成 default-style 或旧-flow success |
 | 9. 证据与审计完整性 | covered: B-002、B-003、B-021、B-022；counter 不能由时钟或复制算法冒充 |
 | 10. 取消/中断/部分完成 | covered: B-015、B-016、B-017；定义优先级、polling 与 cache 原子性 |
