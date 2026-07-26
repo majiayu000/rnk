@@ -538,6 +538,61 @@ fn zero_width_attachments_follow_the_existing_lead_in_order() {
 }
 
 #[test]
+fn zero_width_prospective_matches_actual_owner_and_clip_states() {
+    let mut no_owner = Output::new(2, 1);
+    assert_eq!(
+        no_owner.prospective_grapheme_write_footprint(1, 0, "\u{301}"),
+        None
+    );
+    assert_eq!(
+        no_owner.write_grapheme(1, 0, "\u{301}", &Style::default()),
+        GraphemeWriteOutcome::Clipped
+    );
+
+    let mut valid_owner = Output::new(2, 1);
+    valid_owner.write(0, 0, "e", &Style::default());
+    valid_owner.clear_dirty();
+    let expected = GraphemeWriteFootprint {
+        target_cells: Vec::new(),
+        old_cells: vec![CellPosition { x: 0, y: 0 }],
+    };
+    assert_eq!(
+        valid_owner.prospective_grapheme_write_footprint(1, 0, "\u{301}"),
+        Some(expected.clone())
+    );
+    assert_eq!(
+        valid_owner.write_grapheme(1, 0, "\u{301}", &Style::default()),
+        GraphemeWriteOutcome::Committed(expected)
+    );
+    assert_eq!(valid_owner.render(), "e\u{301}");
+    assert_eq!(
+        valid_owner.dirty_cell_positions().collect::<Vec<_>>(),
+        vec![CellPosition { x: 0, y: 0 }]
+    );
+
+    let mut clipped_owner = Output::new(3, 1);
+    clipped_owner.write(0, 0, "你", &Style::default());
+    clipped_owner.clear_dirty();
+    clipped_owner.clip(ClipRegion {
+        x1: 1,
+        y1: 0,
+        x2: 2,
+        y2: 1,
+    });
+    assert_eq!(
+        clipped_owner.prospective_grapheme_write_footprint(2, 0, "\u{301}"),
+        None
+    );
+    assert_eq!(
+        clipped_owner.write_grapheme(2, 0, "\u{301}", &Style::default()),
+        GraphemeWriteOutcome::Clipped
+    );
+    clipped_owner.unclip();
+    assert_eq!(clipped_owner.render(), "你");
+    assert_eq!(clipped_owner.dirty_cell_positions().count(), 0);
+}
+
+#[test]
 fn repaint_clears_complete_old_and_target_footprints() {
     let mut wide_over_narrow = Output::new(4, 1);
     wide_over_narrow.write(0, 0, "ABC", &Style::default());
