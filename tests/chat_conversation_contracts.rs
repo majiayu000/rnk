@@ -429,6 +429,11 @@ exact!(replace_block_validates_before_commit, {
     let update = ConversationUpdate::replace_block(guard(&state, MessageId::new(1)), BlockId::new(1), MessageBlock::ToolCall(rewritten));
     assert!(matches!(assert_atomic_error(&mut state, event("rewrite", 4, update)), ConversationError::InvalidReplacement { .. }));
 });
+exact!(edit_message_cannot_rewrite_terminal_lifecycle_payload, {
+    let mut state = terminal_call_state(); let rewritten = ToolCallContent::new(ToolCallId::new("call").unwrap(), "rewritten", vec![]).unwrap().with_status(ToolCallStatus::Succeeded);
+    let entry = MessageBlockEntry::new(BlockId::new(1), MessageBlock::ToolCall(rewritten)); let update = ConversationUpdate::edit_message(guard(&state, MessageId::new(1)), vec![entry]);
+    assert!(matches!(assert_atomic_error(&mut state, event("edit-rewrite", 4, update)), ConversationError::InvalidReplacement { .. }));
+});
 exact!(replace_block_requires_same_variant_and_identity, {
     let mut state = text_state(4); let update = ConversationUpdate::replace_block(guard(&state, MessageId::new(1)), BlockId::new(1), MessageBlock::Markdown("x".into()));
     assert!(matches!(assert_atomic_error(&mut state, event("wrong-kind", 1, update)), ConversationError::InvalidReplacement { .. }));
@@ -496,7 +501,8 @@ exact!(block_ids_are_conversation_unique_and_retained, {
 });
 exact!(restore_snapshot_roundtrip_preserves_histories, {
     let state = setup_correlated(); assert_eq!(ConversationState::try_restore(state.snapshot()).unwrap(), state);
-    let snapshot = state.snapshot(); let empty = ConversationStateSnapshot::new(snapshot.messages().to_vec(), snapshot.revision(), snapshot.expected_sequence(), RetentionHistory::new(snapshot.retention().capacity(), vec![], None).unwrap(), snapshot.identities().clone()); assert!(ConversationState::try_restore(empty).is_err());
+    let snapshot = state.snapshot(); let records = snapshot.retention().records().iter().map(|record| ProcessedEventRecord::new(record.event().clone(), record.outcome().clone())).collect(); let external = ConversationStateSnapshot::new(snapshot.messages().to_vec(), snapshot.revision(), snapshot.expected_sequence(), RetentionHistory::new(snapshot.retention().capacity(), records, None).unwrap(), snapshot.identities().clone()); assert_eq!(ConversationState::try_restore(external).unwrap(), state);
+    let empty = ConversationStateSnapshot::new(snapshot.messages().to_vec(), snapshot.revision(), snapshot.expected_sequence(), RetentionHistory::new(snapshot.retention().capacity(), vec![], None).unwrap(), snapshot.identities().clone()); assert!(ConversationState::try_restore(empty).is_err());
 });
 exact!(deleted_tool_result_retires_result_slot_atomically, {
     let mut state = setup_correlated(); let delete = ConversationUpdate::delete_message(guard(&state, MessageId::new(2))); state.apply_event(event("delete-result", 3, delete)).unwrap();
@@ -530,6 +536,11 @@ exact!(bounded_ledger_exposes_honest_replay_boundary, {
     let mut first = ConversationState::new(7, std::num::NonZeroUsize::new(2).unwrap()); let first_outcome = first.apply_event(event("first", 7, ConversationUpdate::push(ConversationGuard::new(first.revision()), message(11, ChatRole::User, vec![text_entry(11, "one")])))).unwrap();
     let mut second = ConversationState::new(7, std::num::NonZeroUsize::new(2).unwrap()); let second_event = event("second", 7, ConversationUpdate::push(ConversationGuard::new(second.revision()), message(22, ChatRole::User, vec![text_entry(22, "two")])));
     second.apply_event(second_event.clone()).unwrap(); let snapshot = second.snapshot(); let forged = ConversationStateSnapshot::new(snapshot.messages().to_vec(), snapshot.revision(), snapshot.expected_sequence(), RetentionHistory::new(snapshot.retention().capacity(), vec![ProcessedEventRecord::new(second_event, first_outcome)], None).unwrap(), snapshot.identities().clone()); assert!(ConversationState::try_restore(forged).is_err());
+});
+exact!(evicted_snapshot_rejects_forged_retained_event_with_valid_outcome, {
+    let mut state = text_state(1); let target = guard(&state, MessageId::new(1)); let accepted = ConversationUpdate::append_text(target, BlockId::new(1), "accepted").unwrap(); state.apply_event(event("append", 1, accepted)).unwrap();
+    let snapshot = state.snapshot(); assert_eq!(ConversationState::try_restore(snapshot.clone()).unwrap(), state); assert_eq!(snapshot.retention().evicted_through(), Some(0)); let forged = event("append", 1, ConversationUpdate::append_text(target, BlockId::new(1), "forged").unwrap()); let record = ProcessedEventRecord::new(forged, snapshot.retention().records()[0].outcome().clone());
+    let forged_snapshot = ConversationStateSnapshot::new(snapshot.messages().to_vec(), snapshot.revision(), snapshot.expected_sequence(), RetentionHistory::new(snapshot.retention().capacity(), vec![record], snapshot.retention().evicted_through()).unwrap(), snapshot.identities().clone()); assert!(ConversationState::try_restore(forged_snapshot).is_err());
 });
 exact!(fresh_restart_state_has_no_replay_or_eviction_evidence, {
     let state = ConversationState::new(9, std::num::NonZeroUsize::MIN); assert_eq!(state.evicted_through(), None); assert!(state.snapshot().retention().records().is_empty());

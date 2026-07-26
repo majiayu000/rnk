@@ -10,10 +10,15 @@ use std::{collections::{BTreeMap, BTreeSet, VecDeque}, num::NonZeroUsize};
 pub struct ProcessedEventRecord {
     pub(in crate::components::chat) event: ConversationEvent,
     pub(in crate::components::chat) outcome: ApplyOutcome,
+    proven: bool,
 }
 impl ProcessedEventRecord {
-    /// Creates a retained record.
-    pub fn new(event: ConversationEvent, outcome: ApplyOutcome) -> Self { Self { event, outcome } }
+    /// Creates an externally assembled record that restoration must replay from its origin.
+    pub fn new(event: ConversationEvent, outcome: ApplyOutcome) -> Self {
+        Self { event, outcome, proven: false }
+    }
+    pub(in crate::components::chat) fn proven(event: ConversationEvent,
+        outcome: ApplyOutcome) -> Self { Self { event, outcome, proven: true } }
     /// Returns the exact accepted event.
     pub fn event(&self) -> &ConversationEvent { &self.event }
     /// Returns the original successful outcome.
@@ -218,8 +223,9 @@ impl ConversationState {
                 self.result_slots.iter().map(|(id, slot)| (id.clone(), slot.clone())).collect()))
     }
     /// Restores a snapshot only after validating every retained proof and identity history.
-    pub fn try_restore(snapshot: ConversationStateSnapshot) -> Result<Self, ConversationError> {
+    pub fn try_restore(mut snapshot: ConversationStateSnapshot) -> Result<Self, ConversationError> {
         validate_snapshot(&snapshot)?;
+        for record in &mut snapshot.retention.records { record.proven = true; }
         let identities = &snapshot.identities;
         let thinking_seen = identities.thinking.iter().map(|history|
             (history.message_id, history.seen.iter().cloned().collect())).collect();
@@ -352,6 +358,9 @@ fn validate_snapshot(value: &ConversationStateSnapshot) -> Result<(), Conversati
         if boundary.checked_add(1) != Some(first.event.sequence) {
             return invalid_snapshot("eviction boundary is not contiguous with ledger");
         }
+        if value.retention.records.iter().any(|record| !record.proven) {
+            return invalid_snapshot("evicted history requires reducer-proven retained records");
+        }
     }
     let slots: BTreeMap<_, _> = value.identities.result_slots.iter().cloned().collect();
     if slots.len() != value.identities.result_slots.len()
@@ -411,7 +420,10 @@ fn validate_snapshot(value: &ConversationStateSnapshot) -> Result<(), Conversati
                 return invalid_snapshot("retained event and outcome do not agree");
             }
         }
-        if replay.snapshot() != *value {
+        let mut replayed = replay.snapshot();
+        for (found, supplied) in replayed.retention.records.iter_mut()
+            .zip(&value.retention.records) { found.proven = supplied.proven; }
+        if replayed != *value {
             return invalid_snapshot("retained replay does not produce the restored state");
         }
     } else {
@@ -611,15 +623,30 @@ pub(super) mod test_cases {
         assert!(!histories.contains_key(&MessageId::new(2)));
     }
     pub(in crate::components::chat::state) fn message_transition_matrix_is_exhaustive() {
-        assert!(valid_message_transition(&MessageStatus::Pending, &MessageStatus::Streaming, false));
-        assert!(valid_message_transition(&MessageStatus::Pending, &MessageStatus::Complete, true));
-        assert!(!valid_message_transition(&MessageStatus::Complete, &MessageStatus::Streaming, true));
+        let statuses = [MessageStatus::Pending, MessageStatus::Streaming, MessageStatus::Complete,
+            MessageStatus::Cancelled, MessageStatus::Failed(cause())];
+        for (from_index, from) in statuses.iter().enumerate() {
+            for (to_index, to) in statuses.iter().enumerate() {
+                let always = matches!((from_index, to_index), (0, 1) | (1, 2) | (0 | 1, 3 | 4));
+                assert_eq!(valid_message_transition(from, to, false), always);
+                assert_eq!(valid_message_transition(from, to, true),
+                    always || (from_index, to_index) == (0, 2));
+            }
+        }
     }
     pub(in crate::components::chat::state) fn nested_status_transition_matrices_are_exhaustive() {
-        assert!(valid_thinking_transition(&ThinkingStatus::Pending, &ThinkingStatus::Streaming));
-        assert!(valid_call_transition(&ToolCallStatus::Running, &ToolCallStatus::Succeeded));
-        assert!(valid_result_transition(&ToolResultStatus::Streaming, &ToolResultStatus::Complete));
-        assert!(!valid_call_transition(&ToolCallStatus::Succeeded, &ToolCallStatus::Running));
+        let thinking = [ThinkingStatus::Pending, ThinkingStatus::Streaming, ThinkingStatus::Complete,
+            ThinkingStatus::Cancelled, ThinkingStatus::Failed(cause())];
+        let calls = [ToolCallStatus::Pending, ToolCallStatus::Running, ToolCallStatus::Succeeded,
+            ToolCallStatus::Cancelled, ToolCallStatus::Failed(cause())];
+        let results = [ToolResultStatus::Pending, ToolResultStatus::Streaming, ToolResultStatus::Complete,
+            ToolResultStatus::Cancelled, ToolResultStatus::Failed(cause())];
+        for from in 0..5 { for to in 0..5 {
+            let expected = matches!((from, to), (0, 1) | (1, 2) | (0 | 1, 3 | 4));
+            assert_eq!(valid_thinking_transition(&thinking[from], &thinking[to]), expected);
+            assert_eq!(valid_call_transition(&calls[from], &calls[to]), expected);
+            assert_eq!(valid_result_transition(&results[from], &results[to]), expected);
+        }}
     }
     pub(in crate::components::chat::state) fn terminal_updates_are_single_effect_and_race_safe() {
         assert!(message_terminal(&MessageStatus::Cancelled));
@@ -653,9 +680,16 @@ pub(super) mod test_cases {
         let results = [None, Some(ToolResultStatus::Pending), Some(ToolResultStatus::Streaming),
             Some(ToolResultStatus::Complete), Some(ToolResultStatus::Cancelled),
             Some(ToolResultStatus::Failed(cause()))];
-        let count = calls.iter().flat_map(|call| results.iter().map(move |result|
-            valid_call_result(call, result.as_ref()))).filter(|allowed| *allowed).count();
-        assert_eq!(count, 14);
+        let expected = [[true, false, false, false, false, false],
+            [true, true, true, false, false, false], [true; 6],
+            [true, false, false, false, true, false],
+            [true, false, false, false, false, true]];
+        for (call_index, call) in calls.iter().enumerate() {
+            for (result_index, result) in results.iter().enumerate() {
+                assert_eq!(valid_call_result(call, result.as_ref()),
+                    expected[call_index][result_index]);
+            }
+        }
     }
     pub(in crate::components::chat::state) fn message_revision_checked_increment_is_exhaustive() {
         assert_eq!(MessageRevision::INITIAL.checked_next(MessageId::new(1)).unwrap().get(), 2);
