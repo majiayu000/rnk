@@ -81,7 +81,9 @@ evidence 的独立修复合同，不以 umbrella issue 的宽泛描述替代验�
    不得归属 root、parent、sibling 或上一 token。
 9. **B-009** root fallback 只允许用于确实没有 element owner 的 tree-level
    malformed/finish failure；`MissingLayout`、`MissingCurrentFlow`、child-known flow
-   validation 和所有 coordinate failure 都必须在产生点携带 owner。后续 error conversion
+   validation、`DuplicateForwardRecord`、`DuplicateReverseCell` 和所有 coordinate
+   failure 都必须在产生点携带 owner。reverse-cell duplicate 在 publish 时使用当前
+   `ProjectionId`，round-trip validation 使用当前 `record.id`；后续 error conversion
    不得覆盖已有 owner。
 10. **B-010** `try_render_to_string*` 失败时必须返回
     `TextRenderError::Coordinate { element_id, source }`，其中 `element_id` 是 B-008 的 child，
@@ -176,7 +178,10 @@ failure atomicity，当前同步pipeline也没有可达的pre-commit cancellatio
 viewport-edge paint 改为正确 clipped，nested coordinate diagnostics 会显示真实 child
 `ElementId`。现有正坐标、公共签名和 typed variants 保持不变。
 
-issue 当前误挂 `ready_to_implement`，但本 packet 在起草前不存在；SpecRail route artifact
-已将真实路线判为 `ready_to_spec -> write_spec`。本 spec PR 只使用 `Refs #132`。任何实现
-必须等待人工 spec review/approval、canonical implementation gate，以及 Tech Spec 声明的
-PR #137/#142 ownership refresh；本规格不修改 label，也不自动授权实现。
+本 packet 起草时的 SpecRail route artifact 将路线判为
+`ready_to_spec -> write_spec`；2026-07-27 round-5 fresh 查询也得到唯一
+`ready_to_spec`。该事实只描述两个查询时点，不得作为未来实现 gate 的固定输入。本 spec
+PR 只使用 `Refs #132`。任何实现必须 fresh 查询 live labels、验证恰有一个 canonical
+readiness、把该原值传给 implementation route，并等待人工 spec review/approval、
+canonical `ready_to_implement` gate 与 Tech Spec 声明的 PR #137/#142 ownership refresh；
+本规格不修改 label，也不自动授权实现。
