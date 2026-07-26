@@ -24,31 +24,44 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
   - Done when:
     1. fresh SpecRail implement route对 issue #132、merged product/tech返回 `allowed`；
     2. issue只有唯一 canonical `ready_to_implement`且无冲突 readiness label；
-    3. PR #137 已最终 merged、非 draft，其 merge commit是implementation base祖先，fresh
-       file list与zero-width focused tests已记录并重跑；
+    3. PR #137 已最终 merged、非 draft，其 merge commit是fresh expected main祖先，fresh
+       file list与两条zero-width focused tests均以`matched=1`重跑；
     4. #131已有 frozen planned-change manifest；若与GH132相交，coordinator记录serial
        ownership，确认没有并发writer；
-    5. worktree clean，base与预期main/依赖merge exact，GH132 manifest逐路径冻结。
+    5. 在首次 implementation edit 前，worktree porcelain精确为空，`HEAD`精确等于fresh
+       `origin/main` SHA，并记录该 SHA 为`GH132_IMPLEMENTATION_BASE_SHA`；implementation
+       11路径manifest逐路径冻结。
   - Verify:
     ```sh
     set -euo pipefail
     : "${SPEC_RAIL_ROOT:?set SPEC_RAIL_ROOT to the checked-out SpecRail workflow-pack root}"
     test -f "$SPEC_RAIL_ROOT/checks/route_gate.py"
+    test -z "$(git status --porcelain=v1 --untracked-files=all)"
+    git fetch --no-tags origin main
+    EXPECTED_MAIN_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
+    CURRENT_HEAD_SHA="$(git rev-parse 'HEAD^{commit}')"
+    test -n "$EXPECTED_MAIN_SHA"
+    test "$CURRENT_HEAD_SHA" = "$EXPECTED_MAIN_SHA"
+    printf 'GH132_IMPLEMENTATION_BASE_SHA=%s\n' "$EXPECTED_MAIN_SHA"
     python3 "$SPEC_RAIL_ROOT/checks/route_gate.py" \
       --repo "$SPEC_RAIL_ROOT" \
       --route implement --issue 132 --state ready_to_implement \
       --artifact product_spec="$PWD/specs/GH132/product.md" \
       --artifact tech_spec="$PWD/specs/GH132/tech.md" --json
-    gh pr view 137 --repo majiayu000/rnk \
-      --json state,isDraft,headRefOid,mergeCommit,files
-    git status --short
-    PR137_MERGE_SHA="$(gh pr view 137 --repo majiayu000/rnk --json mergeCommit \
-      --jq '.mergeCommit.oid')"
+    PR137_JSON="$(gh pr view 137 --repo majiayu000/rnk \
+      --json state,isDraft,headRefOid,mergeCommit,files)"
+    test "$(printf '%s\n' "$PR137_JSON" | jq -r '.state')" = "MERGED"
+    test "$(printf '%s\n' "$PR137_JSON" | jq -r '.isDraft')" = "false"
+    PR137_MERGE_SHA="$(printf '%s\n' "$PR137_JSON" | jq -r '.mergeCommit.oid')"
     test -n "$PR137_MERGE_SHA"
-    git merge-base --is-ancestor "$PR137_MERGE_SHA" HEAD
+    git merge-base --is-ancestor "$PR137_MERGE_SHA" "$EXPECTED_MAIN_SHA"
+    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::projection_zero_width_only_attaches_to_the_same_flow_sequence -- --exact
+    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::synthetic_ellipsis_projection_failure_commits_neither_cells_nor_projection -- --exact
     ```
     `SPEC_RAIL_ROOT` 必须由执行环境显式设置为 SpecRail workflow pack checkout 根目录；
-    未设置、路径错误或 gate 文件缺失时上述命令立即失败，不得跳过或降级为 warning。
+    未设置、路径错误或 gate 文件缺失时上述命令立即失败，不得跳过或降级为 warning。两条
+    filtered test还必须逐条记录`matched=1`、`passed=1`、`ignored=0`，不能只看exit 0。
+    上述整段必须在任何 implementation source/test edit 前运行并保存输出。
     人工核对 GH132 spec approval、#131 frozen manifest 与无共享writer。
   - Covers: B-020, B-021
 
@@ -65,7 +78,8 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     `src/renderer/tree_renderer/projection/tests.rs`、
     `src/renderer/tree_renderer/projection/tests/coordinates.rs`。
   - Done when:
-    1. 唯一 scoped helper 对有限值floor并以`[-2^63,2^63)`检查，`-0.0`与正向行为兼容；
+    1. 单一 scoped wider accumulator先逐个验证`f32` operand有限，再按顺序组合；每步超出
+       `f32`范围或最终floor超出`[-2^63,2^63)`均为Overflow，`-0.0`与正向行为兼容；
     2. x/y/root offset/layout/ancestor/padding/scroll/text/background/border/clip都使用同一
        scoped转换或checked constructor；
     3. clip edges在viewport/active-clip交集前保持signed half-open；
@@ -78,7 +92,7 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::signed_coordinates_use_one_floor_conversion -- --exact
     cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::negative_zero_positive_fractional_and_integral_coordinates_are_compatible -- --exact
     cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::signed_coordinate_composition_is_checked_and_axis_independent -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::finite_coordinate_bounds_and_checked_arithmetic_classify_overflow -- --exact
+    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::finite_operands_that_overflow_f32_composition_and_i64_bounds_classify_overflow -- --exact
     cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::nan_and_infinities_classify_as_non_finite_for_each_coordinate_source -- --exact
     cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::nested_coordinate_failures_report_exact_current_child -- --exact
     cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::coordinate_owner_survives_conversion_and_only_unscoped_failures_use_root_fallback -- --exact
@@ -152,16 +166,42 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
        `matched=1`、`passed=1`、`ignored=0`；
     3. PR #137 merged-head zero-width regressions、全部GH132 focused tests和full Rust gates
        通过；
-    4. changed files exact等于planned manifest，不含layout/output/TestRenderer production
-       或其他spec；
+    4. implementation PR changed files精确等于独立的11路径
+       `specrail-planned-changes` manifest；三份已合入packet不在该diff内，也不得被重改；
     5. exact implementation head的新代码line coverage>=80%，signed conversion/owner/
        transaction critical branches=100%；
     6. fresh CI、independent review、zero unresolved current actionable review threads和
        SpecRail PR gate都绑定同一head SHA。
   - Verify:
     ```sh
+    set -euo pipefail
+    : "${GH132_IMPLEMENTATION_PR:?set the GH132 implementation PR number}"
+    : "${GH132_IMPLEMENTATION_BASE_SHA:?set the exact starting main SHA recorded by SP132-T1}"
+    test -z "$(git status --porcelain=v1 --untracked-files=all)"
+    git fetch --no-tags origin main
+    EXPECTED_CURRENT_MAIN_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
+    PR_JSON="$(gh pr view "$GH132_IMPLEMENTATION_PR" --repo majiayu000/rnk \
+      --json baseRefOid,headRefOid)"
+    PR_BASE_SHA="$(printf '%s\n' "$PR_JSON" | jq -r '.baseRefOid')"
+    PR_HEAD_SHA="$(printf '%s\n' "$PR_JSON" | jq -r '.headRefOid')"
+    test "$PR_BASE_SHA" = "$EXPECTED_CURRENT_MAIN_SHA"
+    test "$(git rev-parse 'HEAD^{commit}')" = "$PR_HEAD_SHA"
+    test "$(git merge-base "$PR_HEAD_SHA" "$EXPECTED_CURRENT_MAIN_SHA")" = \
+      "$EXPECTED_CURRENT_MAIN_SHA"
+    git merge-base --is-ancestor "$GH132_IMPLEMENTATION_BASE_SHA" \
+      "$EXPECTED_CURRENT_MAIN_SHA"
+    IMPLEMENTATION_MANIFEST_JSON="$(sed -n \
+      '/<!-- specrail-planned-changes/{n;p;}' specs/GH132/tech.md)"
+    test "$(printf '%s\n' "$IMPLEMENTATION_MANIFEST_JSON" | jq -r '.paths | length')" -eq 11
+    EXPECTED_CHANGED_PATHS="$(printf '%s\n' "$IMPLEMENTATION_MANIFEST_JSON" |
+      jq -r '.paths[]' | LC_ALL=C sort)"
+    ACTUAL_CHANGED_PATHS="$(git diff --name-only \
+      "$EXPECTED_CURRENT_MAIN_SHA...$PR_HEAD_SHA" | LC_ALL=C sort)"
+    test "$ACTUAL_CHANGED_PATHS" = "$EXPECTED_CHANGED_PATHS"
     cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_signed_coordinates_axis_clips_and_nested_active_clips_are_exact -- --exact
     cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_failure_commits_neither_cells_nor_projection -- --exact
+    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::projection_zero_width_only_attaches_to_the_same_flow_sequence -- --exact
+    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::synthetic_ellipsis_projection_failure_commits_neither_cells_nor_projection -- --exact
     cargo test --workspace --lib --locked renderer::tree_renderer::tests::scrolled_out_negative_rows_do_not_paint_at_top -- --exact
     cargo test --test prelude_surfaces --locked try_render_to_string_surface -- --exact
     cargo fmt --all -- --check
@@ -169,8 +209,10 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -A clippy::collapsible_if -A clippy::manual_is_multiple_of
     cargo test --workspace --all-targets --all-features --locked
     ```
-    另外逐条运行Tech mapping和ledger全部命令，并fresh查询PR exact head、CI、
-    reviewThreads、coverage与SpecRail PR gate。
+    `PR_BASE_SHA` 必须与fresh current main完全相等，且该 SHA 必须是PR head的exact
+    merge-base；仅证明PR137或旧main是ancestor不够。另逐条运行Tech mapping和ledger全部
+    命令并证明`matched=1`，再fresh查询PR exact head、CI、reviewThreads、coverage与
+    SpecRail PR gate。
   - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009,
     B-010, B-011, B-012, B-013, B-014, B-015, B-016, B-017, B-018, B-019,
     B-020, B-021
@@ -199,10 +241,11 @@ SP132-T1 -> SP132-T2 -> SP132-T3 -> SP132-T4 -> SP132-T5
   `B-001..B-021`
 - Task Covers union:
   `B-001..B-021`
-- planned changes包含三份packet、九个既有Rust/test文件和两个因800行上限新增的
-  `coordinates.rs` test子模块；除此之外均fail closed。
-- spec-only PR验证只检查三份packet；implementation命令是后续human-gated handoff，不在本
-  spec PR中实现或伪造通过。
+- `specrail-spec-packet-changes`精确包含三份packet；本 spec PR只按该三路径验证。
+- `specrail-planned-changes`精确包含九个既有Rust/test文件和两个因800行上限新增的
+  `coordinates.rs` test子模块，共11路径；future implementation PR只按该manifest与fresh
+  current main做changed-path diff，三份已合入spec不得出现。
+- implementation命令是后续human-gated handoff，不在本 spec PR中实现或伪造通过。
 
 ## Handoff Notes
 
