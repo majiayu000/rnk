@@ -383,11 +383,49 @@ fn max_state() -> ConversationState {
     ))
     .unwrap()
 }
+
 macro_rules! exact { ($name:ident, $body:block) => { #[test] fn $name() $body }; }
 macro_rules! unformatted { ($($tokens:tt)*) => { $($tokens)* }; }
 
 #[rustfmt::skip]
 unformatted! {
+fn apply_named(state: &mut ConversationState, id: &str, update: ConversationUpdate) -> ApplyOutcome {
+    let sequence = state.expected_sequence(); state.apply_event(event(id, sequence, update)).unwrap()
+}
+fn rich_history_state(capacity: usize) -> ConversationState {
+    let mut state = ConversationState::new(0, std::num::NonZeroUsize::new(capacity).unwrap());
+    let thinking = ["thought-a", "thought-b"].into_iter().enumerate().map(|(index, id)| MessageBlockEntry::new(BlockId::new(index as u64 + 2), MessageBlock::Thinking(ThinkingContent::new(ThinkingId::new(id).unwrap(), ""))));
+    apply_push(&mut state, "history-root", 0, message(1, ChatRole::User, std::iter::once(text_entry(1, "root")).chain(thinking).collect()));
+    let edit = ConversationUpdate::edit_message(guard(&state, MessageId::new(1)), vec![text_entry(1, "root")]); apply_named(&mut state, "retire-thinking", edit);
+    for (index, name) in ["call-a", "call-b"].into_iter().enumerate() {
+        let call_id = ToolCallId::new(name).unwrap(); let call_message = MessageId::new(index as u64 * 2 + 2); let result_message = MessageId::new(index as u64 * 2 + 3); let call_block = BlockId::new(index as u64 * 2 + 10); let result_block = BlockId::new(index as u64 * 2 + 11);
+        let push = ConversationUpdate::push(ConversationGuard::new(state.revision()), message(call_message.get(), ChatRole::Assistant, vec![MessageBlockEntry::new(call_block, MessageBlock::ToolCall(ToolCallContent::new(call_id.clone(), name, vec![]).unwrap()))])); apply_named(&mut state, &format!("{name}-push"), push);
+        let running = ToolCallContent::new(call_id.clone(), name, vec![]).unwrap().with_status(ToolCallStatus::Running); let replace = ConversationUpdate::replace_block(guard(&state, call_message), call_block, MessageBlock::ToolCall(running)); apply_named(&mut state, &format!("{name}-running"), replace);
+        let result = ConversationUpdate::push(ConversationGuard::new(state.revision()), message(result_message.get(), ChatRole::Tool, vec![MessageBlockEntry::new(result_block, MessageBlock::ToolResult(ToolResultContent::new(call_id, "")))])); apply_named(&mut state, &format!("{name}-result"), result);
+        let delete = ConversationUpdate::delete_message(guard(&state, result_message)); apply_named(&mut state, &format!("{name}-delete-result"), delete);
+        let delete = ConversationUpdate::delete_message(guard(&state, call_message)); apply_named(&mut state, &format!("{name}-delete-call"), delete);
+    }
+    let tail = ConversationUpdate::push(ConversationGuard::new(state.revision()), message(99, ChatRole::User, vec![text_entry(99, "tail")])); apply_named(&mut state, "history-tail", tail);
+    state
+}
+fn snapshot_with_identities(snapshot: &ConversationStateSnapshot, identities: ConversationIdentityHistory) -> ConversationStateSnapshot {
+    ConversationStateSnapshot::new_with_proof(snapshot.messages().to_vec(), snapshot.revision(), snapshot.expected_sequence(), snapshot.retention().clone(), identities, snapshot.proof().unwrap().clone())
+}
+fn identity_variant(source: &ConversationIdentityHistory, variant: &str) -> ConversationIdentityHistory {
+    let mut seen_messages = source.seen_messages().to_vec(); let mut retired_messages = source.retired_messages().to_vec(); let mut seen_blocks = source.seen_blocks().to_vec(); let mut retired_blocks = source.retired_blocks().to_vec(); let mut thinking = source.thinking().to_vec(); let mut seen_calls = source.seen_tool_calls().to_vec(); let mut retired_calls = source.retired_tool_calls().to_vec(); let mut result_slots = source.result_slots().to_vec();
+    let index = thinking.iter().position(|value| value.seen().len() > 1).unwrap();
+    match variant {
+        "seen_messages" => seen_messages.reverse(), "retired_messages" => retired_messages.reverse(), "seen_blocks" => seen_blocks.reverse(), "retired_blocks" => retired_blocks.reverse(), "thinking" => thinking.reverse(), "seen_calls" => seen_calls.reverse(), "retired_calls" => retired_calls.reverse(), "result_slots" => result_slots.reverse(),
+        "thinking_seen" => { let value = &thinking[index]; thinking[index] = ThinkingIdentityHistory::new(value.message_id(), value.seen().iter().rev().cloned().collect(), value.retired().to_vec()); }
+        "thinking_retired" => { let value = &thinking[index]; thinking[index] = ThinkingIdentityHistory::new(value.message_id(), value.seen().to_vec(), value.retired().iter().rev().cloned().collect()); }
+        "duplicate_seen_message" => seen_messages.push(seen_messages[0]), "duplicate_retired_message" => retired_messages.push(retired_messages[0]), "duplicate_seen_block" => seen_blocks.push(seen_blocks[0]), "duplicate_retired_block" => retired_blocks.push(retired_blocks[0]), "duplicate_thinking" => thinking.push(thinking[0].clone()), "duplicate_seen_call" => seen_calls.push(seen_calls[0].clone()), "duplicate_retired_call" => retired_calls.push(retired_calls[0].clone()), "duplicate_result_slot" => result_slots.push(result_slots[0].clone()),
+        "duplicate_thinking_seen" => { let value = &thinking[index]; let mut seen = value.seen().to_vec(); seen.push(seen[0].clone()); thinking[index] = ThinkingIdentityHistory::new(value.message_id(), seen, value.retired().to_vec()); }
+        "duplicate_thinking_retired" => { let value = &thinking[index]; let mut retired = value.retired().to_vec(); retired.push(retired[0].clone()); thinking[index] = ThinkingIdentityHistory::new(value.message_id(), value.seen().to_vec(), retired); }
+        "missing_active_message" => seen_messages.retain(|id| *id != MessageId::new(1)), "out_of_range_message" => seen_messages.push(MessageId::new(999)), "retired_active_message" => retired_messages.push(MessageId::new(1)),
+        _ => panic!("unknown identity-history fixture: {variant}"),
+    }
+    ConversationIdentityHistory::new(seen_messages, retired_messages, seen_blocks, retired_blocks, thinking, seen_calls, retired_calls, result_slots)
+}
 exact!(push_is_unique_and_atomic, {
     let mut state = text_state(4); let duplicate = ConversationUpdate::push(ConversationGuard::new(state.revision()), message(1, ChatRole::User, vec![text_entry(2, "duplicate")]));
     assert!(matches!(assert_atomic_error(&mut state, event("duplicate", 1, duplicate)), ConversationError::DuplicateMessageId { .. }));
@@ -437,6 +475,11 @@ exact!(edit_message_cannot_rewrite_terminal_lifecycle_payload, {
 exact!(edit_message_allows_retained_static_payload_changes, {
     let mut state = text_state(4); let update = ConversationUpdate::edit_message(guard(&state, MessageId::new(1)), vec![text_entry(1, "edited")]); state.apply_event(event("static-edit", 1, update)).unwrap();
     assert_eq!(block_text(&state, 1), "edited");
+});
+exact!(edit_message_rejects_identical_blocks_without_mutation, {
+    let mut state = text_state(4); let before = state.clone(); let before_snapshot = state.snapshot(); let entries = state.message(MessageId::new(1)).unwrap().blocks().to_vec();
+    let update = ConversationUpdate::edit_message(guard(&state, MessageId::new(1)), entries); assert!(matches!(state.apply_event(event("no-op-edit", 1, update)), Err(ConversationError::NoOpEdit { message_id }) if message_id == MessageId::new(1)));
+    assert_eq!(state, before); assert_eq!(state.snapshot(), before_snapshot);
 });
 exact!(replace_block_requires_same_variant_and_identity, {
     let mut state = text_state(4); let update = ConversationUpdate::replace_block(guard(&state, MessageId::new(1)), BlockId::new(1), MessageBlock::Markdown("x".into()));
@@ -507,6 +550,26 @@ exact!(restore_snapshot_roundtrip_preserves_histories, {
     let state = setup_correlated(); assert_eq!(ConversationState::try_restore(state.snapshot()).unwrap(), state);
     let snapshot = state.snapshot(); let records = snapshot.retention().records().iter().map(|record| ProcessedEventRecord::new(record.event().clone(), record.outcome().clone())).collect(); let external = ConversationStateSnapshot::new(snapshot.messages().to_vec(), snapshot.revision(), snapshot.expected_sequence(), RetentionHistory::new(snapshot.retention().capacity(), records, None).unwrap(), snapshot.identities().clone()); assert_eq!(ConversationState::try_restore(external).unwrap(), state);
     let empty = ConversationStateSnapshot::new(snapshot.messages().to_vec(), snapshot.revision(), snapshot.expected_sequence(), RetentionHistory::new(snapshot.retention().capacity(), vec![], None).unwrap(), snapshot.identities().clone()); assert!(ConversationState::try_restore(empty).is_err());
+});
+exact!(restore_accepts_reordered_identity_history_sets, {
+    for capacity in [1, 32] { let state = rich_history_state(capacity); let snapshot = state.snapshot();
+        for variant in ["seen_messages", "retired_messages", "seen_blocks", "retired_blocks", "thinking", "thinking_seen", "thinking_retired", "seen_calls", "retired_calls", "result_slots"] {
+            let rebuilt = snapshot_with_identities(&snapshot, identity_variant(snapshot.identities(), variant));
+            assert_eq!(ConversationState::try_restore(rebuilt).unwrap(), state, "{variant}, capacity={capacity}");
+        }
+    }
+});
+exact!(restore_rejects_invalid_identity_history_matrix, {
+    for capacity in [1, 32] { let state = rich_history_state(capacity); let snapshot = state.snapshot();
+        for variant in ["duplicate_seen_message", "duplicate_retired_message", "duplicate_seen_block", "duplicate_retired_block", "duplicate_thinking", "duplicate_thinking_seen", "duplicate_thinking_retired", "duplicate_seen_call", "duplicate_retired_call", "duplicate_result_slot", "missing_active_message", "out_of_range_message", "retired_active_message"] {
+            let rebuilt = snapshot_with_identities(&snapshot, identity_variant(snapshot.identities(), variant));
+            assert!(matches!(ConversationState::try_restore(rebuilt), Err(ConversationError::InvalidSnapshot { .. })), "{variant}, capacity={capacity}");
+        }
+    }
+    let state = rich_history_state(32); let snapshot = state.snapshot(); let mut messages = snapshot.messages().to_vec(); messages.reverse();
+    let reordered_messages = ConversationStateSnapshot::new_with_proof(messages, snapshot.revision(), snapshot.expected_sequence(), snapshot.retention().clone(), snapshot.identities().clone(), snapshot.proof().unwrap().clone()); assert!(ConversationState::try_restore(reordered_messages).is_err());
+    let mut records = snapshot.retention().records().to_vec(); records.reverse(); let retention = RetentionHistory::new(snapshot.retention().capacity(), records, None).unwrap();
+    let reordered_ledger = ConversationStateSnapshot::new_with_proof(snapshot.messages().to_vec(), snapshot.revision(), snapshot.expected_sequence(), retention, snapshot.identities().clone(), snapshot.proof().unwrap().clone()); assert!(ConversationState::try_restore(reordered_ledger).is_err());
 });
 exact!(deleted_tool_result_retires_result_slot_atomically, {
     let mut state = setup_correlated(); let delete = ConversationUpdate::delete_message(guard(&state, MessageId::new(2))); state.apply_event(event("delete-result", 3, delete)).unwrap();
