@@ -8,8 +8,8 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::core::{Element, ElementId};
 use crate::layout::{Layout, LayoutEngine};
-use crate::renderer::Output;
-use crate::renderer::tree_renderer::render_element_tree;
+use crate::renderer::tree_renderer::try_render_element_tree;
+use crate::renderer::{Output, TextRenderError};
 
 /// Test renderer configuration
 #[derive(Debug, Clone)]
@@ -41,23 +41,33 @@ impl TestRenderer {
 
     /// Render element and return plain text (no ANSI codes)
     pub fn render_to_plain(&self, element: &Element) -> String {
-        let ansi = self.render_to_ansi(element);
-        strip_ansi_codes(&ansi)
+        self.try_render_to_plain(element)
+            .unwrap_or_else(|error| panic!("test text render failed: {error}"))
+    }
+
+    pub fn try_render_to_plain(&self, element: &Element) -> Result<String, TextRenderError> {
+        self.try_render_to_ansi(element)
+            .map(|ansi| strip_ansi_codes(&ansi))
     }
 
     /// Render element and return string with ANSI codes
     pub fn render_to_ansi(&self, element: &Element) -> String {
-        let engine = self.compute_layout(element);
+        self.try_render_to_ansi(element)
+            .unwrap_or_else(|error| panic!("test text render failed: {error}"))
+    }
+
+    pub fn try_render_to_ansi(&self, element: &Element) -> Result<String, TextRenderError> {
+        let engine = self.try_compute_layout(element)?;
 
         let mut output = Output::new(self.width, self.height);
         let clip_depth_before = output.clip_depth();
-        render_element_tree(element, &engine, &mut output, 0.0, 0.0);
+        try_render_element_tree(element, &engine, &mut output, 0.0, 0.0)?;
         assert_eq!(
             output.clip_depth(),
             clip_depth_before,
             "test renderer left an unbalanced clip stack"
         );
-        output.render()
+        Ok(output.render())
     }
 
     /// Get computed layouts for all elements
@@ -72,9 +82,16 @@ impl TestRenderer {
 
     /// Compute layout for an element tree
     fn compute_layout(&self, element: &Element) -> LayoutEngine {
+        self.try_compute_layout(element)
+            .unwrap_or_else(|error| panic!("test text layout failed: {error}"))
+    }
+
+    fn try_compute_layout(&self, element: &Element) -> Result<LayoutEngine, TextRenderError> {
         let mut engine = LayoutEngine::new();
-        engine.compute(element, self.width, self.height);
         engine
+            .try_compute(element, self.width, self.height)
+            .map_err(|source| TextRenderError::flow(element.id, source))?;
+        Ok(engine)
     }
 
     /// Validate layout constraints

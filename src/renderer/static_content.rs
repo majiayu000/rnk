@@ -5,8 +5,8 @@
 
 use crate::core::Element;
 use crate::layout::LayoutEngine;
-use crate::renderer::tree_renderer::render_element_tree;
-use crate::renderer::{Output, Terminal};
+use crate::renderer::tree_renderer::try_render_element_tree;
+use crate::renderer::{Output, Terminal, TextRenderError};
 
 /// Static content renderer for inline mode
 ///
@@ -29,29 +29,51 @@ impl StaticRenderer {
     ///
     /// Only extracts content from Static elements that have actual children
     /// (new items to render). Empty Static elements are skipped.
+    #[allow(dead_code)]
     pub(crate) fn extract_static_content(&self, element: &Element, width: u16) -> Vec<String> {
+        self.try_extract_static_content(element, width)
+            .unwrap_or_else(|error| panic!("static text render failed: {error}"))
+    }
+
+    pub(crate) fn try_extract_static_content(
+        &self,
+        element: &Element,
+        width: u16,
+    ) -> Result<Vec<String>, TextRenderError> {
         let mut lines = Vec::new();
-        self.extract_recursive(element, width, &mut lines);
-        lines
+        self.try_extract_recursive(element, width, &mut lines)?;
+        Ok(lines)
     }
 
     /// Recursive helper for extracting static content
-    fn extract_recursive(&self, element: &Element, width: u16, lines: &mut Vec<String>) {
+    fn try_extract_recursive(
+        &self,
+        element: &Element,
+        width: u16,
+        lines: &mut Vec<String>,
+    ) -> Result<(), TextRenderError> {
         if element.style.is_static {
             // Only render if the static element has children (new items)
             // Empty Static elements mean all items have already been rendered
             if !element.children.is_empty() {
                 // Render static element to get its content
                 let mut engine = LayoutEngine::new();
-                engine.compute(element, width, 100); // Use large height for static content
+                engine
+                    .try_compute(element, width, 100)
+                    .map_err(|source| TextRenderError::flow(element.id, source))?;
 
-                let layout = engine.get_layout(element.id).unwrap_or_default();
+                let layout =
+                    engine
+                        .get_layout(element.id)
+                        .ok_or(TextRenderError::IncompleteSourceMap {
+                            element_id: element.id,
+                        })?;
                 // Ensure we have valid dimensions
                 let render_width = (layout.width as u16).max(1);
                 let render_height = (layout.height as u16).max(1);
                 let mut output = Output::new(render_width, render_height);
                 let clip_depth_before = output.clip_depth();
-                render_element_tree(element, &engine, &mut output, 0.0, 0.0);
+                try_render_element_tree(element, &engine, &mut output, 0.0, 0.0)?;
                 debug_assert_eq!(
                     output.clip_depth(),
                     clip_depth_before,
@@ -71,8 +93,9 @@ impl StaticRenderer {
 
         // Check children for static content (non-static elements might contain static children)
         for child in &element.children {
-            self.extract_recursive(child, width, lines);
+            self.try_extract_recursive(child, width, lines)?;
         }
+        Ok(())
     }
 
     /// Commit static content to the terminal (write permanently)
@@ -100,9 +123,9 @@ impl StaticRenderer {
         for line in new_lines {
             // Write the line with erase-to-end-of-line to ensure clean output
             writeln!(stdout, "{}\x1b[K", line)?;
-            self.committed_lines.push(line.clone());
         }
         stdout.flush()?;
+        self.committed_lines.extend_from_slice(new_lines);
 
         // Force a full repaint of the dynamic UI
         terminal.repaint();
@@ -133,6 +156,7 @@ impl StaticRenderer {
 mod tests {
     use super::*;
     use crate::components::{Box, Text};
+    use crate::renderer::TextCoordinateError;
 
     #[test]
     fn test_static_renderer_creation() {
@@ -204,5 +228,28 @@ mod tests {
         // Outer should have 2 children, but inner should have 0 (static filtered out)
         assert_eq!(filtered.children.len(), 2);
         assert_eq!(filtered.children.get(0).unwrap().children.len(), 0);
+    }
+
+    #[test]
+    fn static_render_failure_returns_no_partial_candidate() {
+        let renderer = StaticRenderer::new();
+        let mut valid = Box::new()
+            .child(Text::new("valid").into_element())
+            .into_element();
+        valid.style.is_static = true;
+        let mut invalid_text = Text::new("invalid").into_element();
+        invalid_text.style.padding.left = f32::NAN;
+        let mut invalid = Box::new().child(invalid_text).into_element();
+        invalid.style.is_static = true;
+        let tree = Box::new().children([valid, invalid]).into_element();
+
+        assert!(matches!(
+            renderer.try_extract_static_content(&tree, 20),
+            Err(TextRenderError::Coordinate {
+                source: TextCoordinateError::NonFinite,
+                ..
+            })
+        ));
+        assert!(renderer.committed_lines.is_empty());
     }
 }

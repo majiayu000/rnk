@@ -4,10 +4,11 @@
 
 use crate::core::Element;
 use crate::layout::LayoutEngine;
-use crate::renderer::Output;
-use crate::renderer::tree_renderer::render_element_tree;
+use crate::renderer::tree_renderer::{render_element_tree, try_render_element_tree};
+use crate::renderer::{Output, TextRenderError};
 
 /// Render an element tree to an output buffer
+#[allow(dead_code)]
 pub(crate) fn render_element(
     element: &Element,
     layout_engine: &LayoutEngine,
@@ -22,6 +23,23 @@ pub(crate) fn render_element(
         clip_depth_before,
         "render_element left an unbalanced clip stack"
     );
+}
+
+pub(crate) fn try_render_element(
+    element: &Element,
+    layout_engine: &LayoutEngine,
+    output: &mut Output,
+    offset_x: f32,
+    offset_y: f32,
+) -> Result<(), TextRenderError> {
+    let clip_depth_before = output.clip_depth();
+    try_render_element_tree(element, layout_engine, output, offset_x, offset_y)?;
+    debug_assert_eq!(
+        output.clip_depth(),
+        clip_depth_before,
+        "try_render_element left an unbalanced clip stack"
+    );
+    Ok(())
 }
 
 #[cfg(test)]

@@ -37,6 +37,7 @@
 mod app;
 mod builder;
 pub(crate) mod element_renderer;
+mod error;
 mod filter;
 mod frame_rate;
 mod output;
@@ -55,6 +56,7 @@ pub use app::App;
 
 // Builder and options
 pub use builder::{AppBuilder, AppOptions, CancelToken, render, render_fullscreen, render_inline};
+pub use error::{TextCoordinateError, TextProjectionError, TextRenderError};
 
 // Registry APIs
 pub use registry::{
@@ -65,7 +67,9 @@ pub use registry::{
 // Element rendering APIs
 pub use render_to_string::{
     RenderOptions, render_to_string, render_to_string_auto, render_to_string_no_trim,
-    render_to_string_raw, render_to_string_with_options,
+    render_to_string_raw, render_to_string_with_options, try_render_to_string,
+    try_render_to_string_auto, try_render_to_string_no_trim, try_render_to_string_raw,
+    try_render_to_string_with_options, try_render_to_string_with_tab_stop,
 };
 
 // Frame rate control

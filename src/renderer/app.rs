@@ -266,25 +266,37 @@ where
         }
 
         // Extract and commit static content
-        let new_static_lines = self.static_renderer.extract_static_content(&root, width);
+        let (new_static_lines, rendered) = self
+            .try_prepare_frame(&root, width, height)
+            .map_err(crate::renderer::TextRenderError::into_io)?;
+
         if !new_static_lines.is_empty() {
             self.static_renderer
                 .commit_static_content(&new_static_lines, &mut self.terminal)?;
         }
 
-        // Filter out static elements from the tree for dynamic rendering
-        let dynamic_root = self.static_renderer.filter_static_elements(&root);
+        self.terminal.render(&rendered)
+    }
 
-        let rendered = RenderPipeline::render_dynamic_frame(
+    fn try_prepare_frame(
+        &mut self,
+        root: &Element,
+        width: u16,
+        height: u16,
+    ) -> Result<(Vec<String>, String), crate::renderer::TextRenderError> {
+        let new_static_lines = self
+            .static_renderer
+            .try_extract_static_content(root, width)?;
+        let dynamic_root = self.static_renderer.filter_static_elements(root);
+        let rendered = RenderPipeline::try_render_dynamic_frame(
             &dynamic_root,
             width,
             height,
             &mut self.layout_engine,
             &self.runtime_context,
             &mut self.previous_vnode,
-        );
-
-        self.terminal.render(&rendered)
+        )?;
+        Ok((new_static_lines, rendered))
     }
 
     /// Request exit
@@ -295,8 +307,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use super::*;
     use crate::core::Element;
+    use crate::layout::TextFlowError;
     use crate::renderer::registry::{is_alt_screen, lock_test_registry, render_handle};
 
     #[test]
@@ -332,5 +347,32 @@ mod tests {
         app.exit();
 
         assert!(app.runtime_context.borrow().should_exit());
+    }
+
+    #[test]
+    fn app_render_candidate_preserves_typed_error_source() {
+        let mut app = App::new(|| Element::text("app"));
+        app.layout_engine.set_text_flow_policy(0, "…", 1);
+        let failure = app
+            .try_prepare_frame(&Element::text("app"), 20, 4)
+            .unwrap_err();
+        assert!(matches!(
+            failure,
+            crate::renderer::TextRenderError::Flow {
+                source: TextFlowError::InvalidTabStop,
+                ..
+            }
+        ));
+        let io_error = failure.into_io();
+        let text_error = io_error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<crate::renderer::TextRenderError>())
+            .expect("io error must retain TextRenderError");
+        assert!(matches!(
+            text_error
+                .source()
+                .and_then(|source| { source.downcast_ref::<TextFlowError>() }),
+            Some(TextFlowError::InvalidTabStop)
+        ));
     }
 }
