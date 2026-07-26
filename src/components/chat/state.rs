@@ -1,8 +1,12 @@
 //! Immutable-facing state, snapshots, histories, and pure transition rules.
 
+#[path = "state/message_index.rs"]
+mod message_index;
+
 #[rustfmt::skip]
 mod compact {
 use super::super::*;
+use super::message_index::MessageIndex;
 use std::{collections::{BTreeMap, BTreeSet, VecDeque}, num::NonZeroUsize};
 
 /// One retained accepted event and its original outcome.
@@ -180,6 +184,7 @@ impl ConversationStateSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationState {
     pub(in crate::components::chat) messages: Vec<ChatMessage>,
+    pub(in crate::components::chat) message_index: MessageIndex,
     pub(in crate::components::chat) revision: ConversationRevision,
     pub(in crate::components::chat) expected_sequence: u64,
     pub(in crate::components::chat) ledger_capacity: NonZeroUsize,
@@ -198,7 +203,8 @@ pub struct ConversationState {
 impl ConversationState {
     /// Creates an empty state with an explicit sequence start and non-zero ledger capacity.
     pub fn new(initial_sequence: u64, ledger_capacity: NonZeroUsize) -> Self {
-        Self { messages: Vec::new(), revision: ConversationRevision::INITIAL,
+        Self { messages: Vec::new(), message_index: MessageIndex::empty(),
+            revision: ConversationRevision::INITIAL,
             expected_sequence: initial_sequence, ledger_capacity, ledger: VecDeque::new(),
             evicted_through: None, seen_messages: BTreeSet::new(),
             retired_messages: BTreeSet::new(), seen_blocks: BTreeSet::new(),
@@ -210,7 +216,17 @@ impl ConversationState {
     pub fn messages(&self) -> &[ChatMessage] { &self.messages }
     /// Returns one message by identity.
     pub fn message(&self, id: MessageId) -> Option<&ChatMessage> {
-        self.messages.iter().find(|message| message.id == id)
+        self.message_index.position(&self.messages, id)
+            .map(|position| &self.messages[position])
+    }
+    pub(in crate::components::chat) fn message_position(&self, id: MessageId) -> Option<usize> {
+        self.message_index.position(&self.messages, id)
+    }
+    pub(in crate::components::chat) fn rebuild_message_index(&mut self) {
+        self.message_index = match MessageIndex::rebuild(&self.messages) {
+            Ok(index) => index,
+            Err(()) => panic!("active transcript contains duplicate message identities"),
+        };
     }
     /// Returns current conversation revision.
     pub const fn revision(&self) -> ConversationRevision { self.revision }
@@ -259,7 +275,11 @@ impl ConversationState {
             (history.message_id, history.seen.iter().cloned().collect())).collect();
         let thinking_retired = identities.thinking.iter().map(|history|
             (history.message_id, history.retired.iter().cloned().collect())).collect();
-        Ok(Self { messages: snapshot.messages, revision: snapshot.revision,
+        let message_index = MessageIndex::rebuild(&snapshot.messages)
+            .map_err(|()| ConversationError::InvalidSnapshot {
+                reason: "active message index contains duplicate identities",
+            })?;
+        Ok(Self { messages: snapshot.messages, message_index, revision: snapshot.revision,
             expected_sequence: snapshot.expected_sequence, ledger_capacity: snapshot.retention.capacity,
             ledger: snapshot.retention.records.into(), evicted_through: snapshot.retention.evicted_through,
             seen_messages: identities.seen_messages.iter().copied().collect(),
@@ -768,29 +788,5 @@ pub(super) mod test_cases {
 pub use compact::*;
 
 #[cfg(test)]
-mod tests {
-    macro_rules! case {
-        ($name:ident) => {
-            #[test]
-            fn $name() {
-                super::compact::test_cases::$name();
-            }
-        };
-    }
-    case!(thinking_replacement_requires_same_identity);
-    case!(thinking_id_message_lifetime_rules_are_exhaustive);
-    case!(message_transition_matrix_is_exhaustive);
-    case!(nested_status_transition_matrices_are_exhaustive);
-    case!(terminal_updates_are_single_effect_and_race_safe);
-    case!(cross_level_terminality_never_freezes_active_nested_blocks);
-    case!(identity_and_correlation_helpers_cover_all_namespaces);
-    case!(append_block_cross_level_rules_are_exhaustive);
-    case!(replace_block_kind_rules_are_exhaustive);
-    case!(static_completion_readiness_matrix_is_exhaustive);
-    case!(tool_call_result_correlation_matrix_is_exhaustive);
-    case!(message_revision_checked_increment_is_exhaustive);
-    case!(block_id_state_lifetime_rules_are_exhaustive);
-    case!(restore_history_validation_is_exhaustive);
-    case!(tool_result_slot_history_rules_are_exhaustive);
-    case!(revision_exhaustion_is_checked_and_atomic_at_u64_max);
-}
+#[path = "state/tests.rs"]
+mod tests;
