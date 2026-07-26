@@ -63,7 +63,23 @@ impl StagedFrame {
                 display_width: token.display_width,
                 frame: initial_frame_disposition(&token.placement),
             })?;
-            self.project_token(id, token, origin_x, origin_y)?;
+        }
+        for run in flow.logical_rows().iter().flat_map(|row| &row.runs) {
+            let token =
+                flow.tokens()
+                    .get(run.token_index)
+                    .ok_or(ProjectionError::MalformedFlow(
+                        "run token index out of range",
+                    ))?;
+            self.project_token(
+                ProjectionId {
+                    element_id,
+                    token_index: run.token_index,
+                },
+                token,
+                origin_x,
+                origin_y,
+            )?;
         }
         Ok(())
     }
@@ -165,6 +181,21 @@ impl StagedFrame {
         else {
             return Ok(());
         };
+        let Some(expected) = self
+            .output
+            .prospective_grapheme_write_footprint(x, y, grapheme)
+        else {
+            return Err(ProjectionError::WriterOutcomeMismatch);
+        };
+        if !expected.target_cells.is_empty()
+            || expected.old_cells.is_empty()
+            || expected
+                .old_cells
+                .iter()
+                .any(|position| self.projection.owner_at(position.x, position.y) != Some(owner))
+        {
+            return Err(ProjectionError::WriterOutcomeMismatch);
+        }
         self.checkpoint()?;
         let GraphemeWriteOutcome::Committed(actual) =
             self.output
@@ -172,13 +203,7 @@ impl StagedFrame {
         else {
             return Err(ProjectionError::WriterOutcomeMismatch);
         };
-        if !actual.target_cells.is_empty()
-            || actual.old_cells.is_empty()
-            || actual
-                .old_cells
-                .iter()
-                .any(|position| self.projection.owner_at(position.x, position.y) != Some(owner))
-        {
+        if actual != expected {
             return Err(ProjectionError::WriterOutcomeMismatch);
         }
         Ok(())
@@ -550,7 +575,7 @@ impl ProjectionBuilder {
             y: u16::try_from(y).ok()?,
         };
         let owner = self.reverse.get(&cell)?.id();
-        if owner.element_id != id.element_id || owner.token_index >= id.token_index {
+        if owner.element_id != id.element_id {
             return None;
         }
         let record = self
