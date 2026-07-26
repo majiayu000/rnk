@@ -38,7 +38,7 @@ source，且所有 merge commits 是 implementation base 的祖先。spec PR、�
 ## Codebase Context
 
 锚点基于 spec branch base
-`3f21b049db4e6fe426f8c95270b517d10d92959b`，均已用 Read/grep 核实。
+`58b13e32d2e23aa44d777d60c204979ea3a2f9b7`，均已用 Read/grep 核实。
 
 | Area | Current anchor | Current behavior | GH-66 decision |
 | --- | --- | --- | --- |
@@ -83,9 +83,9 @@ pub trait ScrollbackSink {
 token/control均为concrete private-field值，不是任意callback。
 
 `ScrollbackSink` 不接受 `Any`、字符串 error、任意 callback 或 boxed future。生产
-`NativeScrollbackSink<'a>` 只由 `NativeInlineSession::scrollback_sink()` 构造，借用同一
-session 的 `Terminal` 和 process-local ledger；borrow 结束后 session 才能 `render_live`，
-从类型层防止 commit/write 与 live render 同时执行。
+`NativeScrollbackSink<'a>`是coordinator内部私有适配器，借用同一session的`Terminal`与ledger；
+不从public API返回。coordinator安全拆借shell/session并在同一scope完成primary transition与
+repaint，从类型层防止commit/write和live render交错。
 
 ### 2. 公共 commit types
 
@@ -131,10 +131,18 @@ ScrollbackCommitReceipt {
 ScrollbackCommitOutcome =
   Committed {
     receipt: ScrollbackCommitReceiptHandle,
-    disposition: ScrollbackAttemptDisposition
+    disposition: ScrollbackAttemptDisposition,
+    cleanup: ScrollbackCleanupReport
   } |
-  NotCommitted(ScrollbackCommitError) |
-  Unknown(ScrollbackCommitError)
+  NotCommitted { primary: ScrollbackCommitError, cleanup: ScrollbackCleanupReport } |
+  Unknown { primary: ScrollbackCommitError, cleanup: ScrollbackCleanupReport }
+
+ScrollbackCleanupReport =
+  Complete |
+  Failed(ScrollbackCleanupErrors) // private nonempty ordered errors + accessors
+
+ScrollbackCleanupError =
+  LiveRepaint { source: std::io::Error }
 ```
 
 不增加 hash dependency，也不使用不稳定 `DefaultHasher`。identity 是 exact immutable bytes；
@@ -182,7 +190,8 @@ begin: clear current live region
 -> write canonical SGR reset ESC[0m
 -> write exactly one CRLF delimiter
 -> flush
--> repaint marker
+-> insert confirmed ledger（仅成功路径）
+-> repaint live state（所有begin后出口）
 ```
 
 `ScrollbackContent`与identity始终保存normalized canonical LF bytes，不保存机器相关transport。
@@ -192,21 +201,30 @@ encoder逐个semantic segment输出，保留`canonical_offset`与segment内
 但transport count包含CR且outcome必为Unknown。reset和最终delimiter不属于content identity，
 却分别计数并进入receipt前的成功条件；这与legacy `Terminal::println`逐行CRLF语义一致。
 
-分类固定：
+每个非空segment使用同一个offset-aware循环：以`offset < bytes.len()`调用
+`write(&bytes[offset..])`；`Ok(n)`须满足`n <= remaining`，`n > 0`累加offset/counters并继续，
+包括positive short write；`Ok(0)`规范为`WriteZero`。分类只看累计
+`accepted_commit_transport_bytes`，不把清除live region的控制bytes误算为transcript effect：
 
 | 观察 | Outcome |
 | --- | --- |
-| begin/preflight失败；content accepted=0 | `NotCommitted` |
-| first content write在接受任何 byte前失败 | `NotCommitted` |
-| content short write、编码CRLF中途失败/WriteZero | `Unknown` |
+| preflight/begin/clear失败；或首个nonempty write `Ok(0)`/error/cancel且accepted=0 | `NotCommitted` |
+| 任意positive short writes最终写完 | 继续到下一segment，不提前分类 |
+| 任意accepted byte后的`Ok(0)`/error/cancel；CRLF只写入CR | `Unknown` |
 | content完成但canonical SGR reset partial/失败 | `Unknown` |
 | content完成但 delimiter partial/失败 | `Unknown` |
 | content+delimiter完成但 flush失败 | `Unknown` |
-| cancellation在begin前 | `NotCommitted(Cancelled)` |
-| cancellation在任意 accepted transport byte后或flush后/ledger前 | `Unknown(Cancelled)` |
 | full content + reset + delimiter + flush成功，ledger insert成功 | `Committed { Written }` |
 | ledger已有same完整ID+identity | 不写terminal，`Committed { AlreadyCommitted }`且共享original receipt |
 | ledger已有same完整ID+different identity | `NotCommitted(IdentityConflict)` |
+
+coordinator拆借得到private `InlineNativeCommitContext { shell, session }`；transaction在首次clear
+前保存pre-attempt projection并安装guard，计算primary后先原子apply shell transition，再从shell
+取得post-attempt projection并立即full repaint，之后才构造public outcome。unwind用pre-attempt
+projection恢复；没有public出口可停在clear与repaint之间。repaint失败进入ordered nonempty
+`ScrollbackCleanupErrors`并保留source，绝不改primary三态；Committed仍保留confirmed事实，
+coordinator转typed restoration-required。fake/PTY覆盖first-write/repaint/双失败，要求返回前
+已恢复live transcript/composer或显式报告cleanup failure。
 
 ledger insert 必须在 flush 成功后；native write和insert仍不是 crash-atomic。insert 前容量预检，
 容量满时在写任何 byte前返回 `NotCommitted(LedgerCapacityExhausted)`；confirmed entries不
@@ -215,9 +233,10 @@ evict。这样不会出现“已经写入后才发现无处记录”。若进程
 
 cancellation固定在begin前、每次`Write::write`返回后、每个content segment后、reset/delimiter
 前后、flush前后和ledger insert前采样；fake writer用barrier让另一线程在每个点flip token，
-从而mid-commit分支不是预置fixture。control permit在调用sink前进入、所有outcome/unwind后
-RAII释放；custom sink在outer permit存活时调用`try_begin_nested_attempt`可稳定得到
-`ReentrantCommit`，外层candidate/revision/ledger不变。
+从而mid-commit分支不是预置fixture。fault matrix还逐项覆盖progressive shorts、
+short-then-zero/error/cancel以及content/CRLF/reset/delimiter每个offset。control permit在调用
+sink前进入、所有outcome/unwind后RAII释放；custom sink在outer permit存活时调用
+`try_begin_nested_attempt`可稳定得到`ReentrantCommit`，外层state不变。
 
 ### 4. Durable sink 与跨重试/重启
 
@@ -253,7 +272,9 @@ shell 不提供可 serde/clone restore 的私有 ledger snapshot。restart 流�
 ```text
 persisted GH-62 ConversationStateSnapshot
 -> GH-62 ConversationState::try_restore (验证全部 identity/revision/history)
--> InlineChatShell::try_restore(..., RestoredDurable)
+-> InlineChatShell::try_restore(config, namespace, restored provenance,
+                                &validated ConversationState, recovery render)
+-> source-order seed完整commit IDs（尚不使用当前环境投影）
 -> InlineChatShell::reconcile_durable(&mut DurableScrollbackSink)
 -> 按namespace + message ID/revision先lookup，不先project
 -> lookup Committed验证stored identity/context/receipt后重建confirmed/remove
@@ -263,8 +284,8 @@ persisted GH-62 ConversationStateSnapshot
 
 因此 serialization boundary 唯一属于 GH-62 validated snapshot 和 injected durable store；
 GH-66 不新增 serde dependency或未验证 wire struct。`InlineShellObservation` 是公共只读观察，
-明确不能作为 restore input。公开构造要求
-`InlineSessionProvenance::{Fresh, RestoredDurable { recovery_id },
+明确不能作为 restore input。`try_new`固定Fresh；`try_restore`要求显式
+`InlineSessionProvenance::{RestoredDurable { recovery_id },
 RestoredAfterUncleanNativeExit { recovery_id }}`；native restored path不lookup/重投影旧terminal
 effects，而把所有terminal candidates初始化Unknown/order-blocked，直到typed manual resolution。
 Fresh与restored provenance在observation可读，不能由default隐式选择。
@@ -300,8 +321,14 @@ constructor：
 ```text
 InlineChatShell::try_new(
   InlineChatShellConfig,
+  ScrollbackNamespace
+) -> Result<Self, InlineChatShellError>
+InlineChatShell::try_restore(
+  InlineChatShellConfig,
   ScrollbackNamespace,
-  InlineSessionProvenance
+  InlineSessionProvenance, // runtime拒绝Fresh
+  &ConversationState,
+  InlineRenderContext<'_>
 ) -> Result<Self, InlineChatShellError>
 InlineChatShellConfig::new(
   candidate_capacity: NonZeroUsize,
@@ -354,17 +381,22 @@ observe(&self) -> InlineShellObservation<'_>
 try_project_live(...) -> Result<InlineLiveProjection, InlineChatShellError>
 ```
 
-`bootstrap`只允许`Fresh`且candidate/index为空时调用一次，按Conversation source order做O(n)
-初始化；成功进入Running。此后`synchronize`只消费最终GH-62 `ApplyOutcome`的唯一
+`try_new`只能建立Fresh空shell；`bootstrap`只允许该shell且candidate/index为空时调用一次。
+`try_restore`只接受闭集`RestoredDurable | RestoredAfterUncleanNativeExit`，实际消费GH-62
+validated Conversation与recovery render context，按source order做一次O(n) scan并为每个稳定
+terminal message seed完整namespace/message/revision ID与source-order slot。durable seed不先
+project，等待ID-first lookup；unclean native seed立即进入Unknown并冻结recovery evidence。
+非空history为空结果、ID缺失或projection失败均typed fail atomic。此后`synchronize`只消费
+最终GH-62 `ApplyOutcome`的唯一
 `affected_message_ids()`和当前immutable snapshot，不能遍历未受影响history：
 
-1. 验证outcome属于当前conversation revision，affected IDs唯一且都能从snapshot读取；
-2. 对每个affected ID先用namespace/message/revision查询candidate/confirmed O(1) index；
-3. existing candidate先复用其frozen bytes/context，禁止因当前width/theme先reproject；
-4. 只有previously unseen terminal revision才经GH-63生成一次projection并sanitizer；
-5. Pending/Streaming只更新live index；Complete/Cancelled/Failed还须nested lifecycle terminal；
-6. 通过上游source-order accessor把新candidate插入确定位置，不扫描完整history；
-7. same完整ID/identity为no-op；same完整ID/different bytes fail atomic。
+1. 验证outcome revision与affected entries唯一；逐项先读disposition，只有`Present`才从
+   post-apply snapshot lookup并按既有frozen-first规则project/insert；
+2. `Deleted`绝不snapshot lookup，只用affected ID/revisions定位index：Live、Staged和
+   NotCommitted（均无accepted effect）删除并留typed tombstone；Unknown保留frozen
+   bytes/evidence、标`source_deleted`且继续block；ResolvedCommitted/Abandoned保留append-only
+   resolution audit并归档；Confirmed只移除live/source index，terminal scrollback与ledger不变；
+3. source-order accessor只用于Present新candidate；same ID/identity no-op，conflict fail atomic。
 
 Cancelled/Failed content保留 status/failure cause presentation，transport
 `Committed`不改变其 conversation status。staged content此后不随 resize/theme重建；live
@@ -399,9 +431,12 @@ Shutdown/closing
 - sink不得回调shell，但可以安全调用`request.control().try_begin_nested_attempt()`；outer
   permit存在时该production API返回`ReentrantCommit`，不会unsafe alias或borrow panic。fake
   sink必须通过这条入口证明外层state/receipt/ledger原子。
-- `retry_not_committed`只接受当前phase确为NotCommitted、ID/identity相同、前序已confirmed；
-  Unknown、Confirmed、Live、Staged普通retry都 typed拒绝。
-- `resolve_unknown`只接受当前phase Unknown且前序已确认；`UnknownResolution`闭集为
+- private pure `order_satisfied(phase)`唯一闭集为
+  `Confirmed | ResolvedCommitted | Abandoned`；`try_commit_next`、`retry_not_committed`、
+  `resolve_unknown`都逐个前序调用它，禁止各自写literal Confirmed特判。
+- `retry_not_committed`只接受当前phase确为NotCommitted、ID/identity相同且全部前序满足上述
+  predicate；其他phase typed拒绝。`resolve_unknown`只接受Unknown且前序同样满足；
+  `UnknownResolution`闭集为
   `TreatAsCommitted { evidence: ManualCommitEvidence }`与
   `Abandon { evidence: ManualAbandonEvidence }`。两种evidence均含validated nonempty
   audit ID/reason/actor scope和exact namespace/ID/identity。`UnknownResolutionAuditSink`
@@ -409,6 +444,8 @@ Shutdown/closing
   resolution幂等，conflict/unknown ID/audit failure零mutation。TreatAsCommitted建立
   `ResolvedCommitted` observation但不伪造native sink original receipt；Abandon保留safe
   audit/status且不再允许写该candidate。
+- exact matrix覆盖两种resolution后后继NotCommitted retry、后继Unknown resolution，以及
+  restored history含多个Unknown时只允许按source order逐项解决。
 - durable concurrent去重属于 sink原子存储合同；shell不标 `Sync`，native session/ledger不
   宣称跨线程或跨进程。
 - `Committed` receipt错ID/identity是 sink contract violation，shell转 Unknown并保留live，
@@ -497,20 +534,29 @@ session owner。native session内部拥有`Terminal`、nonzero confirmed ledger�
 `InlineTerminalSnapshot`和逐阶段lifecycle：
 
 ```text
-InlineSessionCoordinator::try_enter(
-  shell_config,
-  namespace,
-  provenance,
-  session_config
+InlineSessionCoordinator::try_enter(fresh_shell_config, namespace, session_config)
+  -> Result<InlineSessionCoordinator, InlineSessionEnterError>
+InlineSessionCoordinator::try_enter_restored(
+  shell_config, namespace, InlineSessionProvenance, &ConversationState, InlineRenderContext<'_>, session_config
 ) -> Result<InlineSessionCoordinator, InlineSessionEnterError>
 
-scrollback_sink(&mut self) -> NativeScrollbackSink<'_>
-cancellation_handle(&self) -> InlineCancellationHandle
-render_live(&mut self, &Element) -> Result<(), InlineSessionError>
-poll_event(&mut self, Duration) -> Result<Option<Event>, InlineSessionError>
-try_shutdown(&mut self) -> InlineShutdownOutcome
-try_recover_poisoned_lease(backend) -> Result<(), InlineLeaseRecoveryError>
+bootstrap(&mut self, &ConversationState, InlineRenderContext<'_>) -> Result<...>
+synchronize(&mut self, &ConversationState, &ApplyOutcome, InlineRenderContext<'_>) -> Result<...>
+try_commit_next_native(&mut self) -> Result<InlineCommitStep, ...>
+retry_not_committed_native(&mut self, &ScrollbackCommitId) -> Result<InlineCommitStep, ...>
+try_commit_next_with<S: ScrollbackSink>(&mut self, &mut S) -> Result<...>; retry_not_committed_with<S: ScrollbackSink>(&mut self, id, &mut S) -> Result<...>
+reconcile_durable<S: DurableScrollbackSink>(&mut self, &mut S) -> Result<InlineRecoveryReport, ...>
+resolve_unknown<A: UnknownResolutionAuditSink>(&mut self, id, resolution, &mut A) -> Result<...>
+cancellation_handle(&self) -> InlineCancellationHandle; observe(&self) -> InlineShellObservation<'_>
+render_live(&mut self, &Element) -> Result<(), InlineSessionError>; poll_event(&mut self, Duration) -> Result<Option<Event>, InlineSessionError>
+try_shutdown(&mut self) -> InlineShutdownOutcome; try_recover_poisoned_lease(backend) -> Result<(), InlineLeaseRecoveryError>
 ```
+
+不公开shell/session/sink的可变borrow。每个wrapper先验证coordinator typestate，再在private实现中
+安全拆借disjoint `&mut shell`/`&mut session`，native commit只在该scope构造sink并在render前
+drop；durable wrapper同样持有single-in-flight guard。crate外exact test只经coordinator完成
+fresh bootstrap、delta、native/durable commit、retry、reconcile、两种resolution、render和
+shutdown，证明public surface实际可调用，而非仅能取得sink。
 
 `InlineShutdownOutcome`闭集为`Complete(report) | RetryRequired(report) | AlreadyShutdown`；
 lease process state闭集为`Free | Held(holder) | Poisoned(restoration stages)`。
@@ -524,7 +570,8 @@ Lease -> CapabilitySnapshot -> RawMode -> CursorHidden
       -> BracketedPasteConfigured -> EntryFlush
 ```
 
-`InlineTerminalSnapshot`由可注入backend查询并验证screen/raw/cursor/paste初值；alternate screen
+`InlineTerminalSnapshot`由可注入backend查询并验证screen/raw/cursor/paste初值；session配置与
+backend没有focus/mouse mutation命令，并拒绝产生相应enable/disable escape。alternate screen
 或无法建立required state时typed Unsupported，不能猜默认。任一entry stage失败都按已完成阶段
 逆序rollback并继续尝试全部步骤；`InlineSessionEnterError`同时保存primary cause与ordered
 rollback failures。rollback全部成功后lease回Free；任一步失败则lease变Poisoned并携带未完成
@@ -537,7 +584,7 @@ coordinator shutdown的唯一顺序：
 stop event intake + trigger cancellation
 -> shell expose pending/Unknown/manual-resolution-required outcomes
 -> clear live region
--> restore paste/focus/mouse
+-> restore paste
 -> show/restore cursor
 -> restore raw/screen
 -> flush
@@ -556,7 +603,7 @@ Drop与panic hook调用同一private阶段表best-effort；全部成功则lease�
 lease标Poisoned并阻止新entry。只有显式`try_recover_poisoned_lease`重跑未完成阶段且外部
 snapshot验证成功后才能Free，仍不得把先前Drop说成成功。PTY/fake覆盖normal/cancel/failure/panic、
 entry partial failure、shutdown first-failure/second-success、nested/cross-thread lease、
-suspend/resume：raw关闭、cursor/paste恢复prior值、无alt-screen序列、所有style已reset。
+suspend/resume：raw关闭、cursor/paste恢复prior值、无alt-screen/focus/mouse序列、style已reset。
 无PTY环境时required job blocked，不能pass。
 
 ### 11. Example、exports 与兼容
@@ -582,24 +629,24 @@ suspend/resume：raw关闭、cursor/paste恢复prior值、无alt-screen序列、
 | B-003 | terminal candidate filter | lib exact `gh66_scrollback_lifecycle_contract` |
 | B-004 | sink trait/outcome | crate-outside exact `closed_scrollback_outcomes_are_exhaustive` |
 | B-005 | stable receipt + per-attempt disposition | lib exact `native_confirmed_dedup_is_process_local` |
-| B-006 | zero-effect classification | lib exact `partial_write_flush_broken_pipe_outcomes_are_typed` |
+| B-006 | primary classification + immediate repaint cleanup | lib exact `partial_write_flush_broken_pipe_outcomes_are_typed`; PTY exact |
 | B-007 | reachable cancellation/Unknown | lib exact `partial_write_flush_broken_pipe_outcomes_are_typed`; `unknown_blocks_order_and_never_auto_retries` |
 | B-008 | native bounded ledger | lib exact `native_confirmed_dedup_is_process_local` |
-| B-009 | O(n) bootstrap + affected-ID delta | lib exact `duplicate_terminal_render_and_delta_are_single_effect`（operation counter） |
-| B-010 | confirmed-only removal | lib exact `gh66_scrollback_lifecycle_contract` |
-| B-011 | source blocker/manual audited resolution | lib exact `unknown_blocks_order_and_never_auto_retries` |
-| B-012 | retry + durable manual resolution audit | integration exact `not_committed_retry_is_explicit_and_unknown_retry_is_rejected` |
+| B-009 | O(n) bootstrap + disposition-first delta/delete phases | lib exact `duplicate_terminal_render_and_delta_are_single_effect` |
+| B-010 | confirmed-only removal + deleted Unknown evidence | lib exact `gh66_scrollback_lifecycle_contract` |
+| B-011 | shared order predicate + both resolutions | lib exact `unknown_blocks_order_and_never_auto_retries` |
+| B-012 | successor retry/resolution audit | integration exact `not_committed_retry_is_explicit_and_unknown_retry_is_rejected` |
 | B-013 | namespaced durable concurrent exactly-once | integration exact `durable_sink_cross_retry_and_restart_reconstruction_is_exactly_once` |
-| B-014 | restart reconstruction | integration exact `durable_sink_cross_retry_and_restart_reconstruction_is_exactly_once`; `public_observation_is_not_a_restore_snapshot` |
+| B-014 | nonempty restored source-order seeding | integration exact `durable_sink_cross_retry_and_restart_reconstruction_is_exactly_once`; `public_observation_is_not_a_restore_snapshot` |
 | B-015 | composer outcomes | integration exact `composer_focus_cancel_and_failure_outcomes_remain_typed` |
 | B-016 | focus/mode/resize | integration exact `composer_focus_cancel_and_failure_outcomes_remain_typed` |
 | B-017 | empty/missing content | lib exact `empty_state_and_empty_commit_do_not_invent_data` |
-| B-018 | LF→CRLF/reset/delimiter fault matrix | lib exact `partial_write_flush_broken_pipe_outcomes_are_typed` |
+| B-018 | progressive-short/write-zero/CRLF/reset/delimiter matrix | lib exact `partial_write_flush_broken_pipe_outcomes_are_typed` |
 | B-019 | safe control reentry/concurrency | lib exact `revision_overflow_and_reentrancy_are_atomic`; durable integration exact |
 | B-020 | checked counters/illegal transition | lib exact `revision_overflow_and_reentrancy_are_atomic` |
-| B-021 | coordinator + retryable shutdown | lib exact `shutdown_state_machine_is_ordered_and_idempotent` |
-| B-022 | staged enter/lease/Drop/panic | PTY exact `inline_pty_restores_terminal_on_normal_cancel_failure_and_panic` |
-| B-023 | four-path PTY restoration | PTY exact `inline_pty_restores_terminal_on_normal_cancel_failure_and_panic` |
+| B-021 | crate-outside coordinator lifecycle + shutdown | prelude exact `inline_chat_shell_public_surface_executes`; lib shutdown exact |
+| B-022 | staged enter/lease/Drop; no focus/mouse mutation | PTY exact `inline_pty_restores_terminal_on_normal_cancel_failure_and_panic` |
+| B-023 | four-path restore/repaint/no-mode-sequence | PTY exact `inline_pty_restores_terminal_on_normal_cancel_failure_and_panic` |
 | B-024 | control sanitizer + reset isolation | lib exact `sanitizer_rejects_terminal_control_injection` |
 | B-025 | crash boundary | integration exact `native_restart_never_claims_unknown_terminal_effect` |
 | B-026 | frozen-candidate-first resize | integration exact `live_resize_never_rewrites_confirmed_scrollback` |
