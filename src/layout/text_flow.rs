@@ -1,9 +1,4 @@
-//! Canonical logical text flow.
-//!
-//! The complete preserved source is segmented exactly once. Source identity
-//! stays separate from placement, so sanitized and synthetic output cannot
-//! forge source ranges.
-
+//! Canonical text flow preserves source identity separately from placement.
 use std::{error::Error, fmt, ops::Range, sync::Arc};
 
 use unicode_segmentation::UnicodeSegmentation;
@@ -90,6 +85,9 @@ pub struct TextFlowOptions {
 }
 
 impl TextFlowOptions {
+    /// Largest supported tab stop and single-tab expansion, in terminal cells.
+    pub const MAX_TAB_EXPANSION: usize = 4096;
+
     pub fn new(max_width: usize, text_wrap: TextWrap) -> Self {
         Self {
             max_width,
@@ -207,8 +205,16 @@ impl TextFlow {
         options: &TextFlowOptions,
         mut interrupted: impl FnMut() -> bool,
     ) -> Result<Self, TextFlowError> {
+        if interrupted() {
+            return Err(TextFlowError::Interrupted);
+        }
         if options.tab_stop == 0 {
             return Err(TextFlowError::InvalidTabStop);
+        }
+        if options.tab_stop > TextFlowOptions::MAX_TAB_EXPANSION {
+            return Err(TextFlowError::TabExpansionTooLarge {
+                requested: options.tab_stop,
+            });
         }
         validate_styled_ranges(input)?;
         let (mut tokens, diagnostics, grapheme_ranges) = tokenize_source(input, &mut interrupted)?;
@@ -286,8 +292,11 @@ impl TextFlowCache {
         &mut self,
         input: &TextFlowInput,
         options: &TextFlowOptions,
-        interrupted: impl FnMut() -> bool,
+        mut interrupted: impl FnMut() -> bool,
     ) -> Result<Arc<TextFlow>, TextFlowError> {
+        if interrupted() {
+            return Err(TextFlowError::Interrupted);
+        }
         if let Some(flow) = &self.published
             && flow.cache_identity.input == *input
             && flow.cache_identity.options == *options
@@ -311,6 +320,9 @@ impl TextFlowCache {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TextFlowError {
     InvalidTabStop,
+    TabExpansionTooLarge {
+        requested: usize,
+    },
     InvalidStyleRange {
         range: Range<usize>,
     },
@@ -333,6 +345,13 @@ impl fmt::Display for TextFlowError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidTabStop => write!(f, "text flow tab stop must be greater than zero"),
+            Self::TabExpansionTooLarge { requested } => {
+                write!(
+                    f,
+                    "tab expansion {requested} exceeds supported maximum {}",
+                    TextFlowOptions::MAX_TAB_EXPANSION
+                )
+            }
             Self::InvalidStyleRange { range } => write!(f, "invalid styled range {range:?}"),
             Self::OverlappingStyleRanges { first, second } => {
                 write!(f, "styled ranges overlap: {first:?} and {second:?}")

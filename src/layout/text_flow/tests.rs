@@ -162,7 +162,7 @@ fn text_flow_cache_reuse() {
 }
 
 #[test]
-fn text_flow_large_tab_stop_is_typed_and_atomic() {
+fn text_flow_tab_expansion_bound_is_typed_and_atomic() {
     let mut cache = TextFlowCache::default();
     let baseline_input = plain_input("baseline");
     let baseline_options = TextFlowOptions::new(8, TextWrap::Wrap);
@@ -170,14 +170,40 @@ fn text_flow_large_tab_stop_is_typed_and_atomic() {
         .get_or_compute(&baseline_input, &baseline_options)
         .unwrap();
 
-    let mut large = TextFlowOptions::new(usize::MAX, TextWrap::Wrap);
-    large.tab_stop = usize::MAX;
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        cache.get_or_compute(&plain_input("\t"), &large)
-    }));
-    assert!(result.is_ok(), "large tab expansion must not panic");
-    assert_eq!(result.unwrap(), Err(TextFlowError::ArithmeticOverflow));
-    assert!(Arc::ptr_eq(cache.published.as_ref().unwrap(), &published));
+    for tab_stop in [
+        TextFlowOptions::MAX_TAB_EXPANSION + 1,
+        10_000_000,
+        usize::MAX,
+    ] {
+        let mut unsupported = TextFlowOptions::new(1, TextWrap::Wrap);
+        unsupported.tab_stop = tab_stop;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cache.get_or_compute(&plain_input("\t"), &unsupported)
+        }));
+        assert!(result.is_ok(), "unsupported tab expansion must not panic");
+        assert_eq!(
+            result.unwrap(),
+            Err(TextFlowError::TabExpansionTooLarge {
+                requested: tab_stop,
+            })
+        );
+        assert!(Arc::ptr_eq(cache.published.as_ref().unwrap(), &published));
+        assert_eq!(cache.build_count, 1);
+    }
+
+    let mut boundary = TextFlowOptions::new(TextFlowOptions::MAX_TAB_EXPANSION, TextWrap::Wrap);
+    boundary.tab_stop = TextFlowOptions::MAX_TAB_EXPANSION;
+    let accepted = TextFlow::try_build(&plain_input("\t"), &boundary).unwrap();
+    assert_eq!(
+        accepted.tokens[0].safe_text.len(),
+        TextFlowOptions::MAX_TAB_EXPANSION
+    );
+    assert_eq!(
+        accepted.tokens[0].display_width,
+        TextFlowOptions::MAX_TAB_EXPANSION
+    );
+    assert_eq!(accepted.tokens[0].source_range(), Some(0..1));
+    assert_eq!(accepted.position_map[0].source, accepted.tokens[0].source);
 }
 
 #[test]
@@ -462,6 +488,33 @@ fn text_flow_interruption() {
     );
     assert!(Arc::ptr_eq(cache.published.as_ref().unwrap(), &published));
     assert_eq!(cache.build_count, 1);
+}
+
+#[test]
+fn text_flow_immediate_interruption_precedes_empty_and_cache_results() {
+    let empty = plain_input("");
+    let options = TextFlowOptions::new(8, TextWrap::Wrap);
+    assert_eq!(
+        TextFlow::try_build_interruptible(&empty, &options, || true),
+        Err(TextFlowError::Interrupted)
+    );
+
+    let mut miss = TextFlowCache::default();
+    assert_eq!(
+        miss.get_or_compute_interruptible(&empty, &options, || true),
+        Err(TextFlowError::Interrupted)
+    );
+    assert!(miss.published.is_none());
+    assert_eq!(miss.build_count, 0);
+
+    let mut hit = TextFlowCache::default();
+    let published = hit.get_or_compute(&empty, &options).unwrap();
+    assert_eq!(
+        hit.get_or_compute_interruptible(&empty, &options, || true),
+        Err(TextFlowError::Interrupted)
+    );
+    assert!(Arc::ptr_eq(hit.published.as_ref().unwrap(), &published));
+    assert_eq!(hit.build_count, 1);
 }
 
 #[test]
