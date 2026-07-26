@@ -1,11 +1,8 @@
 //! TextFlow input, caching, and Taffy measurement bridge.
 
-use std::{
-    collections::{HashMap, VecDeque},
-    sync::Arc,
-};
+use std::{collections::VecDeque, sync::Arc};
 
-use taffy::{AvailableSpace, NodeId};
+use taffy::AvailableSpace;
 
 use crate::components::Line;
 use crate::core::{Element, ElementType, Style, VNode, VNodeType};
@@ -14,11 +11,10 @@ use crate::layout::{
     UnicodeWidthPolicy,
 };
 
-use super::LayoutEngine;
-
 #[derive(Clone)]
 pub(super) struct NodeContext {
     input: Option<TextFlowInput>,
+    policy: TextFlowPolicy,
     first_error: Option<TextFlowError>,
     active_flow: Option<Arc<TextFlow>>,
     #[cfg(test)]
@@ -26,9 +22,10 @@ pub(super) struct NodeContext {
 }
 
 impl NodeContext {
-    pub(super) fn new(input: Option<TextFlowInput>) -> Self {
+    pub(super) fn new(input: Option<TextFlowInput>, policy: &TextFlowPolicy) -> Self {
         Self {
             input,
+            policy: policy.clone(),
             first_error: None,
             active_flow: None,
             #[cfg(test)]
@@ -42,6 +39,10 @@ impl NodeContext {
 
     pub(super) fn is_text(&self) -> bool {
         self.input.is_some()
+    }
+
+    pub(super) fn matches(&self, input: &TextFlowInput, policy: &TextFlowPolicy) -> bool {
+        self.input.as_ref() == Some(input) && self.policy == *policy
     }
 
     pub(super) fn begin_frame(&mut self) {
@@ -61,7 +62,7 @@ impl NodeContext {
         self.active_flow.as_ref()
     }
 
-    fn pin_active_flow(&mut self, flow: &Arc<TextFlow>) {
+    pub(super) fn pin_active_flow(&mut self, flow: &Arc<TextFlow>) {
         self.active_flow = Some(Arc::clone(flow));
     }
 
@@ -85,7 +86,7 @@ impl NodeContext {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(super) struct TextFlowPolicy {
     tab_stop: usize,
     ellipsis: String,
@@ -170,10 +171,13 @@ pub(super) fn input_from_element(element: &Element) -> Option<TextFlowInput> {
     if element.element_type != ElementType::Text {
         return None;
     }
-    let source = element.text_content.as_deref().unwrap_or_default();
-    Some(match &element.spans {
-        Some(lines) => aligned_input(source, lines, &element.style),
-        None => TextFlowInput::plain(source, TextFlowSourceKind::Exact, element.style.clone()),
+    Some(match (&element.text_content, &element.spans) {
+        (Some(source), Some(lines)) => aligned_input(source, lines, &element.style),
+        (Some(source), None) => {
+            TextFlowInput::plain(source, TextFlowSourceKind::Exact, element.style.clone())
+        }
+        (None, Some(lines)) => canonical_span_input(lines, &element.style),
+        (None, None) => TextFlowInput::plain("", TextFlowSourceKind::Exact, element.style.clone()),
     })
 }
 
@@ -238,6 +242,33 @@ fn aligned_input(source: &str, lines: &[Line], style: &Style) -> TextFlowInput {
         cursor += break_len;
     }
     TextFlowInput::plain(source, TextFlowSourceKind::Exact, style.clone())
+        .with_styled_ranges(ranges)
+}
+
+fn canonical_span_input(lines: &[Line], style: &Style) -> TextFlowInput {
+    let mut source = String::new();
+    let mut ranges = Vec::new();
+
+    for (line_index, line) in lines.iter().enumerate() {
+        for span in &line.spans {
+            let start = source.len();
+            source.push_str(&span.content);
+            ranges.push(StyledTextRange {
+                range: start..source.len(),
+                style: style.clone().merge(&span.style),
+            });
+        }
+        if line_index + 1 < lines.len() {
+            let start = source.len();
+            source.push('\n');
+            ranges.push(StyledTextRange {
+                range: start..source.len(),
+                style: style.clone(),
+            });
+        }
+    }
+
+    TextFlowInput::plain(source, TextFlowSourceKind::Canonical, style.clone())
         .with_styled_ranges(ranges)
 }
 
@@ -360,147 +391,15 @@ pub(super) fn flow_for_width(
     cache.get_or_compute(input, &options, interrupted).map(Some)
 }
 
-impl LayoutEngine {
-    pub(super) fn staged_clone(&self) -> Self {
-        Self {
-            taffy: self.taffy.clone(),
-            node_map: self.node_map.clone(),
-            element_keys: self.element_keys.clone(),
-            vnode_map: self.vnode_map.clone(),
-            root_node: self.root_node,
-            last_width: self.last_width,
-            last_height: self.last_height,
-            flow_cache: self.flow_cache.clone(),
-            text_flow_policy: self.text_flow_policy.clone(),
-            current_text_flows: self.current_text_flows.clone(),
-            current_vnode_flows: self.current_vnode_flows.clone(),
-        }
-    }
-
-    pub(super) fn sync_text_contexts(
-        &mut self,
-        inputs: &HashMap<crate::core::NodeKey, TextFlowInput>,
-    ) {
-        for (key, input) in inputs {
-            let Some(node_id) = self.vnode_map.get(key).copied() else {
-                continue;
-            };
-            self.taffy
-                .set_node_context(node_id, Some(NodeContext::new(Some(input.clone()))))
-                .expect("mapped text node must remain in the Taffy tree");
-        }
-    }
-
-    fn context_nodes(&self) -> Vec<NodeId> {
-        self.node_map
-            .values()
-            .chain(self.vnode_map.values())
-            .copied()
-            .collect()
-    }
-
-    pub(super) fn run_layout_and_publish(
-        &mut self,
-        interrupted: &mut impl FnMut() -> bool,
-    ) -> Result<(), TextFlowError> {
-        for node_id in self.context_nodes() {
-            if let Some(context) = self.taffy.get_node_context_mut(node_id) {
-                context.begin_frame();
-            }
-        }
-        if let Some(root_node) = self.root_node {
-            let cache = &mut self.flow_cache;
-            let policy = &self.text_flow_policy;
-            let _ = self.taffy.compute_layout_with_measure(
-                root_node,
-                taffy::Size {
-                    width: AvailableSpace::Definite(self.last_width as f32),
-                    height: AvailableSpace::Definite(self.last_height as f32),
-                },
-                |known, available, _node_id, context, _style| {
-                    measure_text_node(known, available, context, cache, policy, interrupted)
-                },
-            );
-        }
-        for node_id in self.context_nodes() {
-            if let Some(error) = self
-                .taffy
-                .get_node_context(node_id)
-                .and_then(NodeContext::first_error)
-            {
-                return Err(error.clone());
-            }
-        }
-        self.publish_final_flows(interrupted)
-    }
-
-    fn publish_final_flows(
-        &mut self,
-        interrupted: &mut impl FnMut() -> bool,
-    ) -> Result<(), TextFlowError> {
-        let mut node_flows = HashMap::new();
-        for node_id in self.context_nodes() {
-            if node_flows.contains_key(&node_id) {
-                continue;
-            }
-            if let Some(flow) = self.flow_at_final_width(node_id, interrupted)? {
-                node_flows.insert(node_id, flow);
-            }
-        }
-        let element_flows = self
-            .node_map
-            .iter()
-            .filter_map(|(element_id, node_id)| {
-                Some((*element_id, Arc::clone(node_flows.get(node_id)?)))
-            })
-            .collect();
-        let vnode_flows = self
-            .vnode_map
-            .iter()
-            .filter_map(|(key, node_id)| Some((*key, Arc::clone(node_flows.get(node_id)?))))
-            .collect();
-        self.current_text_flows = element_flows;
-        self.current_vnode_flows = vnode_flows;
-        Ok(())
-    }
-
-    fn flow_at_final_width(
-        &mut self,
-        node_id: NodeId,
-        interrupted: &mut impl FnMut() -> bool,
-    ) -> Result<Option<Arc<TextFlow>>, TextFlowError> {
-        let Some(context) = self.taffy.get_node_context(node_id).cloned() else {
-            return Ok(None);
-        };
-        let Some(layout) = self.taffy.layout(node_id).ok() else {
-            return Ok(None);
-        };
-        let horizontal_inset =
-            layout.padding.left + layout.padding.right + layout.border.left + layout.border.right;
-        let width = (layout.size.width - horizontal_inset).max(0.0).floor() as usize;
-        let flow = flow_for_width(
-            &context,
-            width,
-            &mut self.flow_cache,
-            &self.text_flow_policy,
-            interrupted,
-        )?;
-        if let Some(flow) = &flow
-            && let Some(context) = self.taffy.get_node_context_mut(node_id)
-        {
-            context.pin_active_flow(flow);
-        }
-        Ok(flow)
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::LayoutEngine;
     use super::*;
     use crate::{
         components::{Line, Span},
         core::{Color, Dimension, Overflow, TextWrap},
         layout::TextFlowDiagnostic,
+        reconciler::Patch,
     };
 
     #[test]
@@ -519,7 +418,6 @@ mod tests {
             .get_or_compute(&input, &options, &mut || false)
             .unwrap();
         assert!(Arc::ptr_eq(&baseline, &reused));
-
         let mut identities = Vec::new();
         let mut changed_input = input.clone();
         changed_input.source = "ac".into();
@@ -536,7 +434,6 @@ mod tests {
         let mut changed_input = input.clone();
         changed_input.styled_ranges[0].range = 1..2;
         identities.push((changed_input, options.clone()));
-
         options.max_width = 7;
         identities.push((input.clone(), options.clone()));
         options.max_width = 8;
@@ -565,7 +462,6 @@ mod tests {
             assert!(!Arc::ptr_eq(&baseline, &changed));
         }
     }
-
     #[test]
     fn engine_cache_is_bounded_with_deterministic_fifo_eviction() {
         let options = TextFlowOptions::new(8, TextWrap::Wrap);
@@ -589,7 +485,6 @@ mod tests {
             }
         }
         assert_eq!(cache.entries.len(), FlowCache::MAX_ENTRIES);
-
         let newest_input = TextFlowInput::plain(
             format!("entry-{}", FlowCache::MAX_ENTRIES),
             TextFlowSourceKind::Exact,
@@ -602,7 +497,6 @@ mod tests {
             .get_or_compute(&newest_input, &options, &mut || false)
             .unwrap();
         assert!(Arc::ptr_eq(&newest, &newest_again));
-
         let first_again = cache
             .get_or_compute(&first_input, &options, &mut || false)
             .unwrap();
@@ -647,7 +541,6 @@ mod tests {
         let initial_element = identity_element(5.0, Overflow::Visible);
         let (initial_vnode, initial) =
             publish_incrementally(&mut engine, None, &initial_element, 0);
-
         let width_element = identity_element(4.0, Overflow::Visible);
         let (width_vnode, width) =
             publish_incrementally(&mut engine, Some(&initial_vnode), &width_element, 1);
@@ -658,7 +551,6 @@ mod tests {
         assert_eq!(width.cache_identity().input, expected_input);
         assert_eq!(width.cache_identity().options, expected);
         assert!(!Arc::ptr_eq(&initial, &width));
-
         let overflow_element = identity_element(4.0, Overflow::Hidden);
         let (overflow_vnode, overflow) =
             publish_incrementally(&mut engine, Some(&width_vnode), &overflow_element, 1);
@@ -667,7 +559,6 @@ mod tests {
         assert_eq!(overflow.cache_identity().input, expected_input);
         assert_eq!(overflow.cache_identity().options, expected);
         assert!(!Arc::ptr_eq(&width, &overflow));
-
         engine.set_text_flow_policy(2, "…", 1);
         let tab_element = identity_element(4.0, Overflow::Hidden);
         let (tab_vnode, tab) =
@@ -677,7 +568,6 @@ mod tests {
         assert_eq!(tab.cache_identity().options, expected);
         assert!(!Arc::ptr_eq(&overflow, &tab));
         assert_ne!(tab.rows(), overflow.rows());
-
         engine.set_text_flow_policy(2, "..", 1);
         let ellipsis_element = identity_element(4.0, Overflow::Hidden);
         let (_, ellipsis) =
@@ -704,7 +594,6 @@ mod tests {
         let id = element.id;
         let mut engine = LayoutEngine::new();
         engine.try_compute(&element, 8, 2).unwrap();
-
         let flow = engine.current_text_flow(id).unwrap();
         assert_eq!(
             flow.cache_identity().input.source_kind,
@@ -724,7 +613,6 @@ mod tests {
         let id = element.id;
         let mut engine = LayoutEngine::new();
         engine.try_compute(&element, 8, 2).unwrap();
-
         let flow = engine.current_text_flow(id).unwrap();
         assert_eq!(
             flow.cache_identity().input.source_kind,
@@ -737,5 +625,150 @@ mod tests {
             TextFlowDiagnostic::StyleBoundaryNormalized { boundary, .. }
                 if *boundary == "👩".len()
         )));
+    }
+
+    #[test]
+    fn span_only_lines_publish_canonical_source_and_merged_styles() {
+        let mut element = Element::new(ElementType::Text);
+        element.style.bold = true;
+        element.spans = Some(vec![
+            Line::from_spans(vec![
+                Span::new("left").color(Color::Red),
+                Span::new(" right").color(Color::Blue),
+            ]),
+            Line::new(),
+            Line::from(Span::new("tail").color(Color::Green)),
+        ]);
+
+        let input = input_from_element(&element).unwrap();
+
+        assert_eq!(input.source, "left right\n\ntail");
+        assert_eq!(input.source_kind, TextFlowSourceKind::Canonical);
+        assert_eq!(
+            input
+                .styled_ranges
+                .iter()
+                .map(|range| (range.range.clone(), range.style.color, range.style.bold))
+                .collect::<Vec<_>>(),
+            vec![
+                (0..4, Some(Color::Red), true),
+                (4..10, Some(Color::Blue), true),
+                (10..11, None, true),
+                (11..12, None, true),
+                (12..16, Some(Color::Green), true),
+            ]
+        );
+    }
+
+    #[test]
+    fn span_only_source_preserves_crlf_combining_and_zwj_bytes() {
+        let mut element = Element::new(ElementType::Text);
+        element.spans = Some(vec![Line::from_spans(vec![
+            Span::new("a\r\n").color(Color::Red),
+            Span::new("e").color(Color::Blue),
+            Span::new("\u{301}").color(Color::Yellow),
+            Span::new("👩").color(Color::Green),
+            Span::new("\u{200d}💻").color(Color::Cyan),
+        ])]);
+
+        let input = input_from_element(&element).unwrap();
+
+        assert_eq!(input.source, "a\r\ne\u{301}👩\u{200d}💻");
+        assert_eq!(input.source_kind, TextFlowSourceKind::Canonical);
+        assert_eq!(input.styled_ranges.len(), 5);
+        assert_eq!(input.styled_ranges[0].range, 0..3);
+        assert_eq!(input.styled_ranges[1].range, 3..4);
+        assert_eq!(input.styled_ranges[2].range, 4..6);
+        assert_eq!(input.styled_ranges[3].range, 6..10);
+        assert_eq!(input.styled_ranges[4].range, 10..17);
+
+        let mut engine = LayoutEngine::new();
+        engine.try_compute(&element, 8, 3).unwrap();
+        let flow = engine.current_text_flow(element.id).unwrap();
+        let combining = flow
+            .tokens()
+            .iter()
+            .find(|token| token.safe_text == "e\u{301}")
+            .unwrap();
+        let zwj = flow
+            .tokens()
+            .iter()
+            .find(|token| token.safe_text == "👩\u{200d}💻")
+            .unwrap();
+        assert_eq!(combining.style.color, Some(Color::Blue));
+        assert_eq!(zwj.style.color, Some(Color::Green));
+        assert!(flow.row_count() >= 2);
+    }
+
+    #[test]
+    fn present_text_source_keeps_exact_and_reconstructed_policies() {
+        let exact = split_style_element("ab", "a", "b");
+        let exact_input = input_from_element(&exact).unwrap();
+        assert_eq!(exact_input.source, "ab");
+        assert_eq!(exact_input.source_kind, TextFlowSourceKind::Exact);
+        assert_eq!(exact_input.styled_ranges.len(), 2);
+
+        let inconsistent = split_style_element("source", "different", "");
+        let reconstructed_input = input_from_element(&inconsistent).unwrap();
+        assert_eq!(reconstructed_input.source, "source");
+        assert_eq!(
+            reconstructed_input.source_kind,
+            TextFlowSourceKind::Reconstructed
+        );
+        assert!(reconstructed_input.styled_ranges.is_empty());
+    }
+
+    #[test]
+    fn text_without_source_or_spans_remains_empty_and_exact() {
+        let element = Element::new(ElementType::Text);
+
+        let input = input_from_element(&element).unwrap();
+
+        assert!(input.source.is_empty());
+        assert_eq!(input.source_kind, TextFlowSourceKind::Exact);
+        assert!(input.styled_ranges.is_empty());
+    }
+
+    #[test]
+    fn replace_and_reorder_preserve_only_live_flows() {
+        let old_leaf = VNode::text("old").with_key("old-leaf");
+        let old_leaf_key = old_leaf.key;
+        let old_branch = VNode::box_node().with_key("branch").child(old_leaf);
+        let old_branch_key = old_branch.key;
+        let root = VNode::box_node().children([old_branch, VNode::text("keep").with_key("keep")]);
+        let sibling_key = root.children[1].key;
+        let mut engine = LayoutEngine::new();
+        engine.compute_vnode(&root, 20, 4);
+        let old_branch_node = engine.vnode_map[&old_branch_key];
+        let sibling_node = engine.vnode_map[&sibling_key];
+        let sibling_flow = engine.current_vnode_text_flow(sibling_key).unwrap();
+        let new_leaf = VNode::text("new").with_key("new-leaf");
+        let new_leaf_key = new_leaf.key;
+        let replacement = VNode::box_node().with_key("branch").child(new_leaf);
+        assert!(engine.apply_patches(&[Patch::replace(old_branch_key, replacement)]));
+        assert_ne!(engine.vnode_map[&old_branch_key], old_branch_node);
+        assert!(engine.get_vnode_layout(old_leaf_key).is_none());
+        assert!(engine.current_vnode_text_flow(old_leaf_key).is_none());
+        assert_eq!(
+            engine
+                .current_vnode_text_flow(new_leaf_key)
+                .unwrap()
+                .cache_identity()
+                .input
+                .source,
+            "new"
+        );
+        assert_eq!(engine.vnode_map[&sibling_key], sibling_node);
+        assert!(Arc::ptr_eq(
+            &sibling_flow,
+            &engine.current_vnode_text_flow(sibling_key).unwrap()
+        ));
+        assert!(engine.apply_patches(&[Patch::reorder(root.key, vec![(0, 1), (1, 0)])]));
+        assert_eq!(engine.vnode_map[&sibling_key], sibling_node);
+        assert!(engine.get_vnode_layout(sibling_key).is_some());
+        assert!(Arc::ptr_eq(
+            &sibling_flow,
+            &engine.current_vnode_text_flow(sibling_key).unwrap()
+        ));
     }
 }
