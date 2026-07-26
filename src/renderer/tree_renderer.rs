@@ -3,10 +3,8 @@
 //! This module centralizes recursive element rendering so all call sites
 //! (runtime, render_to_string, static content, tests) use one code path.
 
-use crate::components::text::Line;
 use crate::core::{Display, Element, Overflow, Style};
 use crate::layout::LayoutEngine;
-use crate::layout::text_flow::flow_text;
 use crate::renderer::Output;
 use crate::renderer::output::ClipRegion;
 
@@ -189,26 +187,8 @@ fn render_element_tree_with_clip(
             .saturating_add(content_rect.y)
             .saturating_add(element.style.padding.top as u16);
 
-        if let Some(spans) = &element.spans {
-            render_spans(spans, output, text_x, text_y);
-        } else if let Some(text) = &element.text_content {
-            // Draw the same rows layout reserved height for. Writing the raw
-            // string instead stops at the first hard break or at the right
-            // edge, silently dropping everything after it.
-            let content_width = content_rect
-                .width
-                .saturating_sub(element.style.padding.left as u16)
-                .saturating_sub(element.style.padding.right as u16);
-            let flow = flow_text(text, content_width as usize, element.style.text_wrap);
-            for (row_idx, row) in flow.rows().iter().enumerate() {
-                let Ok(offset) = u16::try_from(row_idx) else {
-                    break;
-                };
-                let Some(row_y) = text_y.checked_add(offset) else {
-                    break;
-                };
-                output.write(text_x, row_y, row, &element.style);
-            }
+        if element.spans.is_some() || element.text_content.is_some() {
+            render_published_text_flow(element, layout_engine, output, text_x, text_y);
         }
     }
 
@@ -306,15 +286,29 @@ fn render_border(element: &Element, output: &mut Output, x: u16, y: u16, width: 
     }
 }
 
-fn render_spans(lines: &[Line], output: &mut Output, start_x: u16, start_y: u16) {
-    for (line_idx, line) in lines.iter().enumerate() {
-        let y = start_y + line_idx as u16;
-        let mut x = start_x;
+fn render_published_text_flow(
+    element: &Element,
+    layout_engine: &LayoutEngine,
+    output: &mut Output,
+    start_x: u16,
+    start_y: u16,
+) {
+    let flow = layout_engine
+        .current_text_flow(element.id)
+        .expect("text element must have a published TextFlow before rendering");
 
-        for span in &line.spans {
-            output.write(x, y, &span.content, &span.style);
-            x += span.width() as u16;
-        }
+    for run in flow.logical_rows().iter().flat_map(|row| &row.runs) {
+        let column =
+            u16::try_from(run.column).expect("published TextFlow column must fit output geometry");
+        let row = u16::try_from(run.row).expect("published TextFlow row must fit output geometry");
+        let x = start_x
+            .checked_add(column)
+            .expect("published TextFlow column must fit screen geometry");
+        let y = start_y
+            .checked_add(row)
+            .expect("published TextFlow row must fit screen geometry");
+
+        output.write(x, y, &run.text, &run.style);
     }
 }
 
