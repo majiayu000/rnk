@@ -35,6 +35,66 @@ impl ContentRect {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ClipBounds {
+    x1: u16,
+    y1: u16,
+    x2: u16,
+    y2: u16,
+}
+
+impl ClipBounds {
+    fn from_overflow(
+        style: &Style,
+        raw_x: f32,
+        raw_y: f32,
+        content_rect: ContentRect,
+    ) -> Option<Self> {
+        let clips_x = matches!(style.overflow_x, Overflow::Hidden | Overflow::Scroll);
+        let clips_y = matches!(style.overflow_y, Overflow::Hidden | Overflow::Scroll);
+        if !clips_x && !clips_y {
+            return None;
+        }
+
+        let content_x = raw_x + f32::from(content_rect.x);
+        let content_y = raw_y + f32::from(content_rect.y);
+        Some(Self {
+            x1: if clips_x { clip_bound(content_x) } else { 0 },
+            y1: if clips_y { clip_bound(content_y) } else { 0 },
+            x2: if clips_x {
+                clip_bound(content_x + f32::from(content_rect.width))
+            } else {
+                u16::MAX
+            },
+            y2: if clips_y {
+                clip_bound(content_y + f32::from(content_rect.height))
+            } else {
+                u16::MAX
+            },
+        })
+    }
+
+    fn intersect(self, other: Self) -> Self {
+        let x1 = self.x1.max(other.x1);
+        let y1 = self.y1.max(other.y1);
+        Self {
+            x1,
+            y1,
+            x2: self.x2.min(other.x2).max(x1),
+            y2: self.y2.min(other.y2).max(y1),
+        }
+    }
+
+    fn into_region(self) -> ClipRegion {
+        ClipRegion {
+            x1: self.x1,
+            y1: self.y1,
+            x2: self.x2,
+            y2: self.y2,
+        }
+    }
+}
+
 /// Convert a float screen coordinate to u16.
 ///
 /// Negative coordinates are outside the visible viewport. They must not be
@@ -47,6 +107,18 @@ fn screen_coord(v: f32) -> Option<u16> {
         Some(u16::MAX)
     } else {
         Some(v as u16)
+    }
+}
+
+/// Clamp a screen-space clip boundary to the representable output range.
+#[inline]
+fn clip_bound(v: f32) -> u16 {
+    if v <= 0.0 {
+        0
+    } else if v >= u16::MAX as f32 {
+        u16::MAX
+    } else {
+        v as u16
     }
 }
 
@@ -70,6 +142,17 @@ pub(crate) fn render_element_tree(
     offset_x: f32,
     offset_y: f32,
 ) {
+    render_element_tree_with_clip(element, layout_engine, output, offset_x, offset_y, None);
+}
+
+fn render_element_tree_with_clip(
+    element: &Element,
+    layout_engine: &LayoutEngine,
+    output: &mut Output,
+    offset_x: f32,
+    offset_y: f32,
+    inherited_clip: Option<ClipBounds>,
+) {
     if element.style.display == Display::None {
         return;
     }
@@ -90,28 +173,12 @@ pub(crate) fn render_element_tree(
         output.fill_rect(x, y, width, height, ' ', &element.style);
     }
 
-    let needs_clip = matches!(
-        element.style.overflow_x,
-        Overflow::Hidden | Overflow::Scroll
-    ) || matches!(
-        element.style.overflow_y,
-        Overflow::Hidden | Overflow::Scroll
-    );
-
-    let clip_x = screen_coord(raw_x + f32::from(content_rect.x));
-    let clip_y = screen_coord(raw_y + f32::from(content_rect.y));
-    let clip_width = content_rect.width;
-    let clip_height = content_rect.height;
-
-    let mut clip_pushed = false;
-    if needs_clip && let (Some(clip_x), Some(clip_y)) = (clip_x, clip_y) {
-        output.clip(ClipRegion {
-            x1: clip_x,
-            y1: clip_y,
-            x2: clip_x.saturating_add(clip_width),
-            y2: clip_y.saturating_add(clip_height),
-        });
-        clip_pushed = true;
+    let own_clip = ClipBounds::from_overflow(&element.style, raw_x, raw_y, content_rect);
+    let clip_to_push =
+        own_clip.map(|clip| inherited_clip.map_or(clip, |ancestor| ancestor.intersect(clip)));
+    let effective_clip = clip_to_push.or(inherited_clip);
+    if let Some(clip) = clip_to_push {
+        output.clip(clip.into_region());
     }
 
     if let (Some(x), Some(y)) = (x, y) {
@@ -151,10 +218,17 @@ pub(crate) fn render_element_tree(
     let child_offset_y = offset_y + layout.y - scroll_offset_y;
 
     for child in &element.children {
-        render_element_tree(child, layout_engine, output, child_offset_x, child_offset_y);
+        render_element_tree_with_clip(
+            child,
+            layout_engine,
+            output,
+            child_offset_x,
+            child_offset_y,
+            effective_clip,
+        );
     }
 
-    if clip_pushed {
+    if clip_to_push.is_some() {
         output.unclip();
     }
 
