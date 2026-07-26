@@ -36,7 +36,7 @@ dependency branch 或推测 API 开始实现。
 调用方参数替换、删减或追加集合。
 
 <!-- gh57-critical-paths-v1
-{"version":1,"issue":65,"critical_paths":[{"file":"src/components/chat/message_list/tests.rs","name":"following_zero_viewport_append_and_restore_latest_bottom","verification_command":"cargo test --workspace --lib --locked components::chat::message_list::tests::following_zero_viewport_append_and_restore_latest_bottom -- --exact"},{"file":"src/components/chat/message_list/tests.rs","name":"typed_navigation_overrides_following_and_replaces_observed_anchor","verification_command":"cargo test --workspace --lib --locked components::chat::message_list::tests::typed_navigation_overrides_following_and_replaces_observed_anchor -- --exact"},{"file":"src/components/chat/message_list/tests.rs","name":"invalid_insert_index_precedes_clone_index_and_callbacks","verification_command":"cargo test --workspace --lib --locked components::chat::message_list::tests::invalid_insert_index_precedes_clone_index_and_callbacks -- --exact"},{"file":"src/components/chat/message_list/tests.rs","name":"resize_rebuild_config_is_closed_ordered_and_atomic","verification_command":"cargo test --workspace --lib --locked components::chat::message_list::tests::resize_rebuild_config_is_closed_ordered_and_atomic -- --exact"},{"file":"src/components/chat/message_list/tests.rs","name":"state_revision_overflow_precedes_measurement_and_is_atomic_at_u64_max","verification_command":"cargo test --workspace --lib --locked components::chat::message_list::tests::state_revision_overflow_precedes_measurement_and_is_atomic_at_u64_max -- --exact"},{"file":"src/components/chat/message_list/tests.rs","name":"gh65_variable_height_anchor_contract","verification_command":"cargo test --workspace --lib --locked components::chat::message_list::tests::gh65_variable_height_anchor_contract -- --exact"},{"file":"tests/message_list_public_api.rs","name":"public_observation_is_read_only_and_reports_new_content","verification_command":"cargo test --test message_list_public_api --locked public_observation_is_read_only_and_reports_new_content -- --exact"},{"file":"tests/message_list_render.rs","name":"visible_slice_key_handle_is_o1_shared_immutable_and_send_sync","verification_command":"cargo test --test message_list_render --locked visible_slice_key_handle_is_o1_shared_immutable_and_send_sync -- --exact"},{"file":"tests/message_list_public_api.rs","name":"gh65_current_head_coverage_contract","verification_command":"cargo test --test message_list_public_api --locked gh65_current_head_coverage_contract -- --exact"}]}
+{"version":1,"issue":65,"critical_paths":[{"file":"src/components/chat/message_list/tests.rs","name":"following_zero_viewport_append_and_restore_latest_bottom","verification_command":"cargo test --workspace --lib --locked components::chat::message_list::tests::following_zero_viewport_append_and_restore_latest_bottom -- --exact"},{"file":"src/components/chat/message_list/tests.rs","name":"typed_navigation_overrides_following_and_replaces_observed_anchor","verification_command":"cargo test --workspace --lib --locked components::chat::message_list::tests::typed_navigation_overrides_following_and_replaces_observed_anchor -- --exact"},{"file":"src/components/chat/message_list/tests.rs","name":"invalid_insert_index_precedes_clone_index_and_callbacks","verification_command":"cargo test --workspace --lib --locked components::chat::message_list::tests::invalid_insert_index_precedes_clone_index_and_callbacks -- --exact"},{"file":"src/components/chat/message_list/tests.rs","name":"resize_rebuild_config_is_closed_ordered_and_atomic","verification_command":"cargo test --workspace --lib --locked components::chat::message_list::tests::resize_rebuild_config_is_closed_ordered_and_atomic -- --exact"},{"file":"src/components/chat/message_list/tests.rs","name":"state_revision_overflow_precedes_measurement_and_is_atomic_at_u64_max","verification_command":"cargo test --workspace --lib --locked components::chat::message_list::tests::state_revision_overflow_precedes_measurement_and_is_atomic_at_u64_max -- --exact"},{"file":"src/components/chat/message_list/tests.rs","name":"gh65_variable_height_anchor_contract","verification_command":"cargo test --workspace --lib --locked components::chat::message_list::tests::gh65_variable_height_anchor_contract -- --exact"},{"file":"tests/message_list_public_api.rs","name":"public_observation_is_read_only_and_reports_new_content","verification_command":"cargo test --test message_list_public_api --locked public_observation_is_read_only_and_reports_new_content -- --exact"},{"file":"tests/message_list_render.rs","name":"visible_slice_key_handle_is_o1_shared_immutable_and_send_sync","verification_command":"cargo test --test message_list_render --locked visible_slice_key_handle_is_o1_shared_immutable_and_send_sync -- --exact"},{"file":"tests/message_list_public_api.rs","name":"gh65_current_head_coverage_contract","verification_command":"GH65_COVERAGE_MODE=fixture cargo test --test message_list_public_api --locked gh65_current_head_coverage_contract -- --exact"}]}
 -->
 
 T3 实现 `gh65_current_head_coverage_contract` 的 `fixture`/`produce`/`validate` closed
@@ -150,11 +150,15 @@ GH65_COVERAGE_ARTIFACT="$GH65_EVIDENCE_DIR/gh57-child-coverage-v1.json" \
   `src/components/chat/message_list/state.rs`（private compile skeleton）、
   `src/components/chat/message_list/tests.rs`（T1 exact tests）。
   `Dependencies:` Implementation Gate。
+  Bounded reuse-cache capacity 必须在小于 active entry 数的 fixture 中淘汰旧 reuse item，同时
+  `active_keys` 仍逐项可 clone/render；zero-row constructor 只返回 unkeyed
+  `MessageRowsError::Zero`。
   `Verify:`
   `cargo test --workspace --lib --locked components::chat::message_list::tests::measurement_config_covers_textflow_and_shell_inputs -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::measurement_key_uses_all_identity_fields_and_exact_equality -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::measured_missing_failed_and_cancelled_outcomes_are_closed -- --exact`；
-  `cargo test --workspace --lib --locked components::chat::message_list::tests::message_rows_reject_zero -- --exact`；
+  `cargo test --workspace --lib --locked components::chat::message_list::tests::message_rows_reject_zero_without_measurement_key -- --exact`；
+  `cargo test --workspace --lib --locked components::chat::message_list::tests::active_measurement_handles_survive_reuse_cache_eviction -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::lookup_and_point_update_have_logarithmic_operation_bound -- --exact`；
   `cargo check --workspace --all-targets --all-features --locked`。
   `Handoff:` 保存 exact head、公开 type/error/update/observation/key-handle inventory、
@@ -167,7 +171,12 @@ GH65_COVERAGE_ARTIFACT="$GH65_EVIDENCE_DIR/gh57-child-coverage-v1.json" \
   `src/components/chat/message_list/state.rs`、
   `src/components/chat/message_list/tests.rs`。
   `Dependencies:` SP65-T1。
+  Constructor fixture 必须锁定 preflight-before-callback、input-order callbacks、
+  revision=1/Following/bottom observation 和首失败不发布 state；anchor fixture 必须先制造
+  viewport-clamped typed navigation，再 mutation 并证明 requested message/row 仍是恢复 anchor。
   `Verify:`
+  `cargo test --workspace --lib --locked components::chat::message_list::tests::constructor_measures_initial_entries_in_order_and_publishes_complete_state -- --exact`；
+  `cargo test --workspace --lib --locked components::chat::message_list::tests::constructor_failure_publishes_no_state -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::empty_zero_viewport_and_zero_width_contract -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::partial_first_and_last_message_ranges_are_row_exact -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::prepend_preserves_top_or_reports_short_content_viewport_clamp -- --exact`；
@@ -176,6 +185,7 @@ GH65_COVERAGE_ARTIFACT="$GH65_EVIDENCE_DIR/gh57-child-coverage-v1.json" \
   `cargo test --workspace --lib --locked components::chat::message_list::tests::zero_viewport_retains_and_restores_stored_anchor -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::following_zero_viewport_append_and_restore_latest_bottom -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::typed_navigation_overrides_following_and_replaces_observed_anchor -- --exact`；
+  `cargo test --workspace --lib --locked components::chat::message_list::tests::viewport_clamped_navigation_anchor_survives_next_mutation -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::invalid_insert_index_precedes_clone_index_and_callbacks -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::deleted_anchor_selects_next_then_previous_survivor -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::follow_pause_and_explicit_resume_state_machine -- --exact`；

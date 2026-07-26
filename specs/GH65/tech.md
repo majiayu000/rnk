@@ -105,6 +105,7 @@ GH-63 view/block 类型；facade 只把 entry/slice 交给调用方。
 
 ```text
 MessageRows(NonZeroU64)
+enum MessageRowsError { Zero }
 RowOffset(u64)
 ViewportRows(u64)
 MessageListRevision(NonZeroU64) // INITIAL == 1
@@ -215,7 +216,10 @@ enum MessageResizeConfigOutcome<Failure, Cancellation> {
 }
 ```
 
-`MessageRows::try_new(0)` typed 失败。所有 `u64` prefix arithmetic 使用 checked operations；
+`MessageRows::try_new(raw: u64) -> Result<MessageRows, MessageRowsError>` 在 `raw == 0` 时返回
+不携带 measurement key 的 `MessageRowsError::Zero`。只有成功构造的 `MessageRows` 才能进入
+`MessageMeasureOutcome::Measured`，因此 state callback boundary 不可能收到 raw zero。
+所有 `u64` prefix arithmetic 使用 checked operations；
 到 renderer `u16/usize` 的转换使用 `TryFrom` 并保留 coordinate overflow category，不截断。
 公开 config/private state 字段不能依赖 caller struct literal 构造；构造器校验 cache capacity、
 width、结构 segment rows 和初始 ID 唯一性。
@@ -228,7 +232,6 @@ outer width、horizontal insets 与 role/code header、status、inter-block spac
 border 等有序 structural segments。实现可以用 hash 加速 bucket lookup，但命中后必须对这些
 完整值逐字段 equality，collision 不是相等。GH-58 final API 若重命名 identity，implementation
 只能做机械适配，不得缩成五字段 key 或 opaque hash。
-
 `MessageMeasureKeyHandle` 是拥有 private `Arc<MessageMeasureKey>` 的 concrete public value
 type，不是 alias。`Clone` 只递增共享引用计数，固定 `O(1)`、不复制 source/style/config
 vectors；`as_key(&self) -> &MessageMeasureKey` 仅提供共享只读借用，不能取得 mutable key。
@@ -245,8 +248,8 @@ enum MessageListStateError {
   DuplicateMessageId { message_id },
   UnknownMessageId { message_id },
   InvalidInsertIndex { index, len },
-  ZeroMessageRows { key },
   MissingMeasurement { key },
+  MissingActiveMeasurement { message_id },
   StaleStateRevision { expected, actual },
   StateRevisionOverflow { revision },
   MeasurementIdentityMismatch { entry, key },
@@ -254,7 +257,15 @@ enum MessageListStateError {
   CoordinateOverflow { value, target },
   InvalidAnchorRow { message_id, requested, measured_rows },
   InvalidResizeConfig { message_index, message_id, new_width },
+  InvalidViewportWidth { width },
   InvalidCacheCapacity,
+}
+
+enum MessageCompositeMeasureError<TextFlowFailure> {
+  TextFlowFailed { child_index, source: TextFlowFailure },
+  InvalidCompositeConfig { child_index },
+  RowArithmeticOverflow,
+  MessageRows(MessageRowsError),
 }
 
 enum MessageListMeasureError<Failure, Cancellation> {
@@ -274,8 +285,13 @@ enum MessageListRenderError<RenderFailure> {
 所有 error 实现 `Display`、`Error` 和适用的 `source()`；crate 外 fixture 对 closed state error
 无 wildcard 穷举。failure 与 cancellation 从首版就是两个 generic source，callback 的 closed
 outcome 不要求 inspect 任意 error，也不能把二者压成字符串。未知 ID、invalid insert index、
-invalid anchor row、invalid rebuilt config、missing measurement、stale state revision、state
-revision overflow 与 row arithmetic overflow 保持不同 category。
+invalid anchor row、invalid rebuilt config、missing measurement、missing active measurement、
+stale state revision、state revision overflow 与 row arithmetic overflow 保持不同 category。
+`MessageRowsError` 是独立 public value error，不伪造一个不可达的
+`ZeroMessageRows { key }` state variant。Reference composite adapter 在总行数为零时返回
+`MessageCompositeMeasureError::MessageRows(MessageRowsError::Zero)`；调用方将它作为
+`Failed(source)` 返回后，state 的 `MeasurementFailed { key, source }` 用实际 request key
+增加上下文并保留 source chain。
 
 ### 3. Exact cache 与 prefix row index
 
@@ -285,10 +301,12 @@ State 内部持有：
 entries: Vec<MessageListEntry>
 positions: HashMap<MessageId, usize>
 rows: Vec<MessageRows>
+active_keys: Vec<MessageMeasureKeyHandle>
 prefix_rows: FenwickRows
 measurements: BoundedMeasurementCache<MessageMeasureKeyHandle, MessageRows>
 viewport: { width, rows, scroll_offset }
 stored_anchor: Option<MessageAnchor>
+anchor_authority: Option<StoredAnchorAuthority> // private: ViewportTop | ExplicitNavigation
 follow: BottomFollowState
 revision: MessageListRevision
 ```
@@ -315,11 +333,39 @@ Fenwick tree 保存每条消息 rows：
 
 结构性 prepend/insert/delete/reorder 可从 `rows` 重建 Fenwick 与 positions，复杂度 `O(n)`；
 exact cache 保留 unchanged keys。Resize 为每条 entry 请求新 width key，一次成功后重建；
-同 width 重试命中 cache。Cache eviction 只影响未来 measurement，不改变 active `rows`。
-`visible_range()` 只从 active key slot clone handle，因此 `k` 个 slices 的 key 成本为
+同 width 重试命中 cache。Cache eviction 只影响未来 measurement，不改变 active `rows` 或
+`active_keys`。`active_keys.len() == entries.len() == rows.len()` 是每次 constructor/mutation
+commit 的 postcondition；每个 slot 持有其 entry 当前 exact handle，且不是 bounded cache
+的借用或唯一 owner。Cache capacity 允许小于 active entry 数，candidate 把全部 active
+handles 建好后再按 deterministic LRU 写 reuse cache，eviction 不能触及 candidate/committed
+active slots。`visible_range()` 只从对应 `active_keys[index]` clone handle，因此 `k` 个 slices 的 key 成本为
 `O(k)` 次固定成本引用计数操作、零 source/style/config vector allocation。
 
 ### 4. Measurement contract 与原子 mutation
+
+Public initial constructor 是唯一发布初始 state 的入口：
+
+```text
+MessageListState::try_new<F, C>(
+  entries: &[MessageListEntry],
+  width: u16,
+  viewport_rows: ViewportRows,
+  measurement_cache_capacity: usize,
+  measure: impl FnMut(MessageMeasureRequest<'_>)
+    -> MessageMeasureOutcome<F, C>,
+) -> Result<MessageListState, MessageListMeasureError<F, C>>
+```
+
+它先验证 `width > 0`、capacity > 0、全部 ID 唯一和全部 entry/config structural invariants；
+这些 preflight 全部成功前 callback count 必须为 0。然后按 `entries[0..len]` 顺序建立 exact
+key、调用 cache/measure flow，stage owned entries、positions、rows、全部 `active_keys`、bounded
+reuse cache 和 Fenwick；首个 missing/failed/cancelled/overflow 立即返回 Err，不发布
+`MessageListState`，caller 的 input slice 不变，callback trace 精确停在失败 index。成功时一次
+发布 `revision=MessageListRevision::INITIAL(1)`：空列表为 Following/offset 0/anchor None；
+非空且 viewport rows>0 为 Following、offset=max offset、stored anchor=物理 top 且 authority
+为 `ViewportTop`；非空且 rows=0 为 Following、offset=total rows、stored anchor=末消息最后
+一行且 authority 为 `ViewportTop`。Constructor 不先创建可观察 skeleton，也不通过
+`try_replace_all` 对一个半初始化 state 做 mutation。
 
 Public mutation facade：
 
@@ -395,14 +441,16 @@ validate expected state revision
   -> collect exact cache hits and required keys
   -> synchronously run all missing MessageMeasureRequest callbacks
   -> map Missing/Failed/Cancelled to distinct typed errors
-  -> validate nonzero rows and checked totals
+  -> accept only validated MessageRows and checked totals
+  -> stage one exact active key handle per candidate entry
   -> build/update candidate prefix index
   -> restore candidate anchor/follow state
   -> commit all candidate fields once
 ```
 
-任一步 Err/cancellation drop candidate，原 entries/positions/rows/index/cache/viewport/
-stored_anchor/follow/revision 逐字段不变。优先级固定为 expected revision guard → target/ID/anchor
+任一步 Err/cancellation drop candidate，原 entries/positions/rows/active_keys/index/cache/
+viewport/stored_anchor/anchor_authority/follow/revision 逐字段不变。优先级固定为 expected
+revision guard → target/ID/anchor
 structural validation → exact no-op detection → `MessageListRevision::checked_next` →
 measurement callback/result → candidate arithmetic/postcondition。no-op 在 max revision 仍返回
 `NoChange`；因而仅对确有 observable change 的 operation，revision 为 `u64::MAX`、target 合法但 callback
@@ -445,7 +493,9 @@ Content streaming、variant change、expand/collapse 都通过同 ID 的 `try_up
 Repository-provided reference adapter `try_measure_composite`（位于 facade，不进入
 `height_index`）必须对 request 中有序的每个 `TextFlowCacheIdentity` 调 GH-58 checked
 `TextFlow::try_build(input, options)`，逐项 checked 累加 `row_count`，再 checked 累加全部
-`MessageStructuralSegment.rows`，最后构造一个 `MessageRows`。结构 segments 分别表达
+`MessageStructuralSegment.rows`，最后调用 `MessageRows::try_new(total)`。该 adapter 返回
+`Result<MessageRows, MessageCompositeMeasureError<TextFlowFailure>>`；total=0 保留
+`MessageRowsError::Zero` source，不能自行附造 key。结构 segments 分别表达
 role/code/block header、status marker、inter-block spacing、outer padding/border 等 renderer
 占行，不能把多个 block 拼成单个 TextFlow 或只测 message body。horizontal insets 必须与每个
 child identity 的 `options.max_width` 一致；不一致 typed 失败，不能猜宽度。
@@ -475,7 +525,9 @@ id0 message_rows 2..3 -> viewport_rows 0..1
 id1 message_rows 0..5 -> viewport_rows 1..6
 ```
 
-不存在 active height/key 时返回 `MissingMeasurement`，不能跳过或按一行处理。每个 slice
+Committed state 保证每个 entry 同时有 active height/key；若内部 slot parity 被破坏则返回
+`MissingActiveMeasurement { message_id }`，不能从 bounded reuse cache 临时找回、跳过或按
+一行处理。每个 slice
 验证 `start < end <= measured_rows`，并从 active slot clone
 `MessageMeasureKeyHandle`。handle clone 固定 `O(1)` 且零 key/config/source/style deep copy，
 所以总工作量按 message count 为 `O(log n + k)`，并且不隐藏与消息正文长度相关的 per-slice
@@ -484,30 +536,34 @@ clone；cache/mutation identity check 仍执行 deep equality。
 
 ### 6. Anchor、删除与 follow state transition
 
-State 对非零 viewport 在每次成功 mutation 前从当前 visible range 刷新 `stored_anchor`：
-`{top.message_id, top.message_rows.start}`。viewport rows=0 时 visible slices 为空，但不得把
-已有 surviving `stored_anchor` 改成 `None`；mutation 仍以它作为恢复输入。只有空列表或
-anchor 删除且无 survivor 时才清除。显式 typed navigation 是独立用户命令，不先用当前
-visible top 覆盖它的 requested anchor。恢复规则按优先级：
+Private `anchor_authority` 区分 `ViewportTop` 与 `ExplicitNavigation`。非零 viewport 的
+Paused state 只有在 authority=`ViewportTop` 时，mutation preflight 才从当前 visible top
+刷新 `{message_id, top.message_rows.start}`；authority=`ExplicitNavigation` 时必须直接使用
+stored requested anchor，即使前一次 navigation 因 max-offset clamp 使它位于 viewport 中部。
+显式 user scroll 把 authority 改为 `ViewportTop`，typed navigation 把它改为
+`ExplicitNavigation`，jump/bottom-follow 重算物理 top 后为 `ViewportTop`。普通 mutation
+restore 不得改变 surviving explicit authority。viewport rows=0 时 visible slices 为空但保留
+anchor 与 authority。只有空列表或 anchor 删除且无 survivor 时两者都清除。恢复规则按优先级：
 
 1. 成功 `try_scroll_to_anchor/message`：先应用 validated requested anchor、转换为
-   `Paused { new_content_below: false }`，再做 max-offset clamp；该命令优先于下方 Following
-   restoration，不能被强制回 bottom；
+   `Paused { new_content_below: false }`、authority=`ExplicitNavigation`，再做 max-offset
+   clamp；该命令优先于下方 Following restoration，不能被强制回 bottom；
 2. `Following` 且 viewport rows>0：忽略旧 top anchor，commit 后 offset=新的 max offset，
-   anchor 从新 viewport 重新计算；
+   anchor 从新 viewport 重新计算且 authority=`ViewportTop`；
 3. `Following` 且 viewport rows=0：保持 Following 与 surviving stored anchor，offset 使用
    `logical_bottom=total_rows` end coordinate；append/stream growth 更新 logical bottom，
    不设置 new-content indicator；
 4. `Paused` 且 stored anchor ID 存在：恢复同 intra row；若消息缩短，clamp 到 `rows-1` 并在
    `MessageListUpdate.anchor_clamped=true`；
 5. stored anchor 被删除：按 mutation 前 order 选择下一 surviving ID 的 row 0；无下一项则选上一
-   surviving ID 的 `rows-1`；空列表为 None/offset 0；
+   surviving ID 的 `rows-1`，replacement authority=`ViewportTop`；空列表为 None/offset 0；
 6. global offset 为 `prefix_sum(anchor_index)+intra_row`，再做 checked/max-offset clamp；
    若 viewport 比 remaining content 高，viewport top 的物理 clamp 可使 anchor 位于 viewport
    内而非首行，update result 必须显式报告 `viewport_clamped=true`，不能假称 exact top。
 7. viewport 从 0 恢复为非零时，Paused 从 preserved stored anchor 恢复并报告 clamp；
    Following 则使用包含零 viewport 期间所有 append/stream growth 的最新 total rows 计算
-   最新 max offset，保持 Following/indicator=false，再从恢复后的 viewport top 更新 anchor。
+   最新 max offset，保持 Following/indicator=false，再从恢复后的 viewport top 更新 anchor
+   与 `ViewportTop` authority。
 
 `try_scroll_to_message` 等价于 typed row-0 anchor navigation；
 `try_scroll_to_anchor` 先验证 ID 存在，再要求
@@ -597,19 +653,19 @@ facade 在候选 frame 中构造全部 children，全部成功后才交给 layou
 | B-001 | `types.rs`, `state.rs`, GH-62 types | `message_list_public_surface_is_typed` |
 | B-002 | complete TextFlow + shell config identity | `measurement_config_covers_textflow_and_shell_inputs`；`measurement_key_uses_all_identity_fields_and_exact_equality` |
 | B-003 | caller-owned state/revision/observation | `identical_inputs_produce_identical_state`；`public_observation_is_read_only_and_reports_new_content` |
-| B-004 | constructors/stored anchor/visible range | `empty_zero_viewport_and_zero_width_contract`；`zero_viewport_retains_and_restores_stored_anchor`；`following_zero_viewport_append_and_restore_latest_bottom` |
+| B-004 | constructors/stored anchor/visible range | `constructor_measures_initial_entries_in_order_and_publishes_complete_state`；`constructor_failure_publishes_no_state`；`empty_zero_viewport_and_zero_width_contract`；`zero_viewport_retains_and_restores_stored_anchor`；`following_zero_viewport_append_and_restore_latest_bottom` |
 | B-005 | lower-bound/slice builder | `partial_first_and_last_message_ranges_are_row_exact` |
 | B-006 | prepend restore/max-offset clamp | `prepend_preserves_top_or_reports_short_content_viewport_clamp` |
-| B-007 | typed anchor navigation + update clamp | `typed_anchor_navigation_rejects_unknown_and_invalid_rows`；`typed_navigation_overrides_following_and_replaces_observed_anchor`；`height_changes_preserve_or_report_anchor_clamp` |
+| B-007 | typed anchor navigation + update clamp | `typed_anchor_navigation_rejects_unknown_and_invalid_rows`；`typed_navigation_overrides_following_and_replaces_observed_anchor`；`viewport_clamped_navigation_anchor_survives_next_mutation`；`height_changes_preserve_or_report_anchor_clamp` |
 | B-008 | remove transition | `deleted_anchor_selects_next_then_previous_survivor` |
 | B-009 | follow transition + public observation | `follow_pause_and_explicit_resume_state_machine`；`typed_navigation_overrides_following_and_replaces_observed_anchor`；`public_observation_is_read_only_and_reports_new_content` |
 | B-010 | append/stream transition | `append_and_stream_growth_follow_or_mark_new_content`；`following_zero_viewport_append_and_restore_latest_bottom` |
-| B-011 | isolated invalidation/cache/resize config | `each_textflow_and_shell_input_invalidates_only_affected_entry`；`resize_variant_expansion_and_structure_cache_contract`；`resize_rebuild_config_is_closed_ordered_and_atomic` |
-| B-012 | closed callback outcome + staged commit | `measured_missing_failed_and_cancelled_outcomes_are_closed`；`measurement_failure_and_cancellation_are_atomic`；`resize_rebuild_config_is_closed_ordered_and_atomic` |
-| B-013 | closed errors and structural boundaries | `closed_error_categories_are_exhaustive_and_keep_sources`；`invalid_insert_index_precedes_clone_index_and_callbacks`；`state_revision_overflow_precedes_measurement_and_is_atomic_at_u64_max` |
+| B-011 | isolated invalidation/cache/resize config | `each_textflow_and_shell_input_invalidates_only_affected_entry`；`resize_variant_expansion_and_structure_cache_contract`；`resize_rebuild_config_is_closed_ordered_and_atomic`；`active_measurement_handles_survive_reuse_cache_eviction` |
+| B-012 | closed callback outcome + staged commit | `constructor_failure_publishes_no_state`；`measured_missing_failed_and_cancelled_outcomes_are_closed`；`measurement_failure_and_cancellation_are_atomic`；`resize_rebuild_config_is_closed_ordered_and_atomic` |
+| B-013 | closed errors and structural boundaries | `message_rows_reject_zero_without_measurement_key`；`closed_error_categories_are_exhaustive_and_keep_sources`；`invalid_insert_index_precedes_clone_index_and_callbacks`；`state_revision_overflow_precedes_measurement_and_is_atomic_at_u64_max` |
 | B-014 | state revision/no-op/overflow | `stale_state_revision_and_noop_revision_contract`；`state_revision_overflow_precedes_measurement_and_is_atomic_at_u64_max` |
 | B-015 | renderer-equivalent composite adapter | `composite_height_matches_renderer_equivalent_rows` |
-| B-016 | exact entry/shared-key-handle/slice facade | `render_closure_receives_exact_entry_key_and_slice`；`visible_slice_key_handle_is_o1_shared_immutable_and_send_sync`；`render_revision_drift_is_rejected_before_callback` |
+| B-016 | exact entry/shared-key-handle/slice facade | `active_measurement_handles_survive_reuse_cache_eviction`；`render_closure_receives_exact_entry_key_and_slice`；`visible_slice_key_handle_is_o1_shared_immutable_and_send_sync`；`render_revision_drift_is_rejected_before_callback` |
 | B-017 | render facade | `render_failure_has_source_and_never_returns_partial_frame` |
 | B-018 | Fenwick + shared-handle counters | `lookup_and_point_update_have_logarithmic_operation_bound`；`visible_slice_key_handle_is_o1_shared_immutable_and_send_sync` |
 | B-019 | rebuild/cache counter | `structural_and_resize_costs_are_explicit_and_reuse_cache`；`resize_rebuild_config_is_closed_ordered_and_atomic` |
@@ -617,7 +673,7 @@ facade 在候选 frame 中构造全部 children，全部成功后才交给 layou
 | B-021 | bench + allocation/counter | `cargo bench --bench message_list -- message_list_10k`; `visible_slice_key_handle_is_o1_shared_immutable_and_send_sync`; B-018 counter test |
 | B-022 | unchanged fixed API | `fixed_height_virtual_scroll_api_is_unchanged` |
 | B-023 | implementation preflight | `dependency_completion_records_require_closed_issues_and_complete_commit_sets`；fresh issue/PR/ancestry commands in task gate |
-| B-024 | GH57 child coverage + closure audit | `gh65_current_head_coverage_contract`；exact/full tests, CI/review/PR-gate evidence at current head |
+| B-024 | GH57 child coverage + closure audit | `GH65_COVERAGE_MODE=fixture ... gh65_current_head_coverage_contract`；missing/unknown mode negative fixtures；exact/full tests, CI/review/PR-gate evidence at current head |
 
 每个 bare test name 都对应 tasks 中的完整 `cargo test ... -- --exact` 命令。Property test 使用
 固定 32-byte ChaCha seed、至少 256 cases，并输出 seed/最小操作序列。Operation-count test 是
@@ -675,11 +731,14 @@ GH-62 ordered messages + viewport(width, rows)
 
 ## 测试计划
 
-- [ ] Unit tests：完整 TextFlow/shell identity、isolated invalidation、closed measurement/
+- [ ] Unit tests：initial constructor ordered publish/failure-no-state、完整 TextFlow/shell
+      identity、active handles surviving bounded-cache eviction、isolated invalidation、closed measurement/
       resize-config callback outcomes、invalid-insert pre-clone boundary、partial slices、typed
-      navigation overriding Following、short-content 与 Following/Paused zero-viewport restore、
+      navigation overriding Following、viewport-clamped explicit anchor surviving next mutation、
+      short-content 与 Following/Paused zero-viewport restore、
       delete/follow transition、cache reuse、stale/state-revision-overflow/missing/zero/failure/
-      cancellation atomicity、exact GH-57 aggregate symbol与 operation count。
+      cancellation atomicity、unkeyed zero-row value error、exact GH-57 aggregate symbol与
+      operation count。
 - [ ] Property tests：固定 seed 随机 operation 序列逐步对比独立 naive row-vector oracle。
 - [ ] Integration tests：多 TextFlow + 全 structural rows composite measurement、exact
       entry/shared-key-handle/slice 与 revision-drift rejection、shared handle `O(1)` clone/
@@ -693,6 +752,8 @@ GH-62 ordered messages + viewport(width, rows)
   `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --locked`。
 - [ ] Coverage：Tasks 中必须且只能有一个 `gh57-critical-paths-v1` block，version=1、
   issue=65、9 个 unique exact `file + name` 与逐项 nonempty `verification_command`。
+  第九条 ledger command 必须以 `GH65_COVERAGE_MODE=fixture` 原样调用 coverage contract；
+  missing/unknown mode 的负例都必须失败。
   `gh65_current_head_coverage_contract` 从 raw llvm-cov、committed ledger 和
   merge-base..exact-head diff 确定性 produce/validate `gh57-child-coverage-v1`；artifact
   绑定 child/head/base/merge-base、head commit timestamp、raw absolute path/SHA256、非空
