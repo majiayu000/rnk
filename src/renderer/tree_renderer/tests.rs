@@ -42,6 +42,14 @@ fn plain_text_with_border(
     element
 }
 
+fn fixed_plain_text(content: &str, width: u16, height: u16) -> Element {
+    let mut element = Element::text(content);
+    element.style.width = width.into();
+    element.style.height = height.into();
+    element.style.flex_shrink = 0.0;
+    element
+}
+
 fn render_tree_for_test(element: &Element, width: u16, height: u16) -> Output {
     let mut engine = LayoutEngine::new();
     engine.compute(element, width, height);
@@ -160,6 +168,87 @@ fn hidden_child_is_clipped_to_parent_content_rect() {
     let output = render_tree_for_test(&element, 6, 3);
 
     assert_eq!(output.render(), "┌────┐\r\n│one │\r\n└────┘");
+}
+
+#[test]
+fn horizontal_clip_preserves_visible_vertical_overflow() {
+    for overflow_x in [Overflow::Hidden, Overflow::Scroll] {
+        let element = Box::new()
+            .width(3)
+            .height(1)
+            .overflow_x(overflow_x)
+            .overflow_y(Overflow::Visible)
+            .child(fixed_plain_text("abcde\nfghij", 5, 2))
+            .into_element();
+
+        assert_eq!(
+            render_tree_for_test(&element, 6, 2).render(),
+            "abc\r\nfgh",
+            "horizontal {overflow_x:?} unexpectedly clipped the visible y axis"
+        );
+    }
+}
+
+#[test]
+fn vertical_clip_preserves_visible_horizontal_overflow() {
+    for overflow_y in [Overflow::Hidden, Overflow::Scroll] {
+        let element = Box::new()
+            .width(1)
+            .height(1)
+            .overflow_x(Overflow::Visible)
+            .overflow_y(overflow_y)
+            .child(fixed_plain_text("abcde\nfghij", 5, 2))
+            .into_element();
+
+        assert_eq!(
+            render_tree_for_test(&element, 6, 2).render(),
+            "abcde",
+            "vertical {overflow_y:?} unexpectedly clipped the visible x axis"
+        );
+    }
+}
+
+#[test]
+fn nested_child_clip_intersects_with_ancestor_clip() {
+    let vertically_clipped_child = Box::new()
+        .width(5)
+        .height(1)
+        .flex_shrink(0.0)
+        .overflow_x(Overflow::Visible)
+        .overflow_y(Overflow::Hidden)
+        .child(fixed_plain_text("abcde\nfghij", 5, 2))
+        .into_element();
+    let horizontally_clipped_ancestor = Box::new()
+        .width(3)
+        .height(2)
+        .overflow_x(Overflow::Hidden)
+        .overflow_y(Overflow::Visible)
+        .child(vertically_clipped_child)
+        .into_element();
+    assert_eq!(
+        render_tree_for_test(&horizontally_clipped_ancestor, 6, 2).render(),
+        "abc"
+    );
+
+    let horizontally_clipped_child = Box::new()
+        .width(3)
+        .height(2)
+        .flex_shrink(0.0)
+        .overflow_x(Overflow::Hidden)
+        .overflow_y(Overflow::Visible)
+        .child(fixed_plain_text("abcde\nfghij", 5, 2))
+        .into_element();
+    let vertically_clipped_ancestor = Box::new()
+        .width(5)
+        .height(1)
+        .overflow_x(Overflow::Visible)
+        .overflow_y(Overflow::Hidden)
+        .child(horizontally_clipped_child)
+        .into_element();
+    assert_eq!(
+        render_tree_for_test(&vertically_clipped_ancestor, 6, 2).render(),
+        "abc"
+    );
 }
 
 #[test]
