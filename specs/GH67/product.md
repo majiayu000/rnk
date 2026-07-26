@@ -52,7 +52,8 @@ frame 与 alternate-screen 生命周期，并为布局、焦点、路由、resiz
    禁止caller复制/重建component state、取得平行 `&mut` 或创建隐藏 global state。
 2. **B-002 — Complete initial inputs.** bundle构造必须显式接收完整初始 message entries、
    GH-65 measurement config/callback、Composer state与projection inputs、terminal size、初始
-   focus与空或非空overlay栈，并返回实际创建的同一MessageList/Composer/shell states。空
+   base focus与空或非空ordered overlay open sequence，并由该sequence逐层生成saved-focus
+   restoration chain和最终focus，返回实际创建的同一MessageList/Composer/shell states。空
    transcript与status缺失是有效显式输入；缺失measurement、config、projection inputs或active
    overlay body必须typed失败，不能假设一行、默认width、空element或旧frame。
 3. **B-003 — Exact remaining-height partition.** 每个成功 frame 的 transcript rows 必须
@@ -120,10 +121,11 @@ frame 与 alternate-screen 生命周期，并为布局、焦点、路由、resiz
     clip 到 terminal rect。Passive 永不接收输入，Pointer 只在命中或显式 focus时接收，Modal
     独占输入。重复 ID、非法 kind/focus 组合、body/handler缺失、越界算术或关闭非 top overlay
     typed 失败且 full state/frame 不变。
-18. **B-018 — Overlay close and focus restoration.** top dismissible overlay 的 Escape 只关闭
-    一层并恢复该层保存的仍有效 focus；嵌套关闭逐层恢复。Modal 对未处理 key/paste/mouse
-    仍 consumed；Pointer 一旦命中或持有 focus也不向 lower layer二次派发；Passive 始终
-    fall through且不抢 focus。最后一层关闭后才恢复 base focus。
+18. **B-018 — Overlay close and focus restoration.** Escape只可关闭top dismissible Modal，
+    或在无Modal时关闭同时为top且持有focus的dismissible Pointer；每次只关闭一层并恢复该层
+    保存的仍有效focus。嵌套关闭逐层恢复；Passive即使top/dismissible也始终fall through、
+    不关闭且不抢focus。Modal 对未处理 key/paste/mouse 仍 consumed；Pointer 一旦命中或持有
+    focus也不向 lower layer二次派发；最后一层关闭后才恢复 base focus。
 19. **B-019 — Committed text and paste exactly once.** multi-scalar committed input、
     CJK、emoji、combining、ZWJ 与 tab 只送给 focused Composer 的 GH-64 key ingress一次；
     `Event::Paste` 只送 paste ingress一次且绝不再作为 key/submit。ESC/C0/C1、CRLF 与失败的
@@ -136,8 +138,11 @@ frame 与 alternate-screen 生命周期，并为布局、焦点、路由、resiz
     顺序处理，不重复滚动、不越界。
 21. **B-021 — Rapid event ordering and revision guard.** resize、conversation outcome、
     stream growth、prepend、Composer projection、overlay 与 input 按 shell 收到的顺序串行；
-    每项带 expected shell revision，stale event typed 失败。相同初态和相同事件序列产生相同
-    observation、visible slices、focus 与 frame；不得用全量重建/重排掩盖 update 顺序。
+    每个shell event在创建/入队时封装expected shell revision，poll/run/dispatch原样保留而不得
+    用dispatch时current revision重写。ConversationApplied还必须使ApplyOutcome applied revision、
+    immutable Conversation snapshot revision与shell last-processed revision的checked successor
+    三者一致；stale、skip、replay或错配在任何prepare前typed失败。相同初态和相同事件序列产生
+    相同observation、visible slices、focus与frame；不得用全量重建/重排掩盖update顺序。
 22. **B-022 — Checked coordinates and realizable fail-atomic state.** row/column、rect end、
     region sum、list offset、revision 与 event sequence 只用 checked conversion/arithmetic；
     overflow、stale revision、unknown ID、invalid anchor、missing measurement 或
@@ -156,15 +161,22 @@ frame 与 alternate-screen 生命周期，并为布局、焦点、路由、resiz
 24. **B-024 — Concrete fullscreen session and restoration.** 应用必须能通过公开 session
     config、backend/capability、可验证snapshot evidence、constructor、dispatch/run/render、
     shutdown/recovery API进入fullscreen。native首次snapshot必须来自配对controlling TTY的
-    termios及成功关联的DECRQM replies，精确区分47/1047/1049 screen、25 cursor、
+    termios及成功关联的DECRQM replies；保存原termios后，lease owner进入仅供查询的临时
+    noncanonical/no-echo phase读取无换行reply，随后必须恢复原termios并flush，之后才允许任何
+    fullscreen mode mutation。精确区分47/1047/1049 screen、25 cursor、
     1000/1002/1003 tracking、1015 RXVT、1006 SGR、1004 focus与2004 paste；每个mode逐bit
-    保存/恢复；非规范reply、timeout/
-    mismatch在任何mutation前typed失败。现有public `Terminal`/`App`、terminal controller与
-    panic recovery也必须在首次mutation前取得同一process-wide lease。partial enter反向回滚；
+    保存/恢复；非规范reply、timeout/mismatch或query-phase apply/restore/flush failure均typed
+    失败，普通输入按序保留。初次enter还必须在lease下读取fresh size，以bundle+inputs执行与
+    resume相同的cap-first synthetic Resize/CheckedFrame transaction，再enter/render/commit；
+    禁止发布constructor旧size frame。Rejected必须归还backend及其pending input；现有public
+    `Terminal`/`App`、terminal controller与panic recovery也必须在首次mutation前取得同一
+    process-wide lease。每个可能部分生效的transition在I/O前登记为unfinished并按snapshot完整
+    target恢复，partial enter反向回滚；
     若任一restore/flush/
     release失败，唯一recovery owner与Poisoned registry必须保留backend、lease、snapshot及全部
-    unfinished steps，直到显式retry全部成功；snapshot读取前失败则用`None` snapshot的
-    lease-only owner重试release，禁止丢error后让第二session进入。
+    unfinished steps，直到显式retry全部成功；query/snapshot完成前失败则保留saved termios、
+    query restore/flush与lease ownership，只有完整恢复后才可release；否则由lease-only owner
+    重试，禁止丢error/backend/input后让第二session进入。
 25. **B-025 — Suspend, resume, restart and capability boundary.** suspend停止事件intake并
     恢复当前pre-entry snapshot；restore+flush+release全部成功才进入Suspended。resume重新获取
     exclusive lease、生成/验证新snapshot并读取新size，以bundle prepared candidate执行cap-first
@@ -193,8 +205,9 @@ frame 与 alternate-screen 生命周期，并为布局、焦点、路由、resiz
     满足。若最终 public API/manifest 与本 packet漂移，先把真实 GH-65 refs/API加入并重新
     review GH-67，禁止 alias、private field hack、全量clone rollback、sidecar cache或复制
     未解决缺陷。
-30. **B-030 — Current-head and reproducible evidence.** 完成声明必须绑定 implementation PR
-    exact head：Product-to-Test Mapping 每个 exact test matched=passed=1、ignored=0；
+30. **B-030 — Current-head and reproducible evidence.** 完成声明必须分别绑定 implementation
+    PR exact head、PR base SHA、fresh current-main SHA与两者merge-base，四字段不得合并或用旧值：
+    Product-to-Test Mapping 每个 exact test matched=passed=1、ignored=0；
     plain/ANSI golden不在测试中更新；changed executable coverage ≥80%，committed
     `gh57-critical-paths-v1` 的 exact `file+name+command` 集合逐项 100%，producer/validator
     可从 raw coverage、diff 和 ledger 确定性重算。SpecRail packet验证必须声明可获取的

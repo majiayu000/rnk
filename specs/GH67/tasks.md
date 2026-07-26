@@ -31,8 +31,26 @@ merged public API并做manifest source-drift audit；漂移则停止、更新本
 zero-match、ignored或宽泛 workspace green不能替代。
 
 <!-- gh57-critical-paths-v1
-{"version":1,"issue":67,"critical_paths":[{"file":"src/components/chat/fullscreen/tests.rs","name":"gh67_fixed_bottom_resize_contract","verification_command":"cargo test --workspace --lib --locked components::chat::fullscreen::tests::gh67_fixed_bottom_resize_contract -- --exact"},{"file":"src/components/chat/fullscreen/tests.rs","name":"zero_and_undersized_terminals_fail_before_callbacks","verification_command":"cargo test --workspace --lib --locked components::chat::fullscreen::tests::zero_and_undersized_terminals_fail_before_callbacks -- --exact"},{"file":"src/components/chat/fullscreen/tests.rs","name":"owning_state_bundle_preserves_single_component_revisions","verification_command":"cargo test --workspace --lib --locked components::chat::fullscreen::tests::owning_state_bundle_preserves_single_component_revisions -- --exact"},{"file":"src/components/chat/fullscreen/tests.rs","name":"composer_cap_reprojects_cursor_window_before_partition","verification_command":"cargo test --workspace --lib --locked components::chat::fullscreen::tests::composer_cap_reprojects_cursor_window_before_partition -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"upstream_prepare_commit_abort_gate_and_late_failure_are_atomic","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked upstream_prepare_commit_abort_gate_and_late_failure_are_atomic -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"focus_overlay_key_routing_is_single_target_and_deterministic","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked focus_overlay_key_routing_is_single_target_and_deterministic -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"overlay_route_matrix_is_total_and_passive_focus_is_rejected","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked overlay_route_matrix_is_total_and_passive_focus_is_rejected -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"pointer_overlay_tab_order_wraps_deterministically","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked pointer_overlay_tab_order_wraps_deterministically -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"shell_events_and_session_commands_are_disjoint_and_total","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked shell_events_and_session_commands_are_disjoint_and_total -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"paste_and_committed_ime_text_dispatch_exactly_once","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked paste_and_committed_ime_text_dispatch_exactly_once -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"rapid_resize_stream_prepend_sequence_is_deterministic","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked rapid_resize_stream_prepend_sequence_is_deterministic -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"layout_render_failure_preserves_committed_state_and_frame","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked layout_render_failure_preserves_committed_state_and_frame -- --exact"},{"file":"tests/fullscreen_chat_shell_pty.rs","name":"fullscreen_terminal_restores_all_modes_on_every_exit_path","verification_command":"cargo test --test fullscreen_chat_shell_pty --locked fullscreen_terminal_restores_all_modes_on_every_exit_path -- --exact"},{"file":"tests/fullscreen_chat_shell_pty.rs","name":"partial_enter_and_suspend_resume_restore_exact_snapshot","verification_command":"cargo test --test fullscreen_chat_shell_pty --locked partial_enter_and_suspend_resume_restore_exact_snapshot -- --exact"},{"file":"tests/fullscreen_chat_shell_pty.rs","name":"primary_failure_and_all_cleanup_failures_are_preserved","verification_command":"cargo test --test fullscreen_chat_shell_pty --locked primary_failure_and_all_cleanup_failures_are_preserved -- --exact"},{"file":"tests/fullscreen_chat_shell_pty.rs","name":"native_snapshot_bootstrap_legacy_lease_and_poison_recovery_are_total","verification_command":"cargo test --test fullscreen_chat_shell_pty --locked native_snapshot_bootstrap_legacy_lease_and_poison_recovery_are_total -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"fullscreen_session_public_surface_and_capability_gate_are_typed","verification_command":"cargo test --test fullscreen_chat_shell_public_api --locked fullscreen_session_public_surface_and_capability_gate_are_typed -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"public_observation_reports_focus_regions_follow_and_overlay","verification_command":"cargo test --test fullscreen_chat_shell_public_api --locked public_observation_reports_focus_regions_follow_and_overlay -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"visible_frame_work_is_bounded_and_handles_are_o1_non_evictable","verification_command":"cargo test --test fullscreen_chat_shell_public_api --locked visible_frame_work_is_bounded_and_handles_are_o1_non_evictable -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"specrail_checker_checkout_is_reproducible","verification_command":"cargo test --test fullscreen_chat_shell_public_api --locked specrail_checker_checkout_is_reproducible -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"specrail_mirror_binds_all_reviewed_dependency_refs","verification_command":"cargo test --test fullscreen_chat_shell_public_api --locked specrail_mirror_binds_all_reviewed_dependency_refs -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"gh67_current_head_coverage_contract","verification_command":"GH67_COVERAGE_MODE=fixture cargo test --test fullscreen_chat_shell_public_api --locked gh67_current_head_coverage_contract -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"coverage_validate_environment_survives_full_verification","verification_command":"cargo test --test fullscreen_chat_shell_public_api --locked coverage_validate_environment_survives_full_verification -- --exact"}]}
+{"version":1,"issue":67,"critical_paths":[{"file":"src/components/chat/fullscreen/tests.rs","name":"gh67_fixed_bottom_resize_contract","verification_command":"cargo test --workspace --lib --locked components::chat::fullscreen::tests::gh67_fixed_bottom_resize_contract -- --exact"},{"file":"src/components/chat/fullscreen/tests.rs","name":"zero_and_undersized_terminals_fail_before_callbacks","verification_command":"cargo test --workspace --lib --locked components::chat::fullscreen::tests::zero_and_undersized_terminals_fail_before_callbacks -- --exact"},{"file":"src/components/chat/fullscreen/tests.rs","name":"owning_state_bundle_preserves_single_component_revisions","verification_command":"cargo test --workspace --lib --locked components::chat::fullscreen::tests::owning_state_bundle_preserves_single_component_revisions -- --exact"},{"file":"src/components/chat/fullscreen/tests.rs","name":"composer_cap_reprojects_cursor_window_before_partition","verification_command":"cargo test --workspace --lib --locked components::chat::fullscreen::tests::composer_cap_reprojects_cursor_window_before_partition -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"upstream_prepare_commit_abort_gate_and_late_failure_are_atomic","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked upstream_prepare_commit_abort_gate_and_late_failure_are_atomic -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"focus_overlay_key_routing_is_single_target_and_deterministic","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked focus_overlay_key_routing_is_single_target_and_deterministic -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"overlay_route_matrix_is_total_and_passive_focus_is_rejected","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked overlay_route_matrix_is_total_and_passive_focus_is_rejected -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"pointer_overlay_tab_order_wraps_deterministically","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked pointer_overlay_tab_order_wraps_deterministically -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"shell_events_and_session_commands_are_disjoint_and_total","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked shell_events_and_session_commands_are_disjoint_and_total -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"paste_and_committed_ime_text_dispatch_exactly_once","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked paste_and_committed_ime_text_dispatch_exactly_once -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"rapid_resize_stream_prepend_sequence_is_deterministic","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked rapid_resize_stream_prepend_sequence_is_deterministic -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"layout_render_failure_preserves_committed_state_and_frame","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked layout_render_failure_preserves_committed_state_and_frame -- --exact"},{"file":"tests/fullscreen_chat_shell_pty.rs","name":"fullscreen_terminal_restores_all_modes_on_every_exit_path","verification_command":"cargo test --test fullscreen_chat_shell_pty --locked fullscreen_terminal_restores_all_modes_on_every_exit_path -- --exact"},{"file":"tests/fullscreen_chat_shell_pty.rs","name":"partial_enter_and_suspend_resume_restore_exact_snapshot","verification_command":"cargo test --test fullscreen_chat_shell_pty --locked partial_enter_and_suspend_resume_restore_exact_snapshot -- --exact"},{"file":"tests/fullscreen_chat_shell_pty.rs","name":"primary_failure_and_all_cleanup_failures_are_preserved","verification_command":"cargo test --test fullscreen_chat_shell_pty --locked primary_failure_and_all_cleanup_failures_are_preserved -- --exact"},{"file":"tests/fullscreen_chat_shell_pty.rs","name":"native_snapshot_bootstrap_legacy_lease_and_poison_recovery_are_total","verification_command":"cargo test --test fullscreen_chat_shell_pty --locked native_snapshot_bootstrap_legacy_lease_and_poison_recovery_are_total -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"fullscreen_session_public_surface_and_capability_gate_are_typed","verification_command":"cargo test --test fullscreen_chat_shell_public_api --locked fullscreen_session_public_surface_and_capability_gate_are_typed -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"public_observation_reports_focus_regions_follow_and_overlay","verification_command":"cargo test --test fullscreen_chat_shell_public_api --locked public_observation_reports_focus_regions_follow_and_overlay -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"visible_frame_work_is_bounded_and_handles_are_o1_non_evictable","verification_command":"cargo test --test fullscreen_chat_shell_public_api --locked visible_frame_work_is_bounded_and_handles_are_o1_non_evictable -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"specrail_checker_checkout_is_reproducible","verification_command":"cargo test --test fullscreen_chat_shell_public_api --locked specrail_checker_checkout_is_reproducible -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"specrail_mirror_binds_all_reviewed_dependency_refs","verification_command":"cargo test --test fullscreen_chat_shell_public_api --locked specrail_mirror_binds_all_reviewed_dependency_refs -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"gh67_current_head_coverage_contract","verification_command":"GH67_COVERAGE_MODE=fixture cargo test --test fullscreen_chat_shell_public_api --locked gh67_current_head_coverage_contract -- --exact"},{"file":"tests/fullscreen_chat_shell_public_api.rs","name":"coverage_validate_environment_survives_full_verification","verification_command":"cargo test --test fullscreen_chat_shell_public_api --locked coverage_validate_environment_survives_full_verification -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"initial_enter_requeries_size_and_stages_cap_first_frame","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked initial_enter_requeries_size_and_stages_cap_first_frame -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"initial_overlay_sequence_builds_lifo_focus_restoration","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked initial_overlay_sequence_builds_lifo_focus_restoration -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"passive_escape_falls_through_without_close","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked passive_escape_falls_through_without_close -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"conversation_outcome_snapshot_revision_binding_is_atomic","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked conversation_outcome_snapshot_revision_binding_is_atomic -- --exact"},{"file":"tests/fullscreen_chat_shell_interactions.rs","name":"revisioned_runtime_event_rejects_queued_stale_shell_input","verification_command":"cargo test --test fullscreen_chat_shell_interactions --locked revisioned_runtime_event_rejects_queued_stale_shell_input -- --exact"},{"file":"tests/fullscreen_chat_shell_pty.rs","name":"partial_grouped_transition_restores_full_snapshot_before_release","verification_command":"cargo test --test fullscreen_chat_shell_pty --locked partial_grouped_transition_restores_full_snapshot_before_release -- --exact"},{"file":"tests/fullscreen_chat_shell_pty.rs","name":"rejected_enter_returns_backend_and_pending_input_in_order","verification_command":"cargo test --test fullscreen_chat_shell_pty --locked rejected_enter_returns_backend_and_pending_input_in_order -- --exact"},{"file":"tests/fullscreen_chat_shell_pty.rs","name":"public_native_snapshot_constructor_is_reachable_and_restorable","verification_command":"cargo test --test fullscreen_chat_shell_pty --locked public_native_snapshot_constructor_is_reachable_and_restorable -- --exact"},{"file":"tests/fullscreen_chat_shell_pty.rs","name":"canonical_tty_query_phase_reads_newline_free_replies_and_restores_termios","verification_command":"cargo test --test fullscreen_chat_shell_pty --locked canonical_tty_query_phase_reads_newline_free_replies_and_restores_termios -- --exact"}]}
 -->
+
+## Continue-once finding closure
+
+第三轮correction必须保留既有F001–F003/F005–F015回归，并以同一exact test中的正、反fixture
+逐项关闭下表；反例必须在callback/terminal publication前失败且状态、frame、backend/input
+ownership可逐值核对：
+
+| Finding | Positive fixture | Negative fail-closed fixture |
+| --- | --- | --- |
+| F004 | public native constructor从canonical TTY取得verified snapshot并完整恢复 | query/restore失败保留唯一recovery owner，不能默认modes或释放lease |
+| F016 | enter在lease内fresh size上cap-first prepare/render/commit | constructor旧size与try_size失败均不发布frame |
+| F017 | ordered initial opens生成逐层saved-focus chain | 无history stack、非法base/overlay focus在constructor中原子拒绝 |
+| F018 | top/focused Pointer Escape关闭一层，Passive Escape fall through | top Passive不关闭、不消费、不改变focus/revision |
+| F019 | outcome、snapshot与last revision checked successor一致 | stale/skipped/replayed/mismatched pair零prepare、零mutation |
+| F020 | grouped mouse transition部分写失败后恢复完整snapshot target | 任一attempted step未恢复时flush/release不得成功 |
+| F021 | Rejected归还原backend且pending ordinary input顺序不变 | error/recovery路径不得drop、复制或重排pending input |
+| F022 | 入队revision经poll/run/dispatch原样到handler | intervening mutation后的queued event不得用current revision刷新 |
+| F023 | temporary noncanonical query读取newline-free DECRPM后恢复termios | canonical timeout/partial reply或query restore/flush失败进入recovery |
 
 ## Durable coverage evidence
 
@@ -44,7 +62,8 @@ absolute path，PR number必须是正整数，全部SHA必须是40-hex且等于�
 GH67_COVERAGE_MODE
 GH67_PR_NUMBER
 GH67_PR_HEAD_SHA
-GH67_BASE_MAIN_SHA
+GH67_PR_BASE_SHA
+GH67_CURRENT_MAIN_SHA
 GH67_COVERAGE_MERGE_BASE_SHA
 GH67_COVERAGE_RAW
 GH67_COVERAGE_ARTIFACT
@@ -57,30 +76,40 @@ GH67_COVERAGE_ARTIFACT
 
 T4在clean current implementation head上按唯一顺序执行：
 
-```sh
+```bash
+set -euo pipefail
 case "$GH67_PR_NUMBER" in ''|*[!0-9]*) exit 64 ;; esac
 git fetch --prune origin main
 GH67_PR_HEAD_SHA="$(gh pr view "$GH67_PR_NUMBER" --repo majiayu000/rnk \
   --json headRefOid --jq .headRefOid)"
-GH67_BASE_MAIN_SHA="$(gh api \
+GH67_PR_BASE_SHA="$(gh api \
   "repos/majiayu000/rnk/pulls/$GH67_PR_NUMBER" --jq .base.sha)"
+GH67_CURRENT_MAIN_SHA="$(git rev-parse origin/main)"
+for sha in "$GH67_PR_HEAD_SHA" "$GH67_PR_BASE_SHA" "$GH67_CURRENT_MAIN_SHA"; do
+  case "$sha" in ''|*[!0-9a-f]*) exit 65 ;; esac
+  test "${#sha}" -eq 40
+done
 test "$(git rev-parse HEAD)" = "$GH67_PR_HEAD_SHA"
-test "$(git rev-parse origin/main)" = "$GH67_BASE_MAIN_SHA"
+test "$(git rev-parse origin/main)" = "$GH67_CURRENT_MAIN_SHA"
 test -z "$(git status --porcelain)"
 GH67_COVERAGE_MERGE_BASE_SHA="$(
-  git merge-base "$GH67_BASE_MAIN_SHA" "$GH67_PR_HEAD_SHA"
+  git merge-base "$GH67_CURRENT_MAIN_SHA" "$GH67_PR_HEAD_SHA"
 )"
-GH67_EVIDENCE_DIR="$(mktemp -d)"
+case "$GH67_COVERAGE_MERGE_BASE_SHA" in ''|*[!0-9a-f]*) exit 65 ;; esac
+test "${#GH67_COVERAGE_MERGE_BASE_SHA}" -eq 40
+GH67_EVIDENCE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/rnk-gh67-coverage.XXXXXX")"
 GH67_EVIDENCE_DIR="$(cd "$GH67_EVIDENCE_DIR" && pwd -P)"
+trap 'rm -rf "$GH67_EVIDENCE_DIR"' EXIT
 GH67_COVERAGE_RAW="$GH67_EVIDENCE_DIR/llvm-cov.json"
 GH67_COVERAGE_ARTIFACT="$GH67_EVIDENCE_DIR/gh57-child-coverage-v1.json"
-export GH67_PR_NUMBER GH67_PR_HEAD_SHA GH67_BASE_MAIN_SHA
+export GH67_PR_NUMBER GH67_PR_HEAD_SHA GH67_PR_BASE_SHA GH67_CURRENT_MAIN_SHA
 export GH67_COVERAGE_MERGE_BASE_SHA GH67_EVIDENCE_DIR
 
 GH67_COVERAGE_MODE=collect \
 GH67_PR_NUMBER="$GH67_PR_NUMBER" \
 GH67_PR_HEAD_SHA="$GH67_PR_HEAD_SHA" \
-GH67_BASE_MAIN_SHA="$GH67_BASE_MAIN_SHA" \
+GH67_PR_BASE_SHA="$GH67_PR_BASE_SHA" \
+GH67_CURRENT_MAIN_SHA="$GH67_CURRENT_MAIN_SHA" \
 GH67_COVERAGE_MERGE_BASE_SHA="$GH67_COVERAGE_MERGE_BASE_SHA" \
 GH67_COVERAGE_RAW="$GH67_COVERAGE_RAW" \
 GH67_COVERAGE_ARTIFACT="$GH67_COVERAGE_ARTIFACT" \
@@ -90,7 +119,8 @@ GH67_COVERAGE_ARTIFACT="$GH67_COVERAGE_ARTIFACT" \
 GH67_COVERAGE_MODE=produce \
 GH67_PR_NUMBER="$GH67_PR_NUMBER" \
 GH67_PR_HEAD_SHA="$GH67_PR_HEAD_SHA" \
-GH67_BASE_MAIN_SHA="$GH67_BASE_MAIN_SHA" \
+GH67_PR_BASE_SHA="$GH67_PR_BASE_SHA" \
+GH67_CURRENT_MAIN_SHA="$GH67_CURRENT_MAIN_SHA" \
 GH67_COVERAGE_MERGE_BASE_SHA="$GH67_COVERAGE_MERGE_BASE_SHA" \
 GH67_COVERAGE_RAW="$GH67_COVERAGE_RAW" \
 GH67_COVERAGE_ARTIFACT="$GH67_COVERAGE_ARTIFACT" \
@@ -100,7 +130,8 @@ GH67_COVERAGE_ARTIFACT="$GH67_COVERAGE_ARTIFACT" \
 GH67_COVERAGE_MODE=validate \
 GH67_PR_NUMBER="$GH67_PR_NUMBER" \
 GH67_PR_HEAD_SHA="$GH67_PR_HEAD_SHA" \
-GH67_BASE_MAIN_SHA="$GH67_BASE_MAIN_SHA" \
+GH67_PR_BASE_SHA="$GH67_PR_BASE_SHA" \
+GH67_CURRENT_MAIN_SHA="$GH67_CURRENT_MAIN_SHA" \
 GH67_COVERAGE_MERGE_BASE_SHA="$GH67_COVERAGE_MERGE_BASE_SHA" \
 GH67_COVERAGE_RAW="$GH67_COVERAGE_RAW" \
 GH67_COVERAGE_ARTIFACT="$GH67_COVERAGE_ARTIFACT" \
@@ -108,13 +139,28 @@ GH67_COVERAGE_ARTIFACT="$GH67_COVERAGE_ARTIFACT" \
     gh67_current_head_coverage_contract -- --exact
 
 export GH67_COVERAGE_MODE=validate
-export GH67_PR_NUMBER GH67_PR_HEAD_SHA GH67_BASE_MAIN_SHA
+export GH67_PR_NUMBER GH67_PR_HEAD_SHA GH67_PR_BASE_SHA GH67_CURRENT_MAIN_SHA
 export GH67_COVERAGE_MERGE_BASE_SHA GH67_COVERAGE_RAW GH67_COVERAGE_ARTIFACT
 ```
 
-以上七个变量从validate成功后保持export，贯穿全部mapped/ledger/full workspace tests；窗口末尾
-重新fetch/query并断言PR head、base main、`origin/main`、merge-base和clean worktree仍相等，
+以上八个变量从validate成功后保持export，贯穿全部mapped/ledger/full workspace tests；窗口末尾
+重新fetch/query并分别断言PR head、PR base、current `origin/main`、merge-base和clean worktree，
 否则丢弃全部coverage/test evidence。
+
+窗口末尾必须在同一export环境机械重验四个不同SHA：
+
+```bash
+set -euo pipefail
+git fetch --prune origin main
+test "$(gh pr view "$GH67_PR_NUMBER" --repo majiayu000/rnk \
+  --json headRefOid --jq .headRefOid)" = "$GH67_PR_HEAD_SHA"
+test "$(gh api "repos/majiayu000/rnk/pulls/$GH67_PR_NUMBER" \
+  --jq .base.sha)" = "$GH67_PR_BASE_SHA"
+test "$(git rev-parse origin/main)" = "$GH67_CURRENT_MAIN_SHA"
+test "$(git merge-base "$GH67_CURRENT_MAIN_SHA" "$GH67_PR_HEAD_SHA")" = \
+  "$GH67_COVERAGE_MERGE_BASE_SHA"
+test -z "$(git status --porcelain)"
+```
 
 producer从 committed tasks中解析唯一 ledger，读取实际raw，使用
 `git diff --unified=0 "$GH67_COVERAGE_MERGE_BASE_SHA...$GH67_PR_HEAD_SHA"` 计算planned `.rs` added
@@ -125,7 +171,8 @@ executable lines。它不能接收caller传入critical摘要。canonical artifac
   "schema": "gh57-child-coverage-v1",
   "child_issue": 67,
   "head_sha": "<40-hex exact implementation PR head>",
-  "base_main_sha": "<40-hex fresh GitHub PR base head>",
+  "pr_base_sha": "<40-hex GitHub PR base head>",
+  "current_main_sha": "<40-hex fresh origin/main head>",
   "coverage_merge_base_sha": "<40-hex merge-base>",
   "generated_at": "<HEAD commit RFC3339 timestamp>",
   "provenance": {
@@ -152,7 +199,7 @@ executable lines。它不能接收caller传入critical摘要。canonical artifac
 }
 ```
 
-数组包含ledger全部23项且严格保持ledger顺序；示例只展开一项。`generated_at`取HEAD commit
+数组包含ledger全部32项且严格保持ledger顺序；示例只展开一项。`generated_at`取HEAD commit
 timestamp而非wall clock，path只保存固定basename，JSON使用固定key order/UTF-8/LF与末尾
 newline，使相同head/base/raw/ledger byte-for-byte确定。validator重新hash raw、重算
 PR/head/base/merge-base/diff/executable/critical set/commands/count/percent并生成canonical
@@ -198,7 +245,9 @@ changed `total>0`且≥80%，每个critical `total>0`且100%。active test必须
   resize同candidate；expected shell revision、Following/Paused/nonzero viewport/prepend、
   nested overlay LIFO与Modal/Pointer/Passive × focus × key/paste/mouse/fallthrough总表逐项
   完成；Pointer focus ring按stack正/反向wrap，shell/session closed domains只经total dispatch；
-  explicit navigation优先且不会被visible-top刷新覆盖；每个事件最多一个target/一次
+  constructor从base focus+ordered opens生成逐层restore chain；Passive Escape始终fall through；
+  ConversationApplied三方revision绑定；revisioned envelope从入队到dispatch不可重写；explicit
+  navigation优先且不会被visible-top刷新覆盖；每个事件最多一个target/一次
   revision，prepare后late render failure仍使List/Composer/shell/frame逐值相等。
   `cargo test --workspace --lib --locked components::chat::fullscreen::tests::constructor_requires_complete_entries_config_projection_and_measurement -- --exact`；
   `cargo test --workspace --lib --locked components::chat::fullscreen::tests::owning_state_bundle_preserves_single_component_revisions -- --exact`；
@@ -220,6 +269,10 @@ changed `total>0`且≥80%，每个critical `total>0`且100%。active test必须
   `cargo test --test fullscreen_chat_shell_interactions --locked paste_and_committed_ime_text_dispatch_exactly_once -- --exact`；
   `cargo test --test fullscreen_chat_shell_interactions --locked mouse_hit_testing_uses_committed_z_order_without_double_dispatch -- --exact`；
   `cargo test --test fullscreen_chat_shell_interactions --locked rapid_resize_stream_prepend_sequence_is_deterministic -- --exact`；
+  `cargo test --test fullscreen_chat_shell_interactions --locked initial_overlay_sequence_builds_lifo_focus_restoration -- --exact`；
+  `cargo test --test fullscreen_chat_shell_interactions --locked passive_escape_falls_through_without_close -- --exact`；
+  `cargo test --test fullscreen_chat_shell_interactions --locked conversation_outcome_snapshot_revision_binding_is_atomic -- --exact`；
+  `cargo test --test fullscreen_chat_shell_interactions --locked revisioned_runtime_event_rejects_queued_stale_shell_input -- --exact`；
   `cargo check --workspace --all-targets --all-features --locked`。
   - Dependencies: SP67-T1完整handoff。
   - File ownership: 接管 `fullscreen/state.rs`、`fullscreen/router.rs`、
@@ -238,7 +291,9 @@ changed `total>0`且≥80%，每个critical `total>0`且100%。active test必须
   correlated DECRQM取得完整47/1047/1049/25/1000/1002/1003/1015/1006/1004/2004 snapshot，非reply
   event不丢；legacy Terminal/App、terminal_controller及panic handler共享process lease。
   partial enter反向rollback；suspend完整restore+flush+release；resume重新query size并用bundle
-  prepare cap-first Resize frame后才enter/render/commit。backend `RecoveryOwner`、session
+  prepare cap-first Resize frame后才enter/render/commit；首次enter同样在lease内fresh size上
+  prepare cap-first frame，query用reversible temporary noncanonical phase。每个transition在I/O前
+  登记完整restore target；Rejected归还backend/pending input。backend `RecoveryOwner`、session
   `Option<B>`与Poisoned registry在rollback/Drop/panic失败时保留唯一backend/lease/optional
   snapshot/unfinished steps；snapshot失败+release失败由lease-only owner恢复；Start/Run primary、
   session-transition及全部cleanup/retry sources无损；
@@ -259,6 +314,11 @@ changed `total>0`且≥80%，每个critical `total>0`且100%。active test必须
   `cargo test --test fullscreen_chat_shell_pty --locked partial_enter_and_suspend_resume_restore_exact_snapshot -- --exact`；
   `cargo test --test fullscreen_chat_shell_pty --locked primary_failure_and_all_cleanup_failures_are_preserved -- --exact`；
   `cargo test --test fullscreen_chat_shell_pty --locked native_snapshot_bootstrap_legacy_lease_and_poison_recovery_are_total -- --exact`；
+  `cargo test --test fullscreen_chat_shell_interactions --locked initial_enter_requeries_size_and_stages_cap_first_frame -- --exact`；
+  `cargo test --test fullscreen_chat_shell_pty --locked partial_grouped_transition_restores_full_snapshot_before_release -- --exact`；
+  `cargo test --test fullscreen_chat_shell_pty --locked rejected_enter_returns_backend_and_pending_input_in_order -- --exact`；
+  `cargo test --test fullscreen_chat_shell_pty --locked public_native_snapshot_constructor_is_reachable_and_restorable -- --exact`；
+  `cargo test --test fullscreen_chat_shell_pty --locked canonical_tty_query_phase_reads_newline_free_replies_and_restores_termios -- --exact`；
   `cargo test --test fullscreen_chat_shell_pty --locked suspend_resume_and_fresh_restart_rebuild_explicit_state -- --exact`；
   `cargo check --workspace --all-targets --all-features --locked`。
   - Dependencies: SP67-T2完整handoff；final GH-60 checked frame与terminal runtime inventory可用。
@@ -362,9 +422,9 @@ product、tech mapping、affected tasks、本审计与critical ledger（若criti
 - dependency records fresh且#62/#63/#64/#65 closed/final merged/ancestor；GH-65 transitive
   records完整。
 - Product-to-Test Mapping每项exact test matched=passed=1 ignored=0。
-- ledger version/issue/23个unique `file+name`/nonempty command逐项执行；coverage
+- ledger version/issue/32个unique `file+name`/nonempty command逐项执行；coverage
   fixture/collect/produce/validate mode与absolute paths全部显式。
-- changed executable≥80%、23个critical各100%，artifact可canonical byte-for-byte重算；
+- changed executable≥80%、32个critical各100%，artifact可canonical byte-for-byte重算；
   validate环境贯穿后续全套测试且末尾immutable window fresh不漂移。
 - golden checksum前后相等；public session/capability/exclusive lease、partial enter、
   normal/cancel/error/panic、suspend/resume、primary+cleanup restoration通过。
