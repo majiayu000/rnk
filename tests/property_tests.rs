@@ -80,7 +80,14 @@ proptest! {
         }
         prop_assert_eq!(covered, source.len());
 
-        for entry in flow.position_map() {
+        prop_assert_eq!(flow.position_map().len(), flow.tokens().len());
+        for (token_index, entry) in flow.position_map().iter().enumerate() {
+            prop_assert_eq!(entry.token_index, token_index);
+            prop_assert_eq!(&entry.source, &flow.tokens()[token_index].source);
+            prop_assert_eq!(
+                &entry.placement,
+                &flow.tokens()[token_index].placement
+            );
             if let Some(range) = flow.tokens()[entry.token_index].source_range() {
                 prop_assert!(grapheme_ranges.contains(&range));
                 let begins_inside_another = grapheme_ranges.iter().any(|other| {

@@ -67,7 +67,7 @@ fn text_flow_shared_result() {
         safe_text: "…".to_string(),
         style: Style::new(),
         display_width: 1,
-        placement: TextFlowPlacement::Omitted,
+        placement: TextFlowPlacement::Omitted { row: 0 },
         class: TokenClass::Content,
     };
     let mut synthetic_rows = Vec::new();
@@ -85,17 +85,37 @@ fn text_flow_shared_result() {
         TextFlowPlacement::Synthetic { row: 0, column: 0 }
     );
     assert_eq!(map[0].source, TextFlowSource::Synthetic);
+
+    for mapped in [
+        build("ab cd", 3, TextWrap::Wrap),
+        build("abcd\nx", 2, TextWrap::Truncate),
+    ] {
+        assert_eq!(mapped.position_map.len(), mapped.tokens.len());
+        for (token_index, entry) in mapped.position_map.iter().enumerate() {
+            assert_eq!(entry.token_index, token_index);
+            assert_eq!(entry.source, mapped.tokens[token_index].source);
+            assert_eq!(entry.placement, mapped.tokens[token_index].placement);
+        }
+    }
 }
 
 #[test]
 fn text_flow_cache_invalidation() {
+    fn assert_isolated_miss(changed_input: TextFlowInput, changed_options: TextFlowOptions) {
+        let input = plain_input("cache");
+        let options = TextFlowOptions::new(8, TextWrap::Wrap);
+        let mut cache = TextFlowCache::default();
+        let baseline = cache.get_or_compute(&input, &options).unwrap();
+        let changed = cache
+            .get_or_compute(&changed_input, &changed_options)
+            .unwrap();
+        assert!(!Arc::ptr_eq(&baseline, &changed));
+        assert_eq!(cache.build_count, 2);
+    }
+
     let input = plain_input("cache");
     let options = TextFlowOptions::new(8, TextWrap::Wrap);
-    let mut cache = TextFlowCache::default();
-    cache.get_or_compute(&input, &options).unwrap();
-
-    let mut inputs = Vec::new();
-    inputs.push(plain_input("changed"));
+    assert_isolated_miss(plain_input("changed"), options.clone());
     let mut styled = plain_input("cache");
     let mut bold = Style::new();
     bold.bold = true;
@@ -103,41 +123,29 @@ fn text_flow_cache_invalidation() {
         range: 0..5,
         style: bold,
     }];
-    inputs.push(styled);
-    for changed in inputs {
-        let before = cache.build_count;
-        cache.get_or_compute(&changed, &options).unwrap();
-        assert_eq!(cache.build_count, before + 1);
-    }
+    assert_isolated_miss(styled, options.clone());
 
-    let mut variants = Vec::new();
     let mut changed = options.clone();
     changed.max_width = 9;
-    variants.push(changed);
+    assert_isolated_miss(input.clone(), changed);
     let mut changed = options.clone();
     changed.text_wrap = TextWrap::Truncate;
-    variants.push(changed);
+    assert_isolated_miss(input.clone(), changed);
     let mut changed = options.clone();
     changed.overflow_x = Overflow::Hidden;
-    variants.push(changed);
+    assert_isolated_miss(input.clone(), changed);
     let mut changed = options.clone();
     changed.overflow_y = Overflow::Scroll;
-    variants.push(changed);
+    assert_isolated_miss(input.clone(), changed);
     let mut changed = options.clone();
     changed.tab_stop = 8;
-    variants.push(changed);
+    assert_isolated_miss(input.clone(), changed);
     let mut changed = options.clone();
     changed.ellipsis = "...".to_string();
-    variants.push(changed);
+    assert_isolated_miss(input.clone(), changed);
     let mut changed = options.clone();
     changed.width_policy.revision = 2;
-    variants.push(changed);
-
-    for changed in variants {
-        let before = cache.build_count;
-        cache.get_or_compute(&input, &changed).unwrap();
-        assert_eq!(cache.build_count, before + 1);
-    }
+    assert_isolated_miss(input, changed);
 }
 
 #[test]
@@ -151,6 +159,25 @@ fn text_flow_cache_reuse() {
     assert!(Arc::ptr_eq(&first, &second));
     assert_eq!(cache.build_count, 1);
     assert_eq!(*first, cold);
+}
+
+#[test]
+fn text_flow_large_tab_stop_is_typed_and_atomic() {
+    let mut cache = TextFlowCache::default();
+    let baseline_input = plain_input("baseline");
+    let baseline_options = TextFlowOptions::new(8, TextWrap::Wrap);
+    let published = cache
+        .get_or_compute(&baseline_input, &baseline_options)
+        .unwrap();
+
+    let mut large = TextFlowOptions::new(usize::MAX, TextWrap::Wrap);
+    large.tab_stop = usize::MAX;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        cache.get_or_compute(&plain_input("\t"), &large)
+    }));
+    assert!(result.is_ok(), "large tab expansion must not panic");
+    assert_eq!(result.unwrap(), Err(TextFlowError::ArithmeticOverflow));
+    assert!(Arc::ptr_eq(cache.published.as_ref().unwrap(), &published));
 }
 
 #[test]
@@ -240,15 +267,24 @@ fn split_combining_and_zwj_style_boundary_normalizes() {
 #[test]
 fn finalized_non_grapheme_range_is_error() {
     let source = "e\u{301}";
-    assert_eq!(validate_finalized_range(source, &(0..3)), Ok(()));
+    let input = plain_input(source);
+    let (tokens, _, grapheme_ranges) =
+        tokenize_source(&input, &mut || false).expect("valid source tokenizes");
     assert_eq!(
-        validate_finalized_range(source, &(0..1)),
-        Err(TextFlowError::FinalizedRangeNotGraphemeBoundary { range: 0..1 })
+        validate_source_coverage(source, &tokens, &grapheme_ranges),
+        Ok(())
     );
-    assert_eq!(
-        validate_finalized_range(source, &(1..3)),
-        Err(TextFlowError::FinalizedRangeNotGraphemeBoundary { range: 1..3 })
-    );
+    for range in [0..1, 1..3] {
+        let mut forged = tokens.clone();
+        forged[0].source = TextFlowSource::Source {
+            range: range.clone(),
+            kind: TextFlowSourceKind::Exact,
+        };
+        assert_eq!(
+            validate_source_coverage(source, &forged, &grapheme_ranges),
+            Err(TextFlowError::FinalizedRangeNotGraphemeBoundary { range })
+        );
+    }
 
     for range in [2..2, Range { start: 1, end: 0 }] {
         let input = plain_input("a").with_styled_ranges(vec![StyledTextRange {
@@ -341,7 +377,7 @@ fn text_flow_wrap() {
     );
     assert!(matches!(
         flow.tokens[4].placement,
-        TextFlowPlacement::Omitted
+        TextFlowPlacement::Omitted { row: 0 }
     ));
     assert_eq!(
         flow.tokens
@@ -368,7 +404,7 @@ fn text_flow_truncate() {
         assert!(
             flow.tokens[3..]
                 .iter()
-                .all(|token| token.placement == TextFlowPlacement::Truncated)
+                .all(|token| token.placement == TextFlowPlacement::Truncated { row: 0 })
         );
         assert!(
             flow.tokens
@@ -385,7 +421,7 @@ fn text_flow_narrow_width() {
     assert!(
         zero.tokens
             .iter()
-            .all(|token| token.placement == TextFlowPlacement::Omitted)
+            .all(|token| token.placement == TextFlowPlacement::Omitted { row: 0 })
     );
 
     let narrow = build("界a", 1, TextWrap::Wrap);
@@ -416,13 +452,16 @@ fn text_flow_interruption() {
 
     let mut cache = TextFlowCache::default();
     let published = cache.get_or_compute(&input, &options).unwrap();
-    let mut invalid = options.clone();
-    invalid.tab_stop = 0;
+    let mut cache_calls = 0;
     assert_eq!(
-        cache.get_or_compute(&plain_input("new"), &invalid),
-        Err(TextFlowError::InvalidTabStop)
+        cache.get_or_compute_interruptible(&plain_input("new"), &options, || {
+            cache_calls += 1;
+            cache_calls == 2
+        }),
+        Err(TextFlowError::Interrupted)
     );
     assert!(Arc::ptr_eq(cache.published.as_ref().unwrap(), &published));
+    assert_eq!(cache.build_count, 1);
 }
 
 #[test]

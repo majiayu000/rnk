@@ -34,8 +34,8 @@ pub enum TextFlowPlacement {
     ZeroWidth { row: usize, column: usize },
     SanitizedControl { row: usize, column: usize },
     HardBreak { row: usize },
-    Omitted,
-    Truncated,
+    Omitted { row: usize },
+    Truncated { row: usize },
     Synthetic { row: usize, column: usize },
 }
 
@@ -180,9 +180,7 @@ pub struct TextFlowRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextFlowPositionMapEntry {
     pub token_index: usize,
-    pub row: usize,
-    pub column: usize,
-    pub width: usize,
+    pub placement: TextFlowPlacement,
     pub source: TextFlowSource,
 }
 
@@ -281,13 +279,26 @@ impl TextFlowCache {
         input: &TextFlowInput,
         options: &TextFlowOptions,
     ) -> Result<Arc<TextFlow>, TextFlowError> {
+        self.get_or_compute_interruptible(input, options, || false)
+    }
+
+    pub fn get_or_compute_interruptible(
+        &mut self,
+        input: &TextFlowInput,
+        options: &TextFlowOptions,
+        interrupted: impl FnMut() -> bool,
+    ) -> Result<Arc<TextFlow>, TextFlowError> {
         if let Some(flow) = &self.published
             && flow.cache_identity.input == *input
             && flow.cache_identity.options == *options
         {
             return Ok(Arc::clone(flow));
         }
-        let completed = Arc::new(TextFlow::try_build(input, options)?);
+        let completed = Arc::new(TextFlow::try_build_interruptible(
+            input,
+            options,
+            interrupted,
+        )?);
         self.build_count = self
             .build_count
             .checked_add(1)
@@ -417,24 +428,11 @@ fn tokenize_source(
             safe_text,
             style,
             display_width,
-            placement: TextFlowPlacement::Omitted,
+            placement: TextFlowPlacement::Omitted { row: 0 },
             class,
         });
     }
     Ok((tokens, diagnostics, grapheme_ranges))
-}
-
-#[cfg(test)]
-fn validate_finalized_range(source: &str, range: &Range<usize>) -> Result<(), TextFlowError> {
-    let is_whole_grapheme = source
-        .grapheme_indices(true)
-        .any(|(start, grapheme)| range == &(start..start + grapheme.len()));
-    if !is_whole_grapheme {
-        return Err(TextFlowError::FinalizedRangeNotGraphemeBoundary {
-            range: range.clone(),
-        });
-    }
-    Ok(())
 }
 
 fn classify_grapheme(grapheme: &str) -> (String, TokenClass) {
@@ -510,9 +508,10 @@ fn layout_line(
     interrupted: &mut impl FnMut() -> bool,
 ) -> Result<(), TextFlowError> {
     if options.max_width == 0 {
+        let row = rows.len();
         for token in &mut tokens[range] {
-            finalize_tab(token, options.tab_stop);
-            token.placement = TextFlowPlacement::Omitted;
+            finalize_tab(token, options.tab_stop)?;
+            token.placement = TextFlowPlacement::Omitted { row };
         }
         return place_row(tokens, &[], options.tab_stop, rows);
     }
@@ -569,13 +568,14 @@ fn wrap_line(
             current_width = combined;
             continue;
         }
+        let omitted_row = rows.len();
         if !current.is_empty() {
             place_row(tokens, &current, options.tab_stop, rows)?;
             current.clear();
             current_width = 0;
         }
         for index in pending.drain(..) {
-            tokens[index].placement = TextFlowPlacement::Omitted;
+            tokens[index].placement = TextFlowPlacement::Omitted { row: omitted_row };
         }
         let fresh_width = sequence_width(tokens, &word, 0, options.tab_stop)?;
         if fresh_width <= options.max_width {
@@ -584,7 +584,7 @@ fn wrap_line(
             continue;
         }
         for index in word {
-            let width = token_width_at(&mut tokens[index], current_width, options.tab_stop);
+            let width = token_width_at(&mut tokens[index], current_width, options.tab_stop)?;
             if current_width
                 .checked_add(width)
                 .ok_or(TextFlowError::ArithmeticOverflow)?
@@ -596,7 +596,7 @@ fn wrap_line(
                 current_width = 0;
             }
             current.push(index);
-            let width = token_width_at(&mut tokens[index], current_width, options.tab_stop);
+            let width = token_width_at(&mut tokens[index], current_width, options.tab_stop)?;
             current_width = current_width
                 .checked_add(width)
                 .ok_or(TextFlowError::ArithmeticOverflow)?;
@@ -616,11 +616,12 @@ fn truncate_line(
     let mut placed = Vec::new();
     let mut width = 0usize;
     let mut truncating = false;
+    let row = rows.len();
     for index in range {
         if interrupted() {
             return Err(TextFlowError::Interrupted);
         }
-        let token_width = token_width_at(&mut tokens[index], width, options.tab_stop);
+        let token_width = token_width_at(&mut tokens[index], width, options.tab_stop)?;
         if !truncating
             && width
                 .checked_add(token_width)
@@ -631,7 +632,7 @@ fn truncate_line(
             width += token_width;
         } else {
             truncating = true;
-            tokens[index].placement = TextFlowPlacement::Truncated;
+            tokens[index].placement = TextFlowPlacement::Truncated { row };
         }
     }
     place_row(tokens, &placed, options.tab_stop, rows)
@@ -645,7 +646,7 @@ fn sequence_width(
 ) -> Result<usize, TextFlowError> {
     let mut column = start;
     for index in indices {
-        let width = token_width_at(&mut tokens[*index], column, tab_stop);
+        let width = token_width_at(&mut tokens[*index], column, tab_stop)?;
         column = column
             .checked_add(width)
             .ok_or(TextFlowError::ArithmeticOverflow)?;
@@ -653,21 +654,31 @@ fn sequence_width(
     Ok(column - start)
 }
 
-fn token_width_at(token: &mut TextFlowToken, column: usize, tab_stop: usize) -> usize {
+fn token_width_at(
+    token: &mut TextFlowToken,
+    column: usize,
+    tab_stop: usize,
+) -> Result<usize, TextFlowError> {
     if token.class == TokenClass::Tab {
         let width = tab_stop - column % tab_stop;
-        finalize_tab(token, width);
-        width
+        finalize_tab(token, width)?;
+        Ok(width)
     } else {
-        token.display_width
+        Ok(token.display_width)
     }
 }
 
-fn finalize_tab(token: &mut TextFlowToken, width: usize) {
+fn finalize_tab(token: &mut TextFlowToken, width: usize) -> Result<(), TextFlowError> {
     if token.class == TokenClass::Tab {
+        let mut expanded = String::new();
+        expanded
+            .try_reserve_exact(width)
+            .map_err(|_| TextFlowError::ArithmeticOverflow)?;
+        expanded.extend(std::iter::repeat_n(' ', width));
         token.display_width = width;
-        token.safe_text = " ".repeat(width);
+        token.safe_text = expanded;
     }
+    Ok(())
 }
 
 fn place_row(
@@ -681,7 +692,7 @@ fn place_row(
     let mut text = String::new();
     let mut runs = Vec::with_capacity(indices.len());
     for index in indices {
-        let width = token_width_at(&mut tokens[*index], column, tab_stop);
+        let width = token_width_at(&mut tokens[*index], column, tab_stop)?;
         tokens[*index].placement = match (&tokens[*index].source, tokens[*index].class, width) {
             (TextFlowSource::Synthetic, _, _) => TextFlowPlacement::Synthetic { row, column },
             (_, TokenClass::SanitizedControl, _) => {
@@ -723,15 +734,15 @@ fn validate_source_coverage(
         let TextFlowSource::Source { range, .. } = &token.source else {
             continue;
         };
+        if grapheme_ranges.get(source_index) != Some(range) {
+            return Err(TextFlowError::FinalizedRangeNotGraphemeBoundary {
+                range: range.clone(),
+            });
+        }
         if range.start != covered {
             return Err(TextFlowError::IncompleteSourceCoverage {
                 expected: source.len(),
                 covered,
-            });
-        }
-        if grapheme_ranges.get(source_index) != Some(range) {
-            return Err(TextFlowError::FinalizedRangeNotGraphemeBoundary {
-                range: range.clone(),
             });
         }
         source_index += 1;
@@ -750,21 +761,10 @@ fn build_position_map(tokens: &[TextFlowToken]) -> Vec<TextFlowPositionMapEntry>
     tokens
         .iter()
         .enumerate()
-        .filter_map(|(token_index, token)| {
-            let (row, column) = match token.placement {
-                TextFlowPlacement::Positioned { row, column }
-                | TextFlowPlacement::ZeroWidth { row, column }
-                | TextFlowPlacement::SanitizedControl { row, column }
-                | TextFlowPlacement::Synthetic { row, column } => (row, column),
-                _ => return None,
-            };
-            Some(TextFlowPositionMapEntry {
-                token_index,
-                row,
-                column,
-                width: token.display_width,
-                source: token.source.clone(),
-            })
+        .map(|(token_index, token)| TextFlowPositionMapEntry {
+            token_index,
+            placement: token.placement.clone(),
+            source: token.source.clone(),
         })
         .collect()
 }
