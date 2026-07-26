@@ -8,39 +8,8 @@ use super::super::state::{
     static_complete_ready, valid_call_result, valid_call_transition, valid_message_transition,
     valid_result_transition, valid_thinking_transition,
 };
+use super::super::rollback::IdentityBackup;
 use std::collections::{BTreeMap, BTreeSet};
-
-struct IdentityBackup {
-    seen_messages: BTreeSet<MessageId>, retired_messages: BTreeSet<MessageId>,
-    seen_blocks: BTreeSet<BlockId>, retired_blocks: BTreeSet<BlockId>,
-    thinking_seen: BTreeMap<MessageId, BTreeSet<ThinkingId>>,
-    thinking_retired: BTreeMap<MessageId, BTreeSet<ThinkingId>>,
-    seen_tool_calls: BTreeSet<ToolCallId>, retired_tool_calls: BTreeSet<ToolCallId>,
-    result_slots: BTreeMap<ToolCallId, ToolResultSlot>,
-}
-impl IdentityBackup {
-    fn capture(state: &ConversationState) -> Self {
-        Self { seen_messages: state.seen_messages.clone(),
-            retired_messages: state.retired_messages.clone(),
-            seen_blocks: state.seen_blocks.clone(), retired_blocks: state.retired_blocks.clone(),
-            thinking_seen: state.thinking_seen.clone(),
-            thinking_retired: state.thinking_retired.clone(),
-            seen_tool_calls: state.seen_tool_calls.clone(),
-            retired_tool_calls: state.retired_tool_calls.clone(),
-            result_slots: state.result_slots.clone() }
-    }
-    fn restore(self, state: &mut ConversationState) {
-        state.seen_messages = self.seen_messages;
-        state.retired_messages = self.retired_messages;
-        state.seen_blocks = self.seen_blocks;
-        state.retired_blocks = self.retired_blocks;
-        state.thinking_seen = self.thinking_seen;
-        state.thinking_retired = self.thinking_retired;
-        state.seen_tool_calls = self.seen_tool_calls;
-        state.retired_tool_calls = self.retired_tool_calls;
-        state.result_slots = self.result_slots;
-    }
-}
 
 struct MutationBackup {
     messages: Vec<(usize, ChatMessage)>, added: Option<MessageId>,
@@ -61,7 +30,8 @@ impl MutationBackup {
         let identities = matches!(update, ConversationUpdate::Push(_)
             | ConversationUpdate::AppendMessageBlock(_) | ConversationUpdate::InsertMessageBlock(_)
             | ConversationUpdate::EditMessage(_) | ConversationUpdate::DeleteMessage(_)
-            | ConversationUpdate::Resend(_)).then(|| IdentityBackup::capture(state));
+            | ConversationUpdate::Resend(_))
+            .then(|| IdentityBackup::capture(state, update, affected));
         Self { messages, added, identities }
     }
     fn restore(self, state: &mut ConversationState) {
@@ -163,7 +133,7 @@ impl ConversationState {
         let outcome = ApplyOutcome { revision: next_revision, affected_messages };
         self.revision = next_revision;
         self.expected_sequence = next_sequence;
-        self.ledger.push_back(ProcessedEventRecord::new(event, outcome.clone()));
+        self.ledger.push_back(ProcessedEventRecord::proven(event, outcome.clone()));
         while self.ledger.len() > self.ledger_capacity.get() {
             if let Some(record) = self.ledger.pop_front() {
                 self.evicted_through = Some(record.event.sequence);
@@ -568,6 +538,11 @@ fn edit_message(state: &mut ConversationState, message_id: MessageId,
             if lifecycle_status_changed(&previous.block, &replacement.block) {
                 return Err(ConversationError::InvalidReplacement {
                     block_id: *id, reason: "edit cannot change retained lifecycle status",
+                });
+            }
+            if nested_terminal(&previous.block) && previous.block != replacement.block {
+                return Err(ConversationError::InvalidReplacement {
+                    block_id: *id, reason: "edit cannot rewrite terminal lifecycle payload",
                 });
             }
         } else if message_terminal(&current.status)
