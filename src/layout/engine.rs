@@ -651,6 +651,68 @@ fn allow_text_to_shrink(style: &mut ::taffy::Style, is_text: bool, explicit_min_
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod frame_flow_tests {
+    use super::*;
+    use crate::core::FlexDirection;
+
+    fn many_distinct_text_nodes() -> (Element, Vec<ElementId>) {
+        let mut root = Element::box_element();
+        root.style.width = Dimension::Points(16.0);
+        root.style.flex_direction = FlexDirection::Column;
+        let mut ids = Vec::new();
+        for index in 0..=FlowCache::MAX_ENTRIES {
+            let child = Element::text(format!("node-{index}")).with_key(format!("node-{index}"));
+            ids.push(child.id);
+            root.add_child(child);
+        }
+        (root, ids)
+    }
+
+    #[test]
+    fn active_frame_flows_remain_identical_beyond_history_limit() {
+        let (root, ids) = many_distinct_text_nodes();
+        let mut engine = LayoutEngine::new();
+        let (current_vnode, _) = engine
+            .try_compute_element_incremental(&root, None, 80, 200)
+            .unwrap();
+
+        let mut published = Vec::new();
+        for element_id in &ids {
+            let key = engine.node_key_for_element(*element_id).unwrap();
+            let node_id = *engine.node_map.get(element_id).unwrap();
+            let context = engine.taffy.get_node_context(node_id).unwrap();
+            let measured_flow = context.last_measured_flow().unwrap();
+            let active_flow = context.active_flow().unwrap();
+            let element_flow = engine.current_text_flow(*element_id).unwrap();
+            let vnode_flow = engine.current_vnode_text_flow(key).unwrap();
+            assert!(Arc::ptr_eq(measured_flow, active_flow));
+            assert!(Arc::ptr_eq(active_flow, &element_flow));
+            assert!(Arc::ptr_eq(&element_flow, &vnode_flow));
+            published.push((*element_id, key, node_id, element_flow));
+        }
+        assert_eq!(published.len(), FlowCache::MAX_ENTRIES + 1);
+        assert_eq!(engine.flow_cache.len(), FlowCache::MAX_ENTRIES);
+
+        engine.set_text_flow_policy(0, "…", 1);
+        let failure = engine.try_compute_element_incremental(&root, Some(&current_vnode), 80, 200);
+        assert!(matches!(failure, Err(TextFlowError::InvalidTabStop)));
+        for (element_id, key, node_id, before) in published {
+            let context = engine.taffy.get_node_context(node_id).unwrap();
+            assert!(Arc::ptr_eq(context.active_flow().unwrap(), &before));
+            assert!(Arc::ptr_eq(context.last_measured_flow().unwrap(), &before));
+            assert!(Arc::ptr_eq(
+                &engine.current_text_flow(element_id).unwrap(),
+                &before
+            ));
+            assert!(Arc::ptr_eq(
+                &engine.current_vnode_text_flow(key).unwrap(),
+                &before
+            ));
+        }
+    }
+}
+
 mod text_flow_bridge;
 
 use text_flow_bridge::{

@@ -20,6 +20,9 @@ use super::LayoutEngine;
 pub(super) struct NodeContext {
     input: Option<TextFlowInput>,
     first_error: Option<TextFlowError>,
+    active_flow: Option<Arc<TextFlow>>,
+    #[cfg(test)]
+    last_measured_flow: Option<Arc<TextFlow>>,
 }
 
 impl NodeContext {
@@ -27,6 +30,9 @@ impl NodeContext {
         Self {
             input,
             first_error: None,
+            active_flow: None,
+            #[cfg(test)]
+            last_measured_flow: None,
         }
     }
 
@@ -38,12 +44,38 @@ impl NodeContext {
         self.input.is_some()
     }
 
-    pub(super) fn clear_error(&mut self) {
+    pub(super) fn begin_frame(&mut self) {
         self.first_error = None;
+        self.active_flow = None;
+        #[cfg(test)]
+        {
+            self.last_measured_flow = None;
+        }
     }
 
     pub(super) fn first_error(&self) -> Option<&TextFlowError> {
         self.first_error.as_ref()
+    }
+
+    pub(super) fn active_flow(&self) -> Option<&Arc<TextFlow>> {
+        self.active_flow.as_ref()
+    }
+
+    fn pin_active_flow(&mut self, flow: &Arc<TextFlow>) {
+        self.active_flow = Some(Arc::clone(flow));
+    }
+
+    fn pin_measured_flow(&mut self, flow: &Arc<TextFlow>) {
+        self.pin_active_flow(flow);
+        #[cfg(test)]
+        {
+            self.last_measured_flow = Some(Arc::clone(flow));
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn last_measured_flow(&self) -> Option<&Arc<TextFlow>> {
+        self.last_measured_flow.as_ref()
     }
 
     fn record_error(&mut self, error: TextFlowError) {
@@ -92,14 +124,20 @@ impl TextFlowPolicy {
 /// Engine-local logical cache with deterministic FIFO eviction.
 ///
 /// Hits compare the complete identity, while the fixed entry limit bounds both
-/// retained flows and lookup work independently of frame history.
+/// retained history and lookup work. Live frame flows are pinned by NodeId in
+/// `NodeContext`, so history eviction cannot change current publication.
 #[derive(Clone, Default)]
 pub(super) struct FlowCache {
     entries: VecDeque<Arc<TextFlow>>,
 }
 
 impl FlowCache {
-    const MAX_ENTRIES: usize = 64;
+    pub(super) const MAX_ENTRIES: usize = 64;
+
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        self.entries.len()
+    }
 
     pub(super) fn get_or_compute(
         &mut self,
@@ -291,6 +329,7 @@ pub(super) fn measure_text_node(
             return taffy::Size::zero();
         }
     };
+    context.pin_measured_flow(&flow);
     let width = match effective {
         EffectiveWidth::Resolved(width) => width,
         EffectiveWidth::Available(width) => (flow.max_row_width() as f32).min(width),
@@ -313,6 +352,11 @@ pub(super) fn flow_for_width(
         return Ok(None);
     };
     let options = policy.options(input, width);
+    if let Some(flow) = context.active_flow().filter(|flow| {
+        flow.cache_identity().input == *input && flow.cache_identity().options == options
+    }) {
+        return Ok(Some(Arc::clone(flow)));
+    }
     cache.get_or_compute(input, &options, interrupted).map(Some)
 }
 
@@ -361,7 +405,7 @@ impl LayoutEngine {
     ) -> Result<(), TextFlowError> {
         for node_id in self.context_nodes() {
             if let Some(context) = self.taffy.get_node_context_mut(node_id) {
-                context.clear_error();
+                context.begin_frame();
             }
         }
         if let Some(root_node) = self.root_node {
@@ -394,28 +438,27 @@ impl LayoutEngine {
         &mut self,
         interrupted: &mut impl FnMut() -> bool,
     ) -> Result<(), TextFlowError> {
-        let mut element_flows = HashMap::new();
-        let mut vnode_flows = HashMap::new();
-        let elements: Vec<_> = self
+        let mut node_flows = HashMap::new();
+        for node_id in self.context_nodes() {
+            if node_flows.contains_key(&node_id) {
+                continue;
+            }
+            if let Some(flow) = self.flow_at_final_width(node_id, interrupted)? {
+                node_flows.insert(node_id, flow);
+            }
+        }
+        let element_flows = self
             .node_map
             .iter()
-            .map(|(element_id, node_id)| (*element_id, *node_id))
+            .filter_map(|(element_id, node_id)| {
+                Some((*element_id, Arc::clone(node_flows.get(node_id)?)))
+            })
             .collect();
-        let vnodes: Vec<_> = self
+        let vnode_flows = self
             .vnode_map
             .iter()
-            .map(|(key, node_id)| (*key, *node_id))
+            .filter_map(|(key, node_id)| Some((*key, Arc::clone(node_flows.get(node_id)?))))
             .collect();
-        for (element_id, node_id) in elements {
-            if let Some(flow) = self.flow_at_final_width(node_id, interrupted)? {
-                element_flows.insert(element_id, flow);
-            }
-        }
-        for (key, node_id) in vnodes {
-            if let Some(flow) = self.flow_at_final_width(node_id, interrupted)? {
-                vnode_flows.insert(key, flow);
-            }
-        }
         self.current_text_flows = element_flows;
         self.current_vnode_flows = vnode_flows;
         Ok(())
@@ -435,13 +478,19 @@ impl LayoutEngine {
         let horizontal_inset =
             layout.padding.left + layout.padding.right + layout.border.left + layout.border.right;
         let width = (layout.size.width - horizontal_inset).max(0.0).floor() as usize;
-        flow_for_width(
+        let flow = flow_for_width(
             &context,
             width,
             &mut self.flow_cache,
             &self.text_flow_policy,
             interrupted,
-        )
+        )?;
+        if let Some(flow) = &flow
+            && let Some(context) = self.taffy.get_node_context_mut(node_id)
+        {
+            context.pin_active_flow(flow);
+        }
+        Ok(flow)
     }
 }
 
