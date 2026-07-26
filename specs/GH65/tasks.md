@@ -42,10 +42,16 @@ dependency branch 或推测 API 开始实现。
 T3 实现 `gh65_current_head_coverage_contract` 的 `fixture`/`produce`/`validate` closed
 mode：`fixture` 只运行内嵌 canonical 正例与缺字段、旧 SHA、集合漂移、零 denominator、
 unknown/duplicate symbol、hash/threshold 不符负例，不写或接受 completion artifact；
-missing/unknown mode 失败。T5 在 implementation PR exact head 上先执行 ledger 的全部命令，
-再建立 immutable window：
+missing/unknown mode 失败。mode 与调用阶段的闭合集合固定为：ledger exact command、raw
+`cargo llvm-cov --workspace --all-targets` 和 full
+`cargo test --workspace --all-targets` 只能使用 `fixture`；artifact producer 只能使用
+`produce`；artifact validator 只能使用 `validate`。即使 mode 名本身受支持，只要用于错误
+阶段也必须 fail closed。T5 必须用 canonical 正例以及 missing、unknown、wrong-stage
+负例验证这张矩阵，不能只检查 ledger wrapper。随后在 implementation PR exact head 上先执行
+ledger 的全部命令，再建立 immutable window：
 
 ```sh
+set -euo pipefail
 case "$GH65_PR_NUMBER" in ''|*[!0-9]*) exit 1;; esac
 git fetch --prune origin main
 GH65_PR_HEAD_SHA="$(gh pr view "$GH65_PR_NUMBER" --repo majiayu000/rnk \
@@ -66,6 +72,8 @@ export GH65_COVERAGE_MERGE_BASE_SHA GH65_EVIDENCE_DIR
 然后运行唯一非空 raw coverage 命令：
 
 ```sh
+set -euo pipefail
+GH65_COVERAGE_MODE=fixture \
 cargo llvm-cov --workspace --all-targets --all-features --locked --json \
   --output-path "$GH65_EVIDENCE_DIR/llvm-cov.json"
 ```
@@ -91,7 +99,7 @@ producer 只从 committed ledger、raw llvm-cov JSON 和
     "raw_sha256": "<64-hex>",
     "raw_artifact": "<absolute path>"
   },
-  "command": "cargo llvm-cov --workspace --all-targets --all-features --locked --json --output-path $GH65_EVIDENCE_DIR/llvm-cov.json",
+  "command": "GH65_COVERAGE_MODE=fixture cargo llvm-cov --workspace --all-targets --all-features --locked --json --output-path $GH65_EVIDENCE_DIR/llvm-cov.json",
   "changed_executable": {"covered": 1, "total": 1, "percent": 100.0},
   "critical": [{
     "file": "src/components/chat/message_list/tests.rs",
@@ -118,6 +126,7 @@ symbol 唯一匹配且 executable denominator 非零。Changed executable 是 me
 `continue-on-error` provenance 全部失败。T5 使用：
 
 ```sh
+set -euo pipefail
 GH65_COVERAGE_MODE=produce \
 GH65_PR_NUMBER="$GH65_PR_NUMBER" \
 GH65_PR_HEAD_SHA="$GH65_PR_HEAD_SHA" \
@@ -262,7 +271,7 @@ GH65_COVERAGE_ARTIFACT="$GH65_EVIDENCE_DIR/gh57-child-coverage-v1.json" \
   `gh65_current_head_coverage_contract` 的 produce、validate 命令；然后运行
   `cargo fmt --all -- --check`；
   `cargo check --workspace --all-targets --all-features --locked`；
-  `cargo test --workspace --all-targets --all-features --locked`；
+  `GH65_COVERAGE_MODE=fixture cargo test --workspace --all-targets --all-features --locked`；
   `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`；
   `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --locked`；
   `cargo bench --bench message_list -- message_list_10k`。
@@ -299,6 +308,9 @@ Implementation Gate -> SP65-T1 -> SP65-T2 -> SP65-T3 -> SP65-T4 -> SP65-T5
 - 10k benchmark 在 implementation current head 实际运行；operation counter 仍是复杂度
   correctness 硬门禁。
 - 运行 fmt/check/test/clippy/docs full gates；所有输出来自本次 current exact head。
+- 对 ledger、raw all-target coverage、full all-target test、produce 与 validate 运行 mode
+  matrix 正例；分别删除 mode、替换为 unknown，以及替换为另一个受支持但阶段错误的 mode，
+  每个 schema-valid negative fixture 都必须 nonzero fail closed。
 - `git diff --name-only <implementation-merge-base>...HEAD` 只含 reviewed planned paths。
 - 核对新代码 line coverage ≥80%、anchor/cache/error critical paths 100%。
 - 静态解析唯一 `gh57-critical-paths-v1`，要求 version=1、issue=65、9 个 unique

@@ -673,7 +673,7 @@ facade 在候选 frame 中构造全部 children，全部成功后才交给 layou
 | B-021 | bench + allocation/counter | `cargo bench --bench message_list -- message_list_10k`; `visible_slice_key_handle_is_o1_shared_immutable_and_send_sync`; B-018 counter test |
 | B-022 | unchanged fixed API | `fixed_height_virtual_scroll_api_is_unchanged` |
 | B-023 | implementation preflight | `dependency_completion_records_require_closed_issues_and_complete_commit_sets`；fresh issue/PR/ancestry commands in task gate |
-| B-024 | GH57 child coverage + closure audit | `GH65_COVERAGE_MODE=fixture ... gh65_current_head_coverage_contract`；missing/unknown mode negative fixtures；exact/full tests, CI/review/PR-gate evidence at current head |
+| B-024 | GH57 child coverage + closure audit | ledger/raw all-target coverage/full all-target test 使用 `GH65_COVERAGE_MODE=fixture`，producer/validator 分别使用 `produce`/`validate`；missing/unknown/wrong-stage mode negative fixtures；exact/full tests, CI/review/PR-gate evidence at current head |
 
 每个 bare test name 都对应 tasks 中的完整 `cargo test ... -- --exact` 命令。Property test 使用
 固定 32-byte ChaCha seed、至少 256 cases，并输出 seed/最小操作序列。Operation-count test 是
@@ -747,13 +747,16 @@ GH-62 ordered messages + viewport(width, rows)
 - [ ] Benchmark：divan 10k mixed heights 的 lookup/slice/point update/prepend，保存 current
   head 命令和输出。
 - [ ] Full gates：`cargo fmt --all -- --check`、`cargo check --workspace --all-targets
-  --all-features --locked`、`cargo test --workspace --all-targets --all-features --locked`、
+  --all-features --locked`、`GH65_COVERAGE_MODE=fixture cargo test --workspace --all-targets
+  --all-features --locked`、
   `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`、
   `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --locked`。
 - [ ] Coverage：Tasks 中必须且只能有一个 `gh57-critical-paths-v1` block，version=1、
   issue=65、9 个 unique exact `file + name` 与逐项 nonempty `verification_command`。
   第九条 ledger command 必须以 `GH65_COVERAGE_MODE=fixture` 原样调用 coverage contract；
-  missing/unknown mode 的负例都必须失败。
+  唯一 raw all-target coverage command 与 full all-target test command 也必须显式使用
+  `fixture`，producer/validator 分别只允许 `produce`/`validate`。missing、unknown，以及把
+  任一受支持 mode 用于错误阶段的负例都必须失败。
   `gh65_current_head_coverage_contract` 从 raw llvm-cov、committed ledger 和
   merge-base..exact-head diff 确定性 produce/validate `gh57-child-coverage-v1`；artifact
   绑定 child/head/base/merge-base、head commit timestamp、raw absolute path/SHA256、非空
