@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::sync::mpsc;
+use std::thread;
 
 use rnk::{
     core::{Style, TextWrap},
@@ -68,6 +70,48 @@ fn wide_width_and_tab_or_whitespace_placement_poll_for_interruption() {
 }
 
 #[test]
+fn cancellation_armed_after_placement_starts_interrupts_the_next_token() {
+    const TOKENS: usize = 4_096;
+    // Before placement: build entry + tokenization + wrap scanning + append_wrapped.
+    // The first placement poll is allowed to construct one token; cancellation is
+    // armed only when the second placement token is about to be constructed.
+    const SECOND_PLACEMENT_POLL: usize = 3 * TOKENS + 3;
+    let (placement_started_tx, placement_started_rx) = mpsc::sync_channel(0);
+    let (cancel_tx, cancel_rx) = mpsc::sync_channel(0);
+
+    let build = thread::spawn(move || {
+        let input = wrap_input(" ".repeat(TOKENS));
+        let options = TextFlowOptions::new(TOKENS, TextWrap::Wrap);
+        let mut calls = 0usize;
+        let result = TextFlow::try_build_interruptible(&input, &options, || {
+            calls += 1;
+            if calls != SECOND_PLACEMENT_POLL {
+                return false;
+            }
+            placement_started_tx
+                .send(())
+                .expect("test receiver must observe placement progress");
+            cancel_rx
+                .recv()
+                .expect("test coordinator must arm cancellation after placement starts");
+            true
+        });
+        (result, calls)
+    });
+
+    placement_started_rx
+        .recv()
+        .expect("placement must poll again after constructing its first token");
+    cancel_tx
+        .send(())
+        .expect("builder must still be waiting for cancellation");
+    let (result, calls) = build.join().expect("builder thread must not panic");
+
+    assert!(matches!(result, Err(TextFlowError::Interrupted)));
+    assert_eq!(calls, SECOND_PLACEMENT_POLL);
+}
+
+#[test]
 fn interruption_publishes_no_partial_cache_rows_or_position_map() {
     let stable_input = wrap_input("keep\t界界  together\t終".to_string());
     let options = TextFlowOptions::new(9, TextWrap::Wrap);
@@ -85,15 +129,16 @@ fn interruption_publishes_no_partial_cache_rows_or_position_map() {
     let tokens_before = published.tokens().to_vec();
 
     const TOKENS: usize = 8_192;
-    let interrupted_input = wrap_input("x".repeat(TOKENS));
+    let interrupted_input = wrap_input(" ".repeat(TOKENS));
     let mut calls = 0usize;
     let result = cache.get_or_compute_interruptible(&interrupted_input, &options, || {
         calls += 1;
-        // Cache entry + build entry + tokenization + wrap entry.
-        calls > TOKENS + 3
+        // Cache entry, build entry, tokenization, wrap scanning, append_wrapped,
+        // one completed placement token, then the interrupting placement poll.
+        calls > 3 * TOKENS + 3
     });
     assert!(matches!(result, Err(TextFlowError::Interrupted)));
-    assert_eq!(calls, TOKENS + 4);
+    assert_eq!(calls, 3 * TOKENS + 4);
 
     let still_published = cache
         .get_or_compute(&stable_input, &options)

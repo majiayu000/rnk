@@ -1,8 +1,8 @@
 use std::ops::Range;
 
 use super::{
-    TextFlowError, TextFlowOptions, TextFlowRow, TextFlowToken, TokenClass, place_row,
-    token_width_at,
+    TextFlowError, TextFlowOptions, TextFlowPlacement, TextFlowRow, TextFlowRun, TextFlowSource,
+    TextFlowToken, TokenClass, token_width_at,
 };
 
 pub(super) fn wrap_line(
@@ -172,8 +172,43 @@ fn place_row_interruptible(
     rows: &mut Vec<TextFlowRow>,
     interrupted: &mut impl FnMut() -> bool,
 ) -> Result<(), TextFlowError> {
-    if interrupted() {
-        return Err(TextFlowError::Interrupted);
+    // Mirror `place_row`, but keep the row as an unpublished candidate until
+    // every token has been placed and every interruption poll has passed.
+    let row = rows.len();
+    let mut column = 0;
+    let mut text = String::new();
+    let mut runs = Vec::with_capacity(indices.len());
+    for index in indices {
+        if interrupted() {
+            return Err(TextFlowError::Interrupted);
+        }
+        let width = token_width_at(&mut tokens[*index], column, tab_stop)?;
+        tokens[*index].placement = match (&tokens[*index].source, tokens[*index].class, width) {
+            (TextFlowSource::Synthetic, _, _) => TextFlowPlacement::Synthetic { row, column },
+            (_, TokenClass::SanitizedControl, _) => {
+                TextFlowPlacement::SanitizedControl { row, column }
+            }
+            (_, _, 0) => TextFlowPlacement::ZeroWidth { row, column },
+            _ => TextFlowPlacement::Positioned { row, column },
+        };
+        text.push_str(&tokens[*index].safe_text);
+        runs.push(TextFlowRun {
+            token_index: *index,
+            row,
+            column,
+            width,
+            text: tokens[*index].safe_text.clone(),
+            style: tokens[*index].style.clone(),
+        });
+        column = column
+            .checked_add(width)
+            .ok_or(TextFlowError::ArithmeticOverflow)?;
     }
-    place_row(tokens, indices, tab_stop, rows)
+    rows.push(TextFlowRow {
+        index: row,
+        width: column,
+        text,
+        runs,
+    });
+    Ok(())
 }
