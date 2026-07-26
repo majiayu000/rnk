@@ -22,8 +22,8 @@ GH-132: https://github.com/majiayu000/rnk/issues/132
 
 本文件只定义 GH-132 的 signed coordinate conversion、coordinate error owner、三类 caller
 传播和原子性验证。GH-124 继续拥有 zero-width prospective/actual footprint 与 predecessor
-selection；GH-131 继续拥有 VirtualText/span-only compatibility。GH-132 不复制或顺带修复
-两者。
+selection；GH-131 / merged PR #142 继续拥有 VirtualText/span-only compatibility。GH-132
+不复制或顺带修复两者。
 
 issue #132 当前 label 是 `ready_to_implement`，但起草前缺少本 packet。implx auto 的
 creation-time route artifact `gh132-route-gate.json` 明确给出
@@ -34,8 +34,9 @@ implementation gate。
 
 ## Codebase Context
 
-以下锚点均在 `main@b4f39ed53506a42b7c06d0b0222bf3ac2c3e5ad8` 通过 Read/grep
-核实。实现若在 dependency 合入后开始，必须在 refreshed base 上重新定位行号和签名。
+以下锚点已在包含 PR #137 与 PR #142 的
+`main@1404dbfc7d82bbe1f2214ea25b25b8104dd5242f` 通过 Read/grep 核实。实现开始前仍必须在
+fresh current main 上重新定位行号、签名和三条 PR #142 受控交集路径。
 
 | Area | Current anchor | Current behavior | GH-132 decision |
 | --- | --- | --- | --- |
@@ -102,10 +103,20 @@ overlay同一固定revision的`workflow.yaml`、`states.yaml`、`labels.yaml`和
    与PR #137集合无交集。missing、unexpected或额外交集都必须阻断并重新冻结spec。
    fresh expected main必须包含该merge；实现前在两条受控交集路径上重新定位zero-width
    owner contract，并逐条重跑两项已命名exact regression且证明`matched=1`。
-3. issue #131 当前无 spec、branch 或 PR，但其 VirtualText traversal/flow validation scope
-   预计与 `tree_renderer.rs`、`projection.rs` 和 caller tests 冲突。coordinator 必须先取得
-   #131 的 frozen manifest：若与本文件12路径implementation manifest相交，则两者串行
-   实现；不得以“尚无分支”视为无 owner。GH-132 不修改 VirtualText/span source behavior。
+3. issue #131 已由 PR #142 于 `2026-07-26T13:20:30Z` 合并关闭；final head
+   `18525f3e17c68c19dbb898edb095ccf0f709ba7d`、merge commit
+   `1404dbfc7d82bbe1f2214ea25b25b8104dd5242f`。其 fresh、排序、
+   newline-terminated file set 必须精确为
+   `src/layout/engine/text_flow_bridge.rs`、`src/renderer/render_to_string.rs`、
+   `src/renderer/tree_renderer.rs`、`src/renderer/tree_renderer/projection.rs`、
+   `src/renderer/tree_renderer/tests.rs`、`tests/text_source_compat.rs`，SHA-256 固定为
+   `6db38f157f5fe455302e2c37d55f503b2a74f61795e522d8ab507132befdc3a9`。
+   与本文件 12 路径 implementation manifest 的受控交集必须精确为
+   `tree_renderer.rs`、`tree_renderer/projection.rs`、`tree_renderer/tests.rs` 三路径；
+   其余九个 implementation 路径与 PR #142 集合无交集。fresh expected main 必须包含该
+   merge，implementation 开始前必须在三条交集路径重新定位 VirtualText/span-only
+   contract；GH-132 不修改该 source behavior。missing、unexpected 或额外交集都必须
+   fail closed 并重新冻结 spec。
 
 上述 gate 是 implementation dependency/refresh gate，不阻止本 spec-only PR。记录的
 PR #137 merge证据必须在实现时fresh查询并证明属于上述exact expected main，不能只复用
@@ -304,23 +315,46 @@ MissingCurrentFlow和 PR #137 zero-width tests都是 mandatory regressions。
 Implementation tasks必须逐项创建并运行上表新 tests；以下现有 regressions也必须逐项运行：
 
 ```sh
-cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_signed_coordinates_axis_clips_and_nested_active_clips_are_exact -- --exact
-cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_failure_commits_neither_cells_nor_projection -- --exact
-cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::projection_zero_width_only_attaches_to_the_same_flow_sequence -- --exact
-cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::synthetic_ellipsis_projection_failure_commits_neither_cells_nor_projection -- --exact
-cargo test --workspace --lib --locked renderer::tree_renderer::tests::scrolled_out_negative_rows_do_not_paint_at_top -- --exact
-cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::incremental_failure_retries_from_clean_layout_tree -- --exact
-cargo test --workspace --lib --locked renderer::app::tests::app_render_candidate_preserves_typed_error_source -- --exact
-cargo test --test text_flow_error_paths --locked typed_error_reaches_remaining_callers -- --exact
-cargo test --test text_flow_error_paths --locked caller_failure_commits_no_partial_output -- --exact
-cargo test --test text_flow_renderer_error_paths --locked try_render_to_string_preserves_source_and_returns_no_partial_string -- --exact
-cargo test --test prelude_surfaces --locked try_render_to_string_surface -- --exact
+set -euo pipefail
+run_exact() {
+  GH132_LIST="$("$@" -- --exact --list --format terse 2>&1)"
+  GH132_MATCHED="$(printf '%s\n' "$GH132_LIST" |
+    awk -F ': ' '$2 == "test" { count++ } END { print count + 0 }')"
+  test "$GH132_MATCHED" -eq 1
+  GH132_RESULT="$("$@" -- --exact 2>&1)" || {
+    printf '%s\n' "$GH132_RESULT" >&2
+    return 1
+  }
+  printf '%s\n' "$GH132_RESULT"
+  GH132_COUNTS="$(printf '%s\n' "$GH132_RESULT" | awk '
+    /^test result:/ {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "passed;") passed += $(i - 1)
+        if ($i == "failed;") failed += $(i - 1)
+        if ($i == "ignored;") ignored += $(i - 1)
+      }
+    }
+    END { printf "%d %d %d\n", passed, failed, ignored }')"
+  test "$GH132_COUNTS" = "1 0 0"
+}
+run_exact cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_signed_coordinates_axis_clips_and_nested_active_clips_are_exact
+run_exact cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_failure_commits_neither_cells_nor_projection
+run_exact cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::projection_zero_width_only_attaches_to_the_same_flow_sequence
+run_exact cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::synthetic_ellipsis_projection_failure_commits_neither_cells_nor_projection
+run_exact cargo test --workspace --lib --locked renderer::tree_renderer::tests::scrolled_out_negative_rows_do_not_paint_at_top
+run_exact cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::incremental_failure_retries_from_clean_layout_tree
+run_exact cargo test --workspace --lib --locked renderer::app::tests::app_render_candidate_preserves_typed_error_source
+run_exact cargo test --test text_flow_error_paths --locked typed_error_reaches_remaining_callers
+run_exact cargo test --test text_flow_error_paths --locked caller_failure_commits_no_partial_output
+run_exact cargo test --test text_flow_renderer_error_paths --locked try_render_to_string_preserves_source_and_returns_no_partial_string
+run_exact cargo test --test prelude_surfaces --locked try_render_to_string_surface
 ```
 
 每个 filtered command 的 implementation evidence必须证明 `matched=1`、`passed=1`、
 `ignored=0`；仅凭 exit 0 或 substring filter 不足。完成后运行：
 
 ```sh
+set -euo pipefail
 cargo fmt --all -- --check
 cargo check --workspace --all-targets --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -A clippy::collapsible_if -A clippy::manual_is_multiple_of
@@ -349,7 +383,8 @@ fixture/produce/validate modes fail-closed验证。CI、review与 reviewThreads�
   review与static/App exact tests必须证明每个retained node沿整条caller链保持original ID。
 - **Performance:** floor/range check每 element执行，复杂度仍 O(elements + projected cells)；
   不增加全 viewport scan或二次 traversal。
-- **Maintenance:** PR #137/#131有直接或预期文件交集；未执行 refresh/serialization会造成
+- **Maintenance:** PR #137/#142有已知受控文件交集；未执行 fresh changed-file/manifest
+  比较与 source-drift refresh 会造成
   owner contract漂移。
 
 ## 测试计划
@@ -373,5 +408,5 @@ fixture/produce/validate modes fail-closed验证。CI、review与 reviewThreads�
 
 没有数据迁移或 feature flag。若出现兼容回归，普通 revert GH-132 implementation commit，
 恢复此前转换与错误映射，同时重开 issue；不得只删除 negative fixtures或把 errors改成
-warning/fallback。spec packet保留为问题和验收证据。若 PR #137/#131 后续改变 shared
+warning/fallback。spec packet保留为问题和验收证据。若 PR #137/#142 后续改变 shared
 contract，先暂停实现、刷新本 spec与 manifest并重新审批。
