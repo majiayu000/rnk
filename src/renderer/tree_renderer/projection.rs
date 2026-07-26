@@ -8,6 +8,7 @@ use crate::layout::text_flow::{
     TextFlow, TextFlowPlacement, TextFlowRow, TextFlowRun, TextFlowSource, TextFlowToken,
 };
 use crate::renderer::Output;
+use crate::renderer::{TextCoordinateError, TextProjectionError, TextRenderError};
 
 mod staged;
 
@@ -126,6 +127,7 @@ pub(super) struct ProjectionOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ProjectionError {
     MissingCurrentFlow(ElementId),
+    MissingLayout(ElementId),
     NonFiniteCoordinate,
     CoordinateOverflow,
     MalformedFlow(&'static str),
@@ -142,6 +144,9 @@ impl fmt::Display for ProjectionError {
         match self {
             Self::MissingCurrentFlow(id) => {
                 write!(formatter, "missing current TextFlow for element {id:?}")
+            }
+            Self::MissingLayout(id) => {
+                write!(formatter, "missing current layout for element {id:?}")
             }
             Self::NonFiniteCoordinate => write!(formatter, "non-finite render coordinate"),
             Self::CoordinateOverflow => write!(formatter, "render coordinate overflow"),
@@ -160,6 +165,45 @@ impl fmt::Display for ProjectionError {
             Self::WriterOutcomeMismatch => write!(formatter, "staged writer outcome mismatch"),
             Self::UnbalancedClipStack => write!(formatter, "unbalanced staged clip stack"),
             Self::InjectedFailure => write!(formatter, "injected staged projection failure"),
+        }
+    }
+}
+
+impl std::error::Error for ProjectionError {}
+
+impl ProjectionError {
+    pub(super) fn into_text_render_error(self, fallback_element_id: ElementId) -> TextRenderError {
+        match self {
+            Self::MissingCurrentFlow(element_id) => {
+                TextRenderError::MissingCurrentFlow { element_id }
+            }
+            Self::MissingLayout(element_id) => {
+                TextRenderError::projection(element_id, TextProjectionError::MissingLayout)
+            }
+            Self::NonFiniteCoordinate => {
+                TextRenderError::coordinate(fallback_element_id, TextCoordinateError::NonFinite)
+            }
+            Self::CoordinateOverflow => {
+                TextRenderError::coordinate(fallback_element_id, TextCoordinateError::Overflow)
+            }
+            Self::MalformedFlow(_)
+            | Self::DuplicateForwardRecord(_)
+            | Self::DuplicateReverseCell(_)
+            | Self::MalformedProjection(_) => TextRenderError::IncompleteSourceMap {
+                element_id: fallback_element_id,
+            },
+            Self::WriterOutcomeMismatch => TextRenderError::projection(
+                fallback_element_id,
+                TextProjectionError::WriterOutcomeMismatch,
+            ),
+            Self::UnbalancedClipStack => TextRenderError::projection(
+                fallback_element_id,
+                TextProjectionError::UnbalancedClipStack,
+            ),
+            Self::InjectedFailure => TextRenderError::projection(
+                fallback_element_id,
+                TextProjectionError::InjectedFailure,
+            ),
         }
     }
 }
