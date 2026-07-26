@@ -3,9 +3,10 @@
 use crate::core::{
     Dimension, Element, ElementId, ElementType, NodeKey, Props, Style, VNode, VNodeType,
 };
+use crate::layout::{TextFlow, TextFlowError, TextFlowInput};
 use crate::reconciler::{Patch, diff};
-use std::collections::HashMap;
-use taffy::{AvailableSpace, NodeId, TaffyTree};
+use std::{collections::HashMap, sync::Arc};
+use taffy::{NodeId, TaffyTree};
 
 /// Computed layout for an element
 #[derive(Debug, Clone, Copy, Default)]
@@ -40,6 +41,10 @@ pub struct LayoutEngine {
     last_width: u16,
     /// Last computed height
     last_height: u16,
+    flow_cache: FlowCache,
+    text_flow_policy: TextFlowPolicy,
+    current_text_flows: HashMap<ElementId, Arc<TextFlow>>,
+    current_vnode_flows: HashMap<NodeKey, Arc<TextFlow>>,
 }
 
 impl LayoutEngine {
@@ -52,6 +57,10 @@ impl LayoutEngine {
             root_node: None,
             last_width: 0,
             last_height: 0,
+            flow_cache: FlowCache::default(),
+            text_flow_policy: TextFlowPolicy::default(),
+            current_text_flows: HashMap::new(),
+            current_vnode_flows: HashMap::new(),
         }
     }
 
@@ -62,6 +71,8 @@ impl LayoutEngine {
         self.element_keys.clear();
         self.vnode_map.clear();
         self.root_node = None;
+        self.current_text_flows.clear();
+        self.current_vnode_flows.clear();
         self.build_node(element)
     }
 
@@ -80,7 +91,7 @@ impl LayoutEngine {
             .filter_map(|child| self.build_node(child))
             .collect();
 
-        let context = NodeContext::new(element.text_content.clone(), element.style.text_wrap);
+        let context = NodeContext::new(input_from_element(element));
 
         // Create node with measure function for text
         let node_id = if element.is_text() {
@@ -103,21 +114,35 @@ impl LayoutEngine {
 
     /// Compute layout for the tree
     pub fn compute(&mut self, root: &Element, width: u16, height: u16) {
-        if let Some(root_node) = self.build_tree(root) {
-            self.root_node = Some(root_node);
-            self.last_width = width;
-            self.last_height = height;
-            let _ = self.taffy.compute_layout_with_measure(
-                root_node,
-                taffy::Size {
-                    width: AvailableSpace::Definite(width as f32),
-                    height: AvailableSpace::Definite(height as f32),
-                },
-                |known_dimensions, available_space, _node_id, node_context, _style| {
-                    measure_text_node(known_dimensions, available_space, node_context)
-                },
-            );
+        self.try_compute(root, width, height)
+            .unwrap_or_else(|error| panic!("text flow layout failed: {error}"));
+    }
+
+    pub fn try_compute(
+        &mut self,
+        root: &Element,
+        width: u16,
+        height: u16,
+    ) -> Result<(), TextFlowError> {
+        self.try_compute_interruptible(root, width, height, || false)
+    }
+
+    pub(crate) fn try_compute_interruptible(
+        &mut self,
+        root: &Element,
+        width: u16,
+        height: u16,
+        mut interrupted: impl FnMut() -> bool,
+    ) -> Result<(), TextFlowError> {
+        let mut candidate = self.staged_clone();
+        if let Some(root_node) = candidate.build_tree(root) {
+            candidate.root_node = Some(root_node);
+            candidate.last_width = width;
+            candidate.last_height = height;
+            candidate.run_layout_and_publish(&mut interrupted)?;
         }
+        *self = candidate;
+        Ok(())
     }
 
     /// Compute layout from an `Element` tree using reconciler diff/patch when possible.
@@ -130,17 +155,30 @@ impl LayoutEngine {
         width: u16,
         height: u16,
     ) -> (VNode, IncrementalLayoutOutcome) {
+        self.try_compute_element_incremental(root, previous_vnode, width, height)
+            .unwrap_or_else(|error| panic!("incremental text flow layout failed: {error}"))
+    }
+
+    pub fn try_compute_element_incremental(
+        &mut self,
+        root: &Element,
+        previous_vnode: Option<&VNode>,
+        width: u16,
+        height: u16,
+    ) -> Result<(VNode, IncrementalLayoutOutcome), TextFlowError> {
+        let mut candidate = self.staged_clone();
         let mut element_key_map = HashMap::new();
-        let current_vnode = self
-            .element_to_vnode(root, "root", 0, &mut element_key_map)
+        let mut text_inputs = HashMap::new();
+        let current_vnode = candidate
+            .element_to_vnode(root, "root", 0, &mut element_key_map, &mut text_inputs)
             .unwrap_or_else(VNode::root);
 
-        self.last_width = width;
-        self.last_height = height;
+        candidate.last_width = width;
+        candidate.last_height = height;
 
         let mut outcome = IncrementalLayoutOutcome::default();
 
-        let can_use_incremental = previous_vnode.is_some() && self.has_tree();
+        let can_use_incremental = previous_vnode.is_some() && candidate.has_tree();
         if can_use_incremental {
             let prev = previous_vnode.expect("checked is_some");
             let patches = diff(prev, &current_vnode);
@@ -148,22 +186,30 @@ impl LayoutEngine {
             outcome.used_reconciler = true;
 
             if patches.is_empty() {
-                self.recompute_layout();
-                self.sync_element_node_map(&element_key_map);
-                return (current_vnode, outcome);
+                candidate.sync_text_contexts(&text_inputs);
+                candidate.sync_element_node_map(&element_key_map);
+                candidate.run_layout_and_publish(&mut || false)?;
+                *self = candidate;
+                return Ok((current_vnode, outcome));
             }
 
-            if self.apply_patches(&patches) {
-                self.sync_element_node_map(&element_key_map);
-                return (current_vnode, outcome);
+            if candidate.apply_patches_only(&patches) {
+                candidate.sync_text_contexts(&text_inputs);
+                candidate.sync_element_node_map(&element_key_map);
+                candidate.run_layout_and_publish(&mut || false)?;
+                *self = candidate;
+                return Ok((current_vnode, outcome));
             }
         }
 
         // Fallback path: no previous tree or incremental update failed.
-        self.compute_vnode(&current_vnode, width, height);
-        self.sync_element_node_map(&element_key_map);
+        candidate.build_vnode_tree(&current_vnode);
+        candidate.sync_text_contexts(&text_inputs);
+        candidate.sync_element_node_map(&element_key_map);
+        candidate.run_layout_and_publish(&mut || false)?;
         outcome.fallback_full_rebuild = can_use_incremental;
-        (current_vnode, outcome)
+        *self = candidate;
+        Ok((current_vnode, outcome))
     }
 
     // ==================== VNode-based Layout ====================
@@ -174,6 +220,8 @@ impl LayoutEngine {
         self.node_map.clear();
         self.element_keys.clear();
         self.vnode_map.clear();
+        self.current_text_flows.clear();
+        self.current_vnode_flows.clear();
         self.root_node = self.build_vnode(vnode);
         self.root_node
     }
@@ -188,12 +236,7 @@ impl LayoutEngine {
             .filter_map(|child| self.build_vnode(child))
             .collect();
 
-        let text_content = match &vnode.node_type {
-            VNodeType::Text(s) => Some(s.clone()),
-            _ => None,
-        };
-
-        let context = NodeContext::new(text_content, vnode.props.style.text_wrap);
+        let context = NodeContext::new(input_from_vnode(vnode));
 
         // Create node
         let node_id = if vnode.is_text() {
@@ -219,6 +262,7 @@ impl LayoutEngine {
         parent_path: &str,
         index: usize,
         element_key_map: &mut HashMap<ElementId, NodeKey>,
+        text_inputs: &mut HashMap<NodeKey, TextFlowInput>,
     ) -> Option<VNode> {
         if element.element_type == ElementType::VirtualText {
             return None;
@@ -227,7 +271,7 @@ impl LayoutEngine {
         let node_type = match element.element_type {
             ElementType::Root => VNodeType::Root,
             ElementType::Box => VNodeType::Box,
-            ElementType::Text => VNodeType::Text(element.text_content.clone().unwrap_or_default()),
+            ElementType::Text => VNodeType::Text(compatibility_text(element)),
             ElementType::VirtualText => return None,
         };
 
@@ -251,6 +295,9 @@ impl LayoutEngine {
         }
 
         element_key_map.insert(element.id, vnode.key);
+        if let Some(input) = input_from_element(element) {
+            text_inputs.insert(vnode.key, input);
+        }
 
         let node_path = format!("{parent_path}/{index}");
         vnode.children = element
@@ -258,7 +305,7 @@ impl LayoutEngine {
             .iter()
             .enumerate()
             .filter_map(|(child_idx, child)| {
-                self.element_to_vnode(child, &node_path, child_idx, element_key_map)
+                self.element_to_vnode(child, &node_path, child_idx, element_key_map, text_inputs)
             })
             .collect();
 
@@ -278,20 +325,24 @@ impl LayoutEngine {
 
     /// Compute layout for VNode tree
     pub fn compute_vnode(&mut self, root: &VNode, width: u16, height: u16) {
-        if let Some(root_node) = self.build_vnode_tree(root) {
-            self.last_width = width;
-            self.last_height = height;
-            let _ = self.taffy.compute_layout_with_measure(
-                root_node,
-                taffy::Size {
-                    width: AvailableSpace::Definite(width as f32),
-                    height: AvailableSpace::Definite(height as f32),
-                },
-                |known_dimensions, available_space, _node_id, node_context, _style| {
-                    measure_text_node(known_dimensions, available_space, node_context)
-                },
-            );
+        self.try_compute_vnode(root, width, height)
+            .unwrap_or_else(|error| panic!("VNode text flow layout failed: {error}"));
+    }
+
+    pub fn try_compute_vnode(
+        &mut self,
+        root: &VNode,
+        width: u16,
+        height: u16,
+    ) -> Result<(), TextFlowError> {
+        let mut candidate = self.staged_clone();
+        if candidate.build_vnode_tree(root).is_some() {
+            candidate.last_width = width;
+            candidate.last_height = height;
+            candidate.run_layout_and_publish(&mut || false)?;
         }
+        *self = candidate;
+        Ok(())
     }
 
     /// Apply patches incrementally instead of rebuilding the entire tree
@@ -304,6 +355,18 @@ impl LayoutEngine {
             return false;
         }
 
+        let mut candidate = self.staged_clone();
+        let changed = candidate.apply_patches_only(patches);
+        if changed {
+            candidate
+                .run_layout_and_publish(&mut || false)
+                .unwrap_or_else(|error| panic!("patched text flow layout failed: {error}"));
+            *self = candidate;
+        }
+        changed
+    }
+
+    fn apply_patches_only(&mut self, patches: &[Patch]) -> bool {
         let mut needs_recompute = false;
 
         for patch in patches {
@@ -336,11 +399,6 @@ impl LayoutEngine {
             }
         }
 
-        // Recompute layout if any changes were made
-        if needs_recompute {
-            self.recompute_layout();
-        }
-
         needs_recompute
     }
 
@@ -364,12 +422,27 @@ impl LayoutEngine {
             let is_text = self
                 .taffy
                 .get_node_context(node_id)
-                .is_some_and(|context| context.text_content.is_some());
+                .is_some_and(NodeContext::is_text);
             let new_style = normalized_taffy_style(&props.style, is_text);
             if self.taffy.set_style(node_id, new_style).is_ok() {
                 if is_text {
-                    if let Some(context) = self.taffy.get_node_context_mut(node_id) {
-                        context.update_text_wrap(props.style.text_wrap);
+                    let source = self
+                        .taffy
+                        .get_node_context(node_id)
+                        .and_then(NodeContext::input)
+                        .map(|input| input.source.clone())
+                        .unwrap_or_default();
+                    let input = TextFlowInput::plain(
+                        source,
+                        crate::layout::TextFlowSourceKind::Exact,
+                        props.style.clone(),
+                    );
+                    if self
+                        .taffy
+                        .set_node_context(node_id, Some(NodeContext::new(Some(input))))
+                        .is_err()
+                    {
+                        return false;
                     }
                 }
                 return true;
@@ -446,22 +519,6 @@ impl LayoutEngine {
         false
     }
 
-    /// Recompute layout after patches
-    fn recompute_layout(&mut self) {
-        if let Some(root_node) = self.root_node {
-            let _ = self.taffy.compute_layout_with_measure(
-                root_node,
-                taffy::Size {
-                    width: AvailableSpace::Definite(self.last_width as f32),
-                    height: AvailableSpace::Definite(self.last_height as f32),
-                },
-                |known_dimensions, available_space, _node_id, node_context, _style| {
-                    measure_text_node(known_dimensions, available_space, node_context)
-                },
-            );
-        }
-    }
-
     /// Get computed layout for an element
     pub fn get_layout(&self, element_id: ElementId) -> Option<Layout> {
         let node_id = self.node_map.get(&element_id)?;
@@ -531,6 +588,26 @@ impl LayoutEngine {
         self.element_keys.get(&element_id).copied()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn current_text_flow(&self, element_id: ElementId) -> Option<Arc<TextFlow>> {
+        self.current_text_flows.get(&element_id).cloned()
+    }
+
+    #[allow(dead_code)] // Consumed by the renderer integration lane.
+    pub(crate) fn current_vnode_text_flow(&self, key: NodeKey) -> Option<Arc<TextFlow>> {
+        self.current_vnode_flows.get(&key).cloned()
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn set_text_flow_policy(
+        &mut self,
+        tab_stop: usize,
+        ellipsis: impl Into<String>,
+        revision: u16,
+    ) {
+        self.text_flow_policy.set(tab_stop, ellipsis, revision);
+    }
+
     /// Check if the engine has a valid tree
     pub fn has_tree(&self) -> bool {
         self.root_node.is_some()
@@ -574,6 +651,9 @@ fn allow_text_to_shrink(style: &mut ::taffy::Style, is_text: bool, explicit_min_
 #[cfg(test)]
 mod tests;
 
-mod text_measure;
+mod text_flow_bridge;
 
-use text_measure::{NodeContext, measure_text_node};
+use text_flow_bridge::{
+    FlowCache, NodeContext, TextFlowPolicy, compatibility_text, input_from_element,
+    input_from_vnode,
+};
