@@ -376,19 +376,44 @@ cargo check --workspace --all-targets --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- \
   -D warnings -A clippy::collapsible_if -A clippy::manual_is_multiple_of
 cargo test --workspace --all-targets --all-features --locked
+BASE_SHA="$(git rev-parse "${BASE_SHA:?set BASE_SHA to the implementation PR base}^{commit}")"
+HEAD_SHA="$(git rev-parse HEAD^{commit})"
+test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+test "$(git merge-base "$BASE_SHA" "$HEAD_SHA")" = "$BASE_SHA"
+LCOV_PATH="$(mktemp "${TMPDIR:-/tmp}/gh127-${HEAD_SHA}.lcov.XXXXXX")"
+PROVENANCE_PATH="$(mktemp "${TMPDIR:-/tmp}/gh127-${HEAD_SHA}.coverage.XXXXXX")"
+cargo llvm-cov clean --workspace
 cargo llvm-cov --branch --workspace --lib --all-features --lcov \
-  --output-path /private/tmp/gh127-rust-lcov.info --locked
-python3 - "$BASE_SHA" HEAD /private/tmp/gh127-rust-lcov.info <<'PY'
+  --output-path "$LCOV_PATH" --locked
+test -s "$LCOV_PATH"
+LCOV_SHA256="$(shasum -a 256 "$LCOV_PATH" | awk '{print $1}')"
+python3 - "$BASE_SHA" "$HEAD_SHA" "$LCOV_PATH" "$LCOV_SHA256" \
+  "$PROVENANCE_PATH" <<'PY'
+import hashlib
+import json
 import re
 import subprocess
 import sys
 from pathlib import Path
 
-base, head, lcov_path = sys.argv[1:]
+base, head, lcov_path, expected_lcov_sha256, provenance_path = sys.argv[1:]
 production = (
     "src/layout/text_flow.rs",
     "src/layout/text_flow/style_normalization.rs",
 )
+resolve = lambda *args: subprocess.run(
+    ["git", *args], check=True, capture_output=True, text=True
+).stdout.strip()
+if resolve("rev-parse", "HEAD") != head:
+    raise SystemExit("stale coverage: current HEAD changed")
+if resolve("merge-base", base, head) != base:
+    raise SystemExit("coverage base is not the exact merge-base ancestor")
+lcov_bytes = Path(lcov_path).read_bytes()
+if not lcov_bytes:
+    raise SystemExit("empty raw LCOV artifact")
+actual_lcov_sha256 = hashlib.sha256(lcov_bytes).hexdigest()
+if actual_lcov_sha256 != expected_lcov_sha256:
+    raise SystemExit("raw LCOV checksum mismatch")
 diff = subprocess.run(
     ["git", "diff", "--unified=0", f"{base}...{head}", "--", *production],
     check=True,
@@ -424,9 +449,10 @@ for line in Path(lcov_path).read_text().splitlines():
     elif line == "end_of_record":
         current = None
 
+missing_records = sorted(set(production) - set(records))
+if missing_records:
+    raise SystemExit(f"missing planned production LCOV records: {missing_records}")
 critical = "src/layout/text_flow/style_normalization.rs"
-if critical not in records:
-    raise SystemExit(f"missing LCOV record for {critical}")
 critical_lines = records[critical]["lines"]
 critical_branches = records[critical]["branches"]
 if not critical_lines or any(hits == 0 for hits in critical_lines.values()):
@@ -436,8 +462,6 @@ if not critical_branches or any(taken in (None, 0) for taken in critical_branche
 
 changed_executable = []
 for path in production:
-    if path not in records:
-        continue
     changed_executable.extend(
         records[path]["lines"][line]
         for line in changed[path]
@@ -445,37 +469,64 @@ for path in production:
     )
 if not changed_executable:
     raise SystemExit("zero changed executable production lines")
+if not (changed[critical] & set(critical_lines)):
+    raise SystemExit("zero changed executable lines in critical normalization module")
 covered = sum(hits > 0 for hits in changed_executable)
 if covered * 100 < len(changed_executable) * 80:
     raise SystemExit(
         f"changed production line coverage below 80%: "
         f"{covered}/{len(changed_executable)}"
     )
-print(
-    f"changed production lines {covered}/{len(changed_executable)}; "
-    f"critical lines {len(critical_lines)}/{len(critical_lines)}; "
-    f"critical branches {len(critical_branches)}/{len(critical_branches)}"
+provenance = {
+    "schema_version": 1,
+    "base_sha": base,
+    "head_sha": head,
+    "merge_base_sha": base,
+    "lcov_path": str(Path(lcov_path).resolve()),
+    "lcov_sha256": actual_lcov_sha256,
+    "production_records": list(production),
+    "changed_executable_lines": len(changed_executable),
+    "covered_changed_executable_lines": covered,
+    "critical_executable_lines": len(critical_lines),
+    "covered_critical_executable_lines": len(critical_lines),
+    "critical_executable_branches": len(critical_branches),
+    "covered_critical_executable_branches": len(critical_branches),
+}
+Path(provenance_path).write_text(
+    json.dumps(provenance, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
 )
+print(json.dumps(provenance, sort_keys=True))
 PY
+test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+test "$(shasum -a 256 "$LCOV_PATH" | awk '{print $1}')" = "$LCOV_SHA256"
+test -s "$PROVENANCE_PATH"
 ```
 
 coverage evidence 必须绑定 implementation PR base/head merge-base：所有 GH-127 changed
 production lines 合计 >=80%，private normalization module 的全部可执行 line/branch 各为
-100%。上述 verifier 使用 diff 与 LCOV 的交集，零 executable、missing file、零 branch、
-stale head 或只上传未校验 artifact 均失败。
+100%。上述 verifier 使用 diff 与 LCOV 的交集；两个 planned production file 任一缺失
+record、critical module 无 changed executable、零 executable、零 branch、stale head、错误
+merge-base、raw checksum mismatch 或只上传未校验 artifact 均失败。review evidence 必须
+同时保存 `LCOV_PATH` raw artifact 与 `PROVENANCE_PATH` JSON。
 
 ### SpecRail 与 review
 
-- target repo 明确不存在 `checks/route_gate.py`；不得伪装成本地 route gate。设置外部
-  `SPEC_RAIL_ROOT` 后，以下命令只从 immutable
-  `23caa70e76904eaa82323208d645d5781a365649` archive 建 mirror，并 fail closed：
+- target repo 明确不存在 `checks/route_gate.py`；不得伪装成本地 route gate。以下命令从
+  target clean checkout 执行，只从 immutable
+  `23caa70e76904eaa82323208d645d5781a365649` archive 建 mirror，验证两个 checker
+  SHA-256 与 GH127/GH58 byte-identical inputs，并 fail closed：
 
 ```sh
 : "${SPEC_RAIL_ROOT:?set SPEC_RAIL_ROOT to the external SpecRail checkout}"
 SPEC_RAIL_REV=23caa70e76904eaa82323208d645d5781a365649
+CHECK_WORKFLOW_SHA256=8c791545f78d93649385ef0f9780454a7d4552f8da06da1fdee0de9cb8030a7e
+ROUTE_GATE_SHA256=56954390bc5f9733601d94b5d18f78a7d5179c07fc47cd6dd8e8135685c8ac4a
 git -C "$SPEC_RAIL_ROOT" rev-parse --is-inside-work-tree
 git -C "$SPEC_RAIL_ROOT" cat-file -e "$SPEC_RAIL_REV^{commit}"
-test ! -e checks/route_gate.py
+test "$(git -C "$SPEC_RAIL_ROOT" rev-parse "$SPEC_RAIL_REV^{commit}")" = "$SPEC_RAIL_REV"
+test -z "$(git status --porcelain --untracked-files=all -- specs/GH127 specs/GH58)"
+test ! -e "$PWD/checks/route_gate.py"
 SPEC_RAIL_MIRROR="$(mktemp -d "${TMPDIR:-/tmp}/gh127-specrail.XXXXXX")"
 trap 'rm -rf "$SPEC_RAIL_MIRROR"' EXIT HUP INT TERM
 git -C "$SPEC_RAIL_ROOT" archive "$SPEC_RAIL_REV" | tar -x -C "$SPEC_RAIL_MIRROR"
@@ -484,8 +535,14 @@ cp -R specs/GH127 "$SPEC_RAIL_MIRROR/specs/GH127"
 cp -R specs/GH58 "$SPEC_RAIL_MIRROR/specs/GH58"
 test -f "$SPEC_RAIL_MIRROR/checks/check_workflow.py"
 test -f "$SPEC_RAIL_MIRROR/checks/route_gate.py"
+test "$(shasum -a 256 "$SPEC_RAIL_MIRROR/checks/check_workflow.py" | awk '{print $1}')" \
+  = "$CHECK_WORKFLOW_SHA256"
+test "$(shasum -a 256 "$SPEC_RAIL_MIRROR/checks/route_gate.py" | awk '{print $1}')" \
+  = "$ROUTE_GATE_SHA256"
+diff -qr specs/GH127 "$SPEC_RAIL_MIRROR/specs/GH127"
+diff -qr specs/GH58 "$SPEC_RAIL_MIRROR/specs/GH58"
 python3 "$SPEC_RAIL_MIRROR/checks/check_workflow.py" \
-  --repo "$SPEC_RAIL_MIRROR" --spec-dir specs/GH127
+  --repo "$SPEC_RAIL_MIRROR" --spec-dir "$SPEC_RAIL_MIRROR/specs/GH127"
 python3 "$SPEC_RAIL_MIRROR/checks/route_gate.py" \
   --repo "$SPEC_RAIL_MIRROR" --route implement --issue 127 \
   --state ready_to_implement --mode required --json
