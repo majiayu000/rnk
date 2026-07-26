@@ -738,6 +738,7 @@ cases!(exercise_push_stream_complete =>
     streaming_deltas_are_ordered_lossless_and_typed,
     static_message_completes_without_dummy_append,
     public_model_is_typed_and_constructible,
+    constructor_based_public_api_remains_compatible,
 );
 cases!(exercise_block_mutations =>
     append_block_supports_late_discovered_typed_blocks,
