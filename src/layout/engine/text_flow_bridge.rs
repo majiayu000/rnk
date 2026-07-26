@@ -171,10 +171,13 @@ pub(super) fn input_from_element(element: &Element) -> Option<TextFlowInput> {
     if element.element_type != ElementType::Text {
         return None;
     }
-    let source = element.text_content.as_deref().unwrap_or_default();
-    Some(match &element.spans {
-        Some(lines) => aligned_input(source, lines, &element.style),
-        None => TextFlowInput::plain(source, TextFlowSourceKind::Exact, element.style.clone()),
+    Some(match (&element.text_content, &element.spans) {
+        (Some(source), Some(lines)) => aligned_input(source, lines, &element.style),
+        (Some(source), None) => {
+            TextFlowInput::plain(source, TextFlowSourceKind::Exact, element.style.clone())
+        }
+        (None, Some(lines)) => canonical_span_input(lines, &element.style),
+        (None, None) => TextFlowInput::plain("", TextFlowSourceKind::Exact, element.style.clone()),
     })
 }
 
@@ -239,6 +242,33 @@ fn aligned_input(source: &str, lines: &[Line], style: &Style) -> TextFlowInput {
         cursor += break_len;
     }
     TextFlowInput::plain(source, TextFlowSourceKind::Exact, style.clone())
+        .with_styled_ranges(ranges)
+}
+
+fn canonical_span_input(lines: &[Line], style: &Style) -> TextFlowInput {
+    let mut source = String::new();
+    let mut ranges = Vec::new();
+
+    for (line_index, line) in lines.iter().enumerate() {
+        for span in &line.spans {
+            let start = source.len();
+            source.push_str(&span.content);
+            ranges.push(StyledTextRange {
+                range: start..source.len(),
+                style: style.clone().merge(&span.style),
+            });
+        }
+        if line_index + 1 < lines.len() {
+            let start = source.len();
+            source.push('\n');
+            ranges.push(StyledTextRange {
+                range: start..source.len(),
+                style: style.clone(),
+            });
+        }
+    }
+
+    TextFlowInput::plain(source, TextFlowSourceKind::Canonical, style.clone())
         .with_styled_ranges(ranges)
 }
 
@@ -595,6 +625,108 @@ mod tests {
             TextFlowDiagnostic::StyleBoundaryNormalized { boundary, .. }
                 if *boundary == "👩".len()
         )));
+    }
+
+    #[test]
+    fn span_only_lines_publish_canonical_source_and_merged_styles() {
+        let mut element = Element::new(ElementType::Text);
+        element.style.bold = true;
+        element.spans = Some(vec![
+            Line::from_spans(vec![
+                Span::new("left").color(Color::Red),
+                Span::new(" right").color(Color::Blue),
+            ]),
+            Line::new(),
+            Line::from(Span::new("tail").color(Color::Green)),
+        ]);
+
+        let input = input_from_element(&element).unwrap();
+
+        assert_eq!(input.source, "left right\n\ntail");
+        assert_eq!(input.source_kind, TextFlowSourceKind::Canonical);
+        assert_eq!(
+            input
+                .styled_ranges
+                .iter()
+                .map(|range| (range.range.clone(), range.style.color, range.style.bold))
+                .collect::<Vec<_>>(),
+            vec![
+                (0..4, Some(Color::Red), true),
+                (4..10, Some(Color::Blue), true),
+                (10..11, None, true),
+                (11..12, None, true),
+                (12..16, Some(Color::Green), true),
+            ]
+        );
+    }
+
+    #[test]
+    fn span_only_source_preserves_crlf_combining_and_zwj_bytes() {
+        let mut element = Element::new(ElementType::Text);
+        element.spans = Some(vec![Line::from_spans(vec![
+            Span::new("a\r\n").color(Color::Red),
+            Span::new("e").color(Color::Blue),
+            Span::new("\u{301}").color(Color::Yellow),
+            Span::new("👩").color(Color::Green),
+            Span::new("\u{200d}💻").color(Color::Cyan),
+        ])]);
+
+        let input = input_from_element(&element).unwrap();
+
+        assert_eq!(input.source, "a\r\ne\u{301}👩\u{200d}💻");
+        assert_eq!(input.source_kind, TextFlowSourceKind::Canonical);
+        assert_eq!(input.styled_ranges.len(), 5);
+        assert_eq!(input.styled_ranges[0].range, 0..3);
+        assert_eq!(input.styled_ranges[1].range, 3..4);
+        assert_eq!(input.styled_ranges[2].range, 4..6);
+        assert_eq!(input.styled_ranges[3].range, 6..10);
+        assert_eq!(input.styled_ranges[4].range, 10..17);
+
+        let mut engine = LayoutEngine::new();
+        engine.try_compute(&element, 8, 3).unwrap();
+        let flow = engine.current_text_flow(element.id).unwrap();
+        let combining = flow
+            .tokens()
+            .iter()
+            .find(|token| token.safe_text == "e\u{301}")
+            .unwrap();
+        let zwj = flow
+            .tokens()
+            .iter()
+            .find(|token| token.safe_text == "👩\u{200d}💻")
+            .unwrap();
+        assert_eq!(combining.style.color, Some(Color::Blue));
+        assert_eq!(zwj.style.color, Some(Color::Green));
+        assert!(flow.row_count() >= 2);
+    }
+
+    #[test]
+    fn present_text_source_keeps_exact_and_reconstructed_policies() {
+        let exact = split_style_element("ab", "a", "b");
+        let exact_input = input_from_element(&exact).unwrap();
+        assert_eq!(exact_input.source, "ab");
+        assert_eq!(exact_input.source_kind, TextFlowSourceKind::Exact);
+        assert_eq!(exact_input.styled_ranges.len(), 2);
+
+        let inconsistent = split_style_element("source", "different", "");
+        let reconstructed_input = input_from_element(&inconsistent).unwrap();
+        assert_eq!(reconstructed_input.source, "source");
+        assert_eq!(
+            reconstructed_input.source_kind,
+            TextFlowSourceKind::Reconstructed
+        );
+        assert!(reconstructed_input.styled_ranges.is_empty());
+    }
+
+    #[test]
+    fn text_without_source_or_spans_remains_empty_and_exact() {
+        let element = Element::new(ElementType::Text);
+
+        let input = input_from_element(&element).unwrap();
+
+        assert!(input.source.is_empty());
+        assert_eq!(input.source_kind, TextFlowSourceKind::Exact);
+        assert!(input.styled_ranges.is_empty());
     }
 
     #[test]
