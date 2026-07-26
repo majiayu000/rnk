@@ -214,4 +214,19 @@ fn external_element_struct_literal_compiles() {
     };
 
     assert_eq!(element.get_text(), Some("literal"));
+
+    let span_only = Element {
+        id: ElementId::new(),
+        element_type: ElementType::Text,
+        style: Style::new(),
+        children: Children::new(),
+        text_content: None,
+        spans: Some(vec![Line::raw("span"), Line::raw("only")]),
+        key: None,
+        accessibility: None,
+        scroll_offset_x: None,
+        scroll_offset_y: None,
+    };
+
+    assert_eq!(render_to_string(&span_only, 20), "span\nonly");
 }
