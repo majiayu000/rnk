@@ -356,9 +356,9 @@ verify_test_result() {
   ignored="$(sed -nE \
     's/^test result:.* [0-9]+ passed; [0-9]+ failed; ([0-9]+) ignored;.*/\1/p' \
     "$result" | awk '{ n += $1 } END { print n + 0 }')"
-  test "$matched" -eq 1
-  test "$passed" -eq 1
-  test "$ignored" -eq 0
+  test "$matched" -eq 1 || return 1
+  test "$passed" -eq 1 || return 1
+  test "$ignored" -eq 0 || return 1
 }
 for selector in \
   layout::text_flow::tests::style_normalization::styled_boundary_normalization_operation_count_is_linear \
