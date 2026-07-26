@@ -38,7 +38,8 @@ evidence 的独立修复合同，不以 umbrella issue 的宽泛描述替代验�
   public `Element` 字段。
 - 不接管 GH-124 的 zero-width owner/predecessor 算法；GH-132 只消费其稳定合入后的
   projection ownership 行为。
-- 不实现 GH-131 的 VirtualText/span-only canonicalization。
+- 不重写已由 GH-131 / PR #142 交付的 VirtualText/span-only canonicalization；GH-132
+  只在其 merged contract 上实现 signed coordinate 与 owner propagation。
 - 不把所有 layout dimension 量化规则重写为新的 snapshot architecture。
 - 不新增 terminal protocol、ANSI、授权、网络或持久化能力。
 - 不把 malformed flow、writer mismatch 或 injected test failure 伪装成 coordinate error。
@@ -124,9 +125,11 @@ evidence 的独立修复合同，不以 umbrella issue 的宽泛描述替代验�
 21. **B-021** 完成声明必须绑定 implementation PR exact head：negative fractional
     x/y/scroll/ancestor/clip fixtures、nested child NaN/overflow 在 string/dynamic/
     TestRenderer 三类 caller 的 exact fixtures、atomic failure/retry/repetition
-    fixtures、全部既有 signed-coordinate/typed-error tests、full Rust gates、coverage、
-    CI 与 review-thread evidence都通过。零匹配 filter、旧 SHA 或只看 green rollup 不算
-    证据。
+    fixtures、PR #137/#142 fresh changed-file/manifest overlap gates、全部既有
+    signed-coordinate/typed-error tests、full Rust gates、coverage、CI 与 review-thread
+    evidence都通过。每个 mandatory shell block必须 fail-fast；每个 filtered test必须机械
+    证明 `matched=1`、`passed=1`、`ignored=0`。零匹配 filter、旧 SHA 或只看 green rollup
+    不算证据。
 
 Revision note：B-018 在本轮 review 后由“外层 cancellation fixture”收窄为显式
 Reserved/N/A。原因是 issue #132 的真实 scope只有signed conversion、owner propagation与
@@ -176,4 +179,4 @@ viewport-edge paint 改为正确 clipped，nested coordinate diagnostics 会显�
 issue 当前误挂 `ready_to_implement`，但本 packet 在起草前不存在；SpecRail route artifact
 已将真实路线判为 `ready_to_spec -> write_spec`。本 spec PR 只使用 `Refs #132`。任何实现
 必须等待人工 spec review/approval、canonical implementation gate，以及 Tech Spec 声明的
-PR #137/#131 ownership refresh；本规格不修改 label，也不自动授权实现。
+PR #137/#142 ownership refresh；本规格不修改 label，也不自动授权实现。

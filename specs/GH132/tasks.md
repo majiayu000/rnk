@@ -17,7 +17,7 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
 
 ## 实现任务
 
-- [ ] `SP132-T1` 执行 implementation authorization、dependency与owner preflight。 Owner: `gh132-implementation-coordinator` | Done when: human approval、fresh implement gate、PR #137 merged refresh、#131 frozen manifest与clean exact base全部通过 | Verify: 运行本任务下列route/PR/git命令并人工核对approval和owner evidence。
+- [ ] `SP132-T1` 执行 implementation authorization、dependency与owner preflight。 Owner: `gh132-implementation-coordinator` | Done when: human approval、fresh implement gate、PR #137/#142 merged changed-file refresh与clean exact base全部通过 | Verify: 运行本任务下列route/PR/git命令并人工核对approval和owner evidence。
   - Owner: `gh132-implementation-coordinator`
   - Dependencies: GH-132 spec PR 已 merged并有 human approval；不得把本 spec PR的创建、
     agent review或当前 premature label当作批准。
@@ -27,14 +27,36 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     3. PR #137 已最终 merged、非 draft，其 merge commit是fresh expected main祖先，fresh
        6路径file set、newline SHA-256和与GH132 manifest精确两路径受控交集均匹配；两条
        zero-width focused tests各以`matched=1`重跑；
-    4. #131已有 frozen planned-change manifest；若与GH132相交，coordinator记录serial
-       ownership，确认没有并发writer；
+    4. PR #142 已最终 merged、非 draft，其 merge commit是fresh expected main祖先，fresh
+       6路径file set、newline SHA-256和与GH132 manifest精确三路径受控交集均匹配；在交集
+       路径完成 source-drift refresh，确认GH132不重写 VirtualText/span-only contract；
     5. 在首次 implementation edit 前，worktree porcelain精确为空，`HEAD`精确等于fresh
        `origin/main` SHA，并记录该 SHA 为`GH132_IMPLEMENTATION_BASE_SHA`；implementation
        12路径manifest逐路径冻结。
   - Verify:
     ```sh
     set -euo pipefail
+    run_exact() {
+      GH132_LIST="$("$@" -- --exact --list --format terse 2>&1)"
+      GH132_MATCHED="$(printf '%s\n' "$GH132_LIST" |
+        awk -F ': ' '$2 == "test" { count++ } END { print count + 0 }')"
+      test "$GH132_MATCHED" -eq 1
+      GH132_RESULT="$("$@" -- --exact 2>&1)" || {
+        printf '%s\n' "$GH132_RESULT" >&2
+        return 1
+      }
+      printf '%s\n' "$GH132_RESULT"
+      GH132_COUNTS="$(printf '%s\n' "$GH132_RESULT" | awk '
+        /^test result:/ {
+          for (i = 1; i <= NF; i++) {
+            if ($i == "passed;") passed += $(i - 1)
+            if ($i == "failed;") failed += $(i - 1)
+            if ($i == "ignored;") ignored += $(i - 1)
+          }
+        }
+        END { printf "%d %d %d\n", passed, failed, ignored }')"
+      test "$GH132_COUNTS" = "1 0 0"
+    }
     : "${SPEC_RAIL_ROOT:?set SPEC_RAIL_ROOT to the checked-out SpecRail workflow-pack root}"
     SPEC_RAIL_REV=bfc60f26164af5df1ebd3b5cb79d07379fc416b7
     test "$(git -C "$SPEC_RAIL_ROOT" rev-parse 'HEAD^{commit}')" = "$SPEC_RAIL_REV"
@@ -123,8 +145,49 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
       <(printf '%s\n' "$PR137_ACTUAL_FILES"))"
     printf 'PR137_FILES_SHA256=%s\nPR137_OVERLAP=%s\n' \
       "$PR137_FILES_SHA256" "$PR137_ACTUAL_OVERLAP"
-    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::projection_zero_width_only_attaches_to_the_same_flow_sequence -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::synthetic_ellipsis_projection_failure_commits_neither_cells_nor_projection -- --exact
+    PR142_JSON="$(gh pr view 142 --repo majiayu000/rnk \
+      --json state,isDraft,headRefOid,mergeCommit,files)"
+    test "$(printf '%s\n' "$PR142_JSON" | jq -r '.state')" = "MERGED"
+    test "$(printf '%s\n' "$PR142_JSON" | jq -r '.isDraft')" = "false"
+    PR142_MERGE_SHA="$(printf '%s\n' "$PR142_JSON" | jq -r '.mergeCommit.oid')"
+    test -n "$PR142_MERGE_SHA"
+    git merge-base --is-ancestor "$PR142_MERGE_SHA" "$EXPECTED_MAIN_SHA"
+    PR142_EXPECTED_FILES="$(printf '%s\n' \
+      src/layout/engine/text_flow_bridge.rs \
+      src/renderer/render_to_string.rs \
+      src/renderer/tree_renderer.rs \
+      src/renderer/tree_renderer/projection.rs \
+      src/renderer/tree_renderer/tests.rs \
+      tests/text_source_compat.rs)"
+    PR142_ACTUAL_FILES="$(printf '%s\n' "$PR142_JSON" |
+      jq -r '.files[].path' | LC_ALL=C sort)"
+    test "$PR142_ACTUAL_FILES" = "$PR142_EXPECTED_FILES"
+    PR142_FILES_SHA256="$(printf '%s\n' "$PR142_ACTUAL_FILES" | python3 -c \
+      'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+    test "$PR142_FILES_SHA256" = \
+      6db38f157f5fe455302e2c37d55f503b2a74f61795e522d8ab507132befdc3a9
+    PR142_EXPECTED_OVERLAP="$(printf '%s\n' \
+      src/renderer/tree_renderer.rs \
+      src/renderer/tree_renderer/projection.rs \
+      src/renderer/tree_renderer/tests.rs)"
+    PR142_ACTUAL_OVERLAP="$(comm -12 \
+      <(printf '%s\n' "$PR142_ACTUAL_FILES") \
+      <(printf '%s\n' "$GH132_IMPLEMENTATION_FILES"))"
+    test "$PR142_ACTUAL_OVERLAP" = "$PR142_EXPECTED_OVERLAP"
+    GH132_NON_PR142_FILES="$(comm -23 \
+      <(printf '%s\n' "$GH132_IMPLEMENTATION_FILES") \
+      <(printf '%s\n' "$PR142_ACTUAL_FILES"))"
+    test "$(printf '%s\n' "$GH132_NON_PR142_FILES" | wc -l |
+      tr -d ' ')" -eq 9
+    test -z "$(comm -12 \
+      <(printf '%s\n' "$GH132_NON_PR142_FILES") \
+      <(printf '%s\n' "$PR142_ACTUAL_FILES"))"
+    printf 'PR142_FILES_SHA256=%s\nPR142_OVERLAP=%s\n' \
+      "$PR142_FILES_SHA256" "$PR142_ACTUAL_OVERLAP"
+    run_exact cargo test --workspace --lib --locked \
+      renderer::tree_renderer::projection::tests::zero_width::projection_zero_width_only_attaches_to_the_same_flow_sequence
+    run_exact cargo test --workspace --lib --locked \
+      renderer::tree_renderer::projection::tests::zero_width::synthetic_ellipsis_projection_failure_commits_neither_cells_nor_projection
     ```
     `SPEC_RAIL_ROOT` 必须由执行环境显式设置为 SpecRail workflow pack checkout 根目录；
     checkout必须来自`https://github.com/majiayu000/specrail.git`的上述exact detached
@@ -132,12 +195,13 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     `SPEC_RAIL_MIRROR`必须保留到交付证据归档完成；route JSON还必须证明artifact路径均为
     mirror内的`specs/GH132/{product,tech,tasks}.md`，duplicate evidence为fresh collector
     输出，且没有open PR或remote branch占用GH132实现token。PR #137 sorted file set、
-    newline digest与两路径受控交集必须逐字匹配；同一比较器还要用one-missing、
-    one-unexpected和one-additional-overlap fixture证明均fail closed，任何变化都停止并重新
-    冻结spec。两条filtered test还必须逐条记录`matched=1`、`passed=1`、`ignored=0`，不能
-    只看exit 0。
+    newline digest与两路径受控交集必须逐字匹配；PR #142 sorted file set、newline digest
+    与三路径受控交集也必须逐字匹配。两个比较器都要用one-missing、one-unexpected和
+    one-additional-overlap fixture证明均fail closed，任何变化都停止并重新冻结spec。两条
+    filtered test由`run_exact`逐条机械记录`matched=1`、`passed=1`、`ignored=0`，不能只看
+    exit 0。
     上述整段必须在任何 implementation source/test edit 前运行并保存输出。
-    人工核对 GH132 spec approval、#131 frozen manifest 与无共享writer。
+    人工核对 GH132 spec approval、PR #137/#142 source-drift refresh 与无共享writer。
   - Covers: B-020, B-021
 
 - [ ] `SP132-T2` 实现element-scoped floor conversion、signed clip和staged projection原子性。 Owner: `gh132-coordinate-core` | Done when: scoped floor/clip/owner/single-commit合同及拆分测试全部完成 | Verify: 运行本任务下列12个exact Rust tests。
@@ -173,18 +237,40 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
        production/test文件低于800行，不压缩旧测试、不用`#[rustfmt::skip]`。
   - Verify:
     ```sh
-    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::signed_coordinates_use_one_floor_conversion -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::negative_zero_positive_fractional_and_integral_coordinates_are_compatible -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::signed_coordinate_composition_is_checked_and_axis_independent -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::finite_operands_that_overflow_f32_composition_and_i64_bounds_classify_overflow -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::nan_and_infinities_classify_as_non_finite_for_each_coordinate_source -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::nested_coordinate_failures_report_exact_current_child -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::coordinate_owner_survives_conversion_and_only_unscoped_failures_use_root_fallback -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::nested_flow_validation_overflow_reaches_public_error_with_exact_child -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::late_nested_coordinate_failure_discards_earlier_staged_paint -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::negative_fractional_x_and_y_clip_instead_of_painting_at_zero -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::negative_fractional_scroll_ancestor_and_clip_preserve_signed_disposition -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::coordinate_failure_commits_neither_output_nor_projection -- --exact
+    set -euo pipefail
+    run_exact() {
+      GH132_LIST="$("$@" -- --exact --list --format terse 2>&1)"
+      GH132_MATCHED="$(printf '%s\n' "$GH132_LIST" |
+        awk -F ': ' '$2 == "test" { count++ } END { print count + 0 }')"
+      test "$GH132_MATCHED" -eq 1
+      GH132_RESULT="$("$@" -- --exact 2>&1)" || {
+        printf '%s\n' "$GH132_RESULT" >&2
+        return 1
+      }
+      printf '%s\n' "$GH132_RESULT"
+      GH132_COUNTS="$(printf '%s\n' "$GH132_RESULT" | awk '
+        /^test result:/ {
+          for (i = 1; i <= NF; i++) {
+            if ($i == "passed;") passed += $(i - 1)
+            if ($i == "failed;") failed += $(i - 1)
+            if ($i == "ignored;") ignored += $(i - 1)
+          }
+        }
+        END { printf "%d %d %d\n", passed, failed, ignored }')"
+      test "$GH132_COUNTS" = "1 0 0"
+    }
+    run_exact cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::signed_coordinates_use_one_floor_conversion
+    run_exact cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::negative_zero_positive_fractional_and_integral_coordinates_are_compatible
+    run_exact cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::signed_coordinate_composition_is_checked_and_axis_independent
+    run_exact cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::finite_operands_that_overflow_f32_composition_and_i64_bounds_classify_overflow
+    run_exact cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::nan_and_infinities_classify_as_non_finite_for_each_coordinate_source
+    run_exact cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::nested_coordinate_failures_report_exact_current_child
+    run_exact cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::coordinate_owner_survives_conversion_and_only_unscoped_failures_use_root_fallback
+    run_exact cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::nested_flow_validation_overflow_reaches_public_error_with_exact_child
+    run_exact cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::late_nested_coordinate_failure_discards_earlier_staged_paint
+    run_exact cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::negative_fractional_x_and_y_clip_instead_of_painting_at_zero
+    run_exact cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::negative_fractional_scroll_ancestor_and_clip_preserve_signed_disposition
+    run_exact cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::coordinate_failure_commits_neither_output_nor_projection
     ```
   - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009,
     B-014, B-016, B-020
@@ -207,14 +293,38 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
        只从exact diff、raw llvm-cov JSON和固定critical production区域生成/复核provenance。
   - Verify:
     ```sh
-    cargo test --workspace --lib --locked renderer::error::tests::coordinate_error_context_is_typed_and_does_not_leak_content -- --exact
-    cargo test --test text_flow_renderer_error_paths --locked nested_child_coordinate_errors_reach_string_api_with_exact_id -- --exact
-    cargo test --test text_flow_renderer_error_paths --locked nested_child_coordinate_errors_reach_test_renderer_with_exact_id -- --exact
-    cargo test --test text_flow_renderer_error_paths --locked independent_coordinate_failures_do_not_share_owner_or_frame_state -- --exact
-    cargo test --test text_flow_renderer_error_paths --locked try_render_to_string_preserves_source_and_returns_no_partial_string -- --exact
-    cargo test --test text_flow_error_paths --locked typed_error_reaches_remaining_callers -- --exact
-    cargo test --test text_flow_error_paths --locked caller_failure_commits_no_partial_output -- --exact
-    GH132_COVERAGE_MODE=fixture cargo test --test text_flow_renderer_error_paths --locked gh132_current_head_coverage_contract -- --exact
+    set -euo pipefail
+    run_exact() {
+      GH132_LIST="$("$@" -- --exact --list --format terse 2>&1)"
+      GH132_MATCHED="$(printf '%s\n' "$GH132_LIST" |
+        awk -F ': ' '$2 == "test" { count++ } END { print count + 0 }')"
+      test "$GH132_MATCHED" -eq 1
+      GH132_RESULT="$("$@" -- --exact 2>&1)" || {
+        printf '%s\n' "$GH132_RESULT" >&2
+        return 1
+      }
+      printf '%s\n' "$GH132_RESULT"
+      GH132_COUNTS="$(printf '%s\n' "$GH132_RESULT" | awk '
+        /^test result:/ {
+          for (i = 1; i <= NF; i++) {
+            if ($i == "passed;") passed += $(i - 1)
+            if ($i == "failed;") failed += $(i - 1)
+            if ($i == "ignored;") ignored += $(i - 1)
+          }
+        }
+        END { printf "%d %d %d\n", passed, failed, ignored }')"
+      test "$GH132_COUNTS" = "1 0 0"
+    }
+    run_exact cargo test --workspace --lib --locked renderer::error::tests::coordinate_error_context_is_typed_and_does_not_leak_content
+    run_exact cargo test --test text_flow_renderer_error_paths --locked nested_child_coordinate_errors_reach_string_api_with_exact_id
+    run_exact cargo test --test text_flow_renderer_error_paths --locked nested_child_coordinate_errors_reach_test_renderer_with_exact_id
+    run_exact cargo test --test text_flow_renderer_error_paths --locked independent_coordinate_failures_do_not_share_owner_or_frame_state
+    run_exact cargo test --test text_flow_renderer_error_paths --locked try_render_to_string_preserves_source_and_returns_no_partial_string
+    run_exact cargo test --test text_flow_error_paths --locked typed_error_reaches_remaining_callers
+    run_exact cargo test --test text_flow_error_paths --locked caller_failure_commits_no_partial_output
+    export GH132_COVERAGE_MODE=fixture
+    run_exact cargo test --test text_flow_renderer_error_paths --locked gh132_current_head_coverage_contract
+    unset GH132_COVERAGE_MODE
     ```
   - Covers: B-008, B-009, B-010, B-011, B-013, B-014, B-016, B-019, B-020, B-021
 
@@ -238,13 +348,35 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     5. `App::run`既有I/O mapping保留同一`TextRenderError`和nested typed source chain。
   - Verify:
     ```sh
-    cargo test --workspace --lib --locked renderer::static_content::tests::filter_static_elements_preserves_original_ids_for_retained_dynamic_nodes -- --exact
-    cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::nested_child_coordinate_errors_keep_id_and_candidate_state -- --exact
-    cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::repeated_coordinate_failure_then_correction_retries_cleanly -- --exact
-    cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::failed_coordinate_candidate_is_never_published -- --exact
-    cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::incremental_failure_retries_from_clean_layout_tree -- --exact
-    cargo test --workspace --lib --locked renderer::app::tests::nested_child_coordinate_error_reaches_app_io_source_chain -- --exact
-    cargo test --workspace --lib --locked renderer::app::tests::app_render_candidate_preserves_typed_error_source -- --exact
+    set -euo pipefail
+    run_exact() {
+      GH132_LIST="$("$@" -- --exact --list --format terse 2>&1)"
+      GH132_MATCHED="$(printf '%s\n' "$GH132_LIST" |
+        awk -F ': ' '$2 == "test" { count++ } END { print count + 0 }')"
+      test "$GH132_MATCHED" -eq 1
+      GH132_RESULT="$("$@" -- --exact 2>&1)" || {
+        printf '%s\n' "$GH132_RESULT" >&2
+        return 1
+      }
+      printf '%s\n' "$GH132_RESULT"
+      GH132_COUNTS="$(printf '%s\n' "$GH132_RESULT" | awk '
+        /^test result:/ {
+          for (i = 1; i <= NF; i++) {
+            if ($i == "passed;") passed += $(i - 1)
+            if ($i == "failed;") failed += $(i - 1)
+            if ($i == "ignored;") ignored += $(i - 1)
+          }
+        }
+        END { printf "%d %d %d\n", passed, failed, ignored }')"
+      test "$GH132_COUNTS" = "1 0 0"
+    }
+    run_exact cargo test --workspace --lib --locked renderer::static_content::tests::filter_static_elements_preserves_original_ids_for_retained_dynamic_nodes
+    run_exact cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::nested_child_coordinate_errors_keep_id_and_candidate_state
+    run_exact cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::repeated_coordinate_failure_then_correction_retries_cleanly
+    run_exact cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::failed_coordinate_candidate_is_never_published
+    run_exact cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::incremental_failure_retries_from_clean_layout_tree
+    run_exact cargo test --workspace --lib --locked renderer::app::tests::nested_child_coordinate_error_reaches_app_io_source_chain
+    run_exact cargo test --workspace --lib --locked renderer::app::tests::app_render_candidate_preserves_typed_error_source
     ```
   - Covers: B-008, B-012, B-013, B-015, B-016, B-017, B-019, B-020
 
@@ -267,6 +399,27 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
   - Verify:
     ```sh
     set -euo pipefail
+    run_exact() {
+      GH132_LIST="$("$@" -- --exact --list --format terse 2>&1)"
+      GH132_MATCHED="$(printf '%s\n' "$GH132_LIST" |
+        awk -F ': ' '$2 == "test" { count++ } END { print count + 0 }')"
+      test "$GH132_MATCHED" -eq 1
+      GH132_RESULT="$("$@" -- --exact 2>&1)" || {
+        printf '%s\n' "$GH132_RESULT" >&2
+        return 1
+      }
+      printf '%s\n' "$GH132_RESULT"
+      GH132_COUNTS="$(printf '%s\n' "$GH132_RESULT" | awk '
+        /^test result:/ {
+          for (i = 1; i <= NF; i++) {
+            if ($i == "passed;") passed += $(i - 1)
+            if ($i == "failed;") failed += $(i - 1)
+            if ($i == "ignored;") ignored += $(i - 1)
+          }
+        }
+        END { printf "%d %d %d\n", passed, failed, ignored }')"
+      test "$GH132_COUNTS" = "1 0 0"
+    }
     : "${GH132_IMPLEMENTATION_PR:?set the GH132 implementation PR number}"
     : "${GH132_IMPLEMENTATION_BASE_SHA:?set the exact starting main SHA recorded by SP132-T1}"
     : "${GH132_EVIDENCE_DIR:?set an absolute directory outside the repository}"
@@ -322,43 +475,31 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     mkdir -p "$GH132_EVIDENCE_DIR"
     GH132_COVERAGE_RAW="$GH132_EVIDENCE_DIR/llvm-cov.json"
     GH132_COVERAGE_ARTIFACT="$GH132_EVIDENCE_DIR/gh132-coverage.json"
-    GH132_COVERAGE_MODE=fixture \
-      cargo test --test text_flow_renderer_error_paths --locked \
-        gh132_current_head_coverage_contract -- --exact
+    export GH132_COVERAGE_MODE=fixture
+    run_exact cargo test --test text_flow_renderer_error_paths --locked \
+      gh132_current_head_coverage_contract
     GH132_COVERAGE_MODE=collect \
       cargo llvm-cov --workspace --all-targets --all-features --locked --branch --json \
         --output-path "$GH132_COVERAGE_RAW"
-    GH132_COVERAGE_MODE=produce \
-      GH132_COVERAGE_BASE_SHA="$EXPECTED_CURRENT_MAIN_SHA" \
-      GH132_COVERAGE_HEAD_SHA="$PR_HEAD_SHA" \
-      GH132_COVERAGE_MERGE_BASE_SHA="$GH132_MERGE_BASE_SHA" \
-      GH132_COVERAGE_DIFF_SHA256="$GH132_DIFF_SHA256" \
-      GH132_COVERAGE_RAW="$GH132_COVERAGE_RAW" \
-      GH132_COVERAGE_ARTIFACT="$GH132_COVERAGE_ARTIFACT" \
-      cargo test --test text_flow_renderer_error_paths --locked \
-        gh132_current_head_coverage_contract -- --exact
-    export GH132_COVERAGE_MODE=validate
+    export GH132_COVERAGE_MODE=produce
     export GH132_COVERAGE_BASE_SHA="$EXPECTED_CURRENT_MAIN_SHA"
     export GH132_COVERAGE_HEAD_SHA="$PR_HEAD_SHA"
-    export GH132_COVERAGE_MERGE_BASE_SHA GH132_COVERAGE_DIFF_SHA256
+    export GH132_COVERAGE_MERGE_BASE_SHA="$GH132_MERGE_BASE_SHA"
+    export GH132_COVERAGE_DIFF_SHA256="$GH132_DIFF_SHA256"
     export GH132_COVERAGE_RAW GH132_COVERAGE_ARTIFACT
-    GH132_COVERAGE_MODE=validate \
-      GH132_COVERAGE_BASE_SHA="$EXPECTED_CURRENT_MAIN_SHA" \
-      GH132_COVERAGE_HEAD_SHA="$PR_HEAD_SHA" \
-      GH132_COVERAGE_MERGE_BASE_SHA="$GH132_MERGE_BASE_SHA" \
-      GH132_COVERAGE_DIFF_SHA256="$GH132_DIFF_SHA256" \
-      GH132_COVERAGE_RAW="$GH132_COVERAGE_RAW" \
-      GH132_COVERAGE_ARTIFACT="$GH132_COVERAGE_ARTIFACT" \
-      cargo test --test text_flow_renderer_error_paths --locked \
-        gh132_current_head_coverage_contract -- --exact
+    run_exact cargo test --test text_flow_renderer_error_paths --locked \
+      gh132_current_head_coverage_contract
+    export GH132_COVERAGE_MODE=validate
+    run_exact cargo test --test text_flow_renderer_error_paths --locked \
+      gh132_current_head_coverage_contract
     python3 "$SPEC_RAIL_ROOT/checks/pr_gate.py" --repo "$SPEC_RAIL_GATE_REPO" \
       --evidence "$GH132_PR_EVIDENCE" --mode required --json
-    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_signed_coordinates_axis_clips_and_nested_active_clips_are_exact -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_failure_commits_neither_cells_nor_projection -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::projection_zero_width_only_attaches_to_the_same_flow_sequence -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::synthetic_ellipsis_projection_failure_commits_neither_cells_nor_projection -- --exact
-    cargo test --workspace --lib --locked renderer::tree_renderer::tests::scrolled_out_negative_rows_do_not_paint_at_top -- --exact
-    cargo test --test prelude_surfaces --locked try_render_to_string_surface -- --exact
+    run_exact cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_signed_coordinates_axis_clips_and_nested_active_clips_are_exact
+    run_exact cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_failure_commits_neither_cells_nor_projection
+    run_exact cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::projection_zero_width_only_attaches_to_the_same_flow_sequence
+    run_exact cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::synthetic_ellipsis_projection_failure_commits_neither_cells_nor_projection
+    run_exact cargo test --workspace --lib --locked renderer::tree_renderer::tests::scrolled_out_negative_rows_do_not_paint_at_top
+    run_exact cargo test --test prelude_surfaces --locked try_render_to_string_surface
     cargo fmt --all -- --check
     cargo check --workspace --all-targets --all-features --locked
     cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -A clippy::collapsible_if -A clippy::manual_is_multiple_of
@@ -396,8 +537,9 @@ SP132-T1 -> SP132-T2 -> SP132-T3 -> SP132-T4 -> SP132-T5
 - T4独占static filter/dynamic pipeline/App source-module tests。
 - T5只读。即使T3/T4文件集合不相交，T4也必须等待T3 typed contract稳定，避免对同一错误
   flow并发做不兼容假设。
-- PR #137合入前不得开始T2；#131 frozen manifest与任一T2-T4路径相交时，整条GH132
-  implementation lane与#131串行，不做共享writer。
+- PR #137/#142 merge commits均必须属于fresh implementation base；T2开始前对两者各自
+  changed-file set、digest、manifest overlap与交集路径完成source-drift refresh，不做共享
+  writer或用旧PR元数据替代。
 
 ## 验证
 
@@ -422,7 +564,7 @@ SP132-T1 -> SP132-T2 -> SP132-T3 -> SP132-T4 -> SP132-T5
   spec approval后再fresh运行implement gate。
 - PR #137的head SHA只记录起草时证据，不是implementation pin；真正依赖是其最终merge
   commit和refreshed owner contract。
-- #131当前没有权威manifest，因此不能宣称“无冲突”。开始实现前必须冻结并比较manifest，
-  traversal/projection/caller tests有交集即串行。
+- #131已由PR #142关闭；开始实现前必须fresh验证其6路径set、digest和与GH132的三路径交集，
+  并在交集路径重新定位VirtualText/span-only contract，不能用旧的“无分支”状态跳过。
 - 若实现需要manifest外路径、public API变化、第二个coordinate helper、全局/thread-local
   current element或放宽atomic tests，停止并重新走spec review。
