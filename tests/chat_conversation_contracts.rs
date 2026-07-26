@@ -494,6 +494,11 @@ exact!(streaming_deltas_are_ordered_lossless_and_typed, {
     let pointer = block_text(&state, 2).as_ptr(); let update = ConversationUpdate::append_text(guard(&state, MessageId::new(1)), BlockId::new(1), "hello").unwrap(); state.apply_event(event("append", 2, update)).unwrap();
     assert_eq!(block_text(&state, 1), "hello"); assert_eq!(block_text(&state, 2).as_ptr(), pointer, "unaffected transcript storage was cloned");
 });
+exact!(code_append_preserves_language_storage_and_content, {
+    let mut state = ConversationState::new(0, std::num::NonZeroUsize::new(4).unwrap()); let code = CodeContent::new("fn").unwrap().with_language("rust").unwrap(); apply_push(&mut state, "code", 0, message(1, ChatRole::Assistant, vec![MessageBlockEntry::new(BlockId::new(1), MessageBlock::Code(code))]));
+    let language = match state.messages()[0].blocks()[0].block() { MessageBlock::Code(value) => value.language().unwrap().as_ptr(), _ => unreachable!() }; let update = ConversationUpdate::append_text(guard(&state, MessageId::new(1)), BlockId::new(1), " main").unwrap(); state.apply_event(event("append-code", 1, update)).unwrap();
+    assert!(matches!(state.messages()[0].blocks()[0].block(), MessageBlock::Code(value) if value.content() == "fn main" && value.language() == Some("rust") && value.language().unwrap().as_ptr() == language));
+});
 exact!(static_message_completes_without_dummy_append, {
     let mut state = text_state(4); let before = state.message(MessageId::new(1)).unwrap().blocks().to_vec();
     let update = ConversationUpdate::complete(guard(&state, MessageId::new(1))); state.apply_event(event("complete", 1, update)).unwrap();
@@ -740,6 +745,11 @@ exact!(evicted_snapshot_rejects_genuine_retention_spliced_from_another_state, {
     let mut alpha = text_state(1); let alpha_update = ConversationUpdate::append_text(guard(&alpha, MessageId::new(1)), BlockId::new(1), "alpha").unwrap(); alpha.apply_event(event("alpha", 1, alpha_update)).unwrap(); let alpha_snapshot = alpha.snapshot();
     let mut beta = text_state(1); let beta_update = ConversationUpdate::append_text(guard(&beta, MessageId::new(1)), BlockId::new(1), "beta").unwrap(); beta.apply_event(event("beta", 1, beta_update)).unwrap(); let beta_snapshot = beta.snapshot();
     let hybrid = ConversationStateSnapshot::new_with_proof(beta_snapshot.messages().to_vec(), beta_snapshot.revision(), beta_snapshot.expected_sequence(), alpha_snapshot.retention().clone(), beta_snapshot.identities().clone(), beta_snapshot.proof().unwrap().clone()); assert!(ConversationState::try_restore(hybrid).is_err());
+});
+exact!(evicted_snapshot_rejects_cross_spliced_valid_public_proof_parts, {
+    let mut alpha = text_state(1); let alpha_update = ConversationUpdate::append_text(guard(&alpha, MessageId::new(1)), BlockId::new(1), "alpha").unwrap(); alpha.apply_event(event("alpha", 1, alpha_update)).unwrap(); let alpha = alpha.snapshot();
+    let mut beta = text_state(1); let beta_update = ConversationUpdate::append_text(guard(&beta, MessageId::new(1)), BlockId::new(1), "beta").unwrap(); beta.apply_event(event("beta", 1, beta_update)).unwrap(); let beta = beta.snapshot();
+    let (retention_tail, _) = alpha.proof().unwrap().parts(); let (_, content) = beta.proof().unwrap().parts(); assert!(ConversationStateSnapshot::try_new_with_proof_parts(beta.messages().to_vec(), beta.revision(), beta.expected_sequence(), alpha.retention().clone(), beta.identities().clone(), retention_tail, content).is_err());
 });
 exact!(evicted_snapshot_public_proof_constructor_roundtrips, {
     let mut state = text_state(1); let update = ConversationUpdate::append_text(guard(&state, MessageId::new(1)), BlockId::new(1), "proof").unwrap(); state.apply_event(event("proof", 1, update)).unwrap(); let snapshot = state.snapshot(); let source = &snapshot.retention().records()[0];
