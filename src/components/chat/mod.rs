@@ -47,6 +47,20 @@ mod model;
 mod reducer;
 mod state;
 
+/// Opaque evidence binding a retained event to its accepted history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetentionProof {
+    pub(in crate::components::chat) previous: [u64; 4],
+    pub(in crate::components::chat) record: [u64; 4],
+}
+
+/// Opaque evidence binding a snapshot's content to its retained history tail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotProof {
+    pub(in crate::components::chat) retention_tail: [u64; 4],
+    pub(in crate::components::chat) content: [u64; 4],
+}
+
 #[rustfmt::skip]
 mod rollback {
 use super::*;
@@ -165,15 +179,8 @@ fn fingerprint(value: &impl Debug) -> [u64; 4] {
     found
 }
 pub(super) fn record_fingerprint(previous: [u64; 4], event: &ConversationEvent,
-    outcome: &ApplyOutcome, state: [u64; 4]) -> [u64; 4] {
-    fingerprint(&(previous, event, outcome, state))
-}
-pub(super) fn current_state_fingerprint(state: &ConversationState) -> [u64; 4] {
-    fingerprint(&((&state.messages, state.revision, state.expected_sequence,
-        state.ledger_capacity, state.evicted_through), (&state.seen_messages,
-        &state.retired_messages, &state.seen_blocks, &state.retired_blocks,
-        &state.thinking_seen, &state.thinking_retired, &state.seen_tool_calls,
-        &state.retired_tool_calls, &state.result_slots)))
+    outcome: &ApplyOutcome) -> [u64; 4] {
+    fingerprint(&(previous, event, outcome))
 }
 fn snapshot_state_fingerprint(value: &ConversationStateSnapshot) -> [u64; 4] {
     let identities = &value.identities;
@@ -193,17 +200,22 @@ fn snapshot_state_fingerprint(value: &ConversationStateSnapshot) -> [u64; 4] {
         retired_messages, seen_blocks, retired_blocks, thinking_seen, thinking_retired,
         seen_calls, retired_calls, result_slots)))
 }
+pub(super) fn snapshot_proof(value: &ConversationStateSnapshot) -> SnapshotProof {
+    let retention_tail = value.retention.records.last().and_then(|record| record.proof.as_ref())
+        .map_or([0; 4], |proof| proof.record);
+    SnapshotProof { retention_tail, content: snapshot_state_fingerprint(value) }
+}
 pub(super) fn evicted_proofs_are_valid(value: &ConversationStateSnapshot) -> bool {
     let mut prior = None;
     for record in &value.retention.records {
         let Some(proof) = &record.proof else { return false; };
         if proof.record != record_fingerprint(proof.previous, &record.event,
-            &record.outcome, proof.state)
+            &record.outcome)
             || prior.is_some_and(|previous| proof.previous != previous) { return false; }
         prior = Some(proof.record);
     }
-    value.retention.records.last().and_then(|record| record.proof.as_ref())
-        .is_some_and(|proof| proof.state == snapshot_state_fingerprint(value))
+    value.proof.as_ref().is_some_and(|proof| proof.retention_tail == prior.unwrap_or([0; 4])
+        && proof.content == snapshot_state_fingerprint(value))
 }
 }
 
@@ -222,8 +234,8 @@ pub use model::{
 };
 pub use state::{
     ConversationIdentityHistory, ConversationState, ConversationStateSnapshot,
-    ProcessedEventRecord, RetentionHistory, RetentionProof, ThinkingIdentityHistory,
-    ToolResultLocation, ToolResultSlot,
+    ProcessedEventRecord, RetentionHistory, ThinkingIdentityHistory, ToolResultLocation,
+    ToolResultSlot,
 };
 
 macro_rules! failure_cause_accessor {
