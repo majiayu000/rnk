@@ -1,8 +1,3 @@
-//! Unit tests for the layout engine.
-//!
-//! Split out of `engine.rs` to keep that file under the size ceiling; the
-//! test bodies are unchanged.
-
 #[allow(unused_imports)]
 use super::*;
 use crate::components::{Line, Span, Text};
@@ -593,7 +588,6 @@ fn test_apply_patches_update() {
     let root = VNode::box_node().child(VNode::text("Hello"));
     engine.compute_vnode(&root, 80, 24);
 
-    // Create an update patch
     let mut new_style = Style::new();
     new_style.padding.top = 5.0;
     let new_props = Props::with_style(new_style);
@@ -663,14 +657,12 @@ fn test_get_all_vnode_layouts() {
 fn test_node_count() {
     let mut engine = LayoutEngine::new();
 
-    // Use unique keys to avoid collision
     let root = VNode::box_node()
         .child(VNode::text("A").with_key("a"))
         .child(VNode::box_node().child(VNode::text("B").with_key("b")));
 
     engine.compute_vnode(&root, 80, 24);
 
-    // root + text "A" + inner box + text "B" = 4 nodes
     assert_eq!(engine.node_count(), 4);
 }
 
@@ -766,15 +758,26 @@ fn reconstructed_source_domain_uses_text_content_truth() {
 fn text_flow_failure_is_atomic() {
     let text = Element::text("stable");
     let id = text.id;
+    let mut stable = Element::root();
+    stable.add_child(text);
     let mut engine = LayoutEngine::new();
-    engine.try_compute(&text, 20, 4).unwrap();
+    let (previous, _) = engine
+        .try_compute_element_incremental(&stable, None, 20, 4)
+        .unwrap();
+    let key = engine.node_key_for_element(id).unwrap();
+    let node = engine.node_map[&id];
     let published = engine.current_text_flow(id).unwrap();
     let layout = engine.get_layout(id).unwrap();
     engine.set_text_flow_policy(0, "…", 1);
-    let failure = engine.try_compute(&Element::text("new"), 20, 4);
-    assert_eq!(failure, Err(TextFlowError::InvalidTabStop));
+    let mut changed = Element::root();
+    changed.add_child(Element::text("new"));
+    let failure = engine.try_compute_element_incremental(&changed, Some(&previous), 20, 4);
+    assert!(matches!(failure, Err(TextFlowError::InvalidTabStop)));
     let current = engine.current_text_flow(id).unwrap();
     assert!(Arc::ptr_eq(&published, &current));
+    assert_eq!(engine.node_map[&id], node);
+    let vnode_current = engine.current_vnode_text_flow(key).unwrap();
+    assert!(Arc::ptr_eq(&published, &vnode_current));
     assert_eq!(engine.get_layout(id).unwrap().width, layout.width);
     engine.set_text_flow_policy(4, "…", 1);
     let cancelled = engine.try_compute_interruptible(&Element::text("cancel"), 20, 4, || true);
