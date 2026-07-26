@@ -6,7 +6,7 @@ GH-67: https://github.com/majiayu000/rnk/issues/67
 
 <!-- specrail-requires-planned-changes-v1 -->
 <!-- specrail-planned-changes
-{"version":1,"issue":67,"complete":true,"paths":["specs/GH67/product.md","specs/GH67/tech.md","specs/GH67/tasks.md","src/components/chat/fullscreen.rs","src/components/chat/fullscreen/types.rs","src/components/chat/fullscreen/error.rs","src/components/chat/fullscreen/layout.rs","src/components/chat/fullscreen/state.rs","src/components/chat/fullscreen/router.rs","src/components/chat/fullscreen/session.rs","src/components/chat/fullscreen/tests.rs","src/components/chat/mod.rs","src/components/mod.rs","src/renderer/terminal.rs","src/renderer/terminal/fullscreen_backend.rs","src/prelude.rs","examples/rnk_chat.rs","tests/fullscreen_chat_shell_public_api.rs","tests/fullscreen_chat_shell_interactions.rs","tests/fullscreen_chat_shell_pty.rs","tests/golden/fullscreen_chat_shell.txt","tests/golden/fullscreen_chat_shell.ansi.txt"],"spec_refs":["specs/GH67/product.md","specs/GH67/tech.md","specs/GH67/tasks.md","specs/GH57/product.md","specs/GH57/tech.md","specs/GH57/tasks.md","specs/GH62/product.md","specs/GH62/tech.md","specs/GH62/tasks.md","specs/GH63/product.md","specs/GH63/tech.md","specs/GH63/tasks.md","specs/GH64/product.md","specs/GH64/tech.md","specs/GH64/tasks.md"]}
+{"version":1,"issue":67,"complete":true,"paths":["specs/GH67/product.md","specs/GH67/tech.md","specs/GH67/tasks.md","src/components/chat/fullscreen.rs","src/components/chat/fullscreen/types.rs","src/components/chat/fullscreen/error.rs","src/components/chat/fullscreen/layout.rs","src/components/chat/fullscreen/state.rs","src/components/chat/fullscreen/router.rs","src/components/chat/fullscreen/session.rs","src/components/chat/fullscreen/tests.rs","src/components/chat/mod.rs","src/components/mod.rs","src/renderer/terminal.rs","src/renderer/terminal/fullscreen_backend.rs","src/renderer/terminal_controller.rs","src/runtime/panic_handler.rs","src/prelude.rs","examples/rnk_chat.rs","tests/fullscreen_chat_shell_public_api.rs","tests/fullscreen_chat_shell_interactions.rs","tests/fullscreen_chat_shell_pty.rs","tests/golden/fullscreen_chat_shell.txt","tests/golden/fullscreen_chat_shell.ansi.txt"],"spec_refs":["specs/GH67/product.md","specs/GH67/tech.md","specs/GH67/tasks.md","specs/GH57/product.md","specs/GH57/tech.md","specs/GH57/tasks.md","specs/GH62/product.md","specs/GH62/tech.md","specs/GH62/tasks.md","specs/GH63/product.md","specs/GH63/tech.md","specs/GH63/tasks.md","specs/GH64/product.md","specs/GH64/tech.md","specs/GH64/tasks.md"]}
 -->
 
 ## Product Spec
@@ -130,7 +130,7 @@ src/components/chat/
     ├── types.rs           validated config/event/observation/overlay values
     ├── error.rs           closed typed config/layout/router/session errors
     ├── layout.rs          checked three-region partition and hit testing
-    ├── state.rs           caller-owned revision/focus/overlay/frame metadata
+    ├── state.rs           owning bundle + revision/focus/overlay/frame metadata
     ├── router.rs          one-event/one-target precedence and upstream adapters
     ├── session.rs         candidate frame + fullscreen terminal lifecycle
     └── tests.rs           module contracts and GH-57 bridge exact test
@@ -175,8 +175,22 @@ FullscreenRect { column, row, width, height } // checked constructor/end accesso
 FullscreenRegionLayout { terminal, transcript, composer, status: Option<Rect> }
 FullscreenShellObservation {
   revision, focus, layout, follow_state, stored_anchor, new_content_below,
-  composer_clamped, top_overlay, session_state
+  composer_cap, composer_visible_range, composer_cursor, composer_clamped,
+  top_overlay, session_state
 }
+
+FullscreenChatStateBundle {
+  shell: FullscreenChatShellState,
+  list: MessageListState,
+  composer: ChatComposerState
+}
+
+FullscreenShellEvent =
+  Resize | ConversationApplied | Key | Paste | Mouse |
+  SetStatus | OpenOverlay | CloseTopOverlay
+
+FullscreenSessionCommand = Suspend | Resume | Shutdown
+FullscreenRuntimeEvent = Shell(FullscreenShellEvent) | Session(FullscreenSessionCommand)
 ```
 
 `FullscreenTerminalSize::new(columns, rows)` 显式允许零，以便零尺寸进入可达
@@ -186,43 +200,57 @@ accessible label；`None` 精确表达 absent。overlay rect的 zero-area由 typ
 Modal/Pointer必须声明handler capability；Passive必须`focusable=false`且handler=None；
 其他kind/focus/handler组合在constructor/open前返回`InvalidOverlayState`。
 
-state constructor签名在最终 dependency命名下必须语义等价于：
+唯一state constructor签名在最终dependency命名下必须语义等价于：
 
 ```text
-FullscreenChatShellState::try_new(
+FullscreenChatStateBundle::try_new(
   config: FullscreenChatShellConfig,
   terminal: FullscreenTerminalSize,
   initial_entries: Vec<MessageListEntry>,
   initial_measurement_config: MessageMeasurementConfig,
   composer_state: ChatComposerState,
-  composer_projection: ComposerProjection,
+  composer_projection_inputs: ComposerProjectionInputs,
   status: Option<FullscreenStatusRegion>,
   initial_focus: FullscreenFocusTarget,
   initial_overlays: Vec<FullscreenOverlayRequest>,
   measure: &mut impl FnMut(MessageMeasureRequest) -> MessageMeasureOutcome
-) -> Result<Self, FullscreenShellError>
+) -> Result<FullscreenChatStateBundle, FullscreenShellError>
 ```
 
-这条签名必须实际创建可用的 MessageList state与完整 active measurement handles；空 entries
-合法。callback返回 zero row或缺 active key时必须是可达 typed error。constructor完成前
-不发布 partial state，也不把 callback放进 state长期持有。MessageList key handle由最终
-GH-65 concrete `Arc`-backed value拥有；shell只保存/clone lightweight handle，active frame
-完成前拥有强引用，不能只留在可 eviction cache。
+这条签名必须实际创建并返回后续handler/session使用的同一MessageList与Composer states；
+shell state只保存自己的revision/focus/overlay/frame metadata，不复制component value/revision。
+`FullscreenChatStateBundle`字段private，只公开 `shell()`、`message_list()`、`composer()`只读
+accessor和整体observation；不公开component `&mut`。`pub(super) split_mut()`通过一次字段解构产生
+三条disjoint mutable borrows交给transaction。upstream prepared tokens必须拥有candidate/
+base revision而不借用live state，candidate view借token；这样全部fallible工作结束后可消费token
+并依次调用infallible commit，不需要unsafe、`RefCell`或复制state。空entries合法；callback返回
+zero row或缺active key时typed失败。constructor完成前不发布partial bundle，也不长期持有
+callback。MessageList active key handle由最终GH-65 concrete `Arc`-backed value拥有。
 
-`FullscreenChatShell::try_into_element(...)` 借用 state/conversation/composer projection，
-并接受唯一 stable typed MessageList render closure。status与有序 overlay bodies只从
-state的validated values读取，不再作为第二份调用参数。closure精确接收 GH-65
+`FullscreenChatShell::try_into_element(...)`只借用bundle、conversation和本次candidate中
+由同一prepared Composer token产生的projection，并接受唯一stable typed MessageList render
+closure；禁止caller另传第二份projection。status与有序overlay bodies只从state的validated
+values读取。closure精确接收GH-65
 entry/key-handle/visible-slice并在内部使用 GH-63 `ChatMessageView`；shell不接收第二个
 row-height callback，不重测 block。
 
 ### 4. Checked region partition
 
-令 `T=terminal.rows`、`S=status.rows or 0`、`P=exact-current ComposerProjection.height`：
+令 `T=terminal.rows`、`S=status.rows or 0`。必须先计算cap，再建立projection：
 
 ```text
 required = checked(min_transcript + min_composer + S)
 if columns < min_columns or T < required -> UnsupportedTerminalSize
 composer_cap = min(max_composer, checked(T - min_transcript - S))
+projection = GH64::try_project(
+  current composer state/revision,
+  current content width,
+  max_visible_lines = NonZero(composer_cap),
+  caller projection inputs
+)
+P = projection.height
+if P == 0 or projection.cursor not in projection.visible_range
+  -> InvalidComposerProjection
 composer_rows = clamp(P, min_composer, composer_cap)
 transcript_rows = checked(T - composer_rows - S)
 
@@ -232,8 +260,10 @@ status     = S == 0 ? None
            : rect(0, transcript_rows + composer_rows, columns, S)
 ```
 
-`P=0` 是 `InvalidComposerProjection`，不能被 clamp成1；projection revision必须等于 current
-Composer state revision。所有 u16/usize转换、rect end和sum使用 checked arithmetic。
+cap计算前不得调用GH-64；不得clip旧projection或复用较大cap的visible range。`P=0` 是
+`InvalidComposerProjection`，不能被clamp成1；projection revision必须等于bundle中current
+Composer state revision，cursor-containing visible range必须由该cap重算。所有u16/usize转换、
+rect end和sum使用checked arithmetic。
 成功必须证明 transcript rows≥min、composer在min..=cap、status end==T、三个rect两两不重叠。
 overlay不消耗base rows；它clip到 terminal rect并在base children后按stack bottom→top追加。
 
@@ -258,44 +288,74 @@ evidence，不出现在GH-67 shell test或成功state中。
 
 ### 6. State transaction and event ordering
 
-`handle_fullscreen_shell_event` 语义签名：
+`handle_fullscreen_shell_event`只处理pure shell domain，语义签名：
 
 ```text
 handle_fullscreen_shell_event(
-  states: FullscreenShellStates<'_>, // &mut shell、&mut MessageList、&mut Composer
+  bundle: &mut FullscreenChatStateBundle,
   expected_revision: FullscreenShellRevision,
   event: FullscreenShellEvent,
   dependencies: FullscreenShellInputs,
 ) -> Result<InteractionOutcome<FullscreenShellPayload>, FullscreenShellError>
 ```
 
+handler内部通过bundle `pub(super) split_mut()`一次取得shell/list/composer disjoint borrows；
+prepared tokens拥有candidate且不借live，禁止caller分别提供可能不匹配的三个states。
 `FullscreenShellInputs` 是具体 private-field struct，含当前 immutable Conversation snapshot、
 MessageList config、measurement/render closure和唯一typed overlay handler；没有
 `Any`/dynamic map。
-event至少含 Resize、ConversationApplied、Key、Paste、Mouse、SetStatus、OpenOverlay、
-CloseTopOverlay、Suspend、Resume、Shutdown。SetStatus和OpenOverlay的typed payload分别是
-status/overlay state的唯一更新来源。处理优先级：
+event闭集只含 Resize、ConversationApplied、Key、Paste、Mouse、SetStatus、OpenOverlay、
+CloseTopOverlay。Suspend/Resume/Shutdown只属于`FullscreenSessionCommand`，不能构造为shell
+event。SetStatus和OpenOverlay的typed payload分别是status/overlay state唯一更新来源。
+处理优先级：
 
 ```text
 expected shell revision
 -> event kind/system precedence
 -> target/id/overlay/focus validation
 -> checked next shell revision (only if observable mutation is possible)
+-> terminal/status minimum preflight + checked composer_cap (zero callback)
 -> upstream composer/list expected revisions
--> GH-64/GH-65 try_prepare_* without live mutation
+-> GH-64 prepare composer mutation（非Composer event使用no-op token），再从token candidate view
+   按current width + composer_cap建立cursor-containing projection
+-> GH-65 try_prepare_* without live mutation
 -> ordered measurement/layout using prepared read-only views
 -> render closure + GH-60 checked frame candidate
 -> infallible publication: commit list token, composer token, shell/observation/frame
 ```
 
-stale shell revision先于callback；unknown overlay/focus先于upstream mutation；arithmetic/layout
-先于frame commit。任何prepare/measurement/layout/render error只discard两个tokens和shell
+stale shell revision先于callback；unknown overlay/focus先于upstream mutation；Resize的
+zero/undersized/minimum/cap overflow在Composer/List prepare、measure、projection/render
+callback前失败且所有callback count为0。任何prepare/measurement/layout/render error只discard
+两个tokens和shell
 candidate，live List/Composer/shell/frame逐值相等。publication section不能再执行callback、
 allocation、conversion、validation或返回`Result`；若最终上游commit仍fallible，本issue
 implementation gate失败，禁止声称rollback。Ignored、Handled-no-change、Cancelled不推进
 revision；一次成功 event即使改变list/layout/focus多个字段也只推进一次。相同序列确定。rapid
 `Resize -> ConversationApplied(stream) -> ConversationApplied(prepend) -> Key` 精确按该顺序；
 没有background reorder、coalescing或全局fallback。
+
+session只暴露一个total dispatch boundary：
+
+```text
+FullscreenSession::dispatch(
+  &mut self,
+  bundle: &mut FullscreenChatStateBundle,
+  runtime_event: FullscreenRuntimeEvent,
+  inputs: &mut FullscreenShellInputs<'_>
+) -> Result<FullscreenDispatchOutcome, FullscreenRunError>
+
+FullscreenDispatchOutcome =
+  Shell(InteractionOutcome<FullscreenShellPayload>) |
+  Session(FullscreenSessionCommandOutcome)
+```
+
+`Shell(event)`恰好调用一次上述handler；`Session(Suspend|Resume|Shutdown)`恰好调用session
+state machine且不进入shell/component/overlay handler。`run`只poll `FullscreenRuntimeEvent`
+并调用dispatch，调用方不能对同一event再调用第二入口。Resume取得新lease/snapshot/size后，
+必须以`&mut bundle`和inputs prepare一个cap-first synthetic Resize candidate及CheckedFrame，
+再staged enter/render/commit；terminal可在Suspended期间resize，禁止repaint旧frame。缺frame/
+size或prepare失败typed返回且按session recovery合同回滚。session command error保留source。
 
 ### 7. Focus, key, paste and mouse routing
 
@@ -306,12 +366,12 @@ stack validation要求一旦存在 Modal，它必须是top；Modal之上不能�
 | Overlay/focus state | Event | Sole handler | Overall outcome / propagation |
 | --- | --- | --- | --- |
 | 任意 | Resize | shell prepare transaction | 不进入input handler |
-| 任意 | Suspend/Resume/Shutdown | session | 不进入shell/component handler |
+| 任意 | `Session(Suspend/Resume/Shutdown)` | session dispatch | 不进入shell/component handler |
 | top Modal、dismissible | Escape | shell CloseTop | close一层并恢复saved focus；不调用overlay/base |
 | top Modal、不可dismiss | Escape | top Modal handler | `Ignored`提升为`Handled`；consumed |
 | top Modal | 其他key或Paste | top Modal handler | 任意handler outcome均停止；`Ignored`提升为`Handled` |
 | 无Modal、top dismissible Pointer/Passive | Escape | shell CloseTop | close一层；不向focused target继续 |
-| 无Modal | Tab/BackTab | shell traversal | 只遍历Transcript、Composer、focusable Pointer；Passive跳过 |
+| 无Modal | Tab/BackTab | shell traversal | 使用下述固定ring、方向与wrap；Passive跳过 |
 | 无Modal、Transcript focus | navigation key | GH-65 prepared navigation | exact once；返回其typed outcome |
 | 无Modal、Transcript focus | 其他key/committed/Paste | none | `Ignored` |
 | 无Modal、Composer focus | key/committed | GH-64 prepared key ingress | exact once；不转paste/submit第二次 |
@@ -344,6 +404,20 @@ InteractionOutcome<FullscreenOverlayAction>`；action只能KeepOpen、CloseTop�
 `InvalidFocusRestore`。IME只支持runtime交付的committed text；preedit/candidate unsupported。
 resize candidate未成功时旧committed layout仍是唯一mouse坐标真相。
 
+无Modal的focus ring每次从committed overlay stack机械建立：
+
+```text
+forward = [Transcript, Composer]
+          + focusable Pointer overlays in stack bottom -> top order
+backward = reverse(forward)
+```
+
+Tab/BackTab先验证current target仍存在且eligible，然后从current后的下一项开始；不把current
+再次作为首项。Tab在forward最后一项wrap到Transcript，BackTab在Transcript wrap到forward
+最后一项；没有Pointer时精确在Transcript/Composer间wrap。Passive、`focusable=false`与closed
+ID不进入ring；Modal存在时Tab/BackTab由top Modal捕获而不建ring。一次traversal只推进一次shell
+revision。tests覆盖0/1/多Pointer、bottom/top stack边界、两个方向、所有wrap和current closed。
+
 ### 8. Checked frame and terminal session
 
 `FullscreenFrameTransaction` 私有地持有两个upstream prepared tokens、lightweight shell
@@ -351,97 +425,150 @@ candidate、Element tree、GH-60 checked layout/render result与previous observa
 所有fallible工作完成后才能进入infallible `commit()`。任一callback panic在publication前
 unwind，由session guard恢复terminal，不能catch后default render。
 
-公共terminal surface不是抽象生命周期，而是以下可crate外实现/调用的合同：
+公共terminal surface必须可crate外实现/调用，并且snapshot provenance与recovery ownership
+可检查：
 
 ```text
 FullscreenTerminalCapability = SupportedRestorable | Unsupported
 FullscreenTerminalCapabilities { raw, cursor, alternate, mouse, focus, paste }
-FullscreenTerminalSnapshot {
-  screen: Normal | Alternate,
-  raw_enabled,
-  cursor_visible,
-  mouse_capture,
-  focus_reporting,
-  bracketed_paste
+FullscreenSnapshotEvidence =
+  NativeQuery { tty_identity, lease_epoch, correlated_mode_replies } |
+  ManagedRegistry { tty_identity, lease_epoch } |
+  DeterministicFake { fixture_id }
+FullscreenScreenModes { mode_47, mode_1047, mode_1049 }
+FullscreenMouseModes { mode_1000, mode_1002, mode_1003, mode_1015, mode_1006 }
+VerifiedFullscreenTerminalSnapshot {
+  screen: FullscreenScreenModes,
+  raw_termios, cursor_mode_25,
+  mouse: FullscreenMouseModes,
+  focus_mode_1004, paste_mode_2004,
+  evidence: FullscreenSnapshotEvidence
 }
 OptionalCapabilityPolicy = Require | Disable
-FullscreenSessionConfig {
-  mouse, focus, paste: OptionalCapabilityPolicy,
-  poll_timeout: Duration
-}
-
+FullscreenSessionConfig { mouse, focus, paste: OptionalCapabilityPolicy, poll_timeout: Duration }
 trait FullscreenTerminalBackend {
   type Error: std::error::Error + Send + Sync + 'static;
   type Lease: FullscreenTerminalLease;
+  type RecoveryOwner: FullscreenTerminalRecoveryOwner<Error = Self::Error>;
   fn try_acquire_lease(&mut self) -> Result<Self::Lease, Self::Error>;
   fn try_release_lease(&mut self, lease: &mut Self::Lease) -> Result<(), Self::Error>;
+  fn try_size(&mut self, lease: &mut Self::Lease)
+    -> Result<FullscreenTerminalSize, Self::Error>;
   fn capabilities(&self, lease: &Self::Lease) -> FullscreenTerminalCapabilities;
   fn try_snapshot(&mut self, lease: &mut Self::Lease)
-    -> Result<FullscreenTerminalSnapshot, Self::Error>;
+    -> Result<VerifiedFullscreenTerminalSnapshot, Self::Error>;
   fn try_apply(&mut self, lease: &mut Self::Lease, transition: FullscreenTerminalTransition)
     -> Result<(), Self::Error>;
   fn try_render(&mut self, lease: &mut Self::Lease, frame: &CheckedFrame)
     -> Result<(), Self::Error>;
   fn try_poll(&mut self, lease: &mut Self::Lease, timeout: Duration)
-    -> Result<Option<FullscreenShellEvent>, Self::Error>;
+    -> Result<Option<FullscreenRuntimeEvent>, Self::Error>;
   fn try_flush(&mut self, lease: &mut Self::Lease) -> Result<(), Self::Error>;
+  fn into_recovery_owner(
+    self, lease: Self::Lease, context: FullscreenRecoveryContext,
+    unfinished: NonEmptyRestorationSteps, failures: NonEmptyRestorationFailures
+  ) -> Self::RecoveryOwner;
+  fn transfer_poisoned(owner: Self::RecoveryOwner) -> FullscreenPoisonOwnerId;
 }
-
-NativeFullscreenTerminalBackend::try_stdout()
+FullscreenRecoveryPrimary = Start(FullscreenSessionStartError) | Run(FullscreenRunPrimaryError)
+FullscreenRecoveryContext { snapshot: Option<VerifiedFullscreenTerminalSnapshot>,
+                            primary: Option<FullscreenRecoveryPrimary> }
+trait FullscreenTerminalRecoveryOwner {
+  type Error: std::error::Error + Send + Sync + 'static;
+  fn try_restore_next(&mut self) -> Result<FullscreenRecoveryProgress, Self::Error>;
+  fn try_release(&mut self) -> Result<(), Self::Error>;
+  fn context(&self) -> &FullscreenRecoveryContext;
+  fn unfinished_steps(&self) -> &NonEmptyRestorationSteps;
+}
+NativeFullscreenTerminalBackend::try_controlling_terminal()
   -> Result<Self, FullscreenSessionStartError>
-FullscreenSession<B>::try_enter(
-  backend: B,
-  config: FullscreenSessionConfig
-) -> Result<Self, FullscreenSessionStartError>
+FullscreenSession<B>::try_enter(backend: B, config: FullscreenSessionConfig)
+  -> FullscreenEnterOutcome<B>
+FullscreenEnterOutcome<B> =
+  Active(FullscreenSession<B>) |
+  Rejected(FullscreenSessionStartError) |
+  RecoveryRequired(FullscreenTerminalRecovery<B::RecoveryOwner>)
+FullscreenTerminalRecovery<O>::retry(&mut self) -> Result<FullscreenRecoveryComplete, NonEmptyRestorationFailures>
+FullscreenTerminalRecovery<O>::{unfinished_steps,snapshot,lease_owner,primary,failure_history}()
 run(
   &mut self,
-  shell: &mut FullscreenChatShellState,
-  list: &mut MessageListState,
-  composer: &mut ChatComposerState,
+  bundle: &mut FullscreenChatStateBundle,
   inputs: &mut FullscreenShellInputs<'_>,
   panic_reporter: &mut impl FullscreenPanicCleanupReporter
-)
-  -> Result<FullscreenSessionExit, FullscreenRunError>
+) -> Result<FullscreenSessionExit, FullscreenRunError>
+dispatch(&mut self, bundle, FullscreenRuntimeEvent, inputs)
+  -> Result<FullscreenDispatchOutcome, FullscreenRunError>
 render_frame(&mut self, &CheckedFrame) -> Result<(), FullscreenRunPrimaryError>
-try_suspend(&mut self) -> Result<FullscreenSuspendReport, FullscreenRunError>
-try_resume(&mut self, &CheckedFrame) -> Result<FullscreenResumeReport, FullscreenRunError>
-try_shutdown(&mut self) -> Result<FullscreenShutdownReport, FullscreenRunError>
+try_suspend(&mut self) -> FullscreenSuspendOutcome
+try_resume(&mut self, bundle: &mut FullscreenChatStateBundle, inputs: &mut FullscreenShellInputs<'_>)
+  -> FullscreenResumeOutcome
+try_shutdown(&mut self) -> FullscreenShutdownOutcome
+try_recover(&mut self) -> FullscreenRecoveryOutcome
+NativeFullscreenTerminalBackend::try_claim_poisoned_controlling_terminal()
+  -> Result<FullscreenTerminalRecovery<Self::RecoveryOwner>, FullscreenLeaseClaimError>
 ```
 
-`FullscreenTerminalLease`只公开active/owner accessor，不可clone/construct；具体token由
-backend associated type拥有。`FullscreenTerminalTransition`是闭集
-`SetScreen(Normal|Alternate)`、`SetRaw(bool)`、`SetCursorVisible(bool)`、
-`SetMouseCapture(bool)`、`SetFocusReporting(bool)`、`SetBracketedPaste(bool)`；lease acquire/
-release只能走专用方法，不能伪装成mode transition。
+`FullscreenTerminalLease`只公开active/owner/epoch accessor，不可clone/construct；token由Active
+session、failed-entry guard、RecoveryRequired或process registry四者之一唯一拥有。registry为
+`Free | Held(owner,epoch) | Poisoned(owner,unfinished)`。
+`FullscreenTerminalTransition`闭集为`SetScreen(FullscreenScreenModes)`、
+`SetRawTermios`、`SetCursorMode25`、`SetMouseModes(FullscreenMouseModes)`、
+`SetFocusMode1004`、`SetPasteMode2004`；
+lease acquire/release不能伪装成mode transition。
 
-Native backend在`src/renderer/terminal/fullscreen_backend.rs`拥有process-wide lease registry、
-mode registry与实际terminal I/O；`try_stdout()`只构造backend且零lease/terminal mutation，
-真正lease唯一由`FullscreenSession::try_enter`调用`try_acquire_lease`取得并存入session。
-第二个/nested session返回`AlreadyActive`。backend必须能证明完整pre-entry snapshot；任一mode
-无法查询或不在library-owned registry时返回
-`UnknownPreEntryState`且零mutation。raw/cursor/alternate是required；mouse/focus/paste按
-Require/Disable预检，Unsupported+Require在entry前失败，Disable保持snapshot原值且不宣称
-启用。fake backend用同一trait注入每一步失败。
+Native backend在`src/renderer/terminal/fullscreen_backend.rs`拥有process-wide controlling-TTY
+lease/mode registry与配对input/output I/O。`try_controlling_terminal()`打开并验证input/output
+属于同一TTY identity，零lease、零terminal mutation；只有stdout或TTY identity不一致时typed
+拒绝。首次或registry epoch失效时，acquire后用input termios读取raw，并通过output向同一TTY
+发送无mode mutation的DECRQM查询：
+47/1047/1049 screen、25 cursor、1000/1002/1003 tracking、1015 RXVT、1006 SGR、1004 focus、
+2004 paste；
+只接受从配对input读取、与query ID/TTY/lease epoch完全关联且明确enabled/disabled的reply；
+非reply input按原顺序进入backend pending-event queue，不能吞掉。timeout、unsupported、
+malformed、ambiguous/extra reply或无法读取termios返回`UnknownPreEntryState`，release未变更
+lease且零mode mutation。registry仍在同一exclusive epoch内时可产生`ManagedRegistry`
+evidence；跨release后必须重新query，不能信任旧bool。unsupported平台只允许deterministic fake
+contract或typed Unsupported。snapshot必须逐bit保存上述raw modes并原样恢复，包括crossterm
+同时启用1000/1002/1003/1015/1006的组合；禁止折叠成enum/bool或默认disabled。
 
-entry顺序为acquire lease token→snapshot→capability preflight→alternate→raw→cursor-hide→optional
-mouse/focus/paste→flush。每一步只在目标值与snapshot不同时执行并记录completed-step；
-任一失败按相反顺序恢复所有completed steps并flush，聚合primary enter error和全部rollback
-failures；最后显式release token，release失败也进入rollback failures。没有完整Active session
-就不能render/poll。session lifecycle闭集为Entering{lease}、Active{lease,snapshot}、
-Suspending{lease,snapshot}、Suspended{no_lease}、Resuming{lease,new_snapshot}、
-Closing{lease,snapshot}、Shutdown。shutdown停止poll，
-按snapshot逐项恢复并尝试全部步骤；只把成功step标完成，第二次调用重试unfinished steps，
-全部成功才释放lease并进入Shutdown。
+现有public `Terminal::{enter,enter_inline,suspend,resume,exit}`与`App::run`必须改用同一registry。
+`Terminal::new`零mutation；首次enter取得并保存managed lease/snapshot，nested legacy/new
+session相互返回AlreadyActive。legacy partial failure由该`Terminal`值继续持有recovery state；
+若消费式`App::run`或Drop结束仍未恢复，必须把backend/token/snapshot/unfinished steps原子转移到
+registry Poisoned record，后续entry全部blocked，只有
+`try_claim_poisoned_controlling_terminal`能转移唯一
+ownership并retry。legacy `io::Error`保留typed source；禁止绕过registry直接crossterm enter。
 
-suspend停止poll并执行同一完整snapshot restoration；restoration与release均成功才进入
-`Suspended{no_lease}`。此时第二session可以取得lease。resume先acquire新token；若被第二session
-占用则返回`ResumeLeaseUnavailable`、保持Suspended且零terminal mutation；取得后读取新snapshot、
-重跑staged enter并full repaint，失败则反向恢复、release新token并保持Suspended。fresh session
-必须重新constructor shell state。`run`的完整参数是session event loop的唯一state/input来源，
-不从global或省略参数重建。`run`用unwind guard保证panic时
-执行全部cleanup，把`FullscreenPanicCleanupReport`交给调用方注入的
-`FullscreenPanicCleanupReporter`后`resume_unwind`；public report不暴露panic `Any` payload。
-Drop只重试unfinished best-effort steps并释放可安全释放的lease，不构成恢复成功证据。
+`src/renderer/terminal_controller.rs`的screen/cursor/mouse命令也必须要求当前managed owner/
+lease并经同一transition API执行；无owner时typed/io source拒绝。`src/runtime/panic_handler.rs`
+不得在active managed lease外直接disable raw/leave screen/show cursor或清mouse/focus/paste：
+有owner时只触发该owner unwind recovery table；无可借owner时原子claim/transfer registry
+Poisoned record后恢复，失败继续Poisoned并保存全部sources。panic hook的文本不得声称restored，
+除非typed report逐项成功。
+
+entry顺序为acquire→verified snapshot→capability preflight→alternate→raw→cursor-hide→optional
+mouse/focus/paste→flush。每步只在目标值与snapshot不同时执行并记录；失败按反向顺序尝试全部
+completed steps并flush。只有restore+flush+release全部成功才返回`Rejected(primary)`并使registry
+Free；任一rollback或release失败返回`RecoveryRequired(guard)`，guard保持lease、optional
+snapshot/Start-or-Run primary和完整ordered failures；cleanup-only的primary=None。snapshot query失败后的lease-release
+失败建立snapshot=None且unfinished=LeaseRelease的owner，只重试release；release失败仍
+保留同一token/Poisoned ownership。没有Active session不能render/poll。
+
+session拥有`Option<B>`，使失败/Drop可take backend并构造`B::RecoveryOwner`；Active、
+recovery guard、process registry之间始终恰好一个owner。lifecycle闭集为Entering、Active、
+Suspending、Suspended、Resuming、
+`RecoveryRequired { operation, lease, snapshot, unfinished }`、Closing、Shutdown。shutdown与
+suspend停止poll并尝试全部restoration；只在restore+flush+release全部成功后进入Shutdown/
+Suspended。resume lease冲突保持Suspended且零mutation；取得lease后的entry/repaint失败若完整
+rollback+release则回Suspended，任一步不完整则进入RecoveryRequired而不是伪称Suspended。
+该state只允许`try_recover`；render/poll/dispatch/second entry均typed拒绝。recovery逐次只重试
+unfinished/failed stages，保存每次所有sources，全部成功才release并转到操作对应稳定state。
+
+`run`只poll/dispatch `FullscreenRuntimeEvent`，bundle是唯一state来源。unwind guard使用同一
+recovery table；panic cleanup全部成功后report并`resume_unwind`，不完整则先把session变为
+RecoveryRequired/registry Poisoned并报告owner ID、unfinished steps与全部sources，再继续
+unwind。Drop只best-effort retry；失败时转移Poisoned ownership，绝不释放不确定lease或构成
+恢复成功证据。public report不暴露panic `Any` payload。
 
 shell与run error family分离，避免terminal cleanup覆盖primary：
 
@@ -456,7 +583,8 @@ FullscreenShellError =
 
 FullscreenRunPrimaryError =
   Shell(FullscreenShellError) |
-  Backend(FullscreenTerminalOperationError)
+  Backend(FullscreenTerminalOperationError) |
+  SessionTransition(FullscreenSessionTransitionError)
 
 NonEmptyRestorationFailures(Vec<FullscreenRestorationStepFailure>)
 
@@ -471,11 +599,14 @@ FullscreenRunError =
 ```
 
 restoration step闭集为RawMode、Cursor、AlternateScreen、MouseCapture、FocusReporting、
-BracketedPaste、Flush、LeaseRelease；每项保存typed backend source与attempted target。
+BracketedPaste、Flush、LeaseRelease；每项保存typed backend source、attempted target、
+attempt number与owner/lease epoch。`NonEmptyRestorationFailures`拥有每个source而非string化，
+同一step多次失败也按attempt顺序保留。
 `PrimaryAndCleanup`的`source()`返回primary source，`primary()`与`cleanup_failures()`分别允许
 无损检查原layout/render类别和全部cleanup steps；`Display`只输出类别与failure count，不
-回显terminal payload。fake test必须注入primary render failure加三个cleanup failure，断言
-primary source仍可downcast、三项step/order完整且无覆盖/吞掉。
+回显terminal payload。fake test必须注入primary render failure、三个不同cleanup sources和
+一次release retry failure，断言primary仍可downcast、所有source/step/attempt/order完整、
+RecoveryRequired保持唯一owner且没有覆盖/吞掉。
 
 ### 9. Accessibility, public example and golden
 
@@ -493,25 +624,38 @@ resize/cleanup mechanics。semantic exact test调用与 `main` 相同 production
 ### 10. Reproducible SpecRail packet verification
 
 mandatory checker来自可获取的 `https://github.com/majiayu000/specrail.git`，固定commit
-`bfc60f26164af5df1ebd3b5cb79d07379fc416b7`。前置只需PATH中的Git、Python 3.9+与tar；
-checkers仅使用Python标准库，不执行`pip install`。任何reviewer从fresh checkout运行：
+`bfc60f26164af5df1ebd3b5cb79d07379fc416b7`；被审规格唯一来源是
+`https://github.com/majiayu000/rnk.git` 的PR current exact head。前置只需PATH中的Git、
+GitHub CLI、Python 3.9+与tar；checkers仅使用Python标准库，不执行`pip install`。任何reviewer
+从fresh checkout运行：
 
 ```sh
 command -v git
+command -v gh
 command -v python3
 command -v tar
 python3 -c 'import sys; assert sys.version_info >= (3, 9)'
-
 SPEC_RAIL_URL="https://github.com/majiayu000/specrail.git"
 SPEC_RAIL_COMMIT="bfc60f26164af5df1ebd3b5cb79d07379fc416b7"
+GH67_RNK_URL="https://github.com/majiayu000/rnk.git"
+case "$GH67_PR_NUMBER" in ''|*[!0-9]*) exit 64 ;; esac
+GH67_REVIEWED_RNK_HEAD="$(gh pr view "$GH67_PR_NUMBER" --repo majiayu000/rnk \
+  --json headRefOid --jq .headRefOid)"
+test "$(git rev-parse HEAD)" = "$GH67_REVIEWED_RNK_HEAD"
+test -z "$(git status --porcelain)"
 SPEC_RAIL_CHECKOUT="$(mktemp -d)"
+GH67_RNK_CHECKOUT="$(mktemp -d)"
 GH67_SPEC_MIRROR="$(mktemp -d)"
 git -C "$SPEC_RAIL_CHECKOUT" init -q
 git -C "$SPEC_RAIL_CHECKOUT" remote add origin "$SPEC_RAIL_URL"
 git -C "$SPEC_RAIL_CHECKOUT" fetch --depth=1 origin "$SPEC_RAIL_COMMIT"
 git -C "$SPEC_RAIL_CHECKOUT" checkout --detach FETCH_HEAD
 test "$(git -C "$SPEC_RAIL_CHECKOUT" rev-parse HEAD)" = "$SPEC_RAIL_COMMIT"
-
+git -C "$GH67_RNK_CHECKOUT" init -q
+git -C "$GH67_RNK_CHECKOUT" remote add origin "$GH67_RNK_URL"
+git -C "$GH67_RNK_CHECKOUT" fetch --depth=1 origin "$GH67_REVIEWED_RNK_HEAD"
+git -C "$GH67_RNK_CHECKOUT" checkout --detach FETCH_HEAD
+test "$(git -C "$GH67_RNK_CHECKOUT" rev-parse HEAD)" = "$GH67_REVIEWED_RNK_HEAD"
 test "$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
   "$SPEC_RAIL_CHECKOUT/checks/check_workflow.py")" = \
   "c5bd73060037b0e8febace0e5ee8473e17973e1ca17257ea1517a94e05fa7549"
@@ -520,19 +664,50 @@ test "$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"r
   "380169fcbad509e6bc1b6a555ae0fa469744662af7120e20e999206c226e66c3"
 
 git -C "$SPEC_RAIL_CHECKOUT" archive "$SPEC_RAIL_COMMIT" | tar -x -C "$GH67_SPEC_MIRROR"
-mkdir -p "$GH67_SPEC_MIRROR/specs/GH67"
-cp specs/GH67/product.md specs/GH67/tech.md specs/GH67/tasks.md \
-  "$GH67_SPEC_MIRROR/specs/GH67/"
+GH67_SPEC_REFS="
+specs/GH67/product.md specs/GH67/tech.md specs/GH67/tasks.md
+specs/GH57/product.md specs/GH57/tech.md specs/GH57/tasks.md
+specs/GH62/product.md specs/GH62/tech.md specs/GH62/tasks.md
+specs/GH63/product.md specs/GH63/tech.md specs/GH63/tasks.md
+specs/GH64/product.md specs/GH64/tech.md specs/GH64/tasks.md
+"
+test "$(printf '%s\n' $GH67_SPEC_REFS | sed '/^$/d' | sort -u | wc -l | tr -d ' ')" = 15
+for ref in $GH67_SPEC_REFS; do
+  test -f "$GH67_RNK_CHECKOUT/$ref"
+  mkdir -p "$GH67_SPEC_MIRROR/$(dirname "$ref")"
+  cp "$GH67_RNK_CHECKOUT/$ref" "$GH67_SPEC_MIRROR/$ref"
+  source_sha="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$GH67_RNK_CHECKOUT/$ref")"
+  mirror_sha="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$GH67_SPEC_MIRROR/$ref")"
+  test -n "$source_sha"
+  test "$source_sha" = "$mirror_sha"
+  printf '%s  %s\n' "$source_sha" "$ref"
+done
+python3 - "$GH67_RNK_CHECKOUT/specs/GH67/tech.md" <<'PY'
+import json, re, sys
+text = open(sys.argv[1], encoding="utf-8").read()
+blocks = re.findall(r"<!-- specrail-planned-changes\s*(\{.*?\})\s*-->", text, re.S)
+assert len(blocks) == 1
+refs = json.loads(blocks[0])["spec_refs"]
+expected = [
+    f"specs/GH{issue}/{name}.md"
+    for issue in (67, 57, 62, 63, 64)
+    for name in ("product", "tech", "tasks")
+]
+assert refs == expected
+PY
 python3 "$SPEC_RAIL_CHECKOUT/checks/check_workflow.py" \
   --repo "$GH67_SPEC_MIRROR" --spec-dir specs/GH67
 python3 "$SPEC_RAIL_CHECKOUT/tools/spec_depth_audit.py" \
   --repo "$GH67_SPEC_MIRROR" --spec-dir specs/GH67 --gate
 ```
 
-URL、commit与两个checksum均是本packet常量，不能由environment覆盖。checkout/fetch/checksum
-任一步失败即verification失败；不得fallback到缓存、vendored copy、machine-local固定路径或
-另一revision。`specrail_checker_checkout_is_reproducible`以隔离temporary directory执行同一
-流程并断言remote commit、checksum、workflow与depth四项全部通过。
+两个URL、checker commit与checksum均是本packet常量，不能由environment覆盖；只允许PR number
+选择被审head。checkout/fetch/ref set/existence/source-to-mirror SHA/checksum任一步失败即
+verification失败；不得fallback到SpecRail archive内的drifted GH57/GH62/GH63或缺失GH64、
+cached/vendored copy、machine-local固定路径或另一revision。
+`specrail_checker_checkout_is_reproducible`与
+`specrail_mirror_binds_all_reviewed_dependency_refs`在隔离temporary directory执行同一流程，
+逐文件断言15个ref和SHA，再断言remote commits、checker checksums、workflow与depth通过。
 
 ## Product-to-Test Mapping
 
@@ -541,12 +716,12 @@ URL、commit与两个checksum均是本packet常量，不能由environment覆盖�
 
 | Behavior invariant | Implementation area | Verification |
 | --- | --- | --- |
-| B-001 | facade/state/types/exports | `fullscreen_shell_public_surface_is_typed_and_controlled` |
-| B-002 | state constructor | `constructor_requires_complete_entries_config_projection_and_measurement` |
+| B-001 | facade/owning bundle/types/exports | `fullscreen_shell_public_surface_is_typed_and_controlled`；`owning_state_bundle_preserves_single_component_revisions` |
+| B-002 | owning bundle constructor | `constructor_requires_complete_entries_config_projection_and_measurement`；`owning_state_bundle_preserves_single_component_revisions` |
 | B-003 | layout partition | `fixed_bottom_partition_uses_exact_remaining_rows`；`gh67_fixed_bottom_resize_contract` |
 | B-004 | config/zero/undersized/error precedence | `zero_and_undersized_terminals_fail_before_callbacks` |
 | B-005 | optional status | `status_absence_uses_zero_rows_and_invents_no_data` |
-| B-006 | Composer projection/clamp | `composer_projection_clamps_without_overlap_and_keeps_draft` |
+| B-006 | cap-first Composer reproject | `composer_projection_clamps_without_overlap_and_keeps_draft`；`composer_cap_reprojects_cursor_window_before_partition` |
 | B-007 | MessageList facade only | `variable_height_transcript_uses_rows_not_item_count` |
 | B-008 | cache identity/active handles | `measurement_invalidation_and_active_handles_follow_exact_identity` |
 | B-009 | Following/nonzero shell viewport | `following_stream_growth_tracks_latest_bottom_in_supported_viewport`；`zero_and_undersized_terminals_fail_before_callbacks` |
@@ -556,102 +731,65 @@ URL、commit与两个checksum均是本packet常量，不能由environment覆盖�
 | B-013 | GH-63 typed views | `typed_multiline_block_views_render_once_in_source_order` |
 | B-014 | public example | `rnk_chat_example_uses_only_public_fullscreen_composition`；`cargo check --example rnk_chat --all-features --locked` |
 | B-015 | focus observation/revision | `public_observation_reports_focus_regions_follow_and_overlay`；`overlay_route_matrix_is_total_and_passive_focus_is_rejected` |
-| B-016 | total key/paste precedence | `focus_overlay_key_routing_is_single_target_and_deterministic`；`overlay_route_matrix_is_total_and_passive_focus_is_rejected` |
+| B-016 | total input/session domains + traversal | `focus_overlay_key_routing_is_single_target_and_deterministic`；`overlay_route_matrix_is_total_and_passive_focus_is_rejected`；`pointer_overlay_tab_order_wraps_deterministically`；`shell_events_and_session_commands_are_disjoint_and_total` |
 | B-017 | overlay state/stack/z-order | `nested_overlay_z_order_and_invalid_updates_are_atomic`；`overlay_route_matrix_is_total_and_passive_focus_is_rejected` |
 | B-018 | Escape/focus/fallthrough | `nested_overlay_escape_restores_focus_lifo_without_fallthrough`；`overlay_route_matrix_is_total_and_passive_focus_is_rejected` |
 | B-019 | committed input/paste | `paste_and_committed_ime_text_dispatch_exactly_once` |
 | B-020 | total mouse hit/fallthrough | `mouse_hit_testing_uses_committed_z_order_without_double_dispatch`；`overlay_route_matrix_is_total_and_passive_focus_is_rejected` |
 | B-021 | rapid event/revision | `rapid_resize_stream_prepend_sequence_is_deterministic` |
 | B-022 | prepared upstream/overflow atomicity | `upstream_prepare_commit_abort_gate_and_late_failure_are_atomic`；`coordinate_revision_and_upstream_failures_are_atomic` |
-| B-023 | checked frame/dual failure | `layout_render_failure_preserves_committed_state_and_frame`；`primary_failure_and_all_cleanup_failures_are_preserved` |
-| B-024 | public session/terminal paths | `fullscreen_session_public_surface_and_capability_gate_are_typed`；`partial_enter_and_suspend_resume_restore_exact_snapshot`；`fullscreen_terminal_restores_all_modes_on_every_exit_path`；`primary_failure_and_all_cleanup_failures_are_preserved` |
-| B-025 | suspend/resume/restart | `partial_enter_and_suspend_resume_restore_exact_snapshot`；`suspend_resume_and_fresh_restart_rebuild_explicit_state` |
+| B-023 | checked frame/dual failure | `layout_render_failure_preserves_committed_state_and_frame`；`primary_failure_and_all_cleanup_failures_are_preserved`；`native_snapshot_bootstrap_legacy_lease_and_poison_recovery_are_total` |
+| B-024 | snapshot evidence/shared lease/recovery | `fullscreen_session_public_surface_and_capability_gate_are_typed`；`partial_enter_and_suspend_resume_restore_exact_snapshot`；`fullscreen_terminal_restores_all_modes_on_every_exit_path`；`primary_failure_and_all_cleanup_failures_are_preserved`；`native_snapshot_bootstrap_legacy_lease_and_poison_recovery_are_total` |
+| B-025 | session dispatch/suspend/recovery/restart | `partial_enter_and_suspend_resume_restore_exact_snapshot`；`suspend_resume_and_fresh_restart_rebuild_explicit_state`；`shell_events_and_session_commands_are_disjoint_and_total`；`native_snapshot_bootstrap_legacy_lease_and_poison_recovery_are_total` |
 | B-026 | accessibility/golden | `accessibility_and_plain_ansi_semantics_do_not_depend_on_color` |
 | B-027 | bounded work/handles | `visible_frame_work_is_bounded_and_handles_are_o1_non_evictable` |
 | B-028 | security audit | `fullscreen_shell_has_no_provider_tool_or_secret_execution_surface` |
 | B-029 | dependency/capability/path gate | `dependency_completion_requires_closed_final_merged_ancestor_sets`；`upstream_prepare_commit_abort_gate_and_late_failure_are_atomic` |
-| B-030 | exact/reproducible evidence | mapping全部 tests；`gh67_current_head_coverage_contract`；`specrail_checker_checkout_is_reproducible`；full gates/CI/review |
+| B-030 | exact/reproducible evidence | mapping全部 tests；`gh67_current_head_coverage_contract`；`coverage_validate_environment_survives_full_verification`；`specrail_checker_checkout_is_reproducible`；`specrail_mirror_binds_all_reviewed_dependency_refs`；full gates/CI/review |
 
 ## Data Flow
 
-### 输入
-
-- final GH-62 immutable Conversation snapshot/`ApplyOutcome`。
-- final GH-63 borrowed typed message render path。
-- final GH-64 caller-owned Composer state与 prepared mutation/view/infallible commit capability。
-- final GH-65 caller-owned MessageList、prepared mutation/view、measurement config/closure与
-  observation。
-- terminal size、optional status、typed overlay requests和 serialized shell events。
-- public terminal backend capabilities、exact pre-entry snapshot与session config。
-
-### 处理
-
-1. expected shell revision与event target preflight。
-2. 分别prepare Composer/List tokens，live states保持未修改。
-3. 用prepared views执行完整measurement/checked partition，只从GH-65 visible slices经GH-63
-   closure生成transcript并组合Composer/status/overlay。
-4. GH-60 checked layout和staged render成功后执行无失败commit section；否则discard tokens。
-5. session写terminal；退出时逐项恢复snapshot，同时保留primary和全部cleanup failures。
-
-### 输出
-
-`InteractionOutcome<FullscreenShellPayload>`、immutable
-`FullscreenShellObservation`、一个structured frame或具体 `FullscreenShellError`；session
-边界返回`FullscreenRunError`，双失败时同时包含primary和nonempty cleanup集合。
-
-### 持久化与外部调用
-
-无 provider/network/tool/secret/storage。session仅调用terminal/runtime lifecycle。state、
-anchor、draft与overlay由进程内caller持有；fresh restart不声明跨进程恢复。
+- 输入：GH-62 immutable Conversation/`ApplyOutcome`、bundle-owned GH-64 Composer与GH-65
+  MessageList prepared APIs、GH-63 borrowed render path、terminal/status/overlay/events及
+  terminal backend/snapshot/session config。
+- 处理：session按domain唯一dispatch；shell preflight并算cap；Composer no-op/mutation token先
+  prepare再从candidate view投影，List也prepare；prepared views完成measurement/layout/render；
+  成功才infallible commit，失败discard；session退出逐项恢复并保留全部source。
+- 输出：`FullscreenDispatchOutcome`、interaction/observation/frame或typed shell/run error；
+  双失败同时拥有primary与nonempty cleanup。
+- 外部：无provider/network/tool/secret/storage；进程内持有state，fresh restart不跨进程恢复。
 
 ## 备选方案
 
-- 扩展 `fixed_bottom_layout` 加聊天状态：拒绝；通用布局helper不应拥有MessageList/focus/session。
-- 用 item-count `virtual_scroll_view`：拒绝；可变高度消息会错误定位。
-- transcript/composer/overlay各注册hook：拒绝；当前广播机制会double dispatch。
-- shell复制GH-65 height index或调用TextFlow测消息：拒绝；造成两套identity/invalidation。
-- 在GH-64/GH-65立即commit后clone/rebuild rollback：拒绝；不是O(changed)，且late failure
-  无法无损还原revision/cache/handles。
-- `Option<Element>`表达render错误：拒绝；None含义不明确且会静默丢消息。
-- layout失败显示旧frame并返回成功：拒绝；观察状态与屏幕会漂移。
-- Drop-only cleanup：拒绝；无法把restoration failure报告给调用方。
-- 将Inline/Fullscreen合并为mode flag：拒绝；native scrollback与owned frame生命周期不同。
+- 拒绝给`fixed_bottom_layout`加聊天状态、item-count虚拟滚动、三套广播hook或复制GH-65
+  height/TextFlow：分别破坏ownership、variable-row、single-dispatch或identity。
+- 拒绝上游立即commit后clone rollback、`Option<Element>`、layout失败复用旧frame：无法无损回滚
+  或会静默制造state/frame漂移。
+- 拒绝Drop-only cleanup及Inline/Fullscreen mode flag：前者丢恢复错误，后者混淆scrollback与
+  owned-frame lifecycle。
 
 ## 风险
 
-- Dependency drift：四项direct dependencies均未最终完成，当前base也没有GH-65 spec paths。
-  以path existence、closed/final merged ancestry、candidate capability与source-drift
-  reapproval阻断推测实现。
-- Correctness：region arithmetic、list/composer candidate与frame可能不同步。以单transaction、
-  checked rect和failure equality tests缓解。
-- Interaction：broadcast hooks会double dispatch。shell只注册一个top-level adapter，内部用
-  closed route table。
-- Terminal：真实terminal entry/cleanup有多步独立失败。exclusive lease、exact snapshot、
-  reverse partial-entry rollback、retryable cleanup和PTY/fake backend共同验证。
-- Performance：全conversation clone会随历史增长。只保留GH-65 O(1) handles/visible slices，
-  exact operation-count test禁止线性key/resize路径。
-- Security：paste/overlay/tool text可能含controls。committed input走GH-64，render走GH-58/
-  Output边界，shell无raw ANSI/tool execution。
+- Dependency drift：用path existence、closed/final merged ancestry、capability与source-drift
+  reapproval阻断未完成GH-62..65。
+- Correctness/interaction：单transaction、checked rect、failure equality与closed route table
+  防止candidate/frame漂移和double dispatch。
+- Terminal：exclusive lease、exact snapshot、reverse rollback、retryable recovery及PTY/fake
+  覆盖独立失败。
+- Performance/security：只用GH-65 O(1) handles/visible slices；input走GH-64、render走GH-58/
+  Output，shell无raw ANSI/tool execution。
 
 ## 测试计划
 
-- [ ] config/partition property覆盖0、minimum、max、`u16::MAX`与status absent/present。
-- [ ] MessageList shell sequences覆盖Following/Paused、append/stream/prepend/expand/collapse/
-      delete与continuous supported resize；zero/undersized在List callback前失败，zero viewport
-      只在GH-65 component suite验证。
-- [ ] Modal/Pointer/Passive × Transcript/Composer/Overlay focus × key/paste及
-      Press/Release/Drag/Move/Wheel逐格断言唯一handler、outcome、consumed与fallthrough。
-- [ ] Text/Markdown/Code/Thinking/ToolResult单/多行和plain/ANSI/accessibility golden。
-- [ ] failure injection覆盖Composer/List prepare、measure、layout、projection、render、
-      coordinate/revision overflow与prepare后late failure，证明三个live states/frame相等。
-- [ ] Linux/macOS PTY和portable fake backend覆盖public constructor、capability preflight、
-      nested lease、partial enter、normal/cancel/error/panic、suspend/resume与exact snapshot
-      restoration；primary+三个cleanup failures同时可检查。unsupported平台保留fake contract，
-      不伪称真实terminal verified。
-- [ ] 隔离目录从固定SpecRail URL/commit checkout，校验两个checker SHA-256并通过workflow/
-      depth；不存在machine-local absolute fallback。
-- [ ] exact mapping、coverage producer/validator、fmt/check/clippy/all-target tests/example、
-      fresh CI、独立review、reviewThreads和SpecRail PR gate。
+- [ ] config/partition property覆盖边界；owning bundle证明同一三state revision且无复制/unsafe。
+- [ ] MessageList/Composer覆盖全部mutation/follow/anchor/cap-first resize及zero preflight。
+- [ ] overlay/focus/key/paste/all mouse逐格single target；多Pointer traversal双向/wrap；shell与
+      session domains每variant exact once。
+- [ ] typed blocks、plain/ANSI/accessibility、prepared late-failure equality全部覆盖。
+- [ ] PTY/fake覆盖paired TTY、termios+DECRQM、pending events、所有legacy/shared lease路径、
+      entry/exit/panic/suspend/resume、Poisoned owner及primary+cleanup/retry sources。
+- [ ] fresh SpecRail/rnk exact checkouts逐个校验15 refs/SHA后跑workflow/depth及全部local/CI/
+      review/thread/gate evidence。
 
 ## 回滚方案
 

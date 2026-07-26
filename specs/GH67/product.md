@@ -45,15 +45,16 @@ frame 与 alternate-screen 生命周期，并为布局、焦点、路由、resiz
 ## Behavior Invariants
 
 1. **B-001 — Controlled public shell.** 应用必须能从公开
-   `FullscreenChatShellConfig`、`FullscreenChatShellState`、`FullscreenChatShell`、
-   `FullscreenShellEvent`、`FullscreenShellObservation` 和纯/事务 handler 构造 shell；
-   所有可变状态由 caller 串行持有，shell 不创建隐藏 global conversation、composer、
-   message-list、focus 或 overlay state。
-2. **B-002 — Complete initial inputs.** 构造必须显式接收完整初始 message entries、
-   GH-65 measurement config/callback、Composer state/projection、terminal size、初始 focus
-   与空或非空 overlay 栈。空 transcript 与 status 缺失是有效显式输入；缺失 measurement、
-   config、projection 或 active overlay body 必须 typed 失败，不能假设一行、默认 width、
-   空 element 或旧 frame。
+   `FullscreenChatShellConfig`、`FullscreenChatStateBundle`、`FullscreenChatShell`、
+   `FullscreenShellEvent`、`FullscreenSessionCommand`、`FullscreenShellObservation` 和
+   纯/事务 handler 构造 shell。bundle由caller串行拥有且精确包含同一组 shell、
+   MessageList 与 Composer live states；只提供只读accessor和受控的内部disjoint borrow，
+   禁止caller复制/重建component state、取得平行 `&mut` 或创建隐藏 global state。
+2. **B-002 — Complete initial inputs.** bundle构造必须显式接收完整初始 message entries、
+   GH-65 measurement config/callback、Composer state与projection inputs、terminal size、初始
+   focus与空或非空overlay栈，并返回实际创建的同一MessageList/Composer/shell states。空
+   transcript与status缺失是有效显式输入；缺失measurement、config、projection inputs或active
+   overlay body必须typed失败，不能假设一行、默认width、空element或旧frame。
 3. **B-003 — Exact remaining-height partition.** 每个成功 frame 的 transcript rows 必须
    精确等于 `terminal_rows - composer_rows - status_rows`；三个区域使用同一 checked
    partition，按 transcript→composer→status 顺序连续排列，无 gap、overlap 或越界。
@@ -64,10 +65,11 @@ frame 与 alternate-screen 生命周期，并为布局、焦点、路由、resiz
 5. **B-005 — Optional status semantics.** status 缺失时占用零 rows、没有 status child，也不
    伪造 model、连接、token 或成功状态；存在时使用调用方提供的非零 rows/structured element，
    始终位于 Composer 下方且其语义可由 public observation/accessibility fallback 读取。
-6. **B-006 — Composer auto-grow without overlap.** Composer rows 只来自 exact-current
-   GH-64 projection，并 clamp 到 validated min/max 及“至少保留 min transcript/status”的
-   当前上限；clamp 结果必须公开可观察。resize/reflow 后 cursor/selection/draft identity
-   由同一 Composer projection 保持，shell 不按字符串或 logical line 重算高度。
+6. **B-006 — Composer auto-grow without overlap.** shell必须先由terminal/config/status用
+   checked arithmetic计算 `composer_cap`，再把当前width与该cap作为GH-64 projection input，
+   生成包含cursor的exact-current visible window；`composer_rows`只能取该新projection高度并
+   clamp到validated min与cap。禁止先用旧/较大cap投影再裁rect。clamp、visible range与cursor
+   必须公开可观察；shell不按字符串或logical line重算高度。
 7. **B-007 — Row-based transcript only.** shell 必须以 terminal row 为 viewport、offset、
    slice 和 anchor 单位，直接使用唯一稳定 GH-65 MessageList facade/render closure；不得调用
    `virtual_scroll_view`、`.skip().take()`、message count、局部 prefix sum 或 duplicate height
@@ -88,10 +90,10 @@ frame 与 alternate-screen 生命周期，并为布局、焦点、路由、resiz
 11. **B-011 — Prepend anchor.** prepend 任意数量/高度历史后，原 visible top 的 stable
     message identity 与 intra-message row 保持；短内容/高度缩短产生 GH-65 明确 clamp flag，
     不把同一个全局 row offset 当成锚点。
-12. **B-012 — Resize and reflow.** 每次 width/height resize 都在同一 candidate frame 重建
-    Composer projection、MessageList measurement config、region partition 与 visible slices；
-    成功后 focus、draft、selection、anchor/follow 和 overlay 栈保持合同，旧 width projection
-    不得被发布成新 frame。
+12. **B-012 — Resize and reflow.** 每次 width/height resize 都在同一 candidate frame先重算
+    `composer_cap`，再以该cap重建cursor-containing Composer projection、MessageList
+    measurement config、region partition与visible slices；成功后focus、draft、selection、
+    anchor/follow和overlay栈保持合同，旧width或旧cap projection不得被发布成新frame。
 13. **B-013 — Typed message content.** transcript render closure 必须通过最终 GH-63
     `ChatMessageView` 公开 borrowed path 保留 source order，并覆盖单/多行 Text、Markdown、
     Code、Thinking 与 ToolResult；shell 不 wildcard-ignore block、不 clone whole payload、
@@ -106,12 +108,12 @@ frame 与 alternate-screen 生命周期，并为布局、焦点、路由、resiz
     恰好推进一次 checked shell revision。public observation 必须同时报告 target、scope、
     区域 rect、follow/new-content、Composer clamp 与完整 top overlay state，供测试/辅助技术
     观察，而非仅改变边框颜色。
-16. **B-016 — Total deterministic key/paste precedence.** Resize/shutdown 等 session event
-    先于普通输入；top Modal 对所有 key/paste 有唯一捕获结果，其他情况下 Escape、
-    Tab/BackTab、Transcript、Composer、focused Pointer overlay 与不可达 Passive focus
-    的每个组合都有闭合结果。一次事件最多调用一个 shell/component/overlay handler一次；
-    目标 handler 返回 `Ignored` 时是否 consumed/blocked 也由 overlay kind 固定，不能继续
-    猜测 fallthrough 或依赖 hook 注册顺序。
+16. **B-016 — Total deterministic key/paste precedence.** shell event与session command是
+    disjoint closed domains；唯一session dispatch先处理Suspend/Resume/Shutdown，shell handler
+    永远收不到它们。top Modal对所有key/paste有唯一捕获结果；无Modal时Tab的focus ring固定为
+    Transcript→Composer→focusable Pointer overlays bottom→top，BackTab严格反向；从current后
+    一项开始并在两端wrap，Passive/不可focus/closed ID跳过或typed失败。一次输入最多调用一个
+    shell/component/overlay handler一次，不依赖hook注册顺序。
 17. **B-017 — Nested overlay state and z-order.** overlay 以 validated stable ID、closed
     `OverlayKind`（Modal/Pointer/Passive）、focusability、checked rect/body、handler capability
     和进入前 focus 构成 LIFO stack；base frame 先绘制，overlay 按栈顺序绘制且 topmost 最后、
@@ -152,20 +154,25 @@ frame 与 alternate-screen 生命周期，并为布局、焦点、路由、resiz
     top-level结果必须同时保留 primary typed source和全部 cleanup step failures，不能用后者
     覆盖前者或只保留第一项。
 24. **B-024 — Concrete fullscreen session and restoration.** 应用必须能通过公开 session
-    config、backend/capability、pre-entry snapshot、constructor、run/render、shutdown API进入
-    fullscreen；缺失 snapshot、required capability或已有 active lease在任何terminal mutation
-    前 typed失败。normal exit、cancel、typed shell/render failure 与 panic/unwind 四条路径都
-    必须恢复 snapshot中的 screen、raw mode、cursor visibility、alternate screen、mouse
-    capture、focus reporting 与 bracketed paste。partial enter反向回滚全部已完成step；
-    cleanup尝试全部step并聚合失败，显式路径返回完整结果，panic路径报告后继续unwind，
-    Drop只重试未完成恢复且不声称成功。
-25. **B-025 — Suspend, resume, restart and capability boundary.** suspend停止事件 intake并
-    恢复当前 pre-entry snapshot；只有全部恢复成功才进入 Suspended。resume重新获取 exclusive
-    lease、读取/验证新 snapshot、按 staged enter进入 fullscreen并强制从显式 state完整重绘；
-    partial resume失败反向恢复到该新 snapshot并保持 Suspended。fresh session只从constructor
-    inputs重建，不继承旧 overlay/focus/frame/measurement handle。可选 mouse/focus/paste
-    capability只能按validated Require/Disable policy显式启用或保持不变；未知/不确定状态不得
-    宣称 Active、Suspended或restored成功。
+    config、backend/capability、可验证snapshot evidence、constructor、dispatch/run/render、
+    shutdown/recovery API进入fullscreen。native首次snapshot必须来自配对controlling TTY的
+    termios及成功关联的DECRQM replies，精确区分47/1047/1049 screen、25 cursor、
+    1000/1002/1003 tracking、1015 RXVT、1006 SGR、1004 focus与2004 paste；每个mode逐bit
+    保存/恢复；非规范reply、timeout/
+    mismatch在任何mutation前typed失败。现有public `Terminal`/`App`、terminal controller与
+    panic recovery也必须在首次mutation前取得同一process-wide lease。partial enter反向回滚；
+    若任一restore/flush/
+    release失败，唯一recovery owner与Poisoned registry必须保留backend、lease、snapshot及全部
+    unfinished steps，直到显式retry全部成功；snapshot读取前失败则用`None` snapshot的
+    lease-only owner重试release，禁止丢error后让第二session进入。
+25. **B-025 — Suspend, resume, restart and capability boundary.** suspend停止事件intake并
+    恢复当前pre-entry snapshot；restore+flush+release全部成功才进入Suspended。resume重新获取
+    exclusive lease、生成/验证新snapshot并读取新size，以bundle prepared candidate执行cap-first
+    synthetic Resize/reflow，再按staged enter/render/commit；不得重绘suspend前旧frame。
+    若rollback/release完整则保持Suspended，任一步不完整则进入唯一
+    `RecoveryRequired`并继续拥有lease/poison guard，不能谎称Suspended。Shutdown、panic与Drop
+    使用同一unfinished-step表；Drop失败把所有权转移到process registry的typed poisoned record，
+    后续只能由显式recovery claim接管。fresh session只从bundle constructor inputs重建。
 26. **B-026 — Accessibility and non-color semantics.** transcript 暴露 Viewport、Composer 暴露
     TextArea、status 暴露 Status、modal overlay 暴露 Dialog semantics；label/value/description、
     focus、paused/new-content、submitting/failed/cancelled 必须能通过 `accessible_text()` 或
@@ -191,9 +198,13 @@ frame 与 alternate-screen 生命周期，并为布局、焦点、路由、resiz
     plain/ANSI golden不在测试中更新；changed executable coverage ≥80%，committed
     `gh57-critical-paths-v1` 的 exact `file+name+command` 集合逐项 100%，producer/validator
     可从 raw coverage、diff 和 ledger 确定性重算。SpecRail packet验证必须声明可获取的
-    repository URL、immutable commit、checkout步骤与checker checksum，fresh环境不得依赖
-    coordinator机器的绝对路径。fresh fmt/check/clippy/all-target tests、example、PTY、CI、
-    独立 review、reviewThreads 与 SpecRail PR gate 缺一不可。
+    repository URL、immutable commit、checkout步骤与checker checksum；mirror必须从exact
+    reviewed rnk head复制manifest声明的GH57/GH62/GH63/GH64/GH67全部15个refs，并逐文件断言
+    existence与source/mirror SHA相等，不能使用SpecRail仓库自带的drifted/missing copies。
+    coverage validate后必须export validate mode、raw/artifact absolute paths与全部immutable
+    variables贯穿mapped/ledger/full workspace tests，窗口末尾重新核对head/base/merge-base/
+    clean worktree。fresh fmt/check/clippy/all-target tests、example、PTY、CI、独立review、
+    reviewThreads与SpecRail PR gate缺一不可。
 
 ## 验收标准
 
@@ -204,11 +215,12 @@ frame 与 alternate-screen 生命周期，并为布局、焦点、路由、resiz
       undersized resize在调用 MessageList前typed失败。
 - [ ] Text/Markdown/Code/Thinking/ToolResult 单/多行 render、Composer committed text/paste、
       transcript/composer/overlay focus/key/mouse 冲突均 exact-once。
-- [ ] upstream prepare后任一late layout/render failure前后 List/Composer/shell/frame相等；
-      primary+cleanup双失败证据完整；normal/cancel/error/panic、partial enter与
-      suspend/resume都恢复 exact snapshot。
+- [ ] owning bundle中的List/Composer/shell revisions始终来自同一constructor与transaction；
+      upstream prepare后任一late layout/render failure前后bundle/frame相等。
+- [ ] primary+多个cleanup source完整；normal/cancel/error/panic、partial enter与
+      suspend/resume要么恢复exact snapshot并释放lease，要么由唯一Poisoned recovery owner继续持有。
 - [ ] Modal/Pointer/Passive × focus × key/paste/mouse/fallthrough矩阵逐格只有一个目标与
-      明确 outcome。
+      明确outcome；多Pointer的Tab/BackTab方向、stack顺序与两端wrap逐项确定。
 - [ ] `rnk_chat` 只使用 public shell；plain/ANSI golden 语义等价且 accessibility fallback
       不依赖颜色。
 - [ ] dependency final merged ancestry、fresh full tests、current-head coverage、CI/review/gate
