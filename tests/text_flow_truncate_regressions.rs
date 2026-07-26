@@ -49,21 +49,42 @@ fn middle_truncation_measures_tab_suffix_at_its_eventual_column() {
 
 #[test]
 fn tab_ellipsis_is_measured_after_the_retained_prefix() {
-    for wrap in [TextWrap::Truncate, TextWrap::TruncateEnd] {
-        let flow = build_truncated_flow("abcdx", 4, wrap, 4, "\t");
-        assert_eq!(flow.rows(), &["abc ".to_string()]);
-        assert_eq!(flow.logical_rows()[0].width, 4);
+    let cases = [
+        ("abcdx", 4, 4, TextWrap::Truncate, "abc ", 3, 1),
+        ("abcdx", 4, 4, TextWrap::TruncateEnd, "abc ", 3, 1),
+        ("abcdx", 4, 4, TextWrap::TruncateStart, "    ", 0, 4),
+        ("abcdx", 4, 4, TextWrap::TruncateMiddle, "abc ", 3, 1),
+        ("abcdxy", 5, 4, TextWrap::TruncateStart, "    y", 0, 4),
+        ("abcdxy", 5, 4, TextWrap::TruncateMiddle, "abc y", 3, 1),
+        ("abcdefghx", 8, 8, TextWrap::TruncateEnd, "abcdefg ", 7, 1),
+        ("abcdefghx", 8, 8, TextWrap::TruncateStart, "        ", 0, 8),
+        (
+            "abcdefghxy",
+            9,
+            8,
+            TextWrap::TruncateMiddle,
+            "abcdefg y",
+            7,
+            1,
+        ),
+    ];
+
+    for (source, width, tab_stop, wrap, expected, ellipsis_column, ellipsis_width) in cases {
+        let flow = build_truncated_flow(source, width, wrap, tab_stop, "\t");
+        assert_eq!(flow.rows(), &[expected.to_string()]);
+        assert!(flow.logical_rows()[0].width <= width);
+        let source_tokens = source.chars().count();
         let synthetic = flow.logical_rows()[0]
             .runs
-            .last()
+            .iter()
+            .find(|run| run.token_index >= source_tokens)
             .expect("tab ellipsis must be placed");
-        assert_eq!((synthetic.column, synthetic.width), (3, 1));
-        assert_source_dispositions_are_total(&flow, 5);
+        assert_eq!(
+            (synthetic.column, synthetic.width),
+            (ellipsis_column, ellipsis_width)
+        );
+        assert_source_dispositions_are_total(&flow, source_tokens);
     }
-
-    let wider_tab = build_truncated_flow("abcdefghx", 8, TextWrap::TruncateEnd, 8, "\t");
-    assert_eq!(wider_tab.rows(), &["abcdefg ".to_string()]);
-    assert_eq!(wider_tab.logical_rows()[0].width, 8);
 }
 
 fn interrupt_calls_for(size: usize, wrap: TextWrap) -> usize {

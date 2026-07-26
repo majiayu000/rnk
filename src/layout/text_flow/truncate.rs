@@ -197,12 +197,14 @@ fn truncate_middle(
     let available = options.max_width.saturating_sub(ellipsis_at_zero);
     let left_budget = available / 2;
     let right_budget = available - left_budget;
+    let left_ellipsis_limit = ellipsis_at_zero
+        .saturating_add(left_budget)
+        .min(options.max_width);
     let (left_end, left_column) = prefix_within(
         tokens,
         range.clone(),
-        left_budget,
         ellipsis_metrics,
-        options.max_width,
+        left_ellipsis_limit,
         options.tab_stop,
         interrupted,
     )?;
@@ -275,9 +277,8 @@ fn minimum_suffix(
 fn prefix_within(
     tokens: &[TextFlowToken],
     range: Range<usize>,
-    budget: usize,
     suffix: SequenceMetrics,
-    column_limit: usize,
+    suffix_column_limit: usize,
     tab_stop: usize,
     interrupted: &mut impl FnMut() -> bool,
 ) -> Result<(usize, usize), TextFlowError> {
@@ -288,7 +289,7 @@ fn prefix_within(
             return Err(TextFlowError::Interrupted);
         }
         let next = token_end_column(&tokens[index], column, tab_stop)?;
-        if next > budget || suffix.final_column(next, tab_stop)? > column_limit {
+        if suffix.final_column(next, tab_stop)? > suffix_column_limit {
             break;
         }
         keep = index + 1;
