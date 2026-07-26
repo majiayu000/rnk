@@ -30,8 +30,35 @@ cargo check --workspace --all-targets --all-features --locked
 ```
 
 <!-- gh57-critical-paths-v1
-{"version":1,"issue":66,"critical_paths":[{"file":"src/components/chat/inline/tests.rs","name":"gh66_scrollback_lifecycle_contract"},{"file":"src/components/chat/inline/tests.rs","name":"stable_commit_identity_conflict_is_atomic"},{"file":"src/components/chat/inline/tests.rs","name":"native_confirmed_dedup_is_process_local"},{"file":"src/components/chat/inline/tests.rs","name":"partial_write_flush_broken_pipe_outcomes_are_typed"},{"file":"src/components/chat/inline/tests.rs","name":"duplicate_terminal_render_and_delta_are_single_effect"},{"file":"src/components/chat/inline/tests.rs","name":"unknown_blocks_order_and_never_auto_retries"},{"file":"src/components/chat/inline/tests.rs","name":"revision_overflow_and_reentrancy_are_atomic"},{"file":"src/components/chat/inline/tests.rs","name":"sanitizer_rejects_terminal_control_injection"},{"file":"src/components/chat/inline/tests.rs","name":"shutdown_state_machine_is_ordered_and_idempotent"},{"file":"tests/inline_chat_shell.rs","name":"durable_sink_cross_retry_and_restart_reconstruction_is_exactly_once"},{"file":"tests/inline_chat_shell.rs","name":"composer_focus_cancel_and_failure_outcomes_remain_typed"},{"file":"tests/inline_chat_shell.rs","name":"native_restart_never_claims_unknown_terminal_effect"},{"file":"tests/inline_chat_shell.rs","name":"live_resize_never_rewrites_confirmed_scrollback"},{"file":"tests/inline_chat_shell_pty.rs","name":"inline_pty_restores_terminal_on_normal_cancel_failure_and_panic"},{"file":"tests/prelude_surfaces.rs","name":"inline_chat_shell_public_surface_executes"},{"file":"tests/prelude_surfaces.rs","name":"claude_example_uses_public_inline_shell_contract"},{"file":"tests/inline_chat_shell.rs","name":"gh66_current_head_coverage_contract"}]}
+{"version":1,"issue":66,"critical_paths":[{"file":"src/components/chat/inline/tests.rs","name":"stable_commit_identity_conflict_is_atomic","verification_command":"cargo test --workspace --lib --locked components::chat::inline::tests::stable_commit_identity_conflict_is_atomic -- --exact"},{"file":"src/components/chat/inline/tests.rs","name":"sanitizer_rejects_terminal_control_injection","verification_command":"cargo test --workspace --lib --locked components::chat::inline::tests::sanitizer_rejects_terminal_control_injection -- --exact"},{"file":"src/components/chat/inline/tests.rs","name":"empty_state_and_empty_commit_do_not_invent_data","verification_command":"cargo test --workspace --lib --locked components::chat::inline::tests::empty_state_and_empty_commit_do_not_invent_data -- --exact"},{"file":"tests/inline_chat_shell.rs","name":"closed_scrollback_outcomes_are_exhaustive","verification_command":"cargo test --test inline_chat_shell --locked closed_scrollback_outcomes_are_exhaustive -- --exact"},{"file":"src/components/chat/inline/tests.rs","name":"native_confirmed_dedup_is_process_local","verification_command":"cargo test --workspace --lib --locked components::chat::inline::tests::native_confirmed_dedup_is_process_local -- --exact"},{"file":"src/components/chat/inline/tests.rs","name":"partial_write_flush_broken_pipe_outcomes_are_typed","verification_command":"cargo test --workspace --lib --locked components::chat::inline::tests::partial_write_flush_broken_pipe_outcomes_are_typed -- --exact"},{"file":"src/components/chat/inline/tests.rs","name":"shutdown_state_machine_is_ordered_and_idempotent","verification_command":"cargo test --workspace --lib --locked components::chat::inline::tests::shutdown_state_machine_is_ordered_and_idempotent -- --exact"},{"file":"src/components/chat/inline/tests.rs","name":"gh66_scrollback_lifecycle_contract","verification_command":"cargo test --workspace --lib --locked components::chat::inline::tests::gh66_scrollback_lifecycle_contract -- --exact"},{"file":"src/components/chat/inline/tests.rs","name":"duplicate_terminal_render_and_delta_are_single_effect","verification_command":"cargo test --workspace --lib --locked components::chat::inline::tests::duplicate_terminal_render_and_delta_are_single_effect -- --exact"},{"file":"src/components/chat/inline/tests.rs","name":"unknown_blocks_order_and_never_auto_retries","verification_command":"cargo test --workspace --lib --locked components::chat::inline::tests::unknown_blocks_order_and_never_auto_retries -- --exact"},{"file":"src/components/chat/inline/tests.rs","name":"revision_overflow_and_reentrancy_are_atomic","verification_command":"cargo test --workspace --lib --locked components::chat::inline::tests::revision_overflow_and_reentrancy_are_atomic -- --exact"},{"file":"tests/inline_chat_shell.rs","name":"not_committed_retry_is_explicit_and_unknown_retry_is_rejected","verification_command":"cargo test --test inline_chat_shell --locked not_committed_retry_is_explicit_and_unknown_retry_is_rejected -- --exact"},{"file":"tests/inline_chat_shell.rs","name":"live_resize_never_rewrites_confirmed_scrollback","verification_command":"cargo test --test inline_chat_shell --locked live_resize_never_rewrites_confirmed_scrollback -- --exact"},{"file":"tests/inline_chat_shell.rs","name":"durable_sink_cross_retry_and_restart_reconstruction_is_exactly_once","verification_command":"cargo test --test inline_chat_shell --locked durable_sink_cross_retry_and_restart_reconstruction_is_exactly_once -- --exact"},{"file":"tests/inline_chat_shell.rs","name":"public_observation_is_not_a_restore_snapshot","verification_command":"cargo test --test inline_chat_shell --locked public_observation_is_not_a_restore_snapshot -- --exact"},{"file":"tests/inline_chat_shell.rs","name":"composer_focus_cancel_and_failure_outcomes_remain_typed","verification_command":"cargo test --test inline_chat_shell --locked composer_focus_cancel_and_failure_outcomes_remain_typed -- --exact"},{"file":"tests/inline_chat_shell.rs","name":"native_restart_never_claims_unknown_terminal_effect","verification_command":"cargo test --test inline_chat_shell --locked native_restart_never_claims_unknown_terminal_effect -- --exact"},{"file":"tests/prelude_surfaces.rs","name":"inline_chat_shell_public_surface_executes","verification_command":"cargo test --test prelude_surfaces --locked inline_chat_shell_public_surface_executes -- --exact"},{"file":"tests/prelude_surfaces.rs","name":"claude_example_uses_public_inline_shell_contract","verification_command":"cargo test --test prelude_surfaces --locked claude_example_uses_public_inline_shell_contract -- --exact"},{"file":"tests/prelude_surfaces.rs","name":"legacy_println_and_message_surfaces_remain_compatible","verification_command":"cargo test --test prelude_surfaces --locked legacy_println_and_message_surfaces_remain_compatible -- --exact"},{"file":"tests/inline_chat_shell_pty.rs","name":"inline_pty_restores_terminal_on_normal_cancel_failure_and_panic","verification_command":"cargo test --test inline_chat_shell_pty --locked inline_pty_restores_terminal_on_normal_cancel_failure_and_panic -- --exact"},{"file":"tests/inline_chat_shell.rs","name":"gh66_current_head_coverage_contract","verification_command":"GH66_COVERAGE_MODE=fixture cargo test --test inline_chat_shell --locked gh66_current_head_coverage_contract -- --exact"}]}
 -->
+
+## Reproducible Spec and Ledger Gates
+
+SpecRail source固定为`https://github.com/majiayu000/specrail.git` commit
+`23caa70e76904eaa82323208d645d5781a365649`。fresh verifier clone/checkout后必须先断言
+`checks/check_workflow.py` SHA-256为
+`8c791545f78d93649385ef0f9780454a7d4552f8da06da1fdee0de9cb8030a7e`，再把当前exact-head
+`specs/GH66`三文件复制到该checkout的同路径并运行：
+
+```sh
+git clone https://github.com/majiayu000/specrail.git "$GH66_SPECRAIL_CHECKOUT"
+git -C "$GH66_SPECRAIL_CHECKOUT" checkout --detach \
+  23caa70e76904eaa82323208d645d5781a365649
+test "$(shasum -a 256 "$GH66_SPECRAIL_CHECKOUT/checks/check_workflow.py" | awk '{print $1}')" = \
+  8c791545f78d93649385ef0f9780454a7d4552f8da06da1fdee0de9cb8030a7e
+mkdir -p "$GH66_SPECRAIL_CHECKOUT/specs/GH66"
+cp specs/GH66/{product.md,tech.md,tasks.md} "$GH66_SPECRAIL_CHECKOUT/specs/GH66/"
+python3 "$GH66_SPECRAIL_CHECKOUT/checks/check_workflow.py" \
+  --repo "$GH66_SPECRAIL_CHECKOUT" --spec-dir specs/GH66
+```
+
+静态ledger gate要求唯一marker、22项、row keys恰为
+`file/name/verification_command`、repo-relative file、unique pair/command、每条含
+`-- --exact`；lib/integration/PTY target必须与file/name机械一致，coverage项唯一带
+`GH66_COVERAGE_MODE=fixture`。解析T2–T7 literal exact tests后必须与ledger 22/22严格相等。
+implementation时每项先用`--list --exact --include-ignored`证明matched=1，再执行原命令并要求
+`1 passed; 0 failed; 0 ignored`。
 
 ## Implementation Tasks
 
@@ -54,17 +81,17 @@ cargo check --workspace --all-targets --all-features --locked
   - Handoff: 保存fresh JSON、exact base/head和merged public API inventory；停止写四个paths，
     将`inline.rs`/`inline/tests.rs`/integration scaffold明确交给T2。门禁失败则blocked且零repo edit。
 
-- [ ] `SP66-T2` 实现 concrete commit types、safe content identity、closed outcome/error和ANSI sanitizer。Covers: B-002, B-004, B-006, B-017, B-018, B-024 | Owner: `scrollback-contract-owner` | Done when: sync sink/types/error/source/sanitizer合同完整且exact tests通过 | Verify: T2四个exact tests与公共checkpoint
-  - Covers: B-002, B-004, B-006, B-017, B-018, B-024。
+- [ ] `SP66-T2` 实现 concrete commit types、namespaced identity、stable receipt/attempt outcome、closed error和ANSI sanitizer。Covers: B-002, B-004, B-005, B-006, B-017, B-018, B-024 | Owner: `scrollback-contract-owner` | Done when: sync sink/types/error/source/sanitizer合同完整且exact tests通过 | Verify: T2四个exact tests与公共checkpoint
+  - Covers: B-002, B-004, B-005, B-006, B-017, B-018, B-024。
   - Dependencies: SP66-T1 handoff。
   - File ownership: 独占新增 `src/components/chat/inline/types.rs`、
     `src/components/chat/inline/sanitize.rs`、`src/components/chat/inline/sink.rs`；接管
     `src/components/chat/inline.rs`、`src/components/chat/inline/tests.rs`、
     `tests/inline_chat_shell.rs`。
-  - Done when: private-field validated types和sync `ScrollbackSink`签名与tech完全一致；
-    exact `Arc<[u8]>` identity无deep-copy；closed outcomes/errors可crate外穷举并保留
-    `io::Error::source`；sanitizer只接受printable Unicode/LF/library SGR并拒绝所有其他控制；
-    empty/only-SGR/only-whitespace不生成commit。
+  - Done when: validated namespace+ID、canonical LF content、cancellation/control request、
+    stable `Arc` receipt handle与per-attempt disposition完全一致；双namespace同message不碰撞；
+    closed outcomes/errors可crate外穷举并保留`io::Error::source`；sanitizer只接受printable
+    Unicode/LF/library SGR，transport reset规则可观察，empty/only-SGR/whitespace不commit。
   - Verify:
     `cargo test --workspace --lib --locked components::chat::inline::tests::stable_commit_identity_conflict_is_atomic -- --exact`；
     `cargo test --workspace --lib --locked components::chat::inline::tests::sanitizer_rejects_terminal_control_injection -- --exact`；
@@ -74,25 +101,26 @@ cargo check --workspace --all-targets --all-features --locked
   - Handoff: 保存public inventory、error-source/exhaustive compile output和sanitizer负例；
     停止写shared paths，把`sink.rs`/`inline/tests.rs`交T3，`inline.rs`/integration scaffold交T4。
 
-- [ ] `SP66-T3` 实现 native staged write、process-local confirmed ledger和`NativeInlineSession`显式恢复。Covers: B-005, B-006, B-007, B-008, B-018, B-021, B-022, B-025 | Owner: `native-terminal-owner` | Done when: fault matrix、dedupe、bounded ledger和显式shutdown合同完整 | Verify: T3三个exact tests、file-size gate与公共checkpoint
-  - Covers: B-005, B-006, B-007, B-008, B-018, B-021, B-022, B-025。
+- [ ] `SP66-T3` 实现 native staged transport、process-local ledger、entry lease/rollback与session恢复原语。Covers: B-005, B-006, B-007, B-008, B-018, B-022, B-025 | Owner: `native-terminal-owner` | Done when: fault matrix、dedupe、bounded ledger、exclusive lease和entry rollback完整 | Verify: T3两个exact tests、file-size gate与公共checkpoint
+  - Covers: B-005, B-006, B-007, B-008, B-018, B-022, B-025。
   - Dependencies: SP66-T2 handoff。
   - File ownership: 独占 `src/renderer/terminal.rs`（只增加child module/export且保持<800）、
     新增 `src/renderer/terminal/inline_scrollback.rs`、
     `src/components/chat/inline/session.rs`；从T2接管
     `src/components/chat/inline/sink.rs`、`src/components/chat/inline/tests.rs`。
-  - Done when: generic fault-injection helper区分zero/short/write-zero/delimiter/flush/broken
-    pipe/cancel stages；ledger preflight后才write、flush后才confirm，满容量不逐出；duplicate
-    same ID/identity不二次write；session只进入inline、sink/render borrow互斥；
-    explicit shutdown逐项尝试且报告，repeat shutdown no-op，Drop不声称成功。
+  - Done when: generic helper按canonical offset/transport offset区分zero/short/write-zero、
+    LF→CRLF中断、reset/delimiter/flush/broken pipe和由另一线程触发的每个cancel sample；
+    flush后才confirm，duplicate共享original receipt但attempt disposition不同；entry在首次
+    mutation前取得process-wide lease，逐stage acquire/逆序rollback并聚合primary+cleanup；
+    nested/cross-thread entry拒绝，rollback成功才Free；entry/Drop/panic恢复失败将lease标
+    Poisoned，只有typed recovery验证成功才Free；session只inline且sink/render borrow互斥。
   - Verify:
     `cargo test --workspace --lib --locked components::chat::inline::tests::native_confirmed_dedup_is_process_local -- --exact`；
     `cargo test --workspace --lib --locked components::chat::inline::tests::partial_write_flush_broken_pipe_outcomes_are_typed -- --exact`；
-    `cargo test --workspace --lib --locked components::chat::inline::tests::shutdown_state_machine_is_ordered_and_idempotent -- --exact`；
     `test "$(wc -l < src/renderer/terminal.rs)" -lt 800`；
     公共checkpoint命令。
-  - Handoff: 保存fault matrix、accepted-byte counters、shutdown report和file-size output；
-    停止写全部paths，将`inline/tests.rs`交T4，sink/session/renderer paths封存只读。
+  - Handoff: 保存fault/transport matrix、cancel barriers、receipt identity、entry rollback与lease
+    contention evidence；停止写后将`inline/tests.rs`交T4，session/sink paths在T5前冻结只读。
 
 - [ ] `SP66-T4` 实现 shell staging、single-in-flight、confirmed-only removal、order/retry/overflow状态机。Covers: B-002, B-003, B-007, B-009, B-010, B-011, B-012, B-017, B-019, B-020, B-026 | Owner: `inline-lifecycle-owner` | Done when: terminal staging、dedupe、三态、顺序、retry与checked transition合同完整 | Verify: T4六个exact tests与公共checkpoint
   - Covers: B-002, B-003, B-007, B-009, B-010, B-011, B-012, B-017, B-019, B-020, B-026。
@@ -100,11 +128,11 @@ cargo check --workspace --all-targets --all-features --locked
   - File ownership: 独占新增 `src/components/chat/inline/state.rs`；从T1/T3接管
     `src/components/chat/inline.rs`、`src/components/chat/inline/tests.rs`、
     `tests/inline_chat_shell.rs`；上游model/view和native paths只读。
-  - Done when: terminal-only candidate按conversation source order冻结exact projection；
-    duplicate terminal/render/delta为no-op；Committed receipt exact match后才remove；
-    NotCommitted/Unknown/live observations保留；Unknown阻断后续且普通retry拒绝；
-    explicit NotCommitted retry可用；capacity/revision/counter/content conflict/reentrancy/
-    shutdown-after-call均完整原子；resize只重投影live。
+  - Done when: O(n) `bootstrap`只调用一次，后续`synchronize`只消费fresh GH62
+    affected IDs且operation counter不访问未受影响history；每个ID先查frozen candidate再projection；
+    duplicate为no-op，Committed exact match后才remove；NotCommitted/Unknown保留，Unknown普通retry
+    拒绝；typed TreatAsCommitted/Abandon须durable audit先成功；safe commit control使custom sink
+    可达ReentrantCommit；capacity/revision/conflict均原子，resize不改变staged bytes。
   - Verify:
     `cargo test --workspace --lib --locked components::chat::inline::tests::gh66_scrollback_lifecycle_contract -- --exact`；
     `cargo test --workspace --lib --locked components::chat::inline::tests::duplicate_terminal_render_and_delta_are_single_effect -- --exact`；
@@ -113,26 +141,27 @@ cargo check --workspace --all-targets --all-features --locked
     `cargo test --test inline_chat_shell --locked not_committed_retry_is_explicit_and_unknown_retry_is_rejected -- --exact`；
     `cargo test --test inline_chat_shell --locked live_resize_never_rewrites_confirmed_scrollback -- --exact`；
     公共checkpoint命令。
-  - Handoff: 保存transition table、no-op revision和exact outputs；停止写shared paths，
-    将`state.rs`/`inline.rs`/integration test交T5，lib tests path封存。
+  - Handoff: 保存bootstrap/delta counters、frozen lookup顺序、manual audit与reentry evidence；
+    将`state.rs`/`inline.rs`/integration和lib tests交T5。
 
-- [ ] `SP66-T5` 实现 durable lookup/restart reconstruction、public observation和composer/focus typed routing。Covers: B-012, B-013, B-014, B-015, B-016, B-019, B-025, B-026 | Owner: `inline-recovery-interaction-owner` | Done when: durable/restart/observation/composer/focus合同完整且无clone restore | Verify: T5四个exact tests与公共checkpoint
-  - Covers: B-012, B-013, B-014, B-015, B-016, B-019, B-025, B-026。
+- [ ] `SP66-T5` 实现 durable recovery、single coordinator/retryable shutdown、observation和composer/focus。Covers: B-011, B-012, B-013, B-014, B-015, B-016, B-019, B-021, B-025, B-026 | Owner: `inline-recovery-interaction-owner` | Done when: recovery/coordinator/shutdown/interaction合同完整 | Verify: T5五个exact tests与公共checkpoint
+  - Covers: B-011, B-012, B-013, B-014, B-015, B-016, B-019, B-021, B-025, B-026。
   - Dependencies: SP66-T4 handoff与最终merged GH64 composer API。
   - File ownership: 从T4接管 `src/components/chat/inline/state.rs`、
-    `src/components/chat/inline.rs`、`tests/inline_chat_shell.rs`；从T3只接管
-    `src/components/chat/inline/sink.rs`以增加`DurableScrollbackSink`/lookup types；
-    其他paths只读。
-  - Done when: durable concurrent same-ID只有一次effect并返回同receipt；restart只从
-    GH62 validated snapshot重建conversation后逐ID lookup；Committed才confirmed，
-    NotCommitted仍live，lookup Unknown unresolved/order-blocked，identity conflict fail；
-    observation有完整accessors但无serde/restore入口；composer/focus/mode/cancel/exit保持
-    shared typed outcome且failure ack不清draft；native restart不伪造history。
+    `src/components/chat/inline.rs`、`src/components/chat/inline/tests.rs`、
+    `tests/inline_chat_shell.rs`；从T3接管`src/components/chat/inline/{sink,session}.rs`。
+  - Done when: durable record按namespace+ID先lookup并返回stored bytes/width/theme/receipt，
+    concurrent attempt共享receipt但disposition独立；Fresh/RestoredDurable/
+    RestoredAfterUncleanNativeExit构造可区分，native restored初始化Unknown；observation不可restore；
+    coordinator唯一拥有shell/session/event/lease，shutdown顺序固定，partial failures保留lease并
+    只重试unfinished stages，全部成功后才AlreadyShutdown；Poisoned lease recovery fail closed；
+    composer/focus typed且draft安全。
   - Verify:
     `cargo test --test inline_chat_shell --locked durable_sink_cross_retry_and_restart_reconstruction_is_exactly_once -- --exact`；
     `cargo test --test inline_chat_shell --locked public_observation_is_not_a_restore_snapshot -- --exact`；
     `cargo test --test inline_chat_shell --locked composer_focus_cancel_and_failure_outcomes_remain_typed -- --exact`；
     `cargo test --test inline_chat_shell --locked native_restart_never_claims_unknown_terminal_effect -- --exact`；
+    `cargo test --workspace --lib --locked components::chat::inline::tests::shutdown_state_machine_is_ordered_and_idempotent -- --exact`；
     公共checkpoint命令。
   - Handoff: 保存durable atomic mock transaction log、restart/lookup matrix和draft/focus
     snapshots；停止写全部paths，public API冻结后交T6。
@@ -163,14 +192,19 @@ cargo check --workspace --all-targets --all-features --locked
   - File ownership: 独占新增 `tests/inline_chat_shell_pty.rs`；从T5接管
     `tests/inline_chat_shell.rs`只增加coverage producer/validator及负例；production/example/
     docs/prelude只读。
-  - Done when: 非ignored PTY同一test分别spawn normal/cancel/typed-failure/panic子进程，
-    以termios/captured bytes验证raw/cursor/paste/无altscreen；restoration error失败；
+  - Done when: 非ignored PTY同一test分别spawn normal/cancel/typed-failure/panic、每个entry
+    acquisition failure、shutdown first-failure/second-success、nested/cross-thread lease和
+    suspend/resume子进程；以termios/captured bytes验证raw/cursor/paste/无altscreen及SGR reset
+    后live无泄漏；restoration/lease uncertainty失败；
     `gh66_current_head_coverage_contract`从committed ledger+diff+raw生成确定性
     `gh57-child-coverage-v1`，validate重算全部sets/hash/percent；critical exact set逐项100%，
-    changed executable>=80%；全部mapped/full commands在同一clean exact head通过。
+    changed executable>=80%；fixture含全部negative schema/provenance/threshold cases；collect/
+    produce/validate均显式获得PR/head/base/merge-base/absolute destinations，fresh start/end facts
+    与clean exact head一致。
   - Verify:
     `cargo test --test inline_chat_shell_pty --locked inline_pty_restores_terminal_on_normal_cancel_failure_and_panic -- --exact`；
-    tech coverage produce/validate三条invocations；
+    `GH66_COVERAGE_MODE=fixture cargo test --test inline_chat_shell --locked gh66_current_head_coverage_contract -- --exact`；
+    tech coverage collect/produce/validate invocations；
     `cargo test --workspace --all-targets --all-features --locked`；
     `cargo check --all-targets --all-features --locked`；
     `cargo check --example claude_input_box --all-features --locked`；
@@ -227,7 +261,9 @@ Task `Covers:` union:
 
 - `Committed`只表示scrollback transport确认；Cancelled/Failed conversation status保持原义。
 - native ledger只在同一session confirmed去重，Unknown不自动retry且跨crash不恢复。
-- durable exactly-once必须由原子persist+lookup合同证明；shell observation不是restore snapshot。
-- sink为同步contract，因为实际terminal write/render lifecycle同步；legacy println queue继续无ack。
-- content identity共享exact bytes而不是弱hash；same ID/different bytes fail closed。
+- durable exactly-once按namespace+ID先lookup frozen record；shell observation不是restore snapshot。
+- sync request的Atomic cancellation/control使mid-write cancellation和safe reentry真实可达。
+- canonical LF identity与CRLF/reset/delimiter transport分离并逐offset记账。
+- single coordinator持有shell/session/lease；partial entry/shutdown必须rollback或retry，不能早报完成。
+- Unknown只经durable-audited TreatAsCommitted/Abandon解除；same ID/different bytes fail closed。
 - final PR仍需fresh independent review与人工merge；禁止force push。

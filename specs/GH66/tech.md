@@ -75,9 +75,12 @@ pub trait ScrollbackSink {
 
 理由：实际 `Terminal::println`、`Write`、flush、render loop 和 terminal enter/exit 均为同步
 `std::io::Result`；现有 tokio 只服务 command/background runtime，`AppContext::println`
-则是无 ack queue。把 commit 做成 async 会新增 executor/cancellation 边界，却仍无法令 terminal
-write 与 ledger 原子。同步调用由 `InlineChatShell::try_commit_next(&mut sink)` 在一次
-borrow 内完成，三态结果在返回前写入 shell observation。
+则是无 ack queue。同步调用仍可真实取消：request携带 cloneable
+`ScrollbackCancellationToken(Arc<AtomicBool>)`，session/event ingress或测试线程持有对应
+`InlineCancellationHandle`，在write进行中可原子触发。request还携带
+`ScrollbackCommitControl`；outer call先取得其RAII permit，custom sink可调用
+`try_begin_nested_attempt()`并安全得到typed `ReentrantCommit`，不需要第二个`&mut shell`。
+token/control均为concrete private-field值，不是任意callback。
 
 `ScrollbackSink` 不接受 `Any`、字符串 error、任意 callback 或 boxed future。生产
 `NativeScrollbackSink<'a>` 只由 `NativeInlineSession::scrollback_sink()` 构造，借用同一
@@ -92,6 +95,7 @@ compile fixture 无 wildcard match。
 
 ```text
 ScrollbackCommitId {
+  namespace: ScrollbackNamespace,
   message_id: MessageId,
   terminal_revision: MessageRevision
 }
@@ -107,33 +111,40 @@ ScrollbackContentIdentity {
 
 ScrollbackCommitRequest<'a> {
   commit_id: &'a ScrollbackCommitId,
-  content: &'a ScrollbackContent
+  content: &'a ScrollbackContent,
+  cancellation: &'a ScrollbackCancellationToken,
+  control: &'a ScrollbackCommitControl
 }
 
 ScrollbackGuarantee =
   ProcessLocalConfirmed |
   DurableAtomicIdempotency
 
-CommittedDisposition = Written | AlreadyCommitted
+ScrollbackAttemptDisposition = Written | AlreadyCommitted
 
 ScrollbackCommitReceipt {
   commit_id,
   content_identity,
-  disposition,
   session_sequence
 }
 
 ScrollbackCommitOutcome =
-  Committed(ScrollbackCommitReceipt) |
+  Committed {
+    receipt: ScrollbackCommitReceiptHandle,
+    disposition: ScrollbackAttemptDisposition
+  } |
   NotCommitted(ScrollbackCommitError) |
   Unknown(ScrollbackCommitError)
 ```
 
 不增加 hash dependency，也不使用不稳定 `DefaultHasher`。identity 是 exact immutable bytes；
 request、candidate、receipt 和 ledger 共享同一 `Arc<[u8]>`，避免每次 duplicate check deep
-copy。`ScrollbackCommitId::new(MessageId, MessageRevision)` 的参数本身已经由 GH-62
-validated constructor产生；same ID/different exact bytes返回
-`ScrollbackCommitError::ContentIdentityConflict`。
+copy。`ScrollbackNamespace::try_new`拒绝空白/控制字符且必须由应用或durable store持久恢复；
+`ScrollbackCommitId::new(namespace, MessageId, MessageRevision)` 的消息参数由 GH-62 validated
+constructor产生。不同namespace互不dedupe；同一完整ID/different exact bytes返回
+`ScrollbackCommitError::ContentIdentityConflict`。`ScrollbackCommitReceiptHandle`内部为
+`Arc<ScrollbackCommitReceipt>`；first write建立一次original receipt，duplicate/concurrent
+attempt共享相同allocation/fields，但各自outcome携带自己的disposition，ledger不改写receipt。
 
 `ScrollbackCommitError` closed variants 至少为：
 
@@ -146,10 +157,15 @@ ReentrantCommit
 LedgerCapacityExhausted { capacity }
 SinkClosed
 UnsupportedGuarantee { required, actual }
+TerminalLeaseAlreadyHeld { holder }
+ManualResolutionAuditFailed { source }
 ```
 
-`ScrollbackIoError` 保存 `ScrollbackIoStage::{Begin, WriteContent, WriteDelimiter, Flush}`、
-`accepted_content_bytes`、`delimiter_bytes` 与原 `std::io::Error`；实现 `Error::source`。
+`ScrollbackIoError` 保存
+`ScrollbackIoStage::{Begin, WriteContent, WriteReset, WriteDelimiter, Flush}`、
+canonical offset、`accepted_canonical_prefix_bytes`、`accepted_transport_bytes`、
+`transport_segment_offset`、`reset_bytes`、`delimiter_bytes` 与原 `std::io::Error`；实现
+`Error::source`。
 Display 只输出 stage/count/error kind，不回显 content。`ScrollbackContentError` 保存安全
 category 与 byte range，不保存或显示原始 control/secret。
 
@@ -161,11 +177,20 @@ category 与 byte range，不保存或显示原始 control/secret。
 
 ```text
 begin: clear current live region
--> write validated content bytes until complete
+-> encode canonical content deterministically:
+     printable/SGR bytes unchanged；每个 canonical LF -> CRLF
+-> write canonical SGR reset ESC[0m
 -> write exactly one CRLF delimiter
 -> flush
 -> repaint marker
 ```
+
+`ScrollbackContent`与identity始终保存normalized canonical LF bytes，不保存机器相关transport。
+encoder逐个semantic segment输出，保留`canonical_offset`与segment内
+`transport_offset`；只有一个完整semantic segment全部写完才推进
+`accepted_canonical_prefix_bytes`。例如LF的CR成功而LF失败时，canonical prefix不包含该LF，
+但transport count包含CR且outcome必为Unknown。reset和最终delimiter不属于content identity，
+却分别计数并进入receipt前的成功条件；这与legacy `Terminal::println`逐行CRLF语义一致。
 
 分类固定：
 
@@ -173,19 +198,26 @@ begin: clear current live region
 | --- | --- |
 | begin/preflight失败；content accepted=0 | `NotCommitted` |
 | first content write在接受任何 byte前失败 | `NotCommitted` |
-| content short write后失败/WriteZero | `Unknown` |
+| content short write、编码CRLF中途失败/WriteZero | `Unknown` |
+| content完成但canonical SGR reset partial/失败 | `Unknown` |
 | content完成但 delimiter partial/失败 | `Unknown` |
 | content+delimiter完成但 flush失败 | `Unknown` |
 | cancellation在begin前 | `NotCommitted(Cancelled)` |
-| cancellation在任意 accepted byte后 | `Unknown(Cancelled)` |
-| full content + delimiter + flush成功，ledger insert成功 | `Committed(Written)` |
-| ledger已有same ID+identity | 不写terminal，`Committed(AlreadyCommitted)` |
-| ledger已有same ID+different identity | `NotCommitted(IdentityConflict)` |
+| cancellation在任意 accepted transport byte后或flush后/ledger前 | `Unknown(Cancelled)` |
+| full content + reset + delimiter + flush成功，ledger insert成功 | `Committed { Written }` |
+| ledger已有same完整ID+identity | 不写terminal，`Committed { AlreadyCommitted }`且共享original receipt |
+| ledger已有same完整ID+different identity | `NotCommitted(IdentityConflict)` |
 
 ledger insert 必须在 flush 成功后；native write和insert仍不是 crash-atomic。insert 前容量预检，
 容量满时在写任何 byte前返回 `NotCommitted(LedgerCapacityExhausted)`；confirmed entries不
 evict。这样不会出现“已经写入后才发现无处记录”。若进程在 flush/write 可见后、insert前崩溃，
 重启只能 unknown；native session从不恢复该 ledger。
+
+cancellation固定在begin前、每次`Write::write`返回后、每个content segment后、reset/delimiter
+前后、flush前后和ledger insert前采样；fake writer用barrier让另一线程在每个点flip token，
+从而mid-commit分支不是预置fixture。control permit在调用sink前进入、所有outcome/unwind后
+RAII释放；custom sink在outer permit存活时调用`try_begin_nested_attempt`可稳定得到
+`ReentrantCommit`，外层candidate/revision/ledger不变。
 
 ### 4. Durable sink 与跨重试/重启
 
@@ -201,12 +233,18 @@ pub trait DurableScrollbackSink: ScrollbackSink {
 ```
 
 `DurableScrollbackLookupOutcome` closed 为
-`Committed(receipt) | NotCommitted | Unknown(ScrollbackCommitError)`。实现者合同：
+`Committed(DurableScrollbackRecord) | NotCommitted | Unknown(ScrollbackCommitError)`。
+`DurableScrollbackRecord`包含完整namespace/ID、original receipt handle、exact canonical
+content identity与bytes、`ScrollbackProjectionContext { width, theme_identity }`和store
+sequence。实现者合同：
 
-- `commit_id + exact identity + visible effect + receipt` 在同一 durable transaction去重；
-- concurrent same ID/identity只有一次 effect，全部返回相同 durable receipt；
+- `namespace + commit_id + exact identity + visible effect + receipt + projection context`
+  在同一 durable transaction去重；
+- concurrent same完整ID/identity只有一次 effect，全部共享相同 original receipt，各attempt
+  disposition独立；不同namespace永不碰撞；
 - same ID/different identity 原子 conflict；
-- lookup只在 durable record存在且 identity相同时返回 committed；
+- lookup先按完整commit ID返回stored record，shell随后以stable message ID/revision验证；
+  不允许caller先传当前width/theme projection筛掉历史record；
 - store unavailable、timeout、corrupt record、无法判断 transaction结果返回 Unknown，不能
   返回空/NotCommitted fallback。
 
@@ -215,28 +253,35 @@ shell 不提供可 serde/clone restore 的私有 ledger snapshot。restart 流�
 ```text
 persisted GH-62 ConversationStateSnapshot
 -> GH-62 ConversationState::try_restore (验证全部 identity/revision/history)
--> new InlineChatShell
--> stage terminal messages using exact final revision + current validated projection
+-> InlineChatShell::try_restore(..., RestoredDurable)
 -> InlineChatShell::reconcile_durable(&mut DurableScrollbackSink)
--> lookup each candidate in source order
--> only lookup Committed reconstructs confirmed/remove state
+-> 按namespace + message ID/revision先lookup，不先project
+-> lookup Committed验证stored identity/context/receipt后重建confirmed/remove
+-> lookup NotCommitted才用当前validated projection建立新candidate
+-> lookup Unknown/error建立unresolved/order-blocked，保留restored provenance
 ```
 
 因此 serialization boundary 唯一属于 GH-62 validated snapshot 和 injected durable store；
 GH-66 不新增 serde dependency或未验证 wire struct。`InlineShellObservation` 是公共只读观察，
-明确不能作为 restore input。projection bytes与 durable record不一致即 identity conflict，
-不得用新宽度覆盖历史。
+明确不能作为 restore input。公开构造要求
+`InlineSessionProvenance::{Fresh, RestoredDurable { recovery_id },
+RestoredAfterUncleanNativeExit { recovery_id }}`；native restored path不lookup/重投影旧terminal
+effects，而把所有terminal candidates初始化Unknown/order-blocked，直到typed manual resolution。
+Fresh与restored provenance在observation可读，不能由default隐式选择。
 
 ### 5. Inline shell state、staging 和状态机
 
 ```text
 InlineChatShell {
   revision: InlineShellRevision,
-  lifecycle: Running | ShuttingDown | Shutdown,
-  candidates: ordered bounded entries,
+  lifecycle: Fresh | Running | ShuttingDown | Restoring | Shutdown,
+  provenance: InlineSessionProvenance,
+  namespace: ScrollbackNamespace,
+  candidates: ordered bounded entries + O(1) ID index,
   confirmed: bounded observation index,
+  resolution_audit: bounded append-only references,
   last_outcome: Option<InlineCommitObservation>,
-  commit_in_progress: bool,
+  commit_control: ScrollbackCommitControl,
   composer_focus: InlineFocusState
 }
 
@@ -245,13 +290,19 @@ InlineCommitPhase =
   Staged |
   NotCommitted |
   Unknown |
+  ResolvedCommitted |
+  Abandoned |
   Confirmed
 ```
 
 constructor：
 
 ```text
-InlineChatShell::new(InlineChatShellConfig) -> Result<Self, InlineChatShellError>
+InlineChatShell::try_new(
+  InlineChatShellConfig,
+  ScrollbackNamespace,
+  InlineSessionProvenance
+) -> Result<Self, InlineChatShellError>
 InlineChatShellConfig::new(
   candidate_capacity: NonZeroUsize,
   confirmed_capacity: NonZeroUsize
@@ -261,21 +312,30 @@ InlineChatShellConfig::new(
 核心方法：
 
 ```text
-synchronize(
+bootstrap(
   &mut self,
   conversation: &ConversationState,
   render: InlineRenderContext<'_>
 ) -> Result<InlineShellTransition, InlineChatShellError>
 
+synchronize(
+  &mut self,
+  conversation: &ConversationState,
+  outcome: &ApplyOutcome,
+  render: InlineRenderContext<'_>
+) -> Result<InlineShellTransition, InlineChatShellError>
+
 try_commit_next<S: ScrollbackSink>(
   &mut self,
-  sink: &mut S
+  sink: &mut S,
+  cancellation: &ScrollbackCancellationToken
 ) -> Result<InlineCommitStep, InlineChatShellError>
 
 retry_not_committed<S: ScrollbackSink>(
   &mut self,
   commit_id: &ScrollbackCommitId,
-  sink: &mut S
+  sink: &mut S,
+  cancellation: &ScrollbackCancellationToken
 ) -> Result<InlineCommitStep, InlineChatShellError>
 
 reconcile_durable<S: DurableScrollbackSink>(
@@ -283,24 +343,34 @@ reconcile_durable<S: DurableScrollbackSink>(
   sink: &mut S
 ) -> Result<InlineRecoveryReport, InlineChatShellError>
 
+resolve_unknown<A: UnknownResolutionAuditSink>(
+  &mut self,
+  commit_id: &ScrollbackCommitId,
+  resolution: UnknownResolution,
+  audit: &mut A
+) -> Result<InlineUnknownResolutionReport, InlineChatShellError>
+
 observe(&self) -> InlineShellObservation<'_>
 try_project_live(...) -> Result<InlineLiveProjection, InlineChatShellError>
-begin_shutdown(&mut self) -> Result<InlineShutdownTransition, InlineChatShellError>
 ```
 
-`synchronize`只读上游 state：
+`bootstrap`只允许`Fresh`且candidate/index为空时调用一次，按Conversation source order做O(n)
+初始化；成功进入Running。此后`synchronize`只消费最终GH-62 `ApplyOutcome`的唯一
+`affected_message_ids()`和当前immutable snapshot，不能遍历未受影响history：
 
-1. 按 Conversation source order枚举 messages；
-2. Pending/Streaming保持 live；
-3. Complete/Cancelled/Failed 还须证明全部 nested lifecycle terminal；
-4. 读取 exact `MessageId`/`MessageRevision`；
-5. GH-63 `ChatMessageView` 生成一次 terminal projection，以当前 width冻结；
-6. sanitizer成功后以 `(MessageId, terminal revision)` stage exact bytes；
-7. 已有 same ID/identity为 no-op；same ID/different bytes fail atomic。
+1. 验证outcome属于当前conversation revision，affected IDs唯一且都能从snapshot读取；
+2. 对每个affected ID先用namespace/message/revision查询candidate/confirmed O(1) index；
+3. existing candidate先复用其frozen bytes/context，禁止因当前width/theme先reproject；
+4. 只有previously unseen terminal revision才经GH-63生成一次projection并sanitizer；
+5. Pending/Streaming只更新live index；Complete/Cancelled/Failed还须nested lifecycle terminal；
+6. 通过上游source-order accessor把新candidate插入确定位置，不扫描完整history；
+7. same完整ID/identity为no-op；same完整ID/different bytes fail atomic。
 
 Cancelled/Failed content保留 status/failure cause presentation，transport
 `Committed`不改变其 conversation status。staged content此后不随 resize/theme重建；live
-内容可重投影。candidate/confirmed达到容量前先检查，满则 state不变。
+内容可重投影。bootstrap复杂度O(n)，delta路径为O(a log n + p)，`a`是affected IDs、`p`是
+首次terminal projection工作；operation counter锁定不访问`n-a`条历史。candidate/confirmed
+达到容量前先检查，满则state不变。
 
 每次方法先计算完整 candidate和下一 revision，再一次 commit；revision/sequence/counter用
 `checked_add`。no-op 不增 revision。删除 live message只发生在 sink返回
@@ -323,11 +393,22 @@ Shutdown/closing
 -> sink outcome/receipt validation
 ```
 
-- 普通API需要 `&mut self`，所以一个 shell在线程内串行；`commit_in_progress` 仍覆盖 sink
-  reentrant callback/测试端口重入并 typed拒绝。
-- sink在 `commit` 期间不得回调 shell；若测试端口尝试重入，外层state保持原子。
+- 普通API需要 `&mut self`，所以一个shell在线程内串行；reentry guard不再依赖不可达的第二次
+  shell borrow。shell在调用sink前通过concrete
+  `ScrollbackCommitControl`取得permit；request把同一control共享给sink。
+- sink不得回调shell，但可以安全调用`request.control().try_begin_nested_attempt()`；outer
+  permit存在时该production API返回`ReentrantCommit`，不会unsafe alias或borrow panic。fake
+  sink必须通过这条入口证明外层state/receipt/ledger原子。
 - `retry_not_committed`只接受当前phase确为NotCommitted、ID/identity相同、前序已confirmed；
   Unknown、Confirmed、Live、Staged普通retry都 typed拒绝。
+- `resolve_unknown`只接受当前phase Unknown且前序已确认；`UnknownResolution`闭集为
+  `TreatAsCommitted { evidence: ManualCommitEvidence }`与
+  `Abandon { evidence: ManualAbandonEvidence }`。两种evidence均含validated nonempty
+  audit ID/reason/actor scope和exact namespace/ID/identity。`UnknownResolutionAuditSink`
+  必须先append+flush durable record，再commit shell phase并解除order blocker；duplicate exact
+  resolution幂等，conflict/unknown ID/audit failure零mutation。TreatAsCommitted建立
+  `ResolvedCommitted` observation但不伪造native sink original receipt；Abandon保留safe
+  audit/status且不再允许写该candidate。
 - durable concurrent去重属于 sink原子存储合同；shell不标 `Sync`，native session/ledger不
   宣称跨线程或跨进程。
 - `Committed` receipt错ID/identity是 sink contract violation，shell转 Unknown并保留live，
@@ -346,12 +427,15 @@ commit_entries() -> &[InlineCommitEntryObservation]
 last_commit_outcome()
 order_blocker()
 native_restart_guarantee()
+session_provenance()
+unknown_resolution_audit_refs()
 ```
 
 每个 entry observation公开 ID、content identity、source-order ordinal、terminal status、
 phase、last typed outcome、confirmed receipt（若存在）。content bytes/secret不由 Debug/
 Display输出。observation没有 public fields、serde derive或 `try_restore`；tests必须证明
-clone/roundtrip不是恢复入口。durable restart只使用第4节 GH-62 snapshot + lookup。
+clone/roundtrip不是恢复入口。durable restart只使用第4节 GH-62 snapshot + lookup；fresh/native
+restored provenance与manual resolution audit ref可读但不能改写。
 
 ### 8. Composer、focus 与 live projection
 
@@ -398,32 +482,82 @@ valid UTF-8
 ```
 
 不接受tab（renderer应投影为空格），不静默strip危险控制；否则纯文本语义和identity会变化。
-错误只含 category/range。sink、shell observation和Display不输出content。provider/tool/secret
-不进入error；application仍负责是否把敏感内容加入Conversation。safe ANSI parser以正负
-fixtures覆盖合法SGR、truncated CSI、OSC52、window title、cursor move、C1、NUL和混合Unicode。
+parser对renderer允许的SGR参数执行closed validation并跟踪default/nondefault style，拒绝
+malformed/unsupported参数；不要求canonical content自行balanced，因为transport encoder在每次
+content后无条件写唯一`\x1b[0m`，该reset不进入identity但进入fault accounting。错误只含
+category/range。sink、shell observation和Display不输出content。safe ANSI fixtures覆盖color、
+conceal、inverse、nested reset、truncated CSI、OSC52、title、cursor、C1、NUL、混合Unicode，
+PTY证明reset后delimiter/live/status/composer无style泄漏，partial reset为Unknown。
 
-### 10. NativeInlineSession 与 restoration
+### 10. Native session coordinator、terminal lease 与 restoration
 
-`NativeInlineSession`唯一拥有 `Terminal`、nonzero confirmed ledger、bracketed-paste prior
-state和lifecycle：
+public `InlineSessionCoordinator`唯一拥有`InlineChatShell`、`NativeInlineSession`、event intake、
+cancellation handle与process-wide `InlineTerminalLease`；应用不能分别取得可独立shutdown的shell/
+session owner。native session内部拥有`Terminal`、nonzero confirmed ledger、validated
+`InlineTerminalSnapshot`和逐阶段lifecycle：
 
 ```text
-NativeInlineSession::try_enter(config) -> Result<Self, InlineSessionError>
+InlineSessionCoordinator::try_enter(
+  shell_config,
+  namespace,
+  provenance,
+  session_config
+) -> Result<InlineSessionCoordinator, InlineSessionEnterError>
+
 scrollback_sink(&mut self) -> NativeScrollbackSink<'_>
+cancellation_handle(&self) -> InlineCancellationHandle
 render_live(&mut self, &Element) -> Result<(), InlineSessionError>
 poll_event(&mut self, Duration) -> Result<Option<Event>, InlineSessionError>
-try_shutdown(&mut self) -> Result<InlineShutdownReport, InlineSessionError>
+try_shutdown(&mut self) -> InlineShutdownOutcome
+try_recover_poisoned_lease(backend) -> Result<(), InlineLeaseRecoveryError>
 ```
 
-`try_enter`仅进入inline raw mode，记录进入前screen/paste状态，不进入alternate screen。
-`try_shutdown`阶段顺序和每阶段结果写入`InlineShutdownReport`；任何阶段失败继续尝试其余恢复，
-最终返回包含全部 causes的 typed error/report，不能first-error后跳过cursor/raw restore。
-第二次shutdown返回`AlreadyShutdown` no-op。shutdown后sink/render/poll均typed拒绝。
+`InlineShutdownOutcome`闭集为`Complete(report) | RetryRequired(report) | AlreadyShutdown`；
+lease process state闭集为`Free | Held(holder) | Poisoned(restoration stages)`。
 
-Drop与panic hook调用相同private best-effort steps但不能返回report；Debug/log不能说
-“restored”。PTY子进程通过termios和captured ANSI验证normal/cancel/typed-failure/panic：
-raw关闭、`\x1b[?25h`、`\x1b[?2004l`或恢复prior值、无
-`\x1b[?1049h`/`\x1b[?1049l`。测试必须非ignored；无PTY环境则required job blocked，不能pass。
+`try_enter`在任何terminal mutation前从process-wide non-poisoning mutex取得exclusive lease；
+同线程nested、不同shell和跨线程竞争均返回`TerminalLeaseAlreadyHeld`。lease中记录opaque holder
+ID，不泄漏线程/内容。entry acquisition闭集为：
+
+```text
+Lease -> CapabilitySnapshot -> RawMode -> CursorHidden
+      -> BracketedPasteConfigured -> EntryFlush
+```
+
+`InlineTerminalSnapshot`由可注入backend查询并验证screen/raw/cursor/paste初值；alternate screen
+或无法建立required state时typed Unsupported，不能猜默认。任一entry stage失败都按已完成阶段
+逆序rollback并继续尝试全部步骤；`InlineSessionEnterError`同时保存primary cause与ordered
+rollback failures。rollback全部成功后lease回Free；任一步失败则lease变Poisoned并携带未完成
+stage，error显式标记`RestorationUncertain`且后续entry blocked，直到typed recovery成功。
+fake/PTY在每个acquire stage注入失败。
+
+coordinator shutdown的唯一顺序：
+
+```text
+stop event intake + trigger cancellation
+-> shell expose pending/Unknown/manual-resolution-required outcomes
+-> clear live region
+-> restore paste/focus/mouse
+-> show/restore cursor
+-> restore raw/screen
+-> flush
+-> release terminal lease
+```
+
+每阶段状态为`Pending | Completed | Failed(source)`；一次调用即使失败也继续全部可安全执行的后续
+步骤并返回`RetryRequired`，coordinator保持Restoring且仍拥有lease，只允许再次
+`try_shutdown`。重试只执行Pending/Failed步骤，Completed保持幂等；全部required steps成功并
+释放lease后才进入Shutdown，之后再调用才返回`AlreadyShutdown`。partial shutdown期间sink/
+render/poll/second enter均typed拒绝。suspend恢复terminal modes但保留process lease与explicit
+shell state，resume按entry阶段重新获取modes并full live repaint；fresh process restart没有旧lease，
+但必须选择显式restored provenance。
+
+Drop与panic hook调用同一private阶段表best-effort；全部成功则lease回Free，任一恢复失败则
+lease标Poisoned并阻止新entry。只有显式`try_recover_poisoned_lease`重跑未完成阶段且外部
+snapshot验证成功后才能Free，仍不得把先前Drop说成成功。PTY/fake覆盖normal/cancel/failure/panic、
+entry partial failure、shutdown first-failure/second-success、nested/cross-thread lease、
+suspend/resume：raw关闭、cursor/paste恢复prior值、无alt-screen序列、所有style已reset。
+无PTY环境时required job blocked，不能pass。
 
 ### 11. Example、exports 与兼容
 
@@ -444,31 +578,31 @@ raw关闭、`\x1b[?25h`、`\x1b[?2004l`或恢复prior值、无
 | Invariant | Implementation area | Executable verification |
 | --- | --- | --- |
 | B-001 | chat inline module/upstream public API | `cargo test --test prelude_surfaces --locked inline_chat_shell_public_surface_executes -- --exact` |
-| B-002 | commit ID/content staging | lib exact `stable_commit_identity_conflict_is_atomic` |
+| B-002 | namespace + commit ID/content staging | lib exact `stable_commit_identity_conflict_is_atomic`（含双namespace） |
 | B-003 | terminal candidate filter | lib exact `gh66_scrollback_lifecycle_contract` |
 | B-004 | sink trait/outcome | crate-outside exact `closed_scrollback_outcomes_are_exhaustive` |
-| B-005 | receipt/flush/ledger | lib exact `native_confirmed_dedup_is_process_local` |
+| B-005 | stable receipt + per-attempt disposition | lib exact `native_confirmed_dedup_is_process_local` |
 | B-006 | zero-effect classification | lib exact `partial_write_flush_broken_pipe_outcomes_are_typed` |
-| B-007 | Unknown classification/policy | lib exact `partial_write_flush_broken_pipe_outcomes_are_typed`; `unknown_blocks_order_and_never_auto_retries` |
+| B-007 | reachable cancellation/Unknown | lib exact `partial_write_flush_broken_pipe_outcomes_are_typed`; `unknown_blocks_order_and_never_auto_retries` |
 | B-008 | native bounded ledger | lib exact `native_confirmed_dedup_is_process_local` |
-| B-009 | duplicate terminal/render/delta | lib exact `duplicate_terminal_render_and_delta_are_single_effect` |
+| B-009 | O(n) bootstrap + affected-ID delta | lib exact `duplicate_terminal_render_and_delta_are_single_effect`（operation counter） |
 | B-010 | confirmed-only removal | lib exact `gh66_scrollback_lifecycle_contract` |
-| B-011 | source order blocker | lib exact `unknown_blocks_order_and_never_auto_retries` |
-| B-012 | explicit native retry policy | integration exact `not_committed_retry_is_explicit_and_unknown_retry_is_rejected` |
-| B-013 | durable concurrent exactly-once | integration exact `durable_sink_cross_retry_and_restart_reconstruction_is_exactly_once` |
+| B-011 | source blocker/manual audited resolution | lib exact `unknown_blocks_order_and_never_auto_retries` |
+| B-012 | retry + durable manual resolution audit | integration exact `not_committed_retry_is_explicit_and_unknown_retry_is_rejected` |
+| B-013 | namespaced durable concurrent exactly-once | integration exact `durable_sink_cross_retry_and_restart_reconstruction_is_exactly_once` |
 | B-014 | restart reconstruction | integration exact `durable_sink_cross_retry_and_restart_reconstruction_is_exactly_once`; `public_observation_is_not_a_restore_snapshot` |
 | B-015 | composer outcomes | integration exact `composer_focus_cancel_and_failure_outcomes_remain_typed` |
 | B-016 | focus/mode/resize | integration exact `composer_focus_cancel_and_failure_outcomes_remain_typed` |
 | B-017 | empty/missing content | lib exact `empty_state_and_empty_commit_do_not_invent_data` |
-| B-018 | write fault matrix/source | lib exact `partial_write_flush_broken_pipe_outcomes_are_typed` |
-| B-019 | reentrancy/concurrency | lib exact `revision_overflow_and_reentrancy_are_atomic`; durable integration exact |
+| B-018 | LF→CRLF/reset/delimiter fault matrix | lib exact `partial_write_flush_broken_pipe_outcomes_are_typed` |
+| B-019 | safe control reentry/concurrency | lib exact `revision_overflow_and_reentrancy_are_atomic`; durable integration exact |
 | B-020 | checked counters/illegal transition | lib exact `revision_overflow_and_reentrancy_are_atomic` |
-| B-021 | ordered explicit shutdown | lib exact `shutdown_state_machine_is_ordered_and_idempotent` |
-| B-022 | Drop/panic honesty | PTY exact `inline_pty_restores_terminal_on_normal_cancel_failure_and_panic` |
+| B-021 | coordinator + retryable shutdown | lib exact `shutdown_state_machine_is_ordered_and_idempotent` |
+| B-022 | staged enter/lease/Drop/panic | PTY exact `inline_pty_restores_terminal_on_normal_cancel_failure_and_panic` |
 | B-023 | four-path PTY restoration | PTY exact `inline_pty_restores_terminal_on_normal_cancel_failure_and_panic` |
-| B-024 | control/secret sanitizer | lib exact `sanitizer_rejects_terminal_control_injection` |
+| B-024 | control sanitizer + reset isolation | lib exact `sanitizer_rejects_terminal_control_injection` |
 | B-025 | crash boundary | integration exact `native_restart_never_claims_unknown_terminal_effect` |
-| B-026 | live-only resize/degradation | integration exact `live_resize_never_rewrites_confirmed_scrollback` |
+| B-026 | frozen-candidate-first resize | integration exact `live_resize_never_rewrites_confirmed_scrollback` |
 | B-027 | public example | prelude exact `claude_example_uses_public_inline_shell_contract`; `cargo check --example claude_input_box --all-features --locked` |
 | B-028 | legacy compatibility | prelude exact `legacy_println_and_message_surfaces_remain_compatible` |
 | B-029 | dependency gate | fresh preflight adapter + three `git merge-base --is-ancestor` commands |
@@ -497,67 +631,58 @@ cargo test --test inline_chat_shell_pty --locked \
 
 ## GH-57 Coverage Contract
 
-`tasks.md`包含唯一 `gh57-critical-paths-v1` JSON，exact `file+name` set不得由环境变量传入。
-producer读取该 committed block、current diff和真实 llvm-cov raw JSON，生成
-`gh57-child-coverage-v1`：
+`tasks.md`包含唯一`gh57-critical-paths-v1`：version=1、issue=66、22个unique
+`file+name+verification_command`，严格等于T2–T7创建的exact tests；集合和命令不得由环境传入。
+producer读取committed ledger、merge-base diff与真实raw，生成canonical
+`gh57-child-coverage-v1`。artifact固定包含schema/child、PR/head/base/merge-base、HEAD commit
+timestamp、repository/tool、normalized collect command、稳定
+`raw_artifact_name:"llvm-cov.json"`、raw SHA-256、changed executable及按ledger顺序的22项
+`file/name/verification_command/executable/covered/percent`；不保存mktemp absolute path。
 
-```json
-{
-  "schema": "gh57-child-coverage-v1",
-  "child_issue": 66,
-  "head_sha": "<40-hex>",
-  "base_main_sha": "<40-hex>",
-  "merge_base_sha": "<40-hex>",
-  "generated_at": "<head commit RFC3339 timestamp>",
-  "provenance": {
-    "repository": "majiayu000/rnk",
-    "pr_number": 1,
-    "tool": "cargo-llvm-cov",
-    "command": "<nonempty exact command>",
-    "raw_path": "<absolute path>",
-    "raw_sha256": "<64-hex>"
-  },
-  "changed_executable": {"total": 1, "covered": 1, "percent": 100.0},
-  "critical_paths": [{
-    "file": "src/components/chat/inline/tests.rs",
-    "name": "gh66_scrollback_lifecycle_contract",
-    "executable": 1,
-    "covered": 1,
-    "percent": 100.0
-  }]
-}
-```
+test的closed mode为`fixture|collect|produce|validate`，缺失/越界fail。fixture用scratch
+raw/diff/ledger覆盖正常与missing/duplicate/extra critical、empty raw、wrong
+hash/PR/head/base/merge-base、zero executable、79.99% changed、99.99% critical、empty command、
+relative path。collect只验证fresh immutable facts与absolute writable destinations，不读取尚未
+产生的raw、不写artifact。producer原子写；validator重读ledger/raw/diff并逐byte重建canonical
+JSON，要求changed total>0且>=80%、22项total>0且100%，拒绝old SHA/command drift。
 
-`generated_at`固定为`git show -s --format=%cI "$IMPLEMENTATION_HEAD"`，禁止wall clock；
-producer以`git diff --unified=0 "$BASE_MAIN_SHA...$IMPLEMENTATION_HEAD"`计算 changed executable，
-从raw JSON按file/line/function重算。validator重新读取tasks ledger、diff、raw bytes/hash和
-artifact，要求head/base/merge-base相等、changed total>0且>=80%，critical exact set相等、
-每项executable>0且100%，无duplicate/extra/unknown entry。
-
-可执行 current-head invocations：
+唯一current-head顺序：
 
 ```sh
-export IMPLEMENTATION_HEAD="$(git rev-parse HEAD)"
-export BASE_MAIN_SHA="$(git rev-parse origin/main)"
-export GH66_EVIDENCE_DIR="$(mktemp -d)"
+case "$GH66_PR_NUMBER" in ''|*[!0-9]*) exit 64;; esac
+export GH66_PR_NUMBER
+git fetch --prune origin main
+export GH66_IMPLEMENTATION_HEAD_SHA="$(gh pr view "$GH66_PR_NUMBER" \
+  --repo majiayu000/rnk --json headRefOid --jq .headRefOid)"
+export GH66_BASE_MAIN_SHA="$(gh api "repos/majiayu000/rnk/pulls/$GH66_PR_NUMBER" --jq .base.sha)"
+test "$(git rev-parse HEAD)" = "$GH66_IMPLEMENTATION_HEAD_SHA"
+test "$(git rev-parse origin/main)" = "$GH66_BASE_MAIN_SHA"
+test -z "$(git status --porcelain)"
+export GH66_COVERAGE_MERGE_BASE_SHA="$(git merge-base \
+  "$GH66_BASE_MAIN_SHA" "$GH66_IMPLEMENTATION_HEAD_SHA")"
+export GH66_EVIDENCE_DIR="$(cd "$(mktemp -d)" && pwd -P)"
 export GH66_RAW_COVERAGE="$GH66_EVIDENCE_DIR/llvm-cov.json"
 export GH66_COVERAGE_EVIDENCE="$GH66_EVIDENCE_DIR/coverage.json"
-export GH66_PR_NUMBER="<current implementation PR number>"
-
-cargo llvm-cov --workspace --all-targets --all-features --locked \
+GH66_COVERAGE_MODE=fixture cargo test --test inline_chat_shell --locked \
+  gh66_current_head_coverage_contract -- --exact
+GH66_COVERAGE_MODE=collect cargo llvm-cov --workspace --all-targets --all-features --locked \
   --json --output-path "$GH66_RAW_COVERAGE"
-
-GH66_COVERAGE_MODE=produce \
-  cargo test --test inline_chat_shell --locked \
+test -s "$GH66_RAW_COVERAGE" && test ! -e "$GH66_COVERAGE_EVIDENCE"
+GH66_COVERAGE_MODE=produce cargo test --test inline_chat_shell --locked \
   gh66_current_head_coverage_contract -- --exact
-
-GH66_COVERAGE_MODE=validate \
-  cargo test --test inline_chat_shell --locked \
+GH66_COVERAGE_MODE=validate cargo test --test inline_chat_shell --locked \
   gh66_current_head_coverage_contract -- --exact
+git fetch --prune origin main
+test "$(gh pr view "$GH66_PR_NUMBER" --repo majiayu000/rnk \
+  --json headRefOid --jq .headRefOid)" = "$GH66_IMPLEMENTATION_HEAD_SHA"
+test "$(gh api "repos/majiayu000/rnk/pulls/$GH66_PR_NUMBER" --jq .base.sha)" = "$GH66_BASE_MAIN_SHA"
+test "$(git merge-base "$GH66_BASE_MAIN_SHA" "$GH66_IMPLEMENTATION_HEAD_SHA")" = \
+  "$GH66_COVERAGE_MERGE_BASE_SHA"
+test -z "$(git status --porcelain)"
 ```
 
-test在mode缺失/越界、path非absolute、文件缺失/空、PR number无效、head/base不匹配时失败。
-producer必须原子写artifact；validator逐byte重建规范JSON并比较，不能只反序列化自报percent。
+以上export的PR/head/base/merge-base/raw/artifact env对fixture之外三个mode均为mandatory；每个
+40-hex和positive PR逐值校验。collect command字符串规范化后写入artifact。
 
 ## Verification Plan
 
@@ -569,7 +694,11 @@ producer必须原子写artifact；validator逐byte重建规范JSON并比较，�
 4. planned-changes唯一、issue=66、complete=true、paths/spec_refs为唯一repo-relative值。
 5. tasks ownership DAG无并行shared writer；每task有compile checkpoint。
 6. critical ledger set与tasks实际创建的exact tests相等。
-7. pinned external SpecRail `check_workflow.py --spec-dir specs/GH66`。
+7. 从`https://github.com/majiayu000/specrail.git` checkout
+   `23caa70e76904eaa82323208d645d5781a365649`，验证
+   `checks/check_workflow.py` SHA-256为
+   `8c791545f78d93649385ef0f9780454a7d4552f8da06da1fdee0de9cb8030a7e`，再运行
+   `python3 checks/check_workflow.py --repo <GH66 mirror> --spec-dir specs/GH66`。
 
 未来 implementation每个writer checkpoint：
 
@@ -600,9 +729,9 @@ reviewThreads、independent review、merge state和SpecRail PR gate。spec-only 
 | flush/short write被当成zero effect | staged writer记录accepted bytes/delimiter，fault matrix全覆盖 |
 | live render和commit交错 | session可变borrow使sink与render互斥；shell single in-flight |
 | ledger无限增长或淘汰后重写 | NonZero有界容量；满时pre-write typed block，不逐出confirmed |
-| exact identity造成大复制/O(n²) | candidate/content/receipt/ledger共享`Arc<[u8]>`；单次projection冻结 |
-| ANSI/control注入 | only-SGR allowlist parser；其他control fail loud，不回显payload |
-| Drop错误不可见 | explicit shutdown是成功证据；Drop仅best effort，PTY观察真实terminal |
+| exact identity造成大复制/O(n²) | O(n) bootstrap与affected-ID delta分离；frozen values共享`Arc<[u8]>` |
+| ANSI/control/style泄漏 | closed SGR parser+canonical reset；partial reset Unknown，PTY检查live无泄漏 |
+| entry/shutdown部分失败 | exclusive lease、逆序entry rollback、逐stage retry；显式report才是成功证据 |
 | current terminal.rs超800 | 新逻辑放child file，root只声明module并保持<800 |
 
 ## Rollback
