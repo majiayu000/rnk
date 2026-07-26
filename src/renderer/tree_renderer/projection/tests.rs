@@ -4,7 +4,9 @@ use std::ops::Range;
 use crate::components::{Box, Text};
 use crate::core::{BorderStyle, Color, Element, ElementId, Overflow, Position, Style, TextWrap};
 use crate::layout::LayoutEngine;
-use crate::layout::text_flow::{TextFlowPlacement, TextFlowSource, TextFlowSourceKind};
+use crate::layout::text_flow::{
+    TextFlowPlacement, TextFlowRow, TextFlowRun, TextFlowSource, TextFlowSourceKind,
+};
 use crate::renderer::Output;
 use crate::renderer::output::ClipRegion;
 
@@ -202,6 +204,141 @@ fn projection_source_cell_round_trip_records_visible_clipped_and_synthetic_cells
 }
 
 #[test]
+fn projection_zero_width_only_attaches_to_the_same_flow_sequence() {
+    let mut attached = Element::text("A\u{200b}");
+    attached.style.width = 2.into();
+    attached.style.height = 1.into();
+    let (_, attached_output, attached_projection) = layout_and_project(&attached, 2, 1);
+    let base = source_record(&attached_projection, 0..1);
+    let zero = source_record(&attached_projection, 1..4);
+    assert_eq!(attached_output.render(), "A\u{200b}");
+    assert_eq!(
+        attached_projection.reverse.get(&FrameCell { x: 0, y: 0 }),
+        Some(&base.origin())
+    );
+    assert_eq!(
+        zero.frame,
+        FrameDisposition::NonCell(NonCellDisposition::ZeroWidth)
+    );
+
+    let mut nonzero = Element::text("\u{301}");
+    nonzero.style.position = Position::Absolute;
+    nonzero.style.left = Some(1.0);
+    nonzero.style.top = Some(0.0);
+    nonzero.style.width = 1.into();
+    nonzero.style.height = 1.into();
+    let mut nonzero_engine = LayoutEngine::new();
+    nonzero_engine.try_compute(&nonzero, 3, 1).unwrap();
+    let mut preexisting = Output::new(3, 1);
+    preexisting.write(0, 0, "P", &Style::default());
+    let nonzero_projection =
+        try_render_tree(&nonzero, &nonzero_engine, &mut preexisting, 0.0, 0.0).unwrap();
+    assert_eq!(preexisting.render(), "P");
+    assert!(nonzero_projection.reverse.is_empty());
+
+    let mut background = Element::text("\u{301}");
+    background.style.position = Position::Absolute;
+    background.style.left = Some(1.0);
+    background.style.top = Some(0.0);
+    background.style.width = 2.into();
+    background.style.height = 1.into();
+    background.style.padding.left = 1.0;
+    background.style.background_color = Some(Color::Blue);
+    let (_, background_output, background_projection) = layout_and_project(&background, 4, 1);
+    assert!(!background_output.render().contains('\u{301}'));
+    assert!(background_projection.reverse.is_empty());
+
+    let mut sibling_zero = Element::text("\u{301}");
+    sibling_zero.style.position = Position::Absolute;
+    sibling_zero.style.left = Some(1.0);
+    sibling_zero.style.top = Some(0.0);
+    sibling_zero.style.width = 1.into();
+    sibling_zero.style.height = 1.into();
+    let sibling_tree = Box::new()
+        .width(3)
+        .height(1)
+        .children([
+            {
+                let mut text = Element::text("S");
+                text.style.position = Position::Absolute;
+                text.style.left = Some(0.0);
+                text.style.top = Some(0.0);
+                text.style.width = 1.into();
+                text.style.height = 1.into();
+                text
+            },
+            sibling_zero,
+        ])
+        .into_element();
+    let (_, sibling_output, sibling_projection) = layout_and_project(&sibling_tree, 3, 1);
+    assert_eq!(sibling_output.render(), "S");
+    assert_eq!(sibling_projection.reverse.len(), 1);
+}
+
+#[test]
+fn malformed_intra_flow_overlap_is_rejected_before_caller_mutation() {
+    let style = Style::default();
+    let rows = vec![TextFlowRow {
+        index: 0,
+        width: 3,
+        text: "abc".to_string(),
+        runs: vec![
+            TextFlowRun {
+                token_index: 0,
+                row: 0,
+                column: 0,
+                width: 2,
+                text: "界".to_string(),
+                style: style.clone(),
+            },
+            TextFlowRun {
+                token_index: 1,
+                row: 0,
+                column: 1,
+                width: 1,
+                text: "x".to_string(),
+                style,
+            },
+        ],
+    }];
+    let mut caller = Output::new(4, 1);
+    caller.write(0, 0, "seed", &Style::default());
+    let before_render = caller.render();
+    let before_dirty = caller.dirty_cell_positions().collect::<Vec<_>>();
+    let before_footprint = caller.prospective_grapheme_write_footprint(0, 0, "X");
+    let element = Element::text("x");
+    let mut engine = LayoutEngine::new();
+    engine.try_compute(&element, 4, 1).unwrap();
+
+    assert_eq!(
+        try_render_tree_with_options(
+            &element,
+            &engine,
+            &mut caller,
+            0.0,
+            0.0,
+            ProjectionOptions {
+                fail_after_writes: None,
+                validation_rows: Some(rows),
+            },
+        ),
+        Err(ProjectionError::MalformedFlow(
+            "intra-flow row cell footprints overlap"
+        ))
+    );
+    assert_eq!(caller.render(), before_render);
+    assert_eq!(
+        caller.dirty_cell_positions().collect::<Vec<_>>(),
+        before_dirty
+    );
+    assert_eq!(
+        caller.prospective_grapheme_write_footprint(0, 0, "X"),
+        before_footprint
+    );
+    assert_eq!(caller.clip_depth(), 0);
+}
+
+#[test]
 fn projection_signed_coordinates_axis_clips_and_nested_active_clips_are_exact() {
     let mut vertical = Element::text("a\nb");
     vertical.style.width = 1.into();
@@ -370,6 +507,7 @@ fn projection_failure_commits_neither_cells_nor_projection() {
         0.0,
         ProjectionOptions {
             fail_after_writes: Some(1),
+            ..ProjectionOptions::default()
         },
     );
 

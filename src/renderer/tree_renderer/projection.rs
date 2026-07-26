@@ -2,12 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::ops::Range;
 
-use unicode_segmentation::UnicodeSegmentation;
-
 use crate::core::{Display, Element, ElementId};
 use crate::layout::LayoutEngine;
 use crate::layout::text_flow::{
-    TextFlow, TextFlowPlacement, TextFlowRun, TextFlowSource, TextFlowToken,
+    TextFlow, TextFlowPlacement, TextFlowRow, TextFlowRun, TextFlowSource, TextFlowToken,
 };
 use crate::renderer::Output;
 
@@ -118,9 +116,11 @@ impl RenderProjection {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub(super) struct ProjectionOptions {
     pub(super) fail_after_writes: Option<usize>,
+    #[cfg(test)]
+    pub(super) validation_rows: Option<Vec<TextFlowRow>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,6 +190,10 @@ pub(super) fn try_render_tree_with_options(
     options: ProjectionOptions,
 ) -> Result<RenderProjection, ProjectionError> {
     validate_tree_flows(element, layout_engine)?;
+    #[cfg(test)]
+    if let Some(rows) = options.validation_rows.as_deref() {
+        validate_row_footprints(rows)?;
+    }
     let mut staged = StagedFrame::new(output, options);
     super::render_element_tree_staged(
         element,
@@ -245,6 +249,7 @@ fn validate_flow(flow: &TextFlow) -> Result<(), ProjectionError> {
             }
         }
     }
+    validate_row_footprints(flow.logical_rows())?;
 
     let mut source_covered = 0;
     let source = &flow.cache_identity().input.source;
@@ -256,6 +261,34 @@ fn validate_flow(flow: &TextFlow) -> Result<(), ProjectionError> {
         return Err(ProjectionError::MalformedFlow("source coverage gap"));
     }
     validate_position_map(flow)?;
+    Ok(())
+}
+
+fn validate_row_footprints(rows: &[TextFlowRow]) -> Result<(), ProjectionError> {
+    for row in rows {
+        let mut next_column = 0_usize;
+        for run in &row.runs {
+            if run.column < next_column {
+                return Err(ProjectionError::MalformedFlow(
+                    "intra-flow row cell footprints overlap",
+                ));
+            }
+            if run.column > next_column {
+                return Err(ProjectionError::MalformedFlow(
+                    "intra-flow row cell footprints contain a gap",
+                ));
+            }
+            next_column = run
+                .column
+                .checked_add(run.width)
+                .ok_or(ProjectionError::CoordinateOverflow)?;
+        }
+        if next_column != row.width {
+            return Err(ProjectionError::MalformedFlow(
+                "logical row width differs from run footprints",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -272,14 +305,9 @@ fn validate_source_token(
             "source range gap or overlap",
         ));
     }
-    let grapheme = source
+    source
         .get(range.clone())
         .ok_or(ProjectionError::MalformedFlow("source range boundary"))?;
-    if grapheme.graphemes(true).count() != 1 {
-        return Err(ProjectionError::MalformedFlow(
-            "source range is not one complete EGC",
-        ));
-    }
     *covered = range.end;
     Ok(())
 }

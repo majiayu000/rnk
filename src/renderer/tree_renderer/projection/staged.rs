@@ -1,10 +1,7 @@
 use std::collections::HashMap;
 
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
-
 use crate::core::{ElementId, Style};
-use crate::layout::text_flow::{TextFlow, TextFlowPlacement, TextFlowRun};
+use crate::layout::text_flow::{TextFlow, TextFlowPlacement, TextFlowToken};
 use crate::renderer::Output;
 use crate::renderer::output::{ClipRegion, GraphemeWriteOutcome};
 
@@ -44,11 +41,6 @@ impl StagedFrame {
         origin_x: i64,
         origin_y: i64,
     ) -> Result<(), ProjectionError> {
-        let mut runs = vec![None; flow.tokens().len()];
-        for run in flow.logical_rows().iter().flat_map(|row| row.runs.iter()) {
-            runs[run.token_index] = Some(run);
-        }
-
         for (token_index, token) in flow.tokens().iter().enumerate() {
             let id = ProjectionId {
                 element_id,
@@ -62,54 +54,56 @@ impl StagedFrame {
                 display_width: token.display_width,
                 frame: initial_frame_disposition(&token.placement),
             })?;
-            if let Some(run) = runs[token_index] {
-                self.project_run(id, run, origin_x, origin_y)?;
-            }
+            self.project_token(id, token, origin_x, origin_y)?;
         }
         Ok(())
     }
 
-    fn project_run(
+    fn project_token(
         &mut self,
         id: ProjectionId,
-        run: &TextFlowRun,
+        token: &TextFlowToken,
         origin_x: i64,
         origin_y: i64,
     ) -> Result<(), ProjectionError> {
+        let (row, column) = match token.placement {
+            TextFlowPlacement::Positioned { row, column }
+            | TextFlowPlacement::ZeroWidth { row, column }
+            | TextFlowPlacement::SanitizedControl { row, column }
+            | TextFlowPlacement::Synthetic { row, column } => (row, column),
+            TextFlowPlacement::HardBreak { .. }
+            | TextFlowPlacement::Omitted { .. }
+            | TextFlowPlacement::Truncated { .. } => return Ok(()),
+        };
         let base_x = origin_x
-            .checked_add(
-                i64::try_from(run.column).map_err(|_| ProjectionError::CoordinateOverflow)?,
-            )
+            .checked_add(i64::try_from(column).map_err(|_| ProjectionError::CoordinateOverflow)?)
             .ok_or(ProjectionError::CoordinateOverflow)?;
         let y = origin_y
-            .checked_add(i64::try_from(run.row).map_err(|_| ProjectionError::CoordinateOverflow)?)
+            .checked_add(i64::try_from(row).map_err(|_| ProjectionError::CoordinateOverflow)?)
             .ok_or(ProjectionError::CoordinateOverflow)?;
-        let mut fragment_offset = 0_i64;
-        let mut measured_width = 0_usize;
 
-        for grapheme in run.text.graphemes(true) {
-            let width = UnicodeWidthStr::width(grapheme);
-            let x = base_x
-                .checked_add(fragment_offset)
-                .ok_or(ProjectionError::CoordinateOverflow)?;
-            if width == 0 {
-                self.write_zero_width(x, y, grapheme)?;
-            } else {
-                self.project_visible_grapheme(id, x, y, grapheme, width, &run.style)?;
+        if token.display_width == 0 {
+            return self.write_zero_width(id, row, column, base_x, y, &token.safe_text);
+        }
+        if is_published_space_expansion(token) {
+            for offset in 0..token.display_width {
+                let offset =
+                    i64::try_from(offset).map_err(|_| ProjectionError::CoordinateOverflow)?;
+                let x = base_x
+                    .checked_add(offset)
+                    .ok_or(ProjectionError::CoordinateOverflow)?;
+                self.project_visible_grapheme(id, x, y, " ", 1, &token.style)?;
             }
-            measured_width = measured_width
-                .checked_add(width)
-                .ok_or(ProjectionError::CoordinateOverflow)?;
-            fragment_offset = fragment_offset
-                .checked_add(i64::try_from(width).map_err(|_| ProjectionError::CoordinateOverflow)?)
-                .ok_or(ProjectionError::CoordinateOverflow)?;
+            return Ok(());
         }
-        if measured_width != run.width {
-            return Err(ProjectionError::MalformedFlow(
-                "run text width differs from published width",
-            ));
-        }
-        Ok(())
+        self.project_visible_grapheme(
+            id,
+            base_x,
+            y,
+            &token.safe_text,
+            token.display_width,
+            &token.style,
+        )
     }
 
     fn project_visible_grapheme(
@@ -129,6 +123,9 @@ impl StagedFrame {
             self.projection.extend_clipped(id, signed_cells)?;
             return Ok(());
         };
+        if expected.target_cells.len() != width {
+            return Err(ProjectionError::WriterOutcomeMismatch);
+        }
 
         self.checkpoint()?;
         let GraphemeWriteOutcome::Committed(actual) =
@@ -144,11 +141,37 @@ impl StagedFrame {
         Ok(())
     }
 
-    fn write_zero_width(&mut self, x: i64, y: i64, grapheme: &str) -> Result<(), ProjectionError> {
+    fn write_zero_width(
+        &mut self,
+        id: ProjectionId,
+        row: usize,
+        column: usize,
+        x: i64,
+        y: i64,
+        grapheme: &str,
+    ) -> Result<(), ProjectionError> {
+        let Some(owner) = self
+            .projection
+            .preceding_sequence_owner(id, row, column, x, y)
+        else {
+            return Ok(());
+        };
         self.checkpoint()?;
-        let _ = self
-            .output
-            .write_grapheme(x, y, grapheme, &Style::default());
+        let GraphemeWriteOutcome::Committed(actual) =
+            self.output
+                .write_grapheme(x, y, grapheme, &Style::default())
+        else {
+            return Err(ProjectionError::WriterOutcomeMismatch);
+        };
+        if !actual.target_cells.is_empty()
+            || actual.old_cells.is_empty()
+            || actual
+                .old_cells
+                .iter()
+                .any(|position| self.projection.owner_at(position.x, position.y) != Some(owner))
+        {
+            return Err(ProjectionError::WriterOutcomeMismatch);
+        }
         Ok(())
     }
 
@@ -228,6 +251,10 @@ impl StagedFrame {
         projection.stats.validation_visits = validate_round_trip(&projection)?;
         Ok((self.output, projection))
     }
+}
+
+fn is_published_space_expansion(token: &TextFlowToken) -> bool {
+    token.safe_text.len() == token.display_width && token.safe_text.bytes().all(|byte| byte == b' ')
 }
 
 fn signed_cells(x: i64, y: i64, width: usize) -> Result<Vec<SignedCell>, ProjectionError> {
@@ -381,6 +408,44 @@ impl ProjectionBuilder {
             }
         }
         Ok(())
+    }
+
+    fn preceding_sequence_owner(
+        &self,
+        id: ProjectionId,
+        row: usize,
+        column: usize,
+        x: i64,
+        y: i64,
+    ) -> Option<ProjectionId> {
+        let previous_x = x.checked_sub(1)?;
+        let cell = FrameCell {
+            x: u16::try_from(previous_x).ok()?,
+            y: u16::try_from(y).ok()?,
+        };
+        let owner = self.reverse.get(&cell)?.id();
+        if owner.element_id != id.element_id || owner.token_index >= id.token_index {
+            return None;
+        }
+        let record = self
+            .forward_index
+            .get(&owner)
+            .and_then(|index| self.forward.get(*index))?;
+        let (owner_row, owner_column) = match record.logical {
+            TextFlowPlacement::Positioned { row, column }
+            | TextFlowPlacement::SanitizedControl { row, column }
+            | TextFlowPlacement::Synthetic { row, column } => (row, column),
+            TextFlowPlacement::ZeroWidth { .. }
+            | TextFlowPlacement::HardBreak { .. }
+            | TextFlowPlacement::Omitted { .. }
+            | TextFlowPlacement::Truncated { .. } => return None,
+        };
+        let owner_end = owner_column.checked_add(record.display_width)?;
+        (owner_row == row && owner_end == column).then_some(owner)
+    }
+
+    fn owner_at(&self, x: u16, y: u16) -> Option<ProjectionId> {
+        self.reverse.get(&FrameCell { x, y }).map(CellOrigin::id)
     }
 
     fn record_mut(&mut self, id: ProjectionId) -> Result<&mut ForwardProjection, ProjectionError> {
