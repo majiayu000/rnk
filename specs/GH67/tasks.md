@@ -164,7 +164,11 @@ test -z "$(git status --porcelain)"
 
 producer从 committed tasks中解析唯一 ledger，读取实际raw，使用
 `git diff --unified=0 "$GH67_COVERAGE_MERGE_BASE_SHA...$GH67_PR_HEAD_SHA"` 计算planned `.rs` added
-executable lines。它不能接收caller传入critical摘要。canonical artifact schema：
+executable lines。它不能接收caller传入critical摘要。ledger parser必须验证唯一block、
+version=1、issue=67、非空有序entries及每项非空`file/name/verification_command`和tuple唯一；
+任何缺失/多block/malformed/wrong metadata/空值/重复均fail closed。mandatory runner由解析结果
+机械派生cardinality与顺序，逐项先list证明唯一match再执行；禁止硬编码23/32或caller subset。
+canonical artifact schema：
 
 ```json
 {
@@ -205,7 +209,9 @@ newline，使相同head/base/raw/ledger byte-for-byte确定。validator重新has
 PR/head/base/merge-base/diff/executable/critical set/commands/count/percent并生成canonical
 bytes比较；
 changed `total>0`且≥80%，每个critical `total>0`且100%。active test必须实际执行，raw中的
-旧/同名未执行function不算。
+旧/同名未执行function不算。result parser要求每个派生entry按ledger顺序恰有一条
+`matched=1, passed=1, failed=0, ignored=0, exit=0`记录，并核对aggregate count/digest；
+missing/extra/duplicate/unmatched/ignored/nonzero/incomplete result全部fail closed。
 
 ## Implementation Tasks
 
@@ -354,7 +360,9 @@ changed `total>0`且≥80%，每个critical `total>0`且100%。active test必须
   `cargo test --workspace --all-targets --all-features --locked`；
   `cargo test --doc --workspace --all-features --locked`；
   Durable coverage本节三条命令；
-  Product-to-Test Mapping全部exact tests与ledger全部23条命令；tech §10 fixed
+  Product-to-Test Mapping全部exact tests与唯一ledger机械派生的全部命令（当前reviewed
+  packet为32项；禁止硬编码数量或传入subset），并由result parser验证有序一一对应；
+  tech §10 fixed
   URL/commit/checksum workflow/depth命令。
   - Dependencies: SP67-T3完整handoff；所有production writers停止。
   - File ownership: 独占 `examples/rnk_chat.rs`；接管三个integration tests与goldens只修正
@@ -371,8 +379,9 @@ changed `total>0`且≥80%，每个critical `total>0`且100%。active test必须
   ancestor set fresh；mapped/critical tests、raw/canonical coverage、example/golden/PTY/
   full suite、fixed SpecRail checkout/checksums、CI、reviewThreads与SpecRail PR gate均指向
   current PR exact head；任何head/worktree/remote drift都丢弃evidence并退回T4重建。
-  read-only重跑tech mapping、ledger commands、coverage validate、full Rust/docs/example
-  gates及fresh PR evidence；不得approve、resolve threads或merge。
+  read-only从唯一committed ledger重新派生并重跑全部commands，以同一fail-closed result
+  parser核对count/digest/逐项结果，再重跑tech mapping、coverage validate、full
+  Rust/docs/example gates及fresh PR evidence；不得approve、resolve threads或merge。
   - Dependencies: SP67-T4完整evidence handoff；所有writers停止。
   - File ownership: 无writable path。
   - Handoff: 即使全部通过，最终implementation PR approval、merge、release、#67和GH-57
@@ -422,7 +431,8 @@ product、tech mapping、affected tasks、本审计与critical ledger（若criti
 - dependency records fresh且#62/#63/#64/#65 closed/final merged/ancestor；GH-65 transitive
   records完整。
 - Product-to-Test Mapping每项exact test matched=passed=1 ignored=0。
-- ledger version/issue/32个unique `file+name`/nonempty command逐项执行；coverage
+- ledger parser/result parser正负fixture覆盖缺/多/malformed block、wrong metadata、空值、
+  duplicate/missing/extra/unmatched/ignored/nonzero；当前解析为32个unique `file+name`并逐项执行；coverage
   fixture/collect/produce/validate mode与absolute paths全部显式。
 - changed executable≥80%、32个critical各100%，artifact可canonical byte-for-byte重算；
   validate环境贯穿后续全套测试且末尾immutable window fresh不漂移。

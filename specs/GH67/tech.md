@@ -725,7 +725,13 @@ python3 "$SPEC_RAIL_CHECKOUT/tools/spec_depth_audit.py" \
 ```
 
 URL/commit/checksum是常量；任一步失败即失败，禁止fallback；两exact tests在隔离temp内断言
-15 refs/SHA、remote commits、checksums与两checker。
+15 refs/SHA、remote commits、checksums与两checker。所有mandatory ledger runner只读取
+committed tasks中唯一`gh57-critical-paths-v1` block，解析后机械派生有序entries、digest与
+cardinality（当前reviewed packet为32，runner不得硬编码23/32或接受caller selection）。
+每项先以其exact command列举并证明matched=1，再执行并记录matched/passed/failed/ignored/
+exit status；result parser要求结果与派生ledger有序一一对应且aggregate count/digest一致。
+缺失/多block/malformed、wrong version/issue、空集合/字段/command、重复ledger项，或结果
+missing/extra/duplicate/unmatched/ignored/nonzero，均在closure publication前fail closed。
 
 ## Product-to-Test Mapping
 
@@ -767,23 +773,17 @@ URL/commit/checksum是常量；任一步失败即失败，禁止fallback；两ex
 
 ## Data Flow
 
-- 输入：Conversation/ApplyOutcome、bundle-owned Composer/List prepared APIs、borrowed render path、typed terminal/status/overlay/events与session config。
-- 处理：唯一dispatch→revision/preflight/cap→两upstream prepare→measure/layout/render→infallible commit；失败discard，session逐项恢复。
-- 输出：dispatch/interaction/observation/frame或typed shell/run error；双失败同时拥有primary与nonempty cleanup。
-- 外部：无provider/network/tool/secret/storage；进程内持有state，fresh restart不跨进程恢复。
+- 输入/处理：typed Conversation、owned state/prepared APIs、terminal/events/config → 唯一dispatch → revision/preflight/cap → prepare/measure/layout/render → infallible commit；失败discard并逐项恢复。
+- 输出/外部：typed interaction/observation/frame/error，双失败保留primary+cleanup；无provider/network/tool/secret/storage，fresh restart不跨进程恢复。
 
 ## 备选方案
 
-- 拒绝给layout加chat state、item-count scroll、广播hooks或复制GH-65 height/TextFlow。
-- 拒绝立即commit后clone rollback、`Option<Element>`、旧frame fallback及Drop-only cleanup。
-- 拒绝Inline/Fullscreen flag混淆scrollback与owned-frame lifecycle。
+- 拒绝layout chat state/item-count scroll/广播hooks/GH-65复制，以及commit后clone rollback、`Option<Element>`、旧frame fallback、Drop-only cleanup或Inline/Fullscreen混淆。
 
 ## 风险
 
-- Dependency drift：path、final ancestry、capability与source-drift reapproval阻断未完成上游。
-- Correctness：单transaction、checked rect、failure equality与closed route table。
-- Terminal：lease、query-phase snapshot、attempted-step rollback、retry recovery与PTY/fake。
-- Performance/security：O(1) handles/visible slices；shell无raw ANSI/tool execution。
+- Dependency/correctness：path/ancestry/capability drift须reapproval；单transaction、checked rect、failure equality与closed routes。
+- Terminal/performance/security：lease/query/rollback/recovery由PTY/fake覆盖；O(1) handles/visible slices，shell无raw ANSI/tool execution。
 
 ## 测试计划
 
@@ -796,4 +796,4 @@ URL/commit/checksum是常量；任一步失败即失败，禁止fallback；两ex
 
 ## 回滚方案
 
-GH-67无数据migration；未merge时关闭PR，已merge时普通revert paths并先回滚GH-68依赖。禁止force push/silent-disable/private fallback；保留evidence，issue保持open。
+GH-67无migration；未merge关闭PR，已merge普通revert且先回滚GH-68；禁止force push/silent-disable/private fallback，保留evidence并保持issue open。

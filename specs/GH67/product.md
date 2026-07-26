@@ -210,7 +210,12 @@ frame 与 alternate-screen 生命周期，并为布局、焦点、路由、resiz
     Product-to-Test Mapping 每个 exact test matched=passed=1、ignored=0；
     plain/ANSI golden不在测试中更新；changed executable coverage ≥80%，committed
     `gh57-critical-paths-v1` 的 exact `file+name+command` 集合逐项 100%，producer/validator
-    可从 raw coverage、diff 和 ledger 确定性重算。SpecRail packet验证必须声明可获取的
+    可从 raw coverage、diff 和 ledger 确定性重算。唯一权威ledger是committed tasks中恰好
+    一个可解析的该版本block；所有mandatory runner必须从它机械派生顺序、数量与command并
+    逐项执行，禁止caller subset或硬编码cardinality（当前reviewed packet为32项）。ledger
+    parser遇到缺失/多block/malformed、wrong version/issue、空集合/字段/command或重复项必须
+    fail closed；result parser要求与派生ledger严格有序一一对应，missing/extra/duplicate、
+    unmatched/ignored/nonzero或不完整aggregate均失败。SpecRail packet验证必须声明可获取的
     repository URL、immutable commit、checkout步骤与checker checksum；mirror必须从exact
     reviewed rnk head复制manifest声明的GH57/GH62/GH63/GH64/GH67全部15个refs，并逐文件断言
     existence与source/mirror SHA相等，不能使用SpecRail仓库自带的drifted/missing copies。
