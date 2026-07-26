@@ -429,8 +429,8 @@ fn narrow_tabs_participate_in_wrap_and_truncation() {
     assert!(wrapped.rows().iter().all(|row| !row.contains('\t')));
 
     let truncated = build("A\tB", 2, TextWrap::Truncate);
-    assert_eq!(truncated.rows(), &["A".to_string()]);
-    assert_eq!(truncated.logical_rows()[0].width, 1);
+    assert_eq!(truncated.rows(), &["A…".to_string()]);
+    assert_eq!(truncated.logical_rows()[0].width, 2);
     assert_eq!(
         truncated.tokens()[1].placement(),
         &TextFlowPlacement::Truncated { row: 0 }
