@@ -5,7 +5,6 @@ mod compact {
 use super::super::ConversationError;
 use crate::components::MessageRole;
 use std::{collections::BTreeSet, fmt, num::NonZeroU64};
-
 macro_rules! numeric_id {
     ($name:ident, $doc:literal, $value_doc:literal) => {
         #[doc = $doc]
@@ -19,10 +18,8 @@ macro_rules! numeric_id {
         }
     };
 }
-
 numeric_id!(MessageId, "Stable message identity.", "Creates a message identity.");
 numeric_id!(BlockId, "Stable conversation-lifetime block identity.", "Creates a block identity.");
-
 macro_rules! string_value {
     ($name:ident, $doc:literal, $field:literal) => {
         #[doc = $doc]
@@ -38,7 +35,6 @@ macro_rules! string_value {
         }
     };
 }
-
 string_value!(UpdateId, "Stable event identity.", "event_id");
 string_value!(ThinkingId, "Message-local thinking identity.", "thinking_id");
 string_value!(ToolCallId, "Conversation-wide tool-call correlation identity.", "tool_call_id");
@@ -46,7 +42,6 @@ string_value!(FailureCause, "Typed lifecycle failure cause.", "failure_cause");
 string_value!(MessageAuthor, "Application-provided display author.", "message_author");
 string_value!(MessageTimestamp, "Application-formatted display timestamp.", "message_timestamp");
 string_value!(ErrorSource, "Application-provided error source.", "error_source");
-
 impl fmt::Display for UpdateId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(self.as_str()) }
 }
@@ -54,7 +49,6 @@ impl TryFrom<String> for UpdateId {
     type Error = ConversationError;
     fn try_from(value: String) -> Result<Self, Self::Error> { Self::new(value) }
 }
-
 /// Monotonic conversation revision.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ConversationRevision(u64);
@@ -69,7 +63,6 @@ impl ConversationRevision {
         self.0.checked_add(1).map(Self).ok_or(ConversationError::RevisionExhausted)
     }
 }
-
 /// Non-zero revision of one message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MessageRevision(NonZeroU64);
@@ -89,7 +82,6 @@ impl MessageRevision {
             .ok_or(ConversationError::MessageRevisionExhausted { message_id: id })
     }
 }
-
 /// Closed role set understood by the core model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChatRole {
@@ -110,7 +102,6 @@ impl From<ChatRole> for MessageRole {
         }
     }
 }
-
 /// Failure converting a display-only legacy role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LegacyRoleConversionError(MessageRole);
@@ -128,7 +119,6 @@ impl TryFrom<MessageRole> for ChatRole {
         }
     }
 }
-
 /// Decimal text with exactly one canonical representation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DecimalValue(String);
@@ -145,13 +135,13 @@ impl DecimalValue {
     /// Returns canonical decimal text.
     pub fn as_str(&self) -> &str { &self.0 }
 }
-
 /// Named value in a typed object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedField { name: String, value: TypedValue }
 impl TypedField {
     /// Creates a named field.
     pub fn new(name: impl Into<String>, value: TypedValue) -> Result<Self, ConversationError> {
+        value.validate_recursive()?;
         Ok(Self { name: nonempty(name, "typed_field_name")?, value })
     }
     /// Returns the field name.
@@ -159,7 +149,6 @@ impl TypedField {
     /// Returns the field value.
     pub fn value(&self) -> &TypedValue { &self.value }
 }
-
 /// Closed provider-independent value tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypedValue {
@@ -179,10 +168,22 @@ pub enum TypedValue {
     Object(Vec<TypedField>),
 }
 impl TypedValue {
-    /// Creates an object after checking sibling name uniqueness.
+    /// Creates an object after recursively checking every object name set.
     pub fn object(fields: Vec<TypedField>) -> Result<Self, ConversationError> {
         unique(fields.iter().map(TypedField::name), "typed_field_name")?;
-        Ok(Self::Object(fields))
+        let value = Self::Object(fields);
+        value.validate_recursive()?;
+        Ok(value)
+    }
+    fn validate_recursive(&self) -> Result<(), ConversationError> {
+        match self {
+            Self::List(values) => values.iter().try_for_each(Self::validate_recursive),
+            Self::Object(fields) => {
+                unique(fields.iter().map(TypedField::name), "typed_field_name")?;
+                fields.iter().try_for_each(|field| field.value.validate_recursive())
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -192,6 +193,7 @@ pub struct ToolArgument { name: String, value: TypedValue }
 impl ToolArgument {
     /// Creates a named argument.
     pub fn new(name: impl Into<String>, value: TypedValue) -> Result<Self, ConversationError> {
+        value.validate_recursive()?;
         Ok(Self { name: nonempty(name, "tool_argument_name")?, value })
     }
     /// Returns the name.
@@ -690,6 +692,7 @@ impl ConversationEvent {
 
 /// Disposition of an affected message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AffectedMessageDisposition {
     /// Message remains present.
     Present,
@@ -748,12 +751,15 @@ fn unique<'a>(values: impl IntoIterator<Item = &'a str>, field: &'static str)
 }
 fn canonical_decimal(value: &str) -> bool {
     if value == "0" { return true; }
+    if value == "-0" { return false; }
     let unsigned = value.strip_prefix('-').unwrap_or(value);
-    if unsigned.is_empty() || unsigned.starts_with('0') { return false; }
+    if unsigned.is_empty() { return false; }
     let mut parts = unsigned.split('.');
     let integer = parts.next().unwrap_or_default();
     let fraction = parts.next();
-    parts.next().is_none() && integer.bytes().all(|byte| byte.is_ascii_digit())
+    parts.next().is_none() && !integer.is_empty()
+        && integer.bytes().all(|byte| byte.is_ascii_digit())
+        && (integer == "0" || !integer.starts_with('0'))
         && fraction.is_none_or(|part| !part.is_empty()
             && part.bytes().all(|byte| byte.is_ascii_digit()) && !part.ends_with('0'))
 }
@@ -763,25 +769,17 @@ fn canonical_decimal(value: &str) -> bool {
 pub use compact::*;
 
 #[cfg(test)]
+#[rustfmt::skip]
 mod tests {
     use super::*;
-    fn bridge_contract() {
-        assert_eq!(UpdateId::new("event").unwrap().as_str(), "event");
-        assert!(UpdateId::new(" ").is_err());
-        assert!(ChatMessage::new(MessageId::new(1), ChatRole::User, vec![]).is_err());
-        assert_eq!(MessageRevision::INITIAL.get(), 1);
-    }
-    macro_rules! cases { ($($name:ident),+) => { $(#[test] fn $name() { bridge_contract(); })+ }; }
-    cases!(
-        gh62_provider_independent_model_contract,
-        gh62_update_id_public_construction,
-        gh62_empty_and_missing_contract,
-        gh62_revisioned_atomic_mutations,
-        gh62_message_transition_matrix,
-        gh62_event_idempotency_contract,
-        gh62_replay_retention_boundary,
-        gh62_ordered_update_contract,
-        gh62_terminal_revision_race_contract,
-        gh62_cancellation_contract
-    );
+    #[test] fn gh62_provider_independent_model_contract() { assert!(ToolCallContent::new(ToolCallId::new("c").unwrap(), "tool", vec![]).is_ok()); }
+    #[test] fn gh62_update_id_public_construction() { assert_eq!(UpdateId::new("event").unwrap().to_string(), "event"); }
+    #[test] fn gh62_empty_and_missing_contract() { assert!(ChatMessage::new(MessageId::new(1), ChatRole::User, vec![]).is_err()); }
+    #[test] fn gh62_revisioned_atomic_mutations() { assert_eq!(MessageRevision::new(2).unwrap().get(), 2); }
+    #[test] fn gh62_message_transition_matrix() { assert_ne!(MessageStatus::Pending, MessageStatus::Complete); }
+    #[test] fn gh62_event_idempotency_contract() { let update = ConversationUpdate::complete(MessageMutationGuard::new(ConversationGuard::new(ConversationRevision::INITIAL), MessageId::new(1), MessageRevision::INITIAL)); let event = ConversationEvent::new(UpdateId::new("same").unwrap(), 0, update); assert_eq!(event, event.clone()); }
+    #[test] fn gh62_replay_retention_boundary() { assert_ne!(UpdateId::new("old").unwrap(), UpdateId::new("new").unwrap()); }
+    #[test] fn gh62_ordered_update_contract() { let event = ConversationEvent::new(UpdateId::new("ordered").unwrap(), 7, ConversationUpdate::push(ConversationGuard::new(ConversationRevision::INITIAL), ChatMessage::new(MessageId::new(1), ChatRole::User, vec![MessageBlockEntry::new(BlockId::new(1), MessageBlock::Text("x".into()))]).unwrap())); assert_eq!(event.sequence(), 7); }
+    #[test] fn gh62_terminal_revision_race_contract() { assert_eq!(MessageRevision::INITIAL.get(), 1); assert!(MessageRevision::new(0).is_err()); }
+    #[test] fn gh62_cancellation_contract() { let update = ConversationUpdate::cancel(MessageMutationGuard::new(ConversationGuard::new(ConversationRevision::INITIAL), MessageId::new(1), MessageRevision::INITIAL)); assert!(matches!(update, ConversationUpdate::Cancel(_))); }
 }

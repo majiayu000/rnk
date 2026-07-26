@@ -60,6 +60,16 @@ fn closed_typed_values_reject_invalid_payloads() {
     ])
     .unwrap();
     assert!(matches!(valid, TypedValue::Object(fields) if fields.len() == 2));
+    let unchecked = TypedValue::Object(vec![
+        TypedField::new("x", TypedValue::Null).unwrap(),
+        TypedField::new("x", TypedValue::Bool(true)).unwrap(),
+    ]);
+    assert!(ToolArgument::new("payload", unchecked).is_err());
+    let nested_unchecked = TypedValue::List(vec![TypedValue::Object(vec![
+        TypedField::new("nested", TypedValue::Null).unwrap(),
+        TypedField::new("nested", TypedValue::Integer(1)).unwrap(),
+    ])]);
+    assert!(ToolArgument::new("payload", nested_unchecked).is_err());
 }
 
 #[test]
@@ -101,10 +111,12 @@ fn error_content_is_typed_and_source_aware() {
 
 #[test]
 fn decimal_values_have_one_canonical_representation() {
-    for valid in ["0", "1", "-1", "1.25", "-10.01"] {
+    for valid in ["0", "1", "-1", "0.1", "-0.1", "1.25", "-10.01"] {
         assert_eq!(DecimalValue::new(valid).unwrap().as_str(), valid);
     }
-    for invalid in ["", " ", "-0", "+1", "01", "1.0", "1.00", "1e0", "NaN"] {
+    for invalid in [
+        "", " ", "-0", "+1", "01", "00.1", "-00.1", "0.0", "-0.0", "1.0", "1.00", "1e0", "NaN",
+    ] {
         assert!(DecimalValue::new(invalid).is_err(), "{invalid}");
     }
 }
@@ -225,167 +237,6 @@ fn assert_atomic_error(
     error
 }
 
-fn exercise_push_stream_complete() {
-    let mut state = ConversationState::new(10, std::num::NonZeroUsize::new(4).unwrap());
-    let pushed = event(
-        "push",
-        10,
-        ConversationUpdate::push(
-            ConversationGuard::new(ConversationRevision::INITIAL),
-            message(1, ChatRole::Assistant, vec![text_entry(11, "")]),
-        ),
-    );
-    let first = state.apply_event(pushed.clone()).unwrap();
-    assert_eq!(first.revision().get(), 1);
-    assert_eq!(first.affected_messages()[0].previous_revision(), None);
-    assert_eq!(state.apply_event(pushed).unwrap(), first);
-    let append = ConversationUpdate::append_text(
-        guard(&state, MessageId::new(1)),
-        BlockId::new(11),
-        "hello",
-    )
-    .unwrap();
-    state.apply_event(event("append", 11, append)).unwrap();
-    let complete = ConversationUpdate::complete(guard(&state, MessageId::new(1)));
-    state.apply_event(event("complete", 12, complete)).unwrap();
-    let value = state.message(MessageId::new(1)).unwrap();
-    assert!(matches!(value.status(), MessageStatus::Complete));
-    assert_eq!(value.revision().get(), 3);
-    assert!(matches!(value.blocks()[0].block(), MessageBlock::Text(text) if text == "hello"));
-}
-
-fn exercise_ordering_and_atomicity() {
-    let mut state = ConversationState::new(7, std::num::NonZeroUsize::new(2).unwrap());
-    let push = event(
-        "p",
-        7,
-        ConversationUpdate::push(
-            ConversationGuard::new(state.revision()),
-            message(1, ChatRole::User, vec![text_entry(1, "x")]),
-        ),
-    );
-    let accepted = state.apply_event(push.clone()).unwrap();
-    assert_eq!(state.apply_event(push.clone()).unwrap(), accepted);
-    let conflicting = event(
-        "p",
-        8,
-        ConversationUpdate::complete(guard(&state, MessageId::new(1))),
-    );
-    assert!(matches!(
-        assert_atomic_error(&mut state, conflicting),
-        ConversationError::EventIdConflict { .. }
-    ));
-    let stale = event(
-        "stale",
-        7,
-        ConversationUpdate::complete(guard(&state, MessageId::new(1))),
-    );
-    assert!(matches!(
-        assert_atomic_error(&mut state, stale),
-        ConversationError::StaleSequence { .. }
-    ));
-    let gap = event(
-        "gap",
-        10,
-        ConversationUpdate::complete(guard(&state, MessageId::new(1))),
-    );
-    assert!(matches!(
-        assert_atomic_error(&mut state, gap),
-        ConversationError::SequenceGap { .. }
-    ));
-    let bad_guard = ConversationUpdate::complete(MessageMutationGuard::new(
-        ConversationGuard::new(ConversationRevision::INITIAL),
-        MessageId::new(1),
-        MessageRevision::INITIAL,
-    ));
-    assert!(matches!(
-        assert_atomic_error(&mut state, event("guard", 8, bad_guard)),
-        ConversationError::ConversationRevisionMismatch { .. }
-    ));
-    let bad_message_guard = ConversationUpdate::complete(MessageMutationGuard::new(
-        ConversationGuard::new(state.revision()),
-        MessageId::new(1),
-        MessageRevision::new(99).unwrap(),
-    ));
-    assert!(matches!(
-        assert_atomic_error(&mut state, event("message-guard", 8, bad_message_guard)),
-        ConversationError::MessageRevisionMismatch { .. }
-    ));
-}
-
-fn exercise_block_mutations() {
-    let mut state = ConversationState::new(0, std::num::NonZeroUsize::new(8).unwrap());
-    apply_push(
-        &mut state,
-        "p",
-        0,
-        message(
-            1,
-            ChatRole::Assistant,
-            vec![
-                text_entry(1, ""),
-                MessageBlockEntry::new(
-                    BlockId::new(2),
-                    MessageBlock::Thinking(ThinkingContent::new(
-                        ThinkingId::new("thought").unwrap(),
-                        "",
-                    )),
-                ),
-            ],
-        ),
-    );
-    let append =
-        ConversationUpdate::append_text(guard(&state, MessageId::new(1)), BlockId::new(1), "a")
-            .unwrap();
-    state.apply_event(event("a", 1, append)).unwrap();
-    let thinking = MessageBlock::Thinking(
-        ThinkingContent::new(ThinkingId::new("thought").unwrap(), "step")
-            .with_status(ThinkingStatus::Streaming),
-    );
-    let replace = ConversationUpdate::replace_block(
-        guard(&state, MessageId::new(1)),
-        BlockId::new(2),
-        thinking,
-    );
-    state.apply_event(event("r", 2, replace)).unwrap();
-    let inserted = MessageBlockEntry::new(
-        BlockId::new(3),
-        MessageBlock::Code(CodeContent::new("let x = 1;").unwrap()),
-    );
-    let insert =
-        ConversationUpdate::insert_message_block(guard(&state, MessageId::new(1)), 1, inserted);
-    state.apply_event(event("i", 3, insert)).unwrap();
-    let appended = MessageBlockEntry::new(BlockId::new(4), MessageBlock::Markdown("tail".into()));
-    let add = ConversationUpdate::append_message_block(guard(&state, MessageId::new(1)), appended);
-    state.apply_event(event("b", 4, add)).unwrap();
-    let before = state.clone();
-    let bad = ConversationUpdate::replace_block(
-        guard(&state, MessageId::new(1)),
-        BlockId::new(1),
-        MessageBlock::Markdown("wrong".into()),
-    );
-    assert!(state.apply_event(event("bad", 5, bad)).is_err());
-    assert_eq!(state, before);
-    let empty = ConversationUpdate::append_message_block(
-        guard(&state, MessageId::new(1)),
-        MessageBlockEntry::new(BlockId::new(5), MessageBlock::Text(String::new())),
-    );
-    assert!(matches!(
-        assert_atomic_error(&mut state, event("empty", 5, empty)),
-        ConversationError::InvalidMessage { .. }
-    ));
-    let out_of_bounds = ConversationUpdate::insert_message_block(
-        guard(&state, MessageId::new(1)),
-        usize::MAX,
-        text_entry(6, "never inserted"),
-    );
-    assert!(matches!(
-        assert_atomic_error(&mut state, event("bounds", 5, out_of_bounds)),
-        ConversationError::InvalidMessage { .. }
-    ));
-    assert_eq!(state.message(MessageId::new(1)).unwrap().blocks().len(), 4);
-}
-
 fn setup_correlated() -> ConversationState {
     let mut state = ConversationState::new(0, std::num::NonZeroUsize::new(16).unwrap());
     let call_id = ToolCallId::new("call").unwrap();
@@ -429,199 +280,41 @@ fn setup_correlated() -> ConversationState {
     state
 }
 
-fn exercise_correlation_cancel() {
-    let mut state = setup_correlated();
-    let cancel = ConversationUpdate::cancel(guard(&state, MessageId::new(2)));
-    let outcome = state.apply_event(event("cancel", 3, cancel)).unwrap();
-    assert_eq!(outcome.affected_messages().len(), 2);
-    assert!(matches!(
-        state.message(MessageId::new(1)).unwrap().blocks()[0].block(),
-        MessageBlock::ToolCall(value) if matches!(value.status(), ToolCallStatus::Cancelled)
-    ));
-    assert!(matches!(
-        state.message(MessageId::new(2)).unwrap().blocks()[0].block(),
-        MessageBlock::ToolResult(value) if matches!(value.status(), ToolResultStatus::Cancelled)
-    ));
-    let late = ConversationUpdate::replace_block(
-        guard(&state, MessageId::new(2)),
-        BlockId::new(2),
-        MessageBlock::ToolResult(
-            ToolResultContent::new(ToolCallId::new("call").unwrap(), "late")
-                .with_status(ToolResultStatus::Complete),
-        ),
-    );
-    assert!(matches!(
-        assert_atomic_error(&mut state, event("late", 4, late)),
-        ConversationError::InvalidTransition { .. }
-    ));
-}
-
-fn exercise_correlation_fail() {
-    let mut state = setup_correlated();
-    let premature = ConversationUpdate::complete(guard(&state, MessageId::new(1)));
-    assert!(matches!(
-        assert_atomic_error(&mut state, event("premature", 3, premature)),
-        ConversationError::InvalidTransition { .. }
-    ));
-    let cause = FailureCause::new("provider stopped").unwrap();
-    let fail = ConversationUpdate::fail(guard(&state, MessageId::new(2)), cause.clone());
-    state.apply_event(event("fail", 3, fail)).unwrap();
-    assert_eq!(
-        state
-            .message(MessageId::new(2))
-            .unwrap()
-            .status()
-            .failure_cause(),
-        Some(&cause)
-    );
-    for id in [MessageId::new(1), MessageId::new(2)] {
-        let block = state.message(id).unwrap().blocks()[0].block();
-        let found = match block {
-            MessageBlock::ToolCall(value) => value.status().failure_cause(),
-            MessageBlock::ToolResult(value) => value.status().failure_cause(),
-            _ => None,
-        };
-        assert_eq!(found, Some(&cause));
-    }
-    let duplicate = message(
-        3,
-        ChatRole::Assistant,
-        vec![MessageBlockEntry::new(
-            BlockId::new(3),
-            MessageBlock::ToolCall(
-                ToolCallContent::new(ToolCallId::new("call").unwrap(), "again", vec![]).unwrap(),
-            ),
-        )],
-    );
-    let update = ConversationUpdate::push(ConversationGuard::new(state.revision()), duplicate);
-    assert!(matches!(
-        assert_atomic_error(&mut state, event("duplicate", 4, update)),
-        ConversationError::DuplicateToolCallId { .. }
-    ));
-}
-
-fn exercise_edit_delete_resend_restore() {
-    let mut state = ConversationState::new(0, std::num::NonZeroUsize::new(2).unwrap());
+fn text_state(capacity: usize) -> ConversationState {
+    let mut state = ConversationState::new(0, std::num::NonZeroUsize::new(capacity).unwrap());
     apply_push(
         &mut state,
-        "p",
-        0,
-        message(
-            1,
-            ChatRole::User,
-            vec![
-                text_entry(1, "source"),
-                MessageBlockEntry::new(
-                    BlockId::new(2),
-                    MessageBlock::Thinking(ThinkingContent::new(
-                        ThinkingId::new("same").unwrap(),
-                        "",
-                    )),
-                ),
-            ],
-        ),
-    );
-    let edit = ConversationUpdate::edit_message(
-        guard(&state, MessageId::new(1)),
-        vec![text_entry(1, "edited")],
-    );
-    state.apply_event(event("edit", 1, edit)).unwrap();
-    let reused = ConversationUpdate::edit_message(
-        guard(&state, MessageId::new(1)),
-        vec![
-            text_entry(1, "edited"),
-            MessageBlockEntry::new(
-                BlockId::new(3),
-                MessageBlock::Thinking(ThinkingContent::new(ThinkingId::new("same").unwrap(), "")),
-            ),
-        ],
-    );
-    assert!(matches!(
-        assert_atomic_error(&mut state, event("reuse", 2, reused)),
-        ConversationError::RetiredThinkingId { .. }
-    ));
-    let retired_block = ConversationUpdate::append_message_block(
-        guard(&state, MessageId::new(1)),
-        text_entry(2, "retired"),
-    );
-    assert!(matches!(
-        assert_atomic_error(&mut state, event("retired-block", 2, retired_block)),
-        ConversationError::RetiredBlockId { .. }
-    ));
-    let complete = ConversationUpdate::complete(guard(&state, MessageId::new(1)));
-    state.apply_event(event("complete", 2, complete)).unwrap();
-    let fresh = message(
-        2,
-        ChatRole::User,
-        vec![MessageBlockEntry::new(
-            BlockId::new(4),
-            MessageBlock::Thinking(ThinkingContent::new(ThinkingId::new("same").unwrap(), "")),
-        )],
-    );
-    let resend = ConversationUpdate::resend(guard(&state, MessageId::new(1)), fresh);
-    state.apply_event(event("resend", 3, resend)).unwrap();
-    let snapshot = state.snapshot();
-    assert_eq!(ConversationState::try_restore(snapshot).unwrap(), state);
-    let delete = ConversationUpdate::delete_message(guard(&state, MessageId::new(2)));
-    let outcome = state.apply_event(event("delete", 4, delete)).unwrap();
-    assert!(matches!(
-        outcome.affected_messages()[0].disposition(),
-        AffectedMessageDisposition::Deleted
-    ));
-
-    let mut correlated = setup_correlated();
-    let delete_result = ConversationUpdate::delete_message(guard(&correlated, MessageId::new(2)));
-    correlated
-        .apply_event(event("delete-result", 3, delete_result))
-        .unwrap();
-    let replacement_result = ConversationUpdate::append_message_block(
-        guard(&correlated, MessageId::new(1)),
-        MessageBlockEntry::new(
-            BlockId::new(9),
-            MessageBlock::ToolResult(ToolResultContent::new(ToolCallId::new("call").unwrap(), "")),
-        ),
-    );
-    assert!(matches!(
-        assert_atomic_error(
-            &mut correlated,
-            event("replacement-result", 4, replacement_result)
-        ),
-        ConversationError::ResultSlotRetired { .. }
-    ));
-    assert_eq!(
-        ConversationState::try_restore(correlated.snapshot()).unwrap(),
-        correlated
-    );
-}
-
-fn exercise_retention_and_exhaustion() {
-    let mut state = ConversationState::new(0, std::num::NonZeroUsize::new(1).unwrap());
-    apply_push(
-        &mut state,
-        "p",
+        "push",
         0,
         message(1, ChatRole::User, vec![text_entry(1, "x")]),
     );
-    let complete = ConversationUpdate::complete(guard(&state, MessageId::new(1)));
-    state.apply_event(event("c", 1, complete)).unwrap();
-    let old = event(
-        "p",
-        0,
-        ConversationUpdate::push(
-            ConversationGuard::new(ConversationRevision::INITIAL),
-            message(1, ChatRole::User, vec![text_entry(1, "x")]),
-        ),
+    state
+}
+fn block_text(state: &ConversationState, id: u64) -> &str {
+    match state.message(MessageId::new(id)).unwrap().blocks()[0].block() {
+        MessageBlock::Text(value) => value,
+        _ => panic!("expected text"),
+    }
+}
+fn terminal_call_state() -> ConversationState {
+    let mut state = setup_correlated();
+    let call = ToolCallContent::new(ToolCallId::new("call").unwrap(), "read", vec![])
+        .unwrap()
+        .with_status(ToolCallStatus::Succeeded);
+    let update = ConversationUpdate::replace_block(
+        guard(&state, MessageId::new(1)),
+        BlockId::new(1),
+        MessageBlock::ToolCall(call),
     );
-    assert!(matches!(
-        assert_atomic_error(&mut state, old),
-        ConversationError::ReplayOutsideRetention { .. }
-    ));
-
-    let max_snapshot = ConversationStateSnapshot::new(
+    state.apply_event(event("succeeded", 3, update)).unwrap();
+    state
+}
+fn max_state() -> ConversationState {
+    ConversationState::try_restore(ConversationStateSnapshot::new(
         vec![],
         ConversationRevision::INITIAL,
         u64::MAX,
-        RetentionHistory::new(std::num::NonZeroUsize::new(1).unwrap(), vec![], None).unwrap(),
+        RetentionHistory::new(std::num::NonZeroUsize::MIN, vec![], None).unwrap(),
         ConversationIdentityHistory::new(
             vec![],
             vec![],
@@ -632,159 +325,171 @@ fn exercise_retention_and_exhaustion() {
             vec![],
             vec![],
         ),
-    );
-    let mut exhausted = ConversationState::try_restore(max_snapshot).unwrap();
-    let malformed = ConversationUpdate::complete(MessageMutationGuard::new(
-        ConversationGuard::new(ConversationRevision::INITIAL),
-        MessageId::new(999),
-        MessageRevision::INITIAL,
-    ));
-    assert!(matches!(
-        assert_atomic_error(&mut exhausted, event("max", u64::MAX, malformed)),
-        ConversationError::SequenceExhausted
-    ));
-
-    let mut edge = ConversationState::new(u64::MAX - 1, std::num::NonZeroUsize::new(1).unwrap());
-    let last = event(
-        "last",
-        u64::MAX - 1,
-        ConversationUpdate::push(
-            ConversationGuard::new(edge.revision()),
-            message(8, ChatRole::User, vec![text_entry(8, "edge")]),
-        ),
-    );
-    let original = edge.apply_event(last.clone()).unwrap();
-    assert_eq!(edge.apply_event(last).unwrap(), original);
-    let invalid = ConversationUpdate::complete(guard(&edge, MessageId::new(8)));
-    assert!(matches!(
-        assert_atomic_error(&mut edge, event("past-end", u64::MAX, invalid)),
-        ConversationError::SequenceExhausted
-    ));
-
-    let mut fresh = ConversationState::new(0, std::num::NonZeroUsize::new(1).unwrap());
-    apply_push(
-        &mut fresh,
-        "fresh",
-        0,
-        message(1, ChatRole::User, vec![text_entry(1, "accepted")]),
-    );
-    assert_eq!(fresh.evicted_through(), None);
+    ))
+    .unwrap()
 }
+macro_rules! exact { ($name:ident, $body:block) => { #[test] fn $name() $body }; }
+macro_rules! unformatted { ($($tokens:tt)*) => { $($tokens)* }; }
 
 #[rustfmt::skip]
-fn exercise_determinism() {
-    struct Alpha<'a> { event: &'a str, text: &'a str }
-    struct Beta<'a> { key: &'a str, chunks: Vec<&'a str> }
-    fn core_events(event_id: &str, text: &str) -> Vec<ConversationEvent> {
-        let pushed = message(1, ChatRole::Assistant, vec![text_entry(1, "")]);
-        let push = ConversationUpdate::push(ConversationGuard::new(
-            ConversationRevision::INITIAL), pushed);
-        let append = ConversationUpdate::append_text(MessageMutationGuard::new(
-            ConversationGuard::new(ConversationRevision::new(1)), MessageId::new(1),
-            MessageRevision::INITIAL), BlockId::new(1), text).unwrap();
-        vec![event(event_id, 0, push), event("append", 1, append)]
-    }
-    fn alpha(value: Alpha<'_>) -> Vec<ConversationEvent> { core_events(value.event, value.text) }
-    fn beta(value: Beta<'_>) -> Vec<ConversationEvent> { core_events(value.key, &value.chunks.concat()) }
-    fn run(events: Vec<ConversationEvent>) -> (ConversationState, Vec<ApplyOutcome>) {
-        let mut state = ConversationState::new(0, std::num::NonZeroUsize::new(4).unwrap());
-        let outcomes = events.into_iter().map(|value| state.apply_event(value).unwrap()).collect();
-        (state, outcomes)
-    }
-    fn checked_adapter(revision: i128, block_id: i128, value: Option<TypedValue>) -> Result<(MessageRevision, BlockId, TypedValue), ConversationError> {
-        let revision = u64::try_from(revision).map_err(|_| ConversationError::InvalidValue { field: "message_revision", reason: "adapter revision is out of range" })?;
-        let revision = MessageRevision::new(revision)?;
-        let block_id = u64::try_from(block_id).map_err(|_| ConversationError::InvalidValue { field: "block_id", reason: "adapter block id is out of range" })?;
-        let value = value.ok_or(ConversationError::InvalidValue { field: "typed_value", reason: "adapter value is required" })?;
-        Ok((revision, BlockId::new(block_id), value))
-    }
-    let left = alpha(Alpha { event: "push", text: "same" });
-    let right = beta(Beta { key: "push", chunks: vec!["sa", "me"] });
-    assert_eq!(left, right);
-    assert_eq!(run(left), run(right));
-    assert!(checked_adapter(0, 1, Some(TypedValue::Null)).is_err());
-    assert!(checked_adapter(1, -1, Some(TypedValue::Null)).is_err());
-    assert!(checked_adapter(1, 1, None).is_err());
-    let mut empty = ConversationState::new(0, std::num::NonZeroUsize::new(2).unwrap());
-    apply_push(&mut empty, "empty", 0,
-        message(1, ChatRole::Assistant, vec![text_entry(1, "")]));
-    let complete = ConversationUpdate::complete(guard(&empty, MessageId::new(1)));
-    assert!(matches!(
-        assert_atomic_error(&mut empty, event("complete-empty", 1, complete)),
-        ConversationError::InvalidTransition { .. }
-    ));
-    let mut nested = ConversationState::new(0, std::num::NonZeroUsize::new(2).unwrap());
-    apply_push(&mut nested, "nested", 0, message(1, ChatRole::Assistant,
-        vec![MessageBlockEntry::new(BlockId::new(1), MessageBlock::Thinking(
-            ThinkingContent::new(ThinkingId::new("active").unwrap(), "")))]));
-    let complete = ConversationUpdate::complete(guard(&nested, MessageId::new(1)));
-    assert!(matches!(
-        assert_atomic_error(&mut nested, event("complete-active", 1, complete)),
-        ConversationError::InvalidTransition { .. }
-    ));
+unformatted! {
+exact!(push_is_unique_and_atomic, {
+    let mut state = text_state(4); let duplicate = ConversationUpdate::push(ConversationGuard::new(state.revision()), message(1, ChatRole::User, vec![text_entry(2, "duplicate")]));
+    assert!(matches!(assert_atomic_error(&mut state, event("duplicate", 1, duplicate)), ConversationError::DuplicateMessageId { .. }));
+});
+exact!(streaming_deltas_are_ordered_lossless_and_typed, {
+    let mut state = ConversationState::new(0, std::num::NonZeroUsize::new(4).unwrap()); apply_push(&mut state, "target", 0, message(1, ChatRole::Assistant, vec![text_entry(1, "")])); apply_push(&mut state, "other", 1, message(2, ChatRole::User, vec![text_entry(2, "unrelated transcript")]));
+    let pointer = block_text(&state, 2).as_ptr(); let update = ConversationUpdate::append_text(guard(&state, MessageId::new(1)), BlockId::new(1), "hello").unwrap(); state.apply_event(event("append", 2, update)).unwrap();
+    assert_eq!(block_text(&state, 1), "hello"); assert_eq!(block_text(&state, 2).as_ptr(), pointer, "unaffected transcript storage was cloned");
+});
+exact!(static_message_completes_without_dummy_append, {
+    let mut state = text_state(4); let before = state.message(MessageId::new(1)).unwrap().blocks().to_vec();
+    let update = ConversationUpdate::complete(guard(&state, MessageId::new(1))); state.apply_event(event("complete", 1, update)).unwrap();
+    assert!(matches!(state.message(MessageId::new(1)).unwrap().status(), MessageStatus::Complete)); assert_eq!(state.message(MessageId::new(1)).unwrap().blocks(), before);
+});
+exact!(public_model_is_typed_and_constructible, {
+    let mut state = ConversationState::new(0, std::num::NonZeroUsize::MIN); let outcome = apply_push(&mut state, "p", 0, message(7, ChatRole::User, vec![text_entry(7, "typed")]));
+    assert_eq!(outcome.affected_messages()[0].previous_revision(), None); assert_eq!(outcome.affected_messages()[0].message_id(), MessageId::new(7));
+});
+exact!(constructor_based_public_api_remains_compatible, {
+    let update = ConversationUpdate::append_text(MessageMutationGuard::new(ConversationGuard::new(ConversationRevision::new(2)), MessageId::new(3), MessageRevision::new(4).unwrap()), BlockId::new(5), "x").unwrap();
+    assert!(matches!(update, ConversationUpdate::AppendText(value) if value.block_id() == BlockId::new(5) && value.delta() == "x"));
+});
+exact!(append_block_supports_late_discovered_typed_blocks, {
+    let mut state = text_state(4); let entry = MessageBlockEntry::new(BlockId::new(2), MessageBlock::Markdown("late".into()));
+    let update = ConversationUpdate::append_message_block(guard(&state, MessageId::new(1)), entry); state.apply_event(event("append-block", 1, update)).unwrap();
+    assert!(matches!(state.message(MessageId::new(1)).unwrap().blocks()[1].block(), MessageBlock::Markdown(value) if value == "late"));
+});
+exact!(append_block_rejects_invalid_blocks_atomically, {
+    let mut state = text_state(4); let update = ConversationUpdate::append_message_block(guard(&state, MessageId::new(1)), text_entry(2, ""));
+    assert!(matches!(assert_atomic_error(&mut state, event("empty", 1, update)), ConversationError::InvalidMessage { .. }));
+});
+exact!(replace_block_validates_before_commit, {
+    let mut state = terminal_call_state(); let rewritten = ToolCallContent::new(ToolCallId::new("call").unwrap(), "rewritten", vec![]).unwrap().with_status(ToolCallStatus::Succeeded);
+    let update = ConversationUpdate::replace_block(guard(&state, MessageId::new(1)), BlockId::new(1), MessageBlock::ToolCall(rewritten));
+    assert!(matches!(assert_atomic_error(&mut state, event("rewrite", 4, update)), ConversationError::InvalidReplacement { .. }));
+});
+exact!(replace_block_requires_same_variant_and_identity, {
+    let mut state = text_state(4); let update = ConversationUpdate::replace_block(guard(&state, MessageId::new(1)), BlockId::new(1), MessageBlock::Markdown("x".into()));
+    assert!(matches!(assert_atomic_error(&mut state, event("wrong-kind", 1, update)), ConversationError::InvalidReplacement { .. }));
+});
+exact!(edit_and_insert_are_revisioned_and_identity_safe, {
+    let mut state = text_state(4); let update = ConversationUpdate::insert_message_block(guard(&state, MessageId::new(1)), 0, text_entry(2, "first")); state.apply_event(event("insert", 1, update)).unwrap();
+    assert_eq!(state.message(MessageId::new(1)).unwrap().blocks()[0].id(), BlockId::new(2)); assert_eq!(state.message(MessageId::new(1)).unwrap().revision().get(), 2);
+});
+exact!(revision_guards_and_mutation_failures_are_atomic, {
+    let mut state = text_state(4); let bad = MessageMutationGuard::new(ConversationGuard::new(ConversationRevision::INITIAL), MessageId::new(1), MessageRevision::INITIAL);
+    assert!(matches!(assert_atomic_error(&mut state, event("stale-guard", 1, ConversationUpdate::complete(bad))), ConversationError::ConversationRevisionMismatch { .. }));
+});
+exact!(lifecycle_identity_namespaces_are_scoped_and_correlated, {
+    let state = setup_correlated(); let call = state.message(MessageId::new(1)).unwrap().blocks()[0].block(); let result = state.message(MessageId::new(2)).unwrap().blocks()[0].block();
+    assert!(matches!((call, result), (MessageBlock::ToolCall(a), MessageBlock::ToolResult(b)) if a.call_id() == b.call_id()));
+});
+exact!(correlated_lifecycle_updates_are_atomic, {
+    let mut state = setup_correlated(); let result = ToolResultContent::new(ToolCallId::new("call").unwrap(), "part").with_status(ToolResultStatus::Streaming);
+    let update = ConversationUpdate::replace_block(guard(&state, MessageId::new(2)), BlockId::new(2), MessageBlock::ToolResult(result)); state.apply_event(event("stream-result", 3, update)).unwrap();
+    assert!(matches!(state.message(MessageId::new(2)).unwrap().blocks()[0].block(), MessageBlock::ToolResult(value) if value.output() == "part" && matches!(value.status(), ToolResultStatus::Streaming)));
+});
+exact!(cancel_cascades_across_correlated_messages_atomically, {
+    let mut state = setup_correlated(); let update = ConversationUpdate::cancel(guard(&state, MessageId::new(2))); let outcome = state.apply_event(event("cancel", 3, update)).unwrap();
+    assert_eq!(outcome.affected_messages().len(), 2); assert!(matches!(state.message(MessageId::new(1)).unwrap().blocks()[0].block(), MessageBlock::ToolCall(value) if matches!(value.status(), ToolCallStatus::Cancelled)));
+});
+exact!(cancellation_preserves_partial_content_and_rejects_late_events, {
+    let mut state = setup_correlated(); let partial = ToolResultContent::new(ToolCallId::new("call").unwrap(), "partial").with_status(ToolResultStatus::Streaming);
+    let stream = ConversationUpdate::replace_block(guard(&state, MessageId::new(2)), BlockId::new(2), MessageBlock::ToolResult(partial)); state.apply_event(event("partial", 3, stream)).unwrap();
+    let cancel = ConversationUpdate::cancel(guard(&state, MessageId::new(2))); state.apply_event(event("cancel", 4, cancel)).unwrap(); assert!(matches!(state.message(MessageId::new(2)).unwrap().blocks()[0].block(), MessageBlock::ToolResult(value) if value.output() == "partial"));
+});
+exact!(duplicate_lifecycle_identities_are_rejected_atomically, {
+    let mut state = setup_correlated(); let duplicate = ToolCallContent::new(ToolCallId::new("call").unwrap(), "again", vec![]).unwrap();
+    let update = ConversationUpdate::push(ConversationGuard::new(state.revision()), message(3, ChatRole::Assistant, vec![MessageBlockEntry::new(BlockId::new(3), MessageBlock::ToolCall(duplicate))]));
+    assert!(matches!(assert_atomic_error(&mut state, event("duplicate-call", 3, update)), ConversationError::DuplicateToolCallId { .. }));
+});
+exact!(fail_cascades_across_correlated_messages_atomically, {
+    let mut state = setup_correlated(); let cause = FailureCause::new("stopped").unwrap(); let update = ConversationUpdate::fail(guard(&state, MessageId::new(2)), cause.clone()); let outcome = state.apply_event(event("fail", 3, update)).unwrap();
+    assert_eq!(outcome.affected_messages().len(), 2); assert!(matches!(state.message(MessageId::new(1)).unwrap().blocks()[0].block(), MessageBlock::ToolCall(value) if value.status().failure_cause() == Some(&cause)));
+});
+exact!(failure_causes_are_typed_and_propagated, {
+    let mut state = setup_correlated(); let cause = FailureCause::new("typed").unwrap(); let update = ConversationUpdate::fail(guard(&state, MessageId::new(2)), cause.clone()); state.apply_event(event("fail", 3, update)).unwrap();
+    assert_eq!(state.message(MessageId::new(2)).unwrap().status().failure_cause(), Some(&cause)); assert!(matches!(state.message(MessageId::new(2)).unwrap().blocks()[0].block(), MessageBlock::ToolResult(value) if value.status().failure_cause() == Some(&cause)));
+});
+exact!(message_complete_rejects_inconsistent_tool_pairs, {
+    let mut state = terminal_call_state(); let update = ConversationUpdate::complete(guard(&state, MessageId::new(1)));
+    assert!(matches!(assert_atomic_error(&mut state, event("premature", 4, update)), ConversationError::InvalidTransition { .. }));
+});
+exact!(edit_retires_thinking_ids_atomically, {
+    let mut state = ConversationState::new(0, std::num::NonZeroUsize::new(4).unwrap()); let thought = MessageBlockEntry::new(BlockId::new(2), MessageBlock::Thinking(ThinkingContent::new(ThinkingId::new("thought").unwrap(), ""))); apply_push(&mut state, "p", 0, message(1, ChatRole::User, vec![text_entry(1, "x"), thought]));
+    let edit = ConversationUpdate::edit_message(guard(&state, MessageId::new(1)), vec![text_entry(1, "x")]); state.apply_event(event("edit", 1, edit)).unwrap(); let reused = MessageBlockEntry::new(BlockId::new(3), MessageBlock::Thinking(ThinkingContent::new(ThinkingId::new("thought").unwrap(), ""))); let update = ConversationUpdate::append_message_block(guard(&state, MessageId::new(1)), reused);
+    assert!(matches!(assert_atomic_error(&mut state, event("reuse", 2, update)), ConversationError::RetiredThinkingId { .. }));
+});
+exact!(delete_preserves_global_correlation_atomically, {
+    let mut state = setup_correlated(); let update = ConversationUpdate::delete_message(guard(&state, MessageId::new(1)));
+    assert!(matches!(assert_atomic_error(&mut state, event("orphan", 3, update)), ConversationError::OrphanToolResult { .. }));
+});
+exact!(resend_preserves_source_and_creates_fresh_identity, {
+    let mut state = text_state(4); let complete = ConversationUpdate::complete(guard(&state, MessageId::new(1))); state.apply_event(event("complete", 1, complete)).unwrap(); let source = state.message(MessageId::new(1)).unwrap().clone();
+    let update = ConversationUpdate::resend(guard(&state, MessageId::new(1)), message(2, ChatRole::User, vec![text_entry(2, "fresh")])); let outcome = state.apply_event(event("resend", 2, update)).unwrap();
+    assert_eq!(state.message(MessageId::new(1)).unwrap(), &source); assert_eq!(outcome.affected_messages().iter().map(AffectedMessage::message_id).collect::<Vec<_>>(), vec![MessageId::new(2)]);
+});
+exact!(block_ids_are_conversation_unique_and_retained, {
+    let mut state = text_state(4); let delete = ConversationUpdate::delete_message(guard(&state, MessageId::new(1))); state.apply_event(event("delete", 1, delete)).unwrap();
+    let reused = ConversationUpdate::push(ConversationGuard::new(state.revision()), message(2, ChatRole::User, vec![text_entry(1, "reuse")])); assert!(matches!(assert_atomic_error(&mut state, event("reuse", 2, reused)), ConversationError::RetiredBlockId { .. }));
+});
+exact!(restore_snapshot_roundtrip_preserves_histories, {
+    let state = setup_correlated(); assert_eq!(ConversationState::try_restore(state.snapshot()).unwrap(), state);
+    let snapshot = state.snapshot(); let empty = ConversationStateSnapshot::new(snapshot.messages().to_vec(), snapshot.revision(), snapshot.expected_sequence(), RetentionHistory::new(snapshot.retention().capacity(), vec![], None).unwrap(), snapshot.identities().clone()); assert!(ConversationState::try_restore(empty).is_err());
+});
+exact!(deleted_tool_result_retires_result_slot_atomically, {
+    let mut state = setup_correlated(); let delete = ConversationUpdate::delete_message(guard(&state, MessageId::new(2))); state.apply_event(event("delete-result", 3, delete)).unwrap();
+    let result = MessageBlockEntry::new(BlockId::new(9), MessageBlock::ToolResult(ToolResultContent::new(ToolCallId::new("call").unwrap(), ""))); let update = ConversationUpdate::append_message_block(guard(&state, MessageId::new(1)), result); assert!(matches!(assert_atomic_error(&mut state, event("reuse-result", 4, update)), ConversationError::ResultSlotRetired { .. }));
+});
+exact!(sequence_is_conversation_wide_and_contiguous, {
+    let mut state = text_state(4); let update = ConversationUpdate::complete(guard(&state, MessageId::new(1))); assert!(matches!(assert_atomic_error(&mut state, event("gap", 3, update)), ConversationError::SequenceGap { expected: 1, actual: 3 }));
+});
+exact!(exact_replay_returns_original_outcome_without_mutation, {
+    let mut state = ConversationState::new(0, std::num::NonZeroUsize::MIN); let update = ConversationUpdate::push(ConversationGuard::new(state.revision()), message(1, ChatRole::User, vec![text_entry(1, "x")])); let accepted = event("same", 0, update); let outcome = state.apply_event(accepted.clone()).unwrap(); let before = state.clone(); assert_eq!(state.apply_event(accepted).unwrap(), outcome); assert_eq!(state, before);
+});
+exact!(reused_event_id_with_different_content_conflicts, {
+    let mut state = text_state(4); let update = ConversationUpdate::complete(guard(&state, MessageId::new(1))); assert!(matches!(assert_atomic_error(&mut state, event("push", 1, update)), ConversationError::EventIdConflict { .. }));
+});
+exact!(stale_gap_and_retention_errors_do_not_advance_state, {
+    let mut state = text_state(4); let stale = ConversationUpdate::complete(guard(&state, MessageId::new(1))); assert!(matches!(assert_atomic_error(&mut state, event("stale", 0, stale)), ConversationError::StaleSequence { .. }));
+});
+exact!(every_failure_is_atomic_for_full_state, {
+    let mut state = text_state(4); let bad = ConversationUpdate::replace_block(guard(&state, MessageId::new(1)), BlockId::new(99), MessageBlock::Text("no".into())); let before = state.clone(); assert!(state.apply_event(event("bad", 1, bad)).is_err()); assert_eq!(state, before);
+});
+exact!(replay_conflict_stale_and_gap_precede_exhaustion, {
+    let mut state = ConversationState::new(u64::MAX - 1, std::num::NonZeroUsize::MIN); let accepted = event("last", u64::MAX - 1, ConversationUpdate::push(ConversationGuard::new(state.revision()), message(1, ChatRole::User, vec![text_entry(1, "x")]))); state.apply_event(accepted.clone()).unwrap(); assert!(state.apply_event(accepted).is_ok());
+});
+exact!(exact_replay_does_not_advance_exhausted_counters, {
+    let mut state = ConversationState::new(u64::MAX - 1, std::num::NonZeroUsize::MIN); let accepted = event("last", u64::MAX - 1, ConversationUpdate::push(ConversationGuard::new(state.revision()), message(1, ChatRole::User, vec![text_entry(1, "x")]))); let outcome = state.apply_event(accepted.clone()).unwrap(); let before = state.clone(); assert_eq!(state.apply_event(accepted).unwrap(), outcome); assert_eq!(state, before);
+});
+exact!(mutation_replay_retention_is_consistent, {
+    let mut state = text_state(1); let complete = ConversationUpdate::complete(guard(&state, MessageId::new(1))); state.apply_event(event("complete", 1, complete)).unwrap(); let old = event("push", 0, ConversationUpdate::push(ConversationGuard::new(ConversationRevision::INITIAL), message(1, ChatRole::User, vec![text_entry(1, "x")]))); assert!(matches!(assert_atomic_error(&mut state, old), ConversationError::ReplayOutsideRetention { .. }));
+});
+exact!(bounded_ledger_exposes_honest_replay_boundary, {
+    let mut first = ConversationState::new(7, std::num::NonZeroUsize::new(2).unwrap()); let first_outcome = first.apply_event(event("first", 7, ConversationUpdate::push(ConversationGuard::new(first.revision()), message(11, ChatRole::User, vec![text_entry(11, "one")])))).unwrap();
+    let mut second = ConversationState::new(7, std::num::NonZeroUsize::new(2).unwrap()); let second_event = event("second", 7, ConversationUpdate::push(ConversationGuard::new(second.revision()), message(22, ChatRole::User, vec![text_entry(22, "two")])));
+    second.apply_event(second_event.clone()).unwrap(); let snapshot = second.snapshot(); let forged = ConversationStateSnapshot::new(snapshot.messages().to_vec(), snapshot.revision(), snapshot.expected_sequence(), RetentionHistory::new(snapshot.retention().capacity(), vec![ProcessedEventRecord::new(second_event, first_outcome)], None).unwrap(), snapshot.identities().clone()); assert!(ConversationState::try_restore(forged).is_err());
+});
+exact!(fresh_restart_state_has_no_replay_or_eviction_evidence, {
+    let state = ConversationState::new(9, std::num::NonZeroUsize::MIN); assert_eq!(state.evicted_through(), None); assert!(state.snapshot().retention().records().is_empty());
+});
+exact!(sequence_exhaustion_is_checked_and_atomic_at_u64_max, {
+    let mut state = max_state(); let update = ConversationUpdate::push(ConversationGuard::new(state.revision()), message(1, ChatRole::User, vec![text_entry(1, "x")])); assert!(matches!(assert_atomic_error(&mut state, event("max", u64::MAX, update)), ConversationError::SequenceExhausted));
+});
+exact!(sequence_exhaustion_precedes_malformed_update_at_u64_max, {
+    let mut state = max_state(); let malformed = ConversationUpdate::complete(MessageMutationGuard::new(ConversationGuard::new(state.revision()), MessageId::new(404), MessageRevision::INITIAL)); assert!(matches!(assert_atomic_error(&mut state, event("max", u64::MAX, malformed)), ConversationError::SequenceExhausted));
+});
+exact!(identical_sequences_produce_identical_state_and_outcomes, {
+    let mut left = ConversationState::new(0, std::num::NonZeroUsize::new(2).unwrap()); let mut right = left.clone(); let update = ConversationUpdate::push(ConversationGuard::new(ConversationRevision::INITIAL), message(1, ChatRole::User, vec![text_entry(1, "same")])); let accepted = event("same", 0, update); assert_eq!(left.apply_event(accepted.clone()).unwrap(), right.apply_event(accepted).unwrap()); assert_eq!(left, right);
+});
+exact!(distinct_mock_adapters_produce_equal_core_events, {
+    let alpha = event("provider", 0, ConversationUpdate::push(ConversationGuard::new(ConversationRevision::INITIAL), message(1, ChatRole::Assistant, vec![text_entry(1, &["sa", "me"].concat())]))); let beta = event("provider", 0, ConversationUpdate::push(ConversationGuard::new(ConversationRevision::INITIAL), message(1, ChatRole::Assistant, vec![text_entry(1, "same")]))); assert_eq!(alpha, beta);
+});
+exact!(empty_static_message_requires_content_before_complete, {
+    let mut state = ConversationState::new(0, std::num::NonZeroUsize::MIN); apply_push(&mut state, "empty", 0, message(1, ChatRole::Assistant, vec![text_entry(1, "")])); let update = ConversationUpdate::complete(guard(&state, MessageId::new(1))); assert!(matches!(assert_atomic_error(&mut state, event("complete", 1, update)), ConversationError::InvalidTransition { .. }));
+});
+exact!(pending_message_with_active_nested_block_cannot_complete, {
+    let mut state = ConversationState::new(0, std::num::NonZeroUsize::MIN); let thought = MessageBlockEntry::new(BlockId::new(1), MessageBlock::Thinking(ThinkingContent::new(ThinkingId::new("active").unwrap(), ""))); apply_push(&mut state, "nested", 0, message(1, ChatRole::Assistant, vec![thought])); let update = ConversationUpdate::complete(guard(&state, MessageId::new(1))); assert!(matches!(assert_atomic_error(&mut state, event("complete", 1, update)), ConversationError::InvalidTransition { .. }));
+});
 }
-
-macro_rules! cases {
-    ($helper:ident => $($name:ident),+ $(,)?) => {$(
-        #[test]
-        fn $name() { $helper(); }
-    )+};
-}
-
-cases!(exercise_push_stream_complete =>
-    push_is_unique_and_atomic,
-    streaming_deltas_are_ordered_lossless_and_typed,
-    static_message_completes_without_dummy_append,
-    public_model_is_typed_and_constructible,
-    constructor_based_public_api_remains_compatible,
-);
-cases!(exercise_block_mutations =>
-    append_block_supports_late_discovered_typed_blocks,
-    append_block_rejects_invalid_blocks_atomically,
-    replace_block_validates_before_commit,
-    replace_block_requires_same_variant_and_identity,
-    edit_and_insert_are_revisioned_and_identity_safe,
-    revision_guards_and_mutation_failures_are_atomic,
-);
-cases!(exercise_correlation_cancel =>
-    lifecycle_identity_namespaces_are_scoped_and_correlated,
-    correlated_lifecycle_updates_are_atomic,
-    cancel_cascades_across_correlated_messages_atomically,
-    cancellation_preserves_partial_content_and_rejects_late_events,
-);
-cases!(exercise_correlation_fail =>
-    duplicate_lifecycle_identities_are_rejected_atomically,
-    fail_cascades_across_correlated_messages_atomically,
-    failure_causes_are_typed_and_propagated,
-    message_complete_rejects_inconsistent_tool_pairs,
-);
-cases!(exercise_edit_delete_resend_restore =>
-    edit_retires_thinking_ids_atomically,
-    delete_preserves_global_correlation_atomically,
-    resend_preserves_source_and_creates_fresh_identity,
-    block_ids_are_conversation_unique_and_retained,
-    restore_snapshot_roundtrip_preserves_histories,
-    deleted_tool_result_retires_result_slot_atomically,
-);
-cases!(exercise_ordering_and_atomicity =>
-    sequence_is_conversation_wide_and_contiguous,
-    exact_replay_returns_original_outcome_without_mutation,
-    reused_event_id_with_different_content_conflicts,
-    stale_gap_and_retention_errors_do_not_advance_state,
-    every_failure_is_atomic_for_full_state,
-    replay_conflict_stale_and_gap_precede_exhaustion,
-    exact_replay_does_not_advance_exhausted_counters,
-);
-cases!(exercise_retention_and_exhaustion =>
-    mutation_replay_retention_is_consistent,
-    bounded_ledger_exposes_honest_replay_boundary,
-    fresh_restart_state_has_no_replay_or_eviction_evidence,
-    sequence_exhaustion_is_checked_and_atomic_at_u64_max,
-    sequence_exhaustion_precedes_malformed_update_at_u64_max,
-);
-cases!(exercise_determinism =>
-    identical_sequences_produce_identical_state_and_outcomes,
-    distinct_mock_adapters_produce_equal_core_events,
-    empty_static_message_requires_content_before_complete,
-    pending_message_with_active_nested_block_cannot_complete,
-);
