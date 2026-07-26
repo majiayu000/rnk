@@ -60,9 +60,12 @@ evidence 的独立修复合同，不以 umbrella issue 的宽泛描述替代验�
    必须在 terminal bounds 与完整 active clip stack 中保持 half-open、signed 处置。任何
    中间步骤不得先 clamp 到 0；只有最终 viewport/clip 交集可以把不可见 cell 分类为
    clipped。
-6. **B-006** 有限输入经 floor 后只要能由内部 signed coordinate domain 表示就必须成功；
-   不能表示的有限值、或任一 checked add/sub/extent-edge 计算溢出，必须返回
-   `TextCoordinateError::Overflow`，不得 wrap、panic、饱和为成功或产生 partial frame。
+6. **B-006** 每个 `f32` 坐标贡献项必须在组合前单独验证为有限值，并在 `f64` 或更宽的
+   domain 按原运算顺序组合；任一中间结果超出 `f32` 可表示范围、floor 后超出内部 signed
+   coordinate domain，或任一 checked integer add/sub/extent-edge 计算溢出，都必须返回
+   `TextCoordinateError::Overflow`。例如两个有限的 `f32::MAX` 相加必须是 Overflow，
+   不得因先在 `f32` 中变成 `+inf` 而误报 NonFinite，也不得 wrap、panic、饱和为成功或
+   产生 partial frame。
 7. **B-007** 任一坐标贡献项或需要检查的 extent 为 NaN、`+inf` 或 `-inf` 时必须返回
    `TextCoordinateError::NonFinite`；NonFinite 与 Overflow 是互斥、稳定的 typed 分类，
    不得依赖平台 cast 结果。

@@ -5,9 +5,16 @@
 GH-132: https://github.com/majiayu000/rnk/issues/132
 
 <!-- specrail-requires-planned-changes-v1 -->
-<!-- specrail-planned-changes
-{"version":1,"issue":132,"complete":true,"paths":["specs/GH132/product.md","specs/GH132/tech.md","specs/GH132/tasks.md","src/renderer/app.rs","src/renderer/error.rs","src/renderer/pipeline.rs","src/renderer/tree_renderer.rs","src/renderer/tree_renderer/projection.rs","src/renderer/tree_renderer/projection/staged.rs","src/renderer/tree_renderer/projection/tests.rs","src/renderer/tree_renderer/projection/tests/coordinates.rs","src/renderer/tree_renderer/tests.rs","src/renderer/tree_renderer/tests/coordinates.rs","tests/text_flow_renderer_error_paths.rs"],"spec_refs":["specs/GH132/product.md","specs/GH132/tech.md","specs/GH132/tasks.md","specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md"]}
+<!-- specrail-spec-packet-changes
+{"version":1,"issue":132,"complete":true,"paths":["specs/GH132/product.md","specs/GH132/tech.md","specs/GH132/tasks.md"]}
 -->
+<!-- specrail-planned-changes
+{"version":1,"issue":132,"complete":true,"paths":["src/renderer/app.rs","src/renderer/error.rs","src/renderer/pipeline.rs","src/renderer/tree_renderer.rs","src/renderer/tree_renderer/projection.rs","src/renderer/tree_renderer/projection/staged.rs","src/renderer/tree_renderer/projection/tests.rs","src/renderer/tree_renderer/projection/tests/coordinates.rs","src/renderer/tree_renderer/tests.rs","src/renderer/tree_renderer/tests/coordinates.rs","tests/text_flow_renderer_error_paths.rs"],"spec_refs":["specs/GH132/product.md","specs/GH132/tech.md","specs/GH132/tasks.md","specs/GH58/product.md","specs/GH58/tech.md","specs/GH58/tasks.md"]}
+-->
+
+`specrail-spec-packet-changes` 只约束本 spec PR 的三文件 diff；
+`specrail-planned-changes` 是后续 implementation PR 的独立 11 路径 manifest。实现 closure
+只比较后者，不要求或允许重改已经合入 main 的 packet。
 
 ## Product Spec
 
@@ -56,43 +63,59 @@ implementation gate。
 开始任何实现 edit 前必须同时满足：
 
 1. GH-132 spec PR 已 merged，存在 human approval，issue 有唯一 canonical
-   `ready_to_implement`，fresh route gate 对 `implement` 返回 `allowed`。
-2. PR #137（GH-124）在本 spec 分支固定的 `b4f39ed...` base之后，于
+   `ready_to_implement`，fresh route gate 对 `implement` 返回 `allowed`。在首次 source/test
+   edit前必须fetch `origin/main`，把解析出的 exact SHA记录为
+   `GH132_IMPLEMENTATION_BASE_SHA`，并同时证明worktree porcelain为空且`HEAD`逐字等于该
+   SHA；只证明某个旧SHA是ancestor不满足此 gate。
+2. PR #137（GH-124）在本 packet 最初的 `b4f39ed...` anchor之后，于
    `2026-07-26T08:36:49Z` 合入 main；final head
    `4d135668943e06aaefb8ffffe7f8267337fc9d19`、merge commit
    `84a7492ecff9a5ae560cf7627438909282558f2a` 直接修改
    `src/renderer/tree_renderer/projection/staged.rs` 与
-   `src/renderer/tree_renderer/projection/tests.rs`，并新增zero-width子模块。GH-132实现不得
-   继续停留在本 spec branch的旧base；必须rebase/refresh到该merge commit或其后继main，
-   重新定位zero-width owner contract并重跑focused tests。
+   `src/renderer/tree_renderer/projection/tests.rs`，并新增zero-width子模块。fresh expected
+   main必须包含该merge；实现前重新定位zero-width owner contract，并逐条重跑两项已命名
+   exact regression且证明`matched=1`。
 3. issue #131 当前无 spec、branch 或 PR，但其 VirtualText traversal/flow validation scope
    预计与 `tree_renderer.rs`、`projection.rs` 和 caller tests 冲突。coordinator 必须先取得
-   #131 的 frozen manifest：若与本文件 manifest 相交，则两者串行实现；不得以“尚无分支”
-   视为无 owner。GH-132 不修改 VirtualText/span source behavior。
+   #131 的 frozen manifest：若与本文件11路径implementation manifest相交，则两者串行
+   实现；不得以“尚无分支”视为无 owner。GH-132 不修改 VirtualText/span source behavior。
 
 上述 gate 是 implementation dependency/refresh gate，不阻止本 spec-only PR。记录的
-PR #137 merge证据必须在实现时fresh查询并证明仍是implementation head祖先，不能只复用
-本规格中的SHA文本。
+PR #137 merge证据必须在实现时fresh查询并证明属于上述exact expected main，不能只复用
+本规格中的SHA文本。closure时再次fetch current main：PR `baseRefOid`必须与其逐字相等，
+该SHA必须是PR head的exact merge-base，implementation diff再与11路径manifest精确比较。
 
 ### 2. Scoped floor conversion
 
-在 `tree_renderer.rs` 保留一个权威 helper，概念签名为：
+在 `tree_renderer.rs` 保留一个权威、element-scoped coordinate accumulator。概念接口为：
 
 ```text
-signed_coord(element_id: ElementId, value: f32) -> Result<i64, ProjectionError>
+CheckedCoordinate::from_f32(element_id, operand)
+  .add_f32(operand)
+  .sub_integer(operand)
+  .floor_i64()
+  -> Result<i64, ProjectionError>
 ```
 
-- 先用 `is_finite` 分类 NaN/`+inf`/`-inf` 为 scoped NonFinite。
-- 转为 `f64` 后执行 `floor`，用精确 half-open signed bound
-  `[-2^63, 2^63)` 检查。下界可接受，上界 `2^63` 必须拒绝；不得依赖 saturating cast。
-- 通过检查后才转 `i64`。`-0.0` floor/cast 为 0；非负小数结果与现状相同。
-- 所有 add/sub 使用 `checked_*`，通过 `coordinate_overflow(element_id)` 构造同一 scoped
-  variant。
+这表示一个私有的单一实现入口，不要求逐字采用上述名称：
+
+- 每个来自 root offset、layout、ancestor、padding 或其他坐标源的 `f32` operand 都必须在
+  任何算术前单独用 `is_finite` 验证。原始 NaN/`+inf`/`-inf` 分类为 scoped NonFinite。
+- 通过验证的 operand 转为 `f64`（或更宽的精确 domain）后才按源表达式的原顺序 add/sub；
+  禁止保留 `offset_x + layout.x - scroll` 这类先在 `f32` 中运算再交给 helper 的路径。
+- 每一步 wider-domain 组合后都检查 `[-f32::MAX, f32::MAX]`。有限 operands 的结果一旦
+  超出该范围，或 wider arithmetic 自身产生非有限值，分类为 scoped Overflow，而不是
+  NonFinite；即使后续相反项可能抵消也不得继续。
+- 最终值执行 `floor`，再用精确 half-open signed bound `[-2^63, 2^63)` 检查。下界可接受，
+  上界 `2^63` 必须拒绝；不得依赖 saturating cast。通过后才转 `i64`。
+- `-0.0` floor/cast 为 0；非负小数结果与现状相同。整数 content/scroll/edge 组合继续使用
+  `checked_*`，并通过同一 accumulator 的 scoped Overflow constructor 报错。
 - finite extent 的既有 clamp policy不变；只有 non-finite extent与计算 edge overflow进入
   scoped coordinate error，避免把 GH-132 扩成 layout dimension迁移。
 
-不得创建第二个 alias helper。所有 x/y/root offset/layout/ancestor/padding/scroll/text/
-background/border call site经同一 helper或同一 scoped checked constructor。
+递归 offset 必须以这个 wider accumulator/值传递，不能降回 `f32` 后再供下一层组合。不得
+创建第二个 alias helper。所有 x/y/root offset/layout/ancestor/padding/scroll/text/
+background/border call site经同一权威 accumulator或其 scoped checked integer操作。
 
 ### 3. Signed clip 与组合数据流
 
@@ -101,8 +124,10 @@ floor 后的 signed origin，content/border integer inset和extent用 checked ad
 与 `[y1,y2)`。ancestor intersection继续取 max lower/min upper，但允许整个 rect在负坐标：
 
 ```text
-f32 layout/ancestor offset
-  -> element-scoped finite + floor
+each f32 layout/ancestor operand
+  -> element-scoped finite validation
+  -> ordered f64/wider composition + per-step f32-range Overflow check
+  -> floor + signed-domain check
   -> checked signed origin/content/scroll composition
   -> signed own clip ∩ signed ancestor clip ∩ Output active clip ∩ terminal viewport
   -> checked ClipRegion only at Output boundary
@@ -180,7 +205,7 @@ MissingCurrentFlow和 PR #137 zero-width tests都是 mandatory regressions。
 | B-003 | conversion compatibility matrix | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::negative_zero_positive_fractional_and_integral_coordinates_are_compatible -- --exact` |
 | B-004 | recursive coordinate composition | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::signed_coordinate_composition_is_checked_and_axis_independent -- --exact` |
 | B-005 | signed clip/scroll/ancestor projection | `cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::negative_fractional_scroll_ancestor_and_clip_preserve_signed_disposition -- --exact` |
-| B-006 | finite bound/checked overflow | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::finite_coordinate_bounds_and_checked_arithmetic_classify_overflow -- --exact` |
+| B-006 | finite operands / f32-range / signed bound overflow | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::finite_operands_that_overflow_f32_composition_and_i64_bounds_classify_overflow -- --exact` |
 | B-007 | non-finite classification | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::nan_and_infinities_classify_as_non_finite_for_each_coordinate_source -- --exact` |
 | B-008 | scoped current owner | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::nested_coordinate_failures_report_exact_current_child -- --exact` |
 | B-009 | owner/fallback boundary | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::coordinate_owner_survives_conversion_and_only_unscoped_failures_use_root_fallback -- --exact` |
@@ -194,7 +219,7 @@ MissingCurrentFlow和 PR #137 zero-width tests都是 mandatory regressions。
 | B-017 | repeat/corrected retry | `cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::repeated_coordinate_failure_then_correction_retries_cleanly -- --exact` |
 | B-018 | interruption/drop | `cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::dropped_or_failed_coordinate_candidate_is_never_published -- --exact` |
 | B-019 | independent caller contexts | `cargo test --test text_flow_renderer_error_paths --locked independent_coordinate_failures_do_not_share_owner_or_frame_state -- --exact` |
-| B-020 | public/behavior compatibility | existing: `cargo test --test prelude_surfaces --locked try_render_to_string_surface -- --exact`; `cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::incremental_failure_retries_from_clean_layout_tree -- --exact` |
+| B-020 | public/behavior compatibility | existing: `cargo test --test prelude_surfaces --locked try_render_to_string_surface -- --exact`; `cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::incremental_failure_retries_from_clean_layout_tree -- --exact`; `cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::projection_zero_width_only_attaches_to_the_same_flow_sequence -- --exact`; `cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::synthetic_ellipsis_projection_failure_commits_neither_cells_nor_projection -- --exact` |
 | B-021 | exact-head evidence ledger | run every command below plus full fmt/check/clippy/test, coverage, CI, independent review and fresh reviewThreads query against one head SHA |
 
 ## Critical Test Ledger
@@ -204,6 +229,8 @@ Implementation tasks必须逐项创建并运行上表新 tests；以下现有 re
 ```sh
 cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_signed_coordinates_axis_clips_and_nested_active_clips_are_exact -- --exact
 cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_failure_commits_neither_cells_nor_projection -- --exact
+cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::projection_zero_width_only_attaches_to_the_same_flow_sequence -- --exact
+cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::synthetic_ellipsis_projection_failure_commits_neither_cells_nor_projection -- --exact
 cargo test --workspace --lib --locked renderer::tree_renderer::tests::scrolled_out_negative_rows_do_not_paint_at_top -- --exact
 cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::incremental_failure_retries_from_clean_layout_tree -- --exact
 cargo test --workspace --lib --locked renderer::app::tests::app_render_candidate_preserves_typed_error_source -- --exact
