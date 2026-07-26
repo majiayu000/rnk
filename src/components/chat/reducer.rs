@@ -613,21 +613,6 @@ fn invalid_transition<T>(kind: &'static str, reason: &'static str)
     Err(ConversationError::InvalidTransition { kind, reason })
 }
 
-macro_rules! failure_cause {
-    ($ty:ty) => {
-        impl $ty {
-            /// Returns the typed cause when this status is failed.
-            pub fn failure_cause(&self) -> Option<&FailureCause> {
-                match self { Self::Failed(cause) => Some(cause), _ => None }
-            }
-        }
-    };
-}
-failure_cause!(MessageStatus);
-failure_cause!(ThinkingStatus);
-failure_cause!(ToolCallStatus);
-failure_cause!(ToolResultStatus);
-
 impl PushUpdate {
     /// Returns the expected conversation revision.
     pub const fn guard(&self) -> ConversationGuard { self.guard }

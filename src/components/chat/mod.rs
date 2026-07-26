@@ -65,3 +65,21 @@ pub use state::{
     ProcessedEventRecord, RetentionHistory, ThinkingIdentityHistory, ToolResultLocation,
     ToolResultSlot,
 };
+
+macro_rules! failure_cause_accessor {
+    ($ty:ty) => {
+        impl $ty {
+            /// Returns the typed cause when this status is failed.
+            pub fn failure_cause(&self) -> Option<&FailureCause> {
+                match self {
+                    Self::Failed(cause) => Some(cause),
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+failure_cause_accessor!(MessageStatus);
+failure_cause_accessor!(ThinkingStatus);
+failure_cause_accessor!(ToolCallStatus);
+failure_cause_accessor!(ToolResultStatus);
