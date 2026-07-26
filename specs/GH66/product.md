@@ -63,7 +63,10 @@ confirmed commit 去重；跨重试 exactly-once 只属于明确实现持久、�
    `AlreadyCommitted` 写回或改写 receipt 身份。
 6. **B-006** 只有 sink 能证明 transcript content 的零 bytes 被接受时，结果才可为
    `NotCommitted`；preflight 拒绝、已关闭 sink 或 first-write-before-accept failure 必须保留
-   typed cause，且 shell/live state 除记录该 outcome 外不变。
+   typed cause，且 shell/live state 除记录该 outcome 外不变。native transaction 一旦开始清除
+   live region，任何 `Committed`、`NotCommitted`、`Unknown`、cancel 或 error 出口都必须在
+   返回前立即 repaint；repaint failure 以 typed ordered cleanup aggregate 附在原三态结果上，
+   不得覆盖或升级原 primary classification。
 7. **B-007** partial write、写入后 cancellation、flush failure、无法判定 accepted byte
    count 的 broken pipe 或中断必须为 `Unknown`。commit request 必须携带可由 session/event
    ingress 或测试线程原子触发的 cancellation token，native sink 在 begin、每次 write 返回、
@@ -76,15 +79,22 @@ confirmed commit 去重；跨重试 exactly-once 只属于明确实现持久、�
 9. **B-009** shell 只允许一次显式 O(n) bootstrap；此后每次 synchronize必须消费 GH-62
    `ApplyOutcome` 的 affected-message IDs，并只查找/投影受影响或新 terminal message，复杂度为
    O(affected × lookup/projection)，不得每个 delta重扫完整 history。重复 terminal event、
-   render或projection只产生一个 in-flight candidate与至多一个 confirmed commit。
+   render或projection只产生一个 in-flight candidate与至多一个 confirmed commit。每个 affected
+   entry 必须先按 `AffectedMessageDisposition::{Present, Deleted}` 分支；`Deleted` 不得再查
+   post-apply snapshot，并须对 Live、Staged、NotCommitted、Unknown、ResolvedCommitted、
+   Abandoned、Confirmed 各 phase 执行闭合删除规则。
 10. **B-010** message 仅在 `Committed` 后从 live region 移除；`NotCommitted`、
     `Unknown`、content conflict、projection failure 或 sink unavailable 时，原 terminal
-    projection 和 typed outcome 必须仍可观察。
+    projection 和 typed outcome 必须仍可观察。Conversation 删除可移除尚无 terminal effect 的
+    Live/Staged/NotCommitted；Unknown 即使源 message 已删除也必须保留 frozen evidence 与顺序
+    blocker直至 audited resolution；Resolved audit 与 Confirmed ledger/scrollback 均不可变。
 11. **B-011** commit 顺序必须按 Conversation message 顺序确定且每次最多一个 in-flight
     commit。较早 candidate 为 `Unknown` 或未显式处理时，较晚 candidate 必须返回 typed
     order-blocked，不得越过后造成 scrollback 重排。解除 Unknown 只能经 typed manual
     `TreatAsCommitted` 或 `Abandon`，且 resolution 必须先原子写入 durable audit；audit失败时
-    原状态与 blocker不变。
+    原状态与 blocker不变。commit、NotCommitted retry 与 Unknown resolution 必须共享唯一闭集
+    `order_satisfied = Confirmed | ResolvedCommitted | Abandoned`；两种 resolution 都会解除后继
+    操作，其他 phase 一律仍是 blocker。
 12. **B-012** `NotCommitted` 的重试只在调用方显式请求、ID/identity 未变且当前没有
     in-flight/reentrant commit 时允许；默认 native sink 的 `Unknown` 永不允许自动或普通
     retry。Unknown resolution 的 evidence ID、reason、actor/scope、choice 与 exact commit
@@ -96,10 +106,12 @@ confirmed commit 去重；跨重试 exactly-once 只属于明确实现持久、�
     不同；跨 namespace 不得误 dedupe，identity conflict 必须全部失败。
 14. **B-014** 重启重建不得依赖 clone shell state roundtrip。调用方必须显式声明
     `Fresh`、`RestoredDurable` 或 `RestoredAfterUncleanNativeExit` provenance，并从 GH-62
-    已验证 snapshot 重建 Conversation。durable lookup 先按完整 commit ID取得 store 中冻结的
-    original identity、canonical bytes、width/theme projection context 与 receipt，不得先用
-    当前环境重投影历史；native restored terminal candidates一律初始化为 Unknown/order-blocked，
-    不能与 fresh session混淆或伪造跨重启历史。
+    已验证 snapshot 重建 Conversation。restored constructor 必须实际消费该 validated
+    Conversation 与 recovery render context，按 source order seed 每个完整 candidate ID；
+    durable lookup 再按 ID取得 store 中冻结的 original identity、canonical bytes、width/theme
+    projection context 与 receipt，不得先用当前环境重投影历史；native restored terminal
+    candidates一律初始化为 Unknown/order-blocked。非空 restored history 必须完整重建，不能与
+    fresh session混淆或伪造跨重启历史。
 15. **B-015** composer 在 shell 整个运行期留在 live region。submit、cancel、changed、
     handled、ignored 和 focus routing 必须使用 GH-64/共享 interaction 的 typed outcome；
     submit acknowledgement 失败不得清草稿，cancel 不得隐式退出或固化 active stream。
@@ -111,9 +123,12 @@ confirmed commit 去重；跨重试 exactly-once 只属于明确实现持久、�
     拒绝，不能制造空 confirmed commit；终态 empty-message legality沿用 GH-62。
 18. **B-018** sink 必须区分 canonical LF content bytes 与 terminal transport bytes：每个
     semantic LF 编码为 CRLF，末尾 SGR reset 与 commit delimiter各有独立阶段/计数。
-    zero/short/`WriteZero`、CRLF 中只接受 CR、partial reset/delimiter、flush error、broken
-    pipe、cancellation前/中/后全部有 deterministic outcome；错误公开 canonical offset、
-    transport offset/counters与原 `std::io::Error` source，不吞异常。
+    offset-aware write-all 对每次 `0 < Ok(n) < remaining` 继续写；首个 nonempty write 的
+    `Ok(0)`/`WriteZero`/error/cancel 且累计 accepted transport bytes 为零时是
+    `NotCommitted`，一旦任意 commit transport byte 被接受，后续 zero/error/cancel 都是
+    `Unknown`。progressive shorts、CRLF 中只接受 CR、partial reset/delimiter、flush error、
+    broken pipe与cancellation全部有 deterministic outcome；错误公开 canonical/transport
+    offset与原 `std::io::Error` source，不吞异常。
 19. **B-019** 普通 shell mutation 在 Rust 类型层串行；每个 commit request还必须包含一个
     concrete reentry control。outer attempt持有 permit时，custom sink可安全调用该 control
     的 nested-attempt入口并真实取得 typed `ReentrantCommit`，不得依赖 unsafe alias、
@@ -123,10 +138,12 @@ confirmed commit 去重；跨重试 exactly-once 只属于明确实现持久、�
     checked arithmetic。overflow、stale observation、same-ID/different-content、illegal
     live→confirmed/remove 或 shutdown 后调用均 typed fail 且完整 state 原子不变。
 21. **B-021** shell 与 native session 必须由单一 public coordinator/typestate共同拥有。
-    显式 shutdown只能经该 coordinator 按“停止新事件 → 处理/暴露未决 outcome → 清 live
-    region → disable paste/focus/mouse → show cursor → restore raw/screen”执行，并返回每一步
-    typed result。部分失败保留已完成阶段、terminal lease与 retry handle；仅全部成功后进入
-    `Shutdown`，此后重复 shutdown才是成功 no-op且不得再写 scrollback。
+    coordinator 必须提供可实际调用的 bootstrap、synchronize、native/durable commit、
+    NotCommitted retry、durable reconcile、Unknown resolution、render 与 shutdown 操作，并在
+    内部安全拆借 shell/session；不得要求调用方同时持有 coordinator 内部 sink 与 shell borrow。
+    shutdown 按“停止新事件 → 暴露未决 outcome → 清 live region → restore paste/cursor/raw/
+    screen”执行并逐步返回 typed result。session 从不启用、禁用或更改 terminal focus/mouse
+    reporting mode，因此 snapshot/rollback/shutdown/suspend/resume 均不虚假声称恢复它们。
 22. **B-022** session enter在首次 terminal mutation前取得 process-wide exclusive lease，
     并按 lease→snapshot→raw→cursor→paste→flush staged acquire；任一步失败须逆序尝试回滚、
     聚合 primary+全部 rollback errors。完整恢复/entry rollback后lease回到Free；Drop/panic

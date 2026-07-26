@@ -56,9 +56,22 @@ python3 "$GH66_SPECRAIL_CHECKOUT/checks/check_workflow.py" \
 静态ledger gate要求唯一marker、22项、row keys恰为
 `file/name/verification_command`、repo-relative file、unique pair/command、每条含
 `-- --exact`；lib/integration/PTY target必须与file/name机械一致，coverage项唯一带
-`GH66_COVERAGE_MODE=fixture`。解析T2–T7 literal exact tests后必须与ledger 22/22严格相等。
+`GH66_COVERAGE_MODE=fixture`。解析T2–T7 literal exact tests后必须与ledger 22/22严格相等；
+既有exact名字内的case matrix是合同的一部分：删除或跳过任一R2场景即使测试名仍通过也算失败。
 implementation时每项先用`--list --exact --include-ignored`证明matched=1，再执行原命令并要求
 `1 passed; 0 failed; 0 ignored`。
+
+二轮 correction 的验收/实现/ledger 闭环：
+
+| Finding | Product | Tech contract | Task + exact ledger evidence |
+| --- | --- | --- | --- |
+| R2-F001 / prior F007 | B-021 | coordinator wrappers + scoped split | T5/T6；`inline_chat_shell_public_surface_executes` |
+| R2-F002 | B-006 | primary + repaint cleanup aggregate | T2/T3/T7；writer fault exact + PTY exact |
+| R2-F003 / prior F004 | B-014 | validated nonempty restored seeding | T5；durable restart exact |
+| R2-F004 / prior F012 | B-011/B-012 | shared `order_satisfied` | T4/T5；Unknown/retry exacts |
+| R2-F005 | B-021–B-023 | no focus/mouse mutation or restore claim | T3/T5/T7；shutdown + PTY exacts |
+| R2-F006 | B-009/B-010 | disposition-first seven-phase deletion | T4；delta/lifecycle exacts |
+| R2-F007 | B-006/B-018 | offset-aware write-all | T2/T3；writer fault exact |
 
 ## Implementation Tasks
 
@@ -90,7 +103,8 @@ implementation时每项先用`--list --exact --include-ignored`证明matched=1�
     `tests/inline_chat_shell.rs`。
   - Done when: validated namespace+ID、canonical LF content、cancellation/control request、
     stable `Arc` receipt handle与per-attempt disposition完全一致；双namespace同message不碰撞；
-    closed outcomes/errors可crate外穷举并保留`io::Error::source`；sanitizer只接受printable
+    closed primary outcomes及`Complete | Failed(nonempty ordered cleanup errors)`可crate外穷举，
+    primary/repaint error各自保留`io::Error::source`；sanitizer只接受printable
     Unicode/LF/library SGR，transport reset规则可观察，empty/only-SGR/whitespace不commit。
   - Verify:
     `cargo test --workspace --lib --locked components::chat::inline::tests::stable_commit_identity_conflict_is_atomic -- --exact`；
@@ -108,19 +122,22 @@ implementation时每项先用`--list --exact --include-ignored`证明matched=1�
     新增 `src/renderer/terminal/inline_scrollback.rs`、
     `src/components/chat/inline/session.rs`；从T2接管
     `src/components/chat/inline/sink.rs`、`src/components/chat/inline/tests.rs`。
-  - Done when: generic helper按canonical offset/transport offset区分zero/short/write-zero、
-    LF→CRLF中断、reset/delimiter/flush/broken pipe和由另一线程触发的每个cancel sample；
+  - Done when: offset-aware helper循环接受positive shorts；首个zero/error/cancel且accepted=0为
+    NotCommitted，任意accepted byte后的zero/error/cancel为Unknown；逐项覆盖progressive shorts、
+    short-then-zero/error/cancel、CRLF/reset/delimiter/flush与线程触发的每个cancel sample；
+    clear live后的所有primary出口立即repaint，repaint失败typed聚合且不改primary分类；
     flush后才confirm，duplicate共享original receipt但attempt disposition不同；entry在首次
     mutation前取得process-wide lease，逐stage acquire/逆序rollback并聚合primary+cleanup；
     nested/cross-thread entry拒绝，rollback成功才Free；entry/Drop/panic恢复失败将lease标
-    Poisoned，只有typed recovery验证成功才Free；session只inline且sink/render borrow互斥。
+    Poisoned，只有typed recovery验证成功才Free；session只inline且sink/render borrow互斥，
+    terminal backend没有focus/mouse mutation命令。
   - Verify:
     `cargo test --workspace --lib --locked components::chat::inline::tests::native_confirmed_dedup_is_process_local -- --exact`；
     `cargo test --workspace --lib --locked components::chat::inline::tests::partial_write_flush_broken_pipe_outcomes_are_typed -- --exact`；
     `test "$(wc -l < src/renderer/terminal.rs)" -lt 800`；
     公共checkpoint命令。
-  - Handoff: 保存fault/transport matrix、cancel barriers、receipt identity、entry rollback与lease
-    contention evidence；停止写后将`inline/tests.rs`交T4，session/sink paths在T5前冻结只读。
+  - Handoff: 保存offset/fault/repaint matrix、cancel barriers、receipt identity、entry rollback、
+    focus/mouse零序列与lease contention evidence；停止写后将tests交T4，session/sink冻结只读。
 
 - [ ] `SP66-T4` 实现 shell staging、single-in-flight、confirmed-only removal、order/retry/overflow状态机。Covers: B-002, B-003, B-007, B-009, B-010, B-011, B-012, B-017, B-019, B-020, B-026 | Owner: `inline-lifecycle-owner` | Done when: terminal staging、dedupe、三态、顺序、retry与checked transition合同完整 | Verify: T4六个exact tests与公共checkpoint
   - Covers: B-002, B-003, B-007, B-009, B-010, B-011, B-012, B-017, B-019, B-020, B-026。
@@ -128,11 +145,11 @@ implementation时每项先用`--list --exact --include-ignored`证明matched=1�
   - File ownership: 独占新增 `src/components/chat/inline/state.rs`；从T1/T3接管
     `src/components/chat/inline.rs`、`src/components/chat/inline/tests.rs`、
     `tests/inline_chat_shell.rs`；上游model/view和native paths只读。
-  - Done when: O(n) `bootstrap`只调用一次，后续`synchronize`只消费fresh GH62
-    affected IDs且operation counter不访问未受影响history；每个ID先查frozen candidate再projection；
-    duplicate为no-op，Committed exact match后才remove；NotCommitted/Unknown保留，Unknown普通retry
-    拒绝；typed TreatAsCommitted/Abandon须durable audit先成功；safe commit control使custom sink
-    可达ReentrantCommit；capacity/revision/conflict均原子，resize不改变staged bytes。
+  - Done when: O(n) bootstrap一次，后续`synchronize`先按GH62 Present/Deleted分支且Deleted不查
+    snapshot；Live/Staged/NotCommitted/Unknown/ResolvedCommitted/Abandoned/Confirmed删除矩阵
+    逐phase断言，Unknown删除后仍block且confirmed scrollback不变；唯一`order_satisfied =
+    Confirmed | ResolvedCommitted | Abandoned`供commit/retry/resolve共用，两种resolution均能
+    解锁后继retry/resolve，多restored Unknown按序处理；reentry/capacity/revision/conflict原子。
   - Verify:
     `cargo test --workspace --lib --locked components::chat::inline::tests::gh66_scrollback_lifecycle_contract -- --exact`；
     `cargo test --workspace --lib --locked components::chat::inline::tests::duplicate_terminal_render_and_delta_are_single_effect -- --exact`；
@@ -141,7 +158,8 @@ implementation时每项先用`--list --exact --include-ignored`证明matched=1�
     `cargo test --test inline_chat_shell --locked not_committed_retry_is_explicit_and_unknown_retry_is_rejected -- --exact`；
     `cargo test --test inline_chat_shell --locked live_resize_never_rewrites_confirmed_scrollback -- --exact`；
     公共checkpoint命令。
-  - Handoff: 保存bootstrap/delta counters、frozen lookup顺序、manual audit与reentry evidence；
+  - Handoff: 保存bootstrap/delta counters、disposition-first删除矩阵、order predicate、
+    frozen lookup顺序、manual audit与reentry evidence；
     将`state.rs`/`inline.rs`/integration和lib tests交T5。
 
 - [ ] `SP66-T5` 实现 durable recovery、single coordinator/retryable shutdown、observation和composer/focus。Covers: B-011, B-012, B-013, B-014, B-015, B-016, B-019, B-021, B-025, B-026 | Owner: `inline-recovery-interaction-owner` | Done when: recovery/coordinator/shutdown/interaction合同完整 | Verify: T5五个exact tests与公共checkpoint
@@ -150,12 +168,11 @@ implementation时每项先用`--list --exact --include-ignored`证明matched=1�
   - File ownership: 从T4接管 `src/components/chat/inline/state.rs`、
     `src/components/chat/inline.rs`、`src/components/chat/inline/tests.rs`、
     `tests/inline_chat_shell.rs`；从T3接管`src/components/chat/inline/{sink,session}.rs`。
-  - Done when: durable record按namespace+ID先lookup并返回stored bytes/width/theme/receipt，
-    concurrent attempt共享receipt但disposition独立；Fresh/RestoredDurable/
-    RestoredAfterUncleanNativeExit构造可区分，native restored初始化Unknown；observation不可restore；
-    coordinator唯一拥有shell/session/event/lease，shutdown顺序固定，partial failures保留lease并
-    只重试unfinished stages，全部成功后才AlreadyShutdown；Poisoned lease recovery fail closed；
-    composer/focus typed且draft安全。
+  - Done when: restored constructor消费validated GH62 Conversation+recovery render，按source order
+    seed非空完整IDs；durable再ID-first lookup frozen record，unclean native全部初始化Unknown；
+    coordinator不公开内部mutable sink/shell borrow，wrapper可实际执行bootstrap/synchronize、
+    native/durable commit、retry/reconcile/resolve/render/shutdown并安全拆借字段；partial shutdown
+    只重试unfinished stages；composer/focus typed且draft安全。
   - Verify:
     `cargo test --test inline_chat_shell --locked durable_sink_cross_retry_and_restart_reconstruction_is_exactly_once -- --exact`；
     `cargo test --test inline_chat_shell --locked public_observation_is_not_a_restore_snapshot -- --exact`；
@@ -163,8 +180,8 @@ implementation时每项先用`--list --exact --include-ignored`证明matched=1�
     `cargo test --test inline_chat_shell --locked native_restart_never_claims_unknown_terminal_effect -- --exact`；
     `cargo test --workspace --lib --locked components::chat::inline::tests::shutdown_state_machine_is_ordered_and_idempotent -- --exact`；
     公共checkpoint命令。
-  - Handoff: 保存durable atomic mock transaction log、restart/lookup matrix和draft/focus
-    snapshots；停止写全部paths，public API冻结后交T6。
+  - Handoff: 保存nonempty restart/ID-first lookup、crate-outside coordinator lifecycle、
+    durable atomic log和draft/focus evidence；停止写全部paths，public API冻结后交T6。
 
 - [ ] `SP66-T6` 完成exports/docs并逐个人工迁移Claude inline example。Covers: B-001, B-015, B-016, B-024, B-026, B-027, B-028 | Owner: `inline-adoption-owner` | Done when: concrete exports/docs/example public composition与legacy compatibility完整 | Verify: T6三个exact tests、example/docs与公共checkpoint
   - Covers: B-001, B-015, B-016, B-024, B-026, B-027, B-028。
@@ -194,8 +211,9 @@ implementation时每项先用`--list --exact --include-ignored`证明matched=1�
     docs/prelude只读。
   - Done when: 非ignored PTY同一test分别spawn normal/cancel/typed-failure/panic、每个entry
     acquisition failure、shutdown first-failure/second-success、nested/cross-thread lease和
-    suspend/resume子进程；以termios/captured bytes验证raw/cursor/paste/无altscreen及SGR reset
-    后live无泄漏；restoration/lease uncertainty失败；
+    suspend/resume子进程；以termios/captured bytes验证raw/cursor/paste prior值、无altscreen/
+    focus/mouse mode序列、SGR reset及first-write failure后立即repaint；repaint/restoration失败
+    必须由typed cleanup/report使测试失败；
     `gh66_current_head_coverage_contract`从committed ledger+diff+raw生成确定性
     `gh57-child-coverage-v1`，validate重算全部sets/hash/percent；critical exact set逐项100%，
     changed executable>=80%；fixture含全部negative schema/provenance/threshold cases；collect/
@@ -264,6 +282,6 @@ Task `Covers:` union:
 - durable exactly-once按namespace+ID先lookup frozen record；shell observation不是restore snapshot。
 - sync request的Atomic cancellation/control使mid-write cancellation和safe reentry真实可达。
 - canonical LF identity与CRLF/reset/delimiter transport分离并逐offset记账。
-- single coordinator持有shell/session/lease；partial entry/shutdown必须rollback或retry，不能早报完成。
-- Unknown只经durable-audited TreatAsCommitted/Abandon解除；same ID/different bytes fail closed。
+- single coordinator公开完整lifecycle wrappers；native session从不改变terminal focus/mouse modes。
+- Unknown（含source-deleted）只经durable-audited resolution解除；resolved predecessor满足顺序。
 - final PR仍需fresh independent review与人工merge；禁止force push。
