@@ -130,10 +130,11 @@ identity 与 interruption 原子性。
 22. **B-022** 完成证据必须绑定同一 implementation PR exact head：B-002/B-003 counter、
     B-004 至 B-021 exact tests、4096-case property、#126/#128/#129/#130 regression、
     fmt/check/clippy/all-target tests、至少 80% changed production line coverage、私有
-    styled-normalization module executable branch/line 各 100%、固定 revision 外部 SpecRail
-    mirror、独立 review、零 unresolved non-outdated actionable threads 与 required CI 全部
-    fresh 通过后，才能宣称完成。新增 unit tests 必须进入自然拆分文件，并让被触碰的
-    `src/layout/text_flow/tests.rs` 回到 800 行以内。
+    styled-normalization module executable branch/line 各 100%、绑定 exact base/head/
+    merge-base 与 raw LCOV SHA-256 的 provenance、固定 revision/checker SHA-256 且输入
+    byte-identical 的外部 SpecRail mirror、独立 review、零 unresolved non-outdated
+    actionable threads 与 required CI 全部 fresh 通过后，才能宣称完成。新增 unit tests
+    必须进入自然拆分文件，并让被触碰的 `src/layout/text_flow/tests.rs` 回到 800 行以内。
 
 ## 验收标准
 
@@ -149,7 +150,8 @@ identity 与 interruption 原子性。
 - [ ] implementation head 包含 #126 merge
       `50f6a203c1861814d288d4bdeae0e28d877af34c`；#126/#128/#129/#130 与 full
       workspace gates 未被弱化。
-- [ ] current exact head coverage、CI、SpecRail、独立 review 与 reviewThreads 证据完整。
+- [ ] current exact head coverage raw artifact/provenance、CI、immutable SpecRail mirror、
+      独立 review 与 reviewThreads 证据完整。
 
 ## 边界情况清单
 

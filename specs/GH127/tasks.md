@@ -131,8 +131,10 @@ coordinator 必须 fresh 证明：
   GH127-L1..L13 各先经 harness inventory 证明 selector 恰好一个，再实际执行且
   1 passed/0 ignored；debug/release counts、property、dependency regressions、full Rust、
   >=80% changed production line coverage、critical normalization line/branch 100%、
-  pinned SpecRail、exact-head hosted CI、独立 review 与零 unresolved non-outdated current
-  threads 全部 fresh；PR #109 thread 只由 human 在证据满足后处理。
+  exact base/head/merge-base + raw LCOV SHA-256 provenance、pinned revision/checker
+  SHA-256 + byte-identical input SpecRail mirror、exact-head hosted CI、独立 review 与零
+  unresolved non-outdated current threads 全部 fresh；PR #109 thread 只由 human 在证据
+  满足后处理。
   - Dependencies: SP127-T1、SP127-T2、SP127-T3 完成并停止写所有 owned paths。
   - File ownership: 无 writable path；纯只读 verification/review，不 resolve thread、
     approve、merge、改 label 或修测试。任一失败 handback 给对应 owner并使全部旧
@@ -145,14 +147,15 @@ coordinator 必须 fresh 证明：
     `cargo check --workspace --all-targets --all-features --locked`；
     `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -A clippy::collapsible_if -A clippy::manual_is_multiple_of`；
     `cargo test --workspace --all-targets --all-features --locked`；
-    `cargo llvm-cov --branch --workspace --lib --all-features --lcov --output-path /private/tmp/gh127-rust-lcov.info --locked`；
-    tech Verification Plan 的 diff/LCOV fail-closed verifier；
+    tech Verification Plan 的 fresh exact-head `cargo llvm-cov` + diff/LCOV fail-closed
+    verifier，并保留 raw LCOV 与 checksum/provenance JSON；
     fixed revision `23caa70e76904eaa82323208d645d5781a365649` external mirror 中的
-    `check_workflow.py` 与 `route_gate.py`（同时记录 target route gate 不存在）；
+    checker SHA-256、byte-identical GH127/GH58 inputs、`check_workflow.py` 与
+    `route_gate.py`（同时记录 target route gate 不存在）；
     fresh GraphQL reviewThreads 与 exact `headRefOid` check rollup。
   - Handoff: 向 human maintainer 提交 exact head、dependency SHAs、2k/4k/8k counts、
-    ledger 13/13、B coverage 22/22、manifest/diff、coverage、CI/review JSON；不宣称 final
-    approval/merge。
+    ledger 13/13、B coverage 22/22、manifest/diff、raw LCOV + checksum/provenance、
+    SpecRail checker/input hashes、CI/review JSON；不宣称 final approval/merge。
 
 ## Execution Graph and Ownership
 
