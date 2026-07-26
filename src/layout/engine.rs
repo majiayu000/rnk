@@ -94,7 +94,7 @@ impl LayoutEngine {
             .filter_map(|child| self.build_node(child))
             .collect();
 
-        let context = NodeContext::new(input_from_element(element));
+        let context = NodeContext::new(input_from_element(element), &self.text_flow_policy);
 
         // Create node with measure function for text
         let node_id = if element.is_text() {
@@ -239,7 +239,7 @@ impl LayoutEngine {
             .filter_map(|child| self.build_vnode(child))
             .collect();
 
-        let context = NodeContext::new(input_from_vnode(vnode));
+        let context = NodeContext::new(input_from_vnode(vnode), &self.text_flow_policy);
 
         // Create node
         let node_id = if vnode.is_text() {
@@ -442,7 +442,10 @@ impl LayoutEngine {
                     );
                     if self
                         .taffy
-                        .set_node_context(node_id, Some(NodeContext::new(Some(input))))
+                        .set_node_context(
+                            node_id,
+                            Some(NodeContext::new(Some(input), &self.text_flow_policy)),
+                        )
                         .is_err()
                     {
                         return false;
@@ -771,6 +774,7 @@ mod frame_flow_tests {
     }
 }
 
+mod context_sync;
 mod text_flow_bridge;
 
 use text_flow_bridge::{
