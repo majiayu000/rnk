@@ -30,24 +30,54 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
        ownership，确认没有并发writer；
     5. 在首次 implementation edit 前，worktree porcelain精确为空，`HEAD`精确等于fresh
        `origin/main` SHA，并记录该 SHA 为`GH132_IMPLEMENTATION_BASE_SHA`；implementation
-       11路径manifest逐路径冻结。
+       12路径manifest逐路径冻结。
   - Verify:
     ```sh
     set -euo pipefail
     : "${SPEC_RAIL_ROOT:?set SPEC_RAIL_ROOT to the checked-out SpecRail workflow-pack root}"
-    test -f "$SPEC_RAIL_ROOT/checks/route_gate.py"
-    test -z "$(git status --porcelain=v1 --untracked-files=all)"
+    SPEC_RAIL_REV=bfc60f26164af5df1ebd3b5cb79d07379fc416b7
+    test "$(git -C "$SPEC_RAIL_ROOT" rev-parse 'HEAD^{commit}')" = "$SPEC_RAIL_REV"
+    test "$(git -C "$SPEC_RAIL_ROOT" remote get-url origin)" = \
+      https://github.com/majiayu000/specrail.git
+    test "$(python3 -c \
+      'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
+      "$SPEC_RAIL_ROOT/checks/route_gate.py")" = \
+      d77cad0763713ca589be1c4278edcec7c90c017bc383fd6a7976402be22a7433
+    test "$(python3 -c \
+      'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
+      "$SPEC_RAIL_ROOT/checks/check_workflow.py")" = \
+      c5bd73060037b0e8febace0e5ee8473e17973e1ca17257ea1517a94e05fa7549
+    test "$(python3 -c \
+      'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
+      "$SPEC_RAIL_ROOT/checks/github_duplicate_evidence.py")" = \
+      eab228a33d84a43cde1ba3587d5edde50993ae11c5c5a522ee8d01b64b284d55
+    WORKTREE_STATUS="$(git status --porcelain=v1 --untracked-files=all)"
+    test -z "$WORKTREE_STATUS"
     git fetch --no-tags origin main
     EXPECTED_MAIN_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
     CURRENT_HEAD_SHA="$(git rev-parse 'HEAD^{commit}')"
     test -n "$EXPECTED_MAIN_SHA"
     test "$CURRENT_HEAD_SHA" = "$EXPECTED_MAIN_SHA"
     printf 'GH132_IMPLEMENTATION_BASE_SHA=%s\n' "$EXPECTED_MAIN_SHA"
-    python3 "$SPEC_RAIL_ROOT/checks/route_gate.py" \
-      --repo "$SPEC_RAIL_ROOT" \
+    SPEC_RAIL_MIRROR="$(mktemp -d "${TMPDIR:-/tmp}/gh132-specrail.XXXXXX")"
+    git -C "$SPEC_RAIL_ROOT" archive "$SPEC_RAIL_REV" | tar -x -C "$SPEC_RAIL_MIRROR"
+    mkdir -p "$SPEC_RAIL_MIRROR/specs/GH132" "$SPEC_RAIL_MIRROR/evidence"
+    cp specs/GH132/product.md specs/GH132/tech.md specs/GH132/tasks.md \
+      "$SPEC_RAIL_MIRROR/specs/GH132/"
+    python3 "$SPEC_RAIL_MIRROR/checks/check_workflow.py" \
+      --repo "$SPEC_RAIL_MIRROR" --spec-dir specs/GH132
+    python3 "$SPEC_RAIL_MIRROR/checks/github_duplicate_evidence.py" \
+      --github-repo majiayu000/rnk --issue 132 --remote origin --json \
+      > "$SPEC_RAIL_MIRROR/evidence/gh132-duplicate.json"
+    python3 "$SPEC_RAIL_MIRROR/checks/route_gate.py" \
+      --repo "$SPEC_RAIL_MIRROR" \
       --route implement --issue 132 --state ready_to_implement \
-      --artifact product_spec="$PWD/specs/GH132/product.md" \
-      --artifact tech_spec="$PWD/specs/GH132/tech.md" --json
+      --artifact product_spec=specs/GH132/product.md \
+      --artifact tech_spec=specs/GH132/tech.md \
+      --duplicate-evidence "$SPEC_RAIL_MIRROR/evidence/gh132-duplicate.json" \
+      --mode required --json > "$SPEC_RAIL_MIRROR/evidence/gh132-route.json"
+    test "$(jq -r '.decision' \
+      "$SPEC_RAIL_MIRROR/evidence/gh132-route.json")" = "allowed"
     PR137_JSON="$(gh pr view 137 --repo majiayu000/rnk \
       --json state,isDraft,headRefOid,mergeCommit,files)"
     test "$(printf '%s\n' "$PR137_JSON" | jq -r '.state')" = "MERGED"
@@ -59,13 +89,17 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::synthetic_ellipsis_projection_failure_commits_neither_cells_nor_projection -- --exact
     ```
     `SPEC_RAIL_ROOT` 必须由执行环境显式设置为 SpecRail workflow pack checkout 根目录；
-    未设置、路径错误或 gate 文件缺失时上述命令立即失败，不得跳过或降级为 warning。两条
-    filtered test还必须逐条记录`matched=1`、`passed=1`、`ignored=0`，不能只看exit 0。
+    checkout必须来自`https://github.com/majiayu000/specrail.git`的上述exact detached
+    revision，未设置、路径/revision/hash错误时命令立即失败，不得跳过或降级为 warning。
+    `SPEC_RAIL_MIRROR`必须保留到交付证据归档完成；route JSON还必须证明artifact路径均为
+    mirror内的`specs/GH132/{product,tech,tasks}.md`，duplicate evidence为fresh collector
+    输出，且没有open PR或remote branch占用GH132实现token。两条filtered test还必须逐条
+    记录`matched=1`、`passed=1`、`ignored=0`，不能只看exit 0。
     上述整段必须在任何 implementation source/test edit 前运行并保存输出。
     人工核对 GH132 spec approval、#131 frozen manifest 与无共享writer。
   - Covers: B-020, B-021
 
-- [ ] `SP132-T2` 实现element-scoped floor conversion、signed clip和staged projection原子性。 Owner: `gh132-coordinate-core` | Done when: scoped floor/clip/owner/single-commit合同及拆分测试全部完成 | Verify: 运行本任务下列11个exact Rust tests。
+- [ ] `SP132-T2` 实现element-scoped floor conversion、signed clip和staged projection原子性。 Owner: `gh132-coordinate-core` | Done when: scoped floor/clip/owner/single-commit合同及拆分测试全部完成 | Verify: 运行本任务下列12个exact Rust tests。
   - Owner: `gh132-coordinate-core`
   - Dependencies: `SP132-T1`全部通过；PR #137 merge后的
     `projection/staged.rs`/tests合同已重新定位。
@@ -80,10 +114,16 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
   - Done when:
     1. 单一 scoped wider accumulator先逐个验证`f32` operand有限，再按顺序组合；每步超出
        `f32`范围或最终floor超出`[-2^63,2^63)`均为Overflow，`-0.0`与正向行为兼容；
+       exact fixture至少覆盖`f32::MAX + f32::MAX`、负向MAX组合、nested ancestor累积、
+       scroll subtraction与own/ancestor clip edge组合，逐轴区分Overflow/NonFinite；
     2. x/y/root offset/layout/ancestor/padding/scroll/text/background/border/clip都使用同一
        scoped转换或checked constructor；
     3. clip edges在viewport/active-clip交集前保持signed half-open；
-    4. coordinate variants在产生点携带exact current element ID，root fallback不覆盖；
+    4. coordinate variants在产生点携带exact current element ID；
+       `validate_tree_flows -> validate_flow(element.id, ...) ->
+       validate_row_footprints(element.id, ...)`逐层保留child owner；coordinate overflow、
+       malformed flow和带`ProjectionId`的duplicate均消费已有owner，root fallback只用于
+       错误数据中真正没有ID的finish failure；
     5. caller Output与projection只在全部校验成功后single commit；
     6. 两个既有tests文件只增加子模块声明，新增fixture放到各自`coordinates.rs`，所有
        production/test文件低于800行，不压缩旧测试、不用`#[rustfmt::skip]`。
@@ -96,6 +136,7 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::nan_and_infinities_classify_as_non_finite_for_each_coordinate_source -- --exact
     cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::nested_coordinate_failures_report_exact_current_child -- --exact
     cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::coordinate_owner_survives_conversion_and_only_unscoped_failures_use_root_fallback -- --exact
+    cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::nested_flow_validation_overflow_reaches_public_error_with_exact_child -- --exact
     cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::late_nested_coordinate_failure_discards_earlier_staged_paint -- --exact
     cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::negative_fractional_x_and_y_clip_instead_of_painting_at_zero -- --exact
     cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::negative_fractional_scroll_ancestor_and_clip_preserve_signed_disposition -- --exact
@@ -104,7 +145,7 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
   - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009,
     B-014, B-016, B-020
 
-- [ ] `SP132-T3` 锁定public typed error、safe context以及string/TestRenderer caller。 Owner: `gh132-public-error-callers` | Done when: public error shape兼容且nested child ID/source/safe-context/independent caller fixtures完成 | Verify: 运行本任务下列7个exact Rust tests。
+- [ ] `SP132-T3` 锁定public typed error、safe context以及string/TestRenderer caller。 Owner: `gh132-public-error-callers` | Done when: public error shape兼容且nested child ID/source/safe-context/independent caller fixtures完成 | Verify: 运行本任务下列8个exact Rust tests。
   - Owner: `gh132-public-error-callers`
   - Dependencies: `SP132-T2` core error owner与transaction boundary稳定。
   - File ownership:
@@ -118,6 +159,8 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
        `TestRenderer::try_render_to_ansi/plain` exact fixture；
     4. string失败没有partial返回，compat wrappers只在零外部提交后fail loudly；
     5. 独立/交错caller不共享owner或staged状态。
+    6. `gh132_current_head_coverage_contract` 实现fixture/collect(no-op)/produce/validate四模式，
+       只从exact diff、raw llvm-cov JSON和固定critical production区域生成/复核provenance。
   - Verify:
     ```sh
     cargo test --workspace --lib --locked renderer::error::tests::coordinate_error_context_is_typed_and_does_not_leak_content -- --exact
@@ -127,34 +170,39 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     cargo test --test text_flow_renderer_error_paths --locked try_render_to_string_preserves_source_and_returns_no_partial_string -- --exact
     cargo test --test text_flow_error_paths --locked typed_error_reaches_remaining_callers -- --exact
     cargo test --test text_flow_error_paths --locked caller_failure_commits_no_partial_output -- --exact
+    GH132_COVERAGE_MODE=fixture cargo test --test text_flow_renderer_error_paths --locked gh132_current_head_coverage_contract -- --exact
     ```
-  - Covers: B-008, B-009, B-010, B-011, B-013, B-014, B-016, B-019, B-020
+  - Covers: B-008, B-009, B-010, B-011, B-013, B-014, B-016, B-019, B-020, B-021
 
-- [ ] `SP132-T4` 验证dynamic App的ID传播、candidate atomicity、重试与中断边界。 Owner: `gh132-dynamic-transaction` | Done when: dynamic/App exact ID、candidate atomicity和clean retry合同全部完成 | Verify: 运行本任务下列6个exact Rust tests。
+- [ ] `SP132-T4` 验证dynamic App的canonical ID传播、candidate atomicity与重试边界。 Owner: `gh132-dynamic-transaction` | Done when: static filter/dynamic/App exact original ID、candidate atomicity和clean retry合同全部完成 | Verify: 运行本任务下列7个exact Rust tests。
   - Owner: `gh132-dynamic-transaction`
   - Dependencies: `SP132-T2`、`SP132-T3`。
   - File ownership:
     `src/renderer/pipeline.rs`、
-    `src/renderer/app.rs`。
+    `src/renderer/app.rs`、
+    `src/renderer/static_content.rs`。
   - Done when:
-    1. nested child NaN/overflow经dynamic pipeline保持exact child ID；
+    1. static filter对每个保留dynamic node保持caller original ID，nested child
+       NaN/overflow经dynamic pipeline/App保持该exact original child ID；
     2. failure不提交frame string、previous VNode、runtime layout/key aliases、static lines或
        candidate flow/layout cache；
     3. LayoutEngine失败后处于明确clean retry状态，重复failure稳定，corrected retry无重复
        node/cell/alias；
-    4. dropped/injected candidate等价于cancellation-before-commit，later successful frame
-       不观察失败candidate；
+    4. typed renderer failure的candidate从不发布，later successful frame不观察失败
+       candidate；同步pipeline没有pre-commit cancellation checkpoint，测试不得把failure
+       或drop标成cancellation；
     5. `App::run`既有I/O mapping保留同一`TextRenderError`和nested typed source chain。
   - Verify:
     ```sh
+    cargo test --workspace --lib --locked renderer::static_content::tests::filter_static_elements_preserves_original_ids_for_retained_dynamic_nodes -- --exact
     cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::nested_child_coordinate_errors_keep_id_and_candidate_state -- --exact
     cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::repeated_coordinate_failure_then_correction_retries_cleanly -- --exact
-    cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::dropped_or_failed_coordinate_candidate_is_never_published -- --exact
+    cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::failed_coordinate_candidate_is_never_published -- --exact
     cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::incremental_failure_retries_from_clean_layout_tree -- --exact
     cargo test --workspace --lib --locked renderer::app::tests::nested_child_coordinate_error_reaches_app_io_source_chain -- --exact
     cargo test --workspace --lib --locked renderer::app::tests::app_render_candidate_preserves_typed_error_source -- --exact
     ```
-  - Covers: B-008, B-012, B-013, B-015, B-016, B-017, B-018, B-019, B-020
+  - Covers: B-008, B-012, B-013, B-015, B-016, B-017, B-019, B-020
 
 - [ ] `SP132-T5` 完成compatibility、critical ledger、coverage与exact-head closure evidence。 Owner: `gh132-verification-review` | Done when: B-set、manifest、tests、coverage、CI、reviewThreads与PR gate绑定同一exact head | Verify: 运行Tech全部mapping/ledger和本任务full Rust/closure命令。
   - Owner: `gh132-verification-review`
@@ -166,10 +214,10 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
        `matched=1`、`passed=1`、`ignored=0`；
     3. PR #137 merged-head zero-width regressions、全部GH132 focused tests和full Rust gates
        通过；
-    4. implementation PR changed files精确等于独立的11路径
+    4. implementation PR changed files精确等于独立的12路径
        `specrail-planned-changes` manifest；三份已合入packet不在该diff内，也不得被重改；
     5. exact implementation head的新代码line coverage>=80%，signed conversion/owner/
-       transaction critical branches=100%；
+       transaction/static-identity critical line/branches=100%，raw与summary provenance可重算；
     6. fresh CI、independent review、zero unresolved current actionable review threads和
        SpecRail PR gate都绑定同一head SHA。
   - Verify:
@@ -177,27 +225,90 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     set -euo pipefail
     : "${GH132_IMPLEMENTATION_PR:?set the GH132 implementation PR number}"
     : "${GH132_IMPLEMENTATION_BASE_SHA:?set the exact starting main SHA recorded by SP132-T1}"
-    test -z "$(git status --porcelain=v1 --untracked-files=all)"
+    : "${GH132_EVIDENCE_DIR:?set an absolute directory outside the repository}"
+    : "${SPEC_RAIL_ROOT:?set the pinned SpecRail checkout root}"
+    : "${GH132_PR_EVIDENCE:?set the exact-head PR evidence JSON path}"
+    case "$GH132_EVIDENCE_DIR" in /*) ;; *) exit 1 ;; esac
+    SPEC_RAIL_REV=bfc60f26164af5df1ebd3b5cb79d07379fc416b7
+    test "$(git -C "$SPEC_RAIL_ROOT" rev-parse 'HEAD^{commit}')" = "$SPEC_RAIL_REV"
+    test "$(git -C "$SPEC_RAIL_ROOT" remote get-url origin)" = \
+      https://github.com/majiayu000/specrail.git
+    test "$(python3 -c \
+      'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
+      "$SPEC_RAIL_ROOT/checks/pr_gate.py")" = \
+      10cb7412ff504291d136a2c1486bc96e6b5e811c8040d1f61a8d222994e87873
+    test -f "$GH132_PR_EVIDENCE"
+    WORKTREE_STATUS="$(git status --porcelain=v1 --untracked-files=all)"
+    test -z "$WORKTREE_STATUS"
     git fetch --no-tags origin main
     EXPECTED_CURRENT_MAIN_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
     PR_JSON="$(gh pr view "$GH132_IMPLEMENTATION_PR" --repo majiayu000/rnk \
-      --json baseRefOid,headRefOid)"
+      --json baseRefOid,headRefOid,body)"
     PR_BASE_SHA="$(printf '%s\n' "$PR_JSON" | jq -r '.baseRefOid')"
     PR_HEAD_SHA="$(printf '%s\n' "$PR_JSON" | jq -r '.headRefOid')"
     test "$PR_BASE_SHA" = "$EXPECTED_CURRENT_MAIN_SHA"
     test "$(git rev-parse 'HEAD^{commit}')" = "$PR_HEAD_SHA"
+    SPEC_RAIL_GATE_REPO="$(mktemp -d \
+      "${TMPDIR:-/tmp}/gh132-specrail-pr-gate.XXXXXX")"
+    git clone --quiet --no-local --no-checkout "$PWD" "$SPEC_RAIL_GATE_REPO"
+    git -C "$SPEC_RAIL_GATE_REPO" checkout --quiet --detach "$PR_HEAD_SHA"
+    cp "$SPEC_RAIL_ROOT/workflow.yaml" "$SPEC_RAIL_ROOT/states.yaml" \
+      "$SPEC_RAIL_ROOT/labels.yaml" "$SPEC_RAIL_GATE_REPO/"
+    cp -R "$SPEC_RAIL_ROOT/schemas" "$SPEC_RAIL_GATE_REPO/"
     test "$(git merge-base "$PR_HEAD_SHA" "$EXPECTED_CURRENT_MAIN_SHA")" = \
       "$EXPECTED_CURRENT_MAIN_SHA"
     git merge-base --is-ancestor "$GH132_IMPLEMENTATION_BASE_SHA" \
       "$EXPECTED_CURRENT_MAIN_SHA"
     IMPLEMENTATION_MANIFEST_JSON="$(sed -n \
       '/<!-- specrail-planned-changes/{n;p;}' specs/GH132/tech.md)"
-    test "$(printf '%s\n' "$IMPLEMENTATION_MANIFEST_JSON" | jq -r '.paths | length')" -eq 11
+    test "$(printf '%s\n' "$IMPLEMENTATION_MANIFEST_JSON" | jq -r '.paths | length')" -eq 12
     EXPECTED_CHANGED_PATHS="$(printf '%s\n' "$IMPLEMENTATION_MANIFEST_JSON" |
       jq -r '.paths[]' | LC_ALL=C sort)"
     ACTUAL_CHANGED_PATHS="$(git diff --name-only \
       "$EXPECTED_CURRENT_MAIN_SHA...$PR_HEAD_SHA" | LC_ALL=C sort)"
     test "$ACTUAL_CHANGED_PATHS" = "$EXPECTED_CHANGED_PATHS"
+    GH132_MERGE_BASE_SHA="$(git merge-base "$EXPECTED_CURRENT_MAIN_SHA" "$PR_HEAD_SHA")"
+    GH132_DIFF_SHA256="$(git diff --no-ext-diff --binary \
+      "$EXPECTED_CURRENT_MAIN_SHA...$PR_HEAD_SHA" -- | python3 -c \
+      'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+    printf '%s\n' "$PR_JSON" | jq -e --arg head "$PR_HEAD_SHA" \
+      --arg base "$PR_BASE_SHA" --arg diff "$GH132_DIFF_SHA256" \
+      '.body | contains($head) and contains($base) and contains($diff)' >/dev/null
+    test "$(cargo llvm-cov --version)" = "cargo-llvm-cov 0.8.7"
+    mkdir -p "$GH132_EVIDENCE_DIR"
+    GH132_COVERAGE_RAW="$GH132_EVIDENCE_DIR/llvm-cov.json"
+    GH132_COVERAGE_ARTIFACT="$GH132_EVIDENCE_DIR/gh132-coverage.json"
+    GH132_COVERAGE_MODE=fixture \
+      cargo test --test text_flow_renderer_error_paths --locked \
+        gh132_current_head_coverage_contract -- --exact
+    GH132_COVERAGE_MODE=collect \
+      cargo llvm-cov --workspace --all-targets --all-features --locked --branch --json \
+        --output-path "$GH132_COVERAGE_RAW"
+    GH132_COVERAGE_MODE=produce \
+      GH132_COVERAGE_BASE_SHA="$EXPECTED_CURRENT_MAIN_SHA" \
+      GH132_COVERAGE_HEAD_SHA="$PR_HEAD_SHA" \
+      GH132_COVERAGE_MERGE_BASE_SHA="$GH132_MERGE_BASE_SHA" \
+      GH132_COVERAGE_DIFF_SHA256="$GH132_DIFF_SHA256" \
+      GH132_COVERAGE_RAW="$GH132_COVERAGE_RAW" \
+      GH132_COVERAGE_ARTIFACT="$GH132_COVERAGE_ARTIFACT" \
+      cargo test --test text_flow_renderer_error_paths --locked \
+        gh132_current_head_coverage_contract -- --exact
+    export GH132_COVERAGE_MODE=validate
+    export GH132_COVERAGE_BASE_SHA="$EXPECTED_CURRENT_MAIN_SHA"
+    export GH132_COVERAGE_HEAD_SHA="$PR_HEAD_SHA"
+    export GH132_COVERAGE_MERGE_BASE_SHA GH132_COVERAGE_DIFF_SHA256
+    export GH132_COVERAGE_RAW GH132_COVERAGE_ARTIFACT
+    GH132_COVERAGE_MODE=validate \
+      GH132_COVERAGE_BASE_SHA="$EXPECTED_CURRENT_MAIN_SHA" \
+      GH132_COVERAGE_HEAD_SHA="$PR_HEAD_SHA" \
+      GH132_COVERAGE_MERGE_BASE_SHA="$GH132_MERGE_BASE_SHA" \
+      GH132_COVERAGE_DIFF_SHA256="$GH132_DIFF_SHA256" \
+      GH132_COVERAGE_RAW="$GH132_COVERAGE_RAW" \
+      GH132_COVERAGE_ARTIFACT="$GH132_COVERAGE_ARTIFACT" \
+      cargo test --test text_flow_renderer_error_paths --locked \
+        gh132_current_head_coverage_contract -- --exact
+    python3 "$SPEC_RAIL_ROOT/checks/pr_gate.py" --repo "$SPEC_RAIL_GATE_REPO" \
+      --evidence "$GH132_PR_EVIDENCE" --mode required --json
     cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_signed_coordinates_axis_clips_and_nested_active_clips_are_exact -- --exact
     cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_failure_commits_neither_cells_nor_projection -- --exact
     cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::projection_zero_width_only_attaches_to_the_same_flow_sequence -- --exact
@@ -211,8 +322,19 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     ```
     `PR_BASE_SHA` 必须与fresh current main完全相等，且该 SHA 必须是PR head的exact
     merge-base；仅证明PR137或旧main是ancestor不够。另逐条运行Tech mapping和ledger全部
-    命令并证明`matched=1`，再fresh查询PR exact head、CI、reviewThreads、coverage与
-    SpecRail PR gate。
+    命令并证明`matched=1`。coverage contract必须从raw llvm-cov JSON和exact diff重算：
+    changed production executable lines>=80%，`CheckedCoordinate`/scoped validation/
+    static identity filter/pipeline publish boundary的changed line与branch各100%；artifact
+    schema固定为`gh132-current-head-coverage-v1`并含repo、issue、base/head/merge-base、
+    diff SHA-256、raw SHA-256、`cargo-llvm-cov 0.8.7`与exact command。missing/zero
+    executable、stale SHA、非absolute artifact path、threshold或provenance不符全部失败。
+    `collect`模式在llvm-cov递归测试中必须无副作用通过；未设置mode的普通full-suite同样通过，
+    但不能produce/validate artifact。produce/validate成功后上述immutable coverage环境必须
+    保留到全部mapped/full tests结束。`SPEC_RAIL_GATE_REPO`必须保留到PR gate JSON归档；
+    它的`HEAD`必须等于`PR_HEAD_SHA`，overlay只允许来自已校验的固定SpecRail revision，
+    不得拿SpecRail自身git history代替implementation history。PR body必须包含同一exact
+    head、base与diff SHA-256。
+    最后fresh查询PR exact head、CI、reviewThreads、coverage与SpecRail required PR gate。
   - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009,
     B-010, B-011, B-012, B-013, B-014, B-015, B-016, B-017, B-018, B-019,
     B-020, B-021
@@ -227,7 +349,7 @@ SP132-T1 -> SP132-T2 -> SP132-T3 -> SP132-T4 -> SP132-T5
 
 - T2独占tree/projection/staged和两个coordinate test子模块。
 - T3独占public error与public-facing integration fixture。
-- T4独占dynamic pipeline/App source-module tests。
+- T4独占static filter/dynamic pipeline/App source-module tests。
 - T5只读。即使T3/T4文件集合不相交，T4也必须等待T3 typed contract稳定，避免对同一错误
   flow并发做不兼容假设。
 - PR #137合入前不得开始T2；#131 frozen manifest与任一T2-T4路径相交时，整条GH132
@@ -242,8 +364,8 @@ SP132-T1 -> SP132-T2 -> SP132-T3 -> SP132-T4 -> SP132-T5
 - Task Covers union:
   `B-001..B-021`
 - `specrail-spec-packet-changes`精确包含三份packet；本 spec PR只按该三路径验证。
-- `specrail-planned-changes`精确包含九个既有Rust/test文件和两个因800行上限新增的
-  `coordinates.rs` test子模块，共11路径；future implementation PR只按该manifest与fresh
+- `specrail-planned-changes`精确包含十个既有Rust/test文件和两个因800行上限新增的
+  `coordinates.rs` test子模块，共12路径；future implementation PR只按该manifest与fresh
   current main做changed-path diff，三份已合入spec不得出现。
 - implementation命令是后续human-gated handoff，不在本 spec PR中实现或伪造通过。
 

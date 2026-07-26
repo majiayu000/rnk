@@ -71,10 +71,12 @@ evidence 的独立修复合同，不以 umbrella issue 的宽泛描述替代验�
    不得依赖平台 cast 结果。
 8. **B-008** coordinate failure 必须记录发生转换或 checked 组合时正在遍历的 exact
    `ElementId`。nested child 的 padding、layout origin、ancestor/scroll 组合、text origin、
-   background 或 border 错误均归属该 child，不得归属 root、parent、sibling 或上一 token。
+   background、border 或该 child 的 TextFlow footprint validation overflow 均归属该 child，
+   不得归属 root、parent、sibling 或上一 token。
 9. **B-009** root fallback 只允许用于确实没有 element owner 的 tree-level
-   validation/finish failure；`MissingLayout`、`MissingCurrentFlow` 和所有 coordinate
-   failure 都必须在产生点携带 owner。后续 error conversion 不得覆盖已有 owner。
+   malformed/finish failure；`MissingLayout`、`MissingCurrentFlow`、child-known flow
+   validation 和所有 coordinate failure 都必须在产生点携带 owner。后续 error conversion
+   不得覆盖已有 owner。
 10. **B-010** `try_render_to_string*` 失败时必须返回
     `TextRenderError::Coordinate { element_id, source }`，其中 `element_id` 是 B-008 的 child，
     `source()` 可下转为相同 `TextCoordinateError`，且不返回 partial `String`。
@@ -82,8 +84,10 @@ evidence 的独立修复合同，不以 umbrella issue 的宽泛描述替代验�
     `TestRenderer::try_render_to_plain` 必须保留与 B-010 相同的 exact child ID 和 typed
     source；对应 fail-loud compatibility wrappers 只能在无副作用后 panic。
 12. **B-012** public `App::run` 的 dynamic frame 路径必须把同一
-    `TextRenderError::Coordinate` 保留为 `io::Error` source；内部
-    `RenderPipeline::try_render_dynamic_frame` 不得把 child ID 改为 dynamic root ID。
+    `TextRenderError::Coordinate` 保留为 `io::Error` source。StaticRenderer 去除 static
+    subtree 后，所有保留的 dynamic nodes 必须继续使用 caller 原树的 canonical
+    `ElementId`；内部 filter 与 `RenderPipeline::try_render_dynamic_frame` 均不得生成隐藏
+    fresh ID 或把 child ID 改为 dynamic root ID。
 13. **B-013** 公共错误文本和 source chain 只能包含 element identity、closed error
     classification 与固定安全上下文；不得泄漏 source text、styled spans、frame cells、
     cache contents、terminal bytes 或其他 element 的内容。
@@ -101,9 +105,10 @@ evidence 的独立修复合同，不以 umbrella issue 的宽泛描述替代验�
 17. **B-017** 对同一无效输入重复调用必须稳定返回相同 child ID 与分类，且每次均零提交；
     修正该 child 后重试必须从 clean state 生成完整 frame，不重复节点、cell、projection
     record 或 runtime alias。重复成功 render 不得积累 rounding drift。
-18. **B-018** 外层 cancellation 或 interruption 在成功 commit 前发生时，效果等同丢弃
-    candidate；已发布 frame/VNode/cache 不变。恢复后的首次 render 必须按 B-017 clean
-    retry，不得续用被中断的 staged projection。
+18. **B-018** **Reserved / N/A：**GH-132 的 synchronous tree/dynamic renderer 没有
+    candidate 创建后、commit 前可达的 cancellation/interruption checkpoint，issue #132
+    也不新增该能力。不得用 injected failure 或函数返回后 drop 冒充 cancellation 证据；
+    typed render failure 的 candidate discard 与 clean retry 仅由 B-014 至 B-017 验收。
 19. **B-019** 独立的字符串/TestRenderer 调用不得共享可变 staged frame 或错误 owner
     context；并发或任意交错执行必须各自得到与串行执行相同的 output/error。App 仍按既有
     单帧发布顺序提交，later frame 不得观察 earlier failed candidate。
@@ -113,10 +118,15 @@ evidence 的独立修复合同，不以 umbrella issue 的宽泛描述替代验�
     wrappers 继续 fail loudly，不允许 blank/old-frame fallback。
 21. **B-021** 完成声明必须绑定 implementation PR exact head：negative fractional
     x/y/scroll/ancestor/clip fixtures、nested child NaN/overflow 在 string/dynamic/
-    TestRenderer 三类 caller 的 exact fixtures、atomic retry/cancellation/repetition
+    TestRenderer 三类 caller 的 exact fixtures、atomic failure/retry/repetition
     fixtures、全部既有 signed-coordinate/typed-error tests、full Rust gates、coverage、
     CI 与 review-thread evidence都通过。零匹配 filter、旧 SHA 或只看 green rollup 不算
     证据。
+
+Revision note：B-018 在本轮 review 后由“外层 cancellation fixture”收窄为显式
+Reserved/N/A。原因是 issue #132 的真实 scope只有signed conversion、owner propagation与
+failure atomicity，当前同步pipeline也没有可达的pre-commit cancellation checkpoint；该ID
+不重用于其他行为，B-014至B-017继续承担全部typed failure原子性与重试验收。
 
 ## 验收标准
 
@@ -130,8 +140,8 @@ evidence 的独立修复合同，不以 umbrella issue 的宽泛描述替代验�
       `try_render_to_string*`、dynamic App pipeline、`TestRenderer::try_render_to_ansi/plain`
       均报告 exact child ID，并保留 typed `Error::source` chain。
 - [ ] 失败发生在已有 staged background/sibling/text 之后时，Output、projection、VNode、
-      runtime evidence 与 cache 均无 partial commit；重复失败、修正后重试、取消后重试和
-      独立交错 render 均确定。
+      runtime evidence 与 cache 均无 partial commit；重复失败、修正后重试和独立交错
+      render 均确定。
 - [ ] implementation exact head 的 focused tests、fmt/check/clippy/full tests、coverage、
       CI、独立 review 和 unresolved current reviewThreads gate 全部满足 B-021。
 
@@ -148,7 +158,7 @@ evidence 的独立修复合同，不以 umbrella issue 的宽泛描述替代验�
 | 兼容/迁移 | covered: B-003、B-020 |
 | 降级/回退 | covered: B-002、B-006、B-007、B-009、B-020；禁止 clamp、blank、old-frame 或 root-ID silent fallback |
 | 证据与审计完整性 | covered: B-021 |
-| 取消/中断/部分完成 | covered: B-014、B-015、B-016、B-018 |
+| 取消/中断/部分完成 | cancellation/interruption N/A：同步 renderer 无 pre-commit checkpoint，GH-132 不新增 API；typed failure 的部分完成由 B-014、B-015、B-016、B-017 覆盖，B-018 保留为显式 scope revision |
 
 ## 发布说明
 
