@@ -406,6 +406,37 @@ fn text_flow_tabs() {
 }
 
 #[test]
+fn narrow_tabs_participate_in_wrap_and_truncation() {
+    let wrapped = build("A\tB", 2, TextWrap::Wrap);
+    assert_eq!(
+        wrapped.rows(),
+        &["A".to_string(), "    ".to_string(), "B".to_string()]
+    );
+    assert_eq!(
+        wrapped
+            .logical_rows()
+            .iter()
+            .map(|row| row.width)
+            .collect::<Vec<_>>(),
+        vec![1, 4, 1]
+    );
+    assert!(wrapped.rows().iter().all(|row| !row.contains('\t')));
+
+    let truncated = build("A\tB", 2, TextWrap::Truncate);
+    assert_eq!(truncated.rows(), &["A".to_string()]);
+    assert_eq!(truncated.logical_rows()[0].width, 1);
+    assert_eq!(
+        truncated.tokens()[1].placement(),
+        &TextFlowPlacement::Truncated { row: 0 }
+    );
+    assert_eq!(
+        truncated.tokens()[2].placement(),
+        &TextFlowPlacement::Truncated { row: 0 }
+    );
+    assert!(truncated.rows().iter().all(|row| !row.contains('\t')));
+}
+
+#[test]
 fn text_flow_wrap() {
     let flow = build("aaaa bbbb cccc", 6, TextWrap::Wrap);
     assert_eq!(
