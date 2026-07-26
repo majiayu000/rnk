@@ -3,10 +3,12 @@
 //! Uses proptest to find edge cases through random input generation.
 
 use proptest::prelude::*;
+use unicode_segmentation::UnicodeSegmentation;
 
 use rnk::components::{Box as RnkBox, Text};
-use rnk::core::{Dimension, Element, FlexDirection};
+use rnk::core::{Dimension, Element, FlexDirection, Style, TextWrap};
 use rnk::layout::measure::measure_text_width;
+use rnk::layout::{TextFlow, TextFlowInput, TextFlowOptions, TextFlowSourceKind};
 use rnk::testing::{TestRenderer, display_width};
 
 // ============================================================================
@@ -39,6 +41,97 @@ proptest! {
         let cjk_width = measure_text_width(&cjk);
 
         prop_assert_eq!(combined_width, ascii_width + cjk_width);
+    }
+
+    /// Canonical source ranges cover the exact input once and only on EGC boundaries.
+    #[test]
+    fn text_flow_logical_source_round_trip(
+        scalars in proptest::collection::vec(any::<char>(), 0..80),
+        width in 0usize..20
+    ) {
+        let source: String = scalars.into_iter().collect();
+        let input = TextFlowInput::plain(
+            source.clone(),
+            TextFlowSourceKind::Exact,
+            Style::new(),
+        );
+        let flow = TextFlow::try_build(
+            &input,
+            &TextFlowOptions::new(width, TextWrap::Wrap),
+        ).expect("valid UTF-8 input must produce a complete logical map");
+
+        let grapheme_ranges: Vec<_> = source
+            .grapheme_indices(true)
+            .map(|(start, grapheme)| start..start + grapheme.len())
+            .collect();
+        let source_ranges: Vec<_> = flow
+            .tokens()
+            .iter()
+            .filter_map(|token| token.source_range())
+            .collect();
+
+        prop_assert_eq!(&source_ranges, &grapheme_ranges);
+        let mut covered = 0usize;
+        for range in source_ranges {
+            prop_assert_eq!(range.start, covered);
+            prop_assert!(source.is_char_boundary(range.start));
+            prop_assert!(source.is_char_boundary(range.end));
+            covered = range.end;
+        }
+        prop_assert_eq!(covered, source.len());
+
+        prop_assert_eq!(flow.position_map().len(), flow.tokens().len());
+        for (token_index, entry) in flow.position_map().iter().enumerate() {
+            prop_assert_eq!(entry.token_index, token_index);
+            prop_assert_eq!(&entry.source, &flow.tokens()[token_index].source);
+            prop_assert_eq!(
+                &entry.placement,
+                &flow.tokens()[token_index].placement
+            );
+            if let Some(range) = flow.tokens()[entry.token_index].source_range() {
+                prop_assert!(grapheme_ranges.contains(&range));
+                let begins_inside_another = grapheme_ranges.iter().any(|other| {
+                    other.start < range.start && range.start < other.end
+                });
+                prop_assert!(!begins_inside_another);
+            }
+        }
+
+        let expected_non_break: String = source
+            .graphemes(true)
+            .filter(|grapheme| !matches!(*grapheme, "\n" | "\r" | "\r\n"))
+            .collect();
+        for wrap_width in 1..=grapheme_ranges.len().max(1) {
+            let wrapped = TextFlow::try_build(
+                &input,
+                &TextFlowOptions::new(wrap_width, TextWrap::Wrap),
+            ).expect("every positive width must preserve row-backed source order");
+            let mut reconstructed = String::new();
+            let mut last_token_index = None;
+            for (row_index, row) in wrapped.logical_rows().iter().enumerate() {
+                prop_assert_eq!(row.index, row_index);
+                prop_assert_eq!(&wrapped.rows()[row_index], &row.text);
+                let run_text = row
+                    .runs
+                    .iter()
+                    .map(|run| run.text.as_str())
+                    .collect::<String>();
+                prop_assert_eq!(&run_text, &row.text);
+                for run in &row.runs {
+                    if let Some(previous) = last_token_index {
+                        prop_assert!(previous < run.token_index);
+                    }
+                    last_token_index = Some(run.token_index);
+                    let range = wrapped.tokens()[run.token_index]
+                        .source_range()
+                        .expect("wrap rows must contain source-backed runs");
+                    let source_grapheme = &source[range];
+                    prop_assert!(!matches!(source_grapheme, "\n" | "\r" | "\r\n"));
+                    reconstructed.push_str(source_grapheme);
+                }
+            }
+            prop_assert_eq!(&reconstructed, &expected_non_break);
+        }
     }
 }
 
