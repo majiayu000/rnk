@@ -5,7 +5,8 @@ use crate::components::{Box, Text};
 use crate::core::{BorderStyle, Color, Element, ElementId, Overflow, Position, Style, TextWrap};
 use crate::layout::LayoutEngine;
 use crate::layout::text_flow::{
-    TextFlowPlacement, TextFlowRow, TextFlowRun, TextFlowSource, TextFlowSourceKind,
+    TextFlow, TextFlowInput, TextFlowOptions, TextFlowPlacement, TextFlowRow, TextFlowRun,
+    TextFlowSource, TextFlowSourceKind,
 };
 use crate::renderer::Output;
 use crate::renderer::output::ClipRegion;
@@ -573,4 +574,175 @@ fn projection_round_trip_validation_is_linear() {
         let projection = projection_with_cells(count);
         assert_eq!(validate_round_trip(&projection), Ok(count * 3));
     }
+}
+
+fn background_style() -> Style {
+    Style {
+        background_color: Some(Color::Blue),
+        ..Style::default()
+    }
+}
+
+#[test]
+fn staged_fill_65535_squared_visits_only_small_viewport_and_retires_projection() {
+    let caller = Output::new(4, 3);
+    let mut staged = StagedFrame::new(&caller, ProjectionOptions::default());
+    let input = TextFlowInput::plain("界", TextFlowSourceKind::Exact, Style::default());
+    let flow = TextFlow::try_build(&input, &TextFlowOptions::new(4, TextWrap::Wrap)).unwrap();
+    let element_id = ElementId::new();
+    staged.project_flow(element_id, &flow, 0, 0).unwrap();
+
+    staged
+        .fill_rect(0, 0, u16::MAX, u16::MAX, &background_style())
+        .unwrap();
+    assert_eq!(staged.fill_candidate_visits(), 12);
+
+    let (output, projection) = staged.finish().unwrap();
+    let FrameDisposition::Cells {
+        visible, replaced, ..
+    } = &projection.forward_for(element_id, 0).unwrap().frame
+    else {
+        panic!("wide source must have a cell disposition");
+    };
+    assert!(visible.is_empty());
+    assert_eq!(
+        replaced,
+        &[FrameCell { x: 0, y: 0 }, FrameCell { x: 1, y: 0 }]
+    );
+    assert!(projection.reverse.is_empty());
+    for y in 0..3 {
+        for x in 0..4 {
+            let cell = output.cell_at(x, y).unwrap();
+            assert_eq!(cell.ch, ' ');
+            assert_eq!(cell.bg, Some(Color::Blue));
+        }
+    }
+}
+
+#[test]
+fn staged_fill_negative_origin_visits_only_visible_intersection() {
+    let caller = Output::new(4, 3);
+    let mut staged = StagedFrame::new(&caller, ProjectionOptions::default());
+    staged
+        .fill_rect(-65_533, -65_534, u16::MAX, u16::MAX, &background_style())
+        .unwrap();
+    assert_eq!(staged.fill_candidate_visits(), 2);
+
+    let (output, _) = staged.finish().unwrap();
+    assert_eq!(output.cell_at(0, 0).unwrap().bg, Some(Color::Blue));
+    assert_eq!(output.cell_at(1, 0).unwrap().bg, Some(Color::Blue));
+    assert_eq!(output.cell_at(2, 0).unwrap().bg, None);
+}
+
+#[test]
+fn staged_fill_with_no_intersection_performs_no_candidate_visits() {
+    let caller = Output::new(4, 3);
+    let mut staged = StagedFrame::new(&caller, ProjectionOptions::default());
+    staged
+        .fill_rect(5, 4, u16::MAX, u16::MAX, &background_style())
+        .unwrap();
+    assert_eq!(staged.fill_candidate_visits(), 0);
+
+    let (output, projection) = staged.finish().unwrap();
+    assert!(!output.is_dirty());
+    assert!(projection.reverse.is_empty());
+}
+
+#[test]
+fn staged_fill_empty_or_overflowing_rectangles_are_checked_without_iteration() {
+    let caller = Output::new(4, 3);
+    let mut staged = StagedFrame::new(&caller, ProjectionOptions::default());
+    staged
+        .fill_rect(0, 0, 0, u16::MAX, &background_style())
+        .unwrap();
+    assert_eq!(
+        staged.fill_rect(i64::MAX, 0, 1, 1, &background_style()),
+        Err(ProjectionError::CoordinateOverflow)
+    );
+    assert_eq!(staged.fill_candidate_visits(), 0);
+
+    let mut clipped = Output::new(4, 3);
+    clipped.clip(ClipRegion {
+        x1: 4,
+        y1: 0,
+        x2: 5,
+        y2: 3,
+    });
+    let mut staged = StagedFrame::new(&clipped, ProjectionOptions::default());
+    staged
+        .fill_rect(0, 0, u16::MAX, u16::MAX, &background_style())
+        .unwrap();
+    assert_eq!(staged.fill_candidate_visits(), 0);
+}
+
+#[test]
+fn staged_fill_partial_intersection_counts_exact_visible_candidates() {
+    let caller = Output::new(4, 3);
+    let mut staged = StagedFrame::new(&caller, ProjectionOptions::default());
+    staged
+        .fill_rect(2, 1, u16::MAX, u16::MAX, &background_style())
+        .unwrap();
+    assert_eq!(staged.fill_candidate_visits(), 4);
+
+    let (output, _) = staged.finish().unwrap();
+    for (x, y) in [(2, 1), (3, 1), (2, 2), (3, 2)] {
+        assert_eq!(output.cell_at(x, y).unwrap().bg, Some(Color::Blue));
+    }
+    assert_eq!(output.cell_at(1, 1).unwrap().bg, None);
+}
+
+#[test]
+fn staged_fill_nested_clips_visits_only_effective_clip_intersection() {
+    let mut caller = Output::new(5, 4);
+    caller.clip(ClipRegion {
+        x1: 1,
+        y1: 0,
+        x2: 5,
+        y2: 4,
+    });
+    let mut staged = StagedFrame::new(&caller, ProjectionOptions::default());
+    staged.clip(ClipRegion {
+        x1: 2,
+        y1: 1,
+        x2: 3,
+        y2: 3,
+    });
+    staged
+        .fill_rect(0, 0, u16::MAX, u16::MAX, &background_style())
+        .unwrap();
+    assert_eq!(staged.fill_candidate_visits(), 2);
+    staged.unclip();
+
+    let (output, _) = staged.finish().unwrap();
+    assert_eq!(output.clip_depth(), 1);
+    assert_eq!(output.cell_at(2, 1).unwrap().bg, Some(Color::Blue));
+    assert_eq!(output.cell_at(2, 2).unwrap().bg, Some(Color::Blue));
+    assert_eq!(output.cell_at(1, 1).unwrap().bg, None);
+}
+
+#[test]
+fn staged_fill_injected_failure_keeps_caller_atomic_and_stops_visiting() {
+    let mut caller = Output::new(4, 3);
+    caller.write(0, 0, "seed", &Style::default());
+    let before_render = caller.render();
+    let before_dirty = caller.dirty_cell_positions().collect::<Vec<_>>();
+    let mut staged = StagedFrame::new(
+        &caller,
+        ProjectionOptions {
+            fail_after_writes: Some(1),
+            ..ProjectionOptions::default()
+        },
+    );
+
+    assert_eq!(
+        staged.fill_rect(0, 0, u16::MAX, u16::MAX, &background_style()),
+        Err(ProjectionError::InjectedFailure)
+    );
+    assert_eq!(staged.fill_candidate_visits(), 2);
+    assert_eq!(caller.render(), before_render);
+    assert_eq!(
+        caller.dirty_cell_positions().collect::<Vec<_>>(),
+        before_dirty
+    );
+    assert_eq!(caller.clip_depth(), 0);
 }

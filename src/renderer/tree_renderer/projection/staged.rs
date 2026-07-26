@@ -15,6 +15,10 @@ pub(in crate::renderer::tree_renderer) struct StagedFrame {
     output: Output,
     projection: ProjectionBuilder,
     initial_clip_depth: usize,
+    fill_bounds: VisibleRect,
+    fill_bounds_stack: Vec<VisibleRect>,
+    #[cfg(test)]
+    fill_candidate_visits: usize,
     writes: usize,
     options: ProjectionOptions,
 }
@@ -25,10 +29,15 @@ impl StagedFrame {
         options: ProjectionOptions,
     ) -> Self {
         let snapshot = output.staged_snapshot();
+        let fill_bounds = active_visible_bounds(&snapshot);
         Self {
             initial_clip_depth: snapshot.clip_depth(),
             output: snapshot,
             projection: ProjectionBuilder::default(),
+            fill_bounds,
+            fill_bounds_stack: Vec::new(),
+            #[cfg(test)]
+            fill_candidate_visits: 0,
             writes: 0,
             options,
         }
@@ -208,14 +217,21 @@ impl StagedFrame {
         height: u16,
         style: &Style,
     ) -> Result<(), ProjectionError> {
-        for row_offset in 0..i64::from(height) {
-            let row = y
-                .checked_add(row_offset)
-                .ok_or(ProjectionError::CoordinateOverflow)?;
-            for column_offset in 0..i64::from(width) {
-                let column = x
-                    .checked_add(column_offset)
-                    .ok_or(ProjectionError::CoordinateOverflow)?;
+        let Some(layout_rect) = VisibleRect::from_origin_size(x, y, width, height)? else {
+            return Ok(());
+        };
+        let Some(fill) = layout_rect.intersection(self.fill_bounds) else {
+            return Ok(());
+        };
+        for row in fill.y1..fill.y2 {
+            for column in fill.x1..fill.x2 {
+                #[cfg(test)]
+                {
+                    self.fill_candidate_visits = self
+                        .fill_candidate_visits
+                        .checked_add(1)
+                        .ok_or(ProjectionError::CoordinateOverflow)?;
+                }
                 self.paint_grapheme(column, row, " ", style)?;
             }
         }
@@ -223,11 +239,25 @@ impl StagedFrame {
     }
 
     pub(in crate::renderer::tree_renderer) fn clip(&mut self, region: ClipRegion) {
+        self.fill_bounds_stack.push(self.fill_bounds);
+        self.fill_bounds = self
+            .fill_bounds
+            .intersection(VisibleRect::from_clip(&region))
+            .unwrap_or_default();
         self.output.clip(region);
     }
 
     pub(in crate::renderer::tree_renderer) fn unclip(&mut self) {
         self.output.unclip();
+        self.fill_bounds = self
+            .fill_bounds_stack
+            .pop()
+            .unwrap_or_else(|| active_visible_bounds(&self.output));
+    }
+
+    #[cfg(test)]
+    pub(in crate::renderer::tree_renderer) fn fill_candidate_visits(&self) -> usize {
+        self.fill_candidate_visits
     }
 
     fn checkpoint(&mut self) -> Result<(), ProjectionError> {
@@ -251,6 +281,99 @@ impl StagedFrame {
         projection.stats.validation_visits = validate_round_trip(&projection)?;
         Ok((self.output, projection))
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct VisibleRect {
+    x1: i64,
+    y1: i64,
+    x2: i64,
+    y2: i64,
+}
+
+impl VisibleRect {
+    fn viewport(output: &Output) -> Self {
+        Self {
+            x1: 0,
+            y1: 0,
+            x2: i64::from(output.width),
+            y2: i64::from(output.height),
+        }
+    }
+
+    fn from_clip(clip: &ClipRegion) -> Self {
+        Self {
+            x1: i64::from(clip.x1),
+            y1: i64::from(clip.y1),
+            x2: i64::from(clip.x2),
+            y2: i64::from(clip.y2),
+        }
+    }
+
+    fn from_origin_size(
+        x: i64,
+        y: i64,
+        width: u16,
+        height: u16,
+    ) -> Result<Option<Self>, ProjectionError> {
+        if width == 0 || height == 0 {
+            return Ok(None);
+        }
+        let x2 = x
+            .checked_add(i64::from(width))
+            .ok_or(ProjectionError::CoordinateOverflow)?;
+        let y2 = y
+            .checked_add(i64::from(height))
+            .ok_or(ProjectionError::CoordinateOverflow)?;
+        Ok(Some(Self {
+            x1: x,
+            y1: y,
+            x2,
+            y2,
+        }))
+    }
+
+    fn intersection(self, other: Self) -> Option<Self> {
+        let intersection = Self {
+            x1: self.x1.max(other.x1),
+            y1: self.y1.max(other.y1),
+            x2: self.x2.min(other.x2),
+            y2: self.y2.min(other.y2),
+        };
+        (intersection.x1 < intersection.x2 && intersection.y1 < intersection.y2)
+            .then_some(intersection)
+    }
+}
+
+fn active_visible_bounds(output: &Output) -> VisibleRect {
+    let viewport = VisibleRect::viewport(output);
+    if output.clip_depth() == 0 {
+        return viewport;
+    }
+
+    let mut visible: Option<VisibleRect> = None;
+    for y in viewport.y1..viewport.y2 {
+        for x in viewport.x1..viewport.x2 {
+            if !output.active_clips_contain_grapheme(x, y, 1) {
+                continue;
+            }
+            visible = Some(match visible {
+                Some(bounds) => VisibleRect {
+                    x1: bounds.x1.min(x),
+                    y1: bounds.y1.min(y),
+                    x2: bounds.x2.max(x + 1),
+                    y2: bounds.y2.max(y + 1),
+                },
+                None => VisibleRect {
+                    x1: x,
+                    y1: y,
+                    x2: x + 1,
+                    y2: y + 1,
+                },
+            });
+        }
+    }
+    visible.unwrap_or_default()
 }
 
 fn is_published_space_expansion(token: &TextFlowToken) -> bool {
