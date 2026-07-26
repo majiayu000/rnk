@@ -52,7 +52,10 @@ evidence 的独立修复合同，不以 umbrella issue 的宽泛描述替代验�
    被裁剪；两者都不得绘制到 `(0, *)` 或 `(*, 0)`。
 3. **B-003** `-0.0` 必须与 `0.0` 等价；非负有限小数继续保持现有向下/向零一致的可见
    结果，例如 `0.5 -> 0`、`1.5 -> 1`，整数坐标逐值不变。修复不得使正向内容整体右移或
-   下移。
+   下移。现有递归/offset/scroll 的每个 `f32` 语义边界必须保留原 IEEE-754 舍入：例如
+   `-33_554_432.0 + 1.0 + 33_554_432.0` 仍得到 0，而不是因跨边界保留 `f64` 精度变成 1。
+   padding 继续先独立转换/floor，再与 signed screen origin 做 checked integer add；
+   screen origin `0.5` 加 padding `0.5` 仍落在列/行 0，不得先合并为 1.0 再 floor 到 1。
 4. **B-004** B-001 的单一规则必须覆盖 x、y、root render offset、当前 layout origin、
    nested ancestor 累积 offset、padding、scroll subtraction、content/border origin、文本
    run offset 和 clip edge；组合计算必须使用 checked arithmetic，x/y 两轴独立判定。
@@ -60,12 +63,14 @@ evidence 的独立修复合同，不以 umbrella issue 的宽泛描述替代验�
    必须在 terminal bounds 与完整 active clip stack 中保持 half-open、signed 处置。任何
    中间步骤不得先 clamp 到 0；只有最终 viewport/clip 交集可以把不可见 cell 分类为
    clipped。
-6. **B-006** 每个 `f32` 坐标贡献项必须在组合前单独验证为有限值，并在 `f64` 或更宽的
-   domain 按原运算顺序组合；任一中间结果超出 `f32` 可表示范围、floor 后超出内部 signed
-   coordinate domain，或任一 checked integer add/sub/extent-edge 计算溢出，都必须返回
-   `TextCoordinateError::Overflow`。例如两个有限的 `f32::MAX` 相加必须是 Overflow，
-   不得因先在 `f32` 中变成 `+inf` 而误报 NonFinite，也不得 wrap、panic、饱和为成功或
-   产生 partial frame。
+6. **B-006** 每个 `f32` 坐标贡献项必须在组合前单独验证为有限值。每个现有
+   递归/offset/scroll `f32` 语义边界都必须用 `f64` 或更宽的 shadow 按同一顺序计算以检测
+   超出 `f32` 可表示范围；通过检查后，供下一语义边界使用的 accumulator 必须是该边界原
+   `f32` 运算的舍入结果，而不是跨边界延续 wider shadow。任一 shadow 结果超出 `f32`
+   范围、floor 后超出内部 signed coordinate domain，或任一 checked integer
+   add/sub/extent-edge 计算溢出，都必须返回 `TextCoordinateError::Overflow`。例如两个
+   有限的 `f32::MAX` 相加必须是 Overflow，不得因先在 `f32` 中变成 `+inf` 而误报
+   NonFinite，也不得 wrap、panic、饱和为成功或产生 partial frame。
 7. **B-007** 任一坐标贡献项或需要检查的 extent 为 NaN、`+inf` 或 `-inf` 时必须返回
    `TextCoordinateError::NonFinite`；NonFinite 与 Overflow 是互斥、稳定的 typed 分类，
    不得依赖平台 cast 结果。
@@ -133,7 +138,9 @@ failure atomicity，当前同步pipeline也没有可达的pre-commit cancellatio
 - [ ] `-0.5` 的 x/y origin、`0.5 - scroll(1)`、负 fractional ancestor 累积和负
       fractional clip 组合均保留负 disposition；首 cell 被 clipped 而不是绘制到零坐标。
 - [ ] `-0.0`、`0.5`、`1.5`、整数和正向 clip snapshots 与当前兼容；x/y、Hidden/Scroll、
-      terminal bounds 与 nested active clips 的组合互不串轴。
+      terminal bounds 与 nested active clips 的组合互不串轴；`f32`
+      `-33_554_432 + 1 + 33_554_432` 仍为0，screen origin `0.5`与padding `0.5`独立
+      floor后仍为列/行0。
 - [ ] NaN、`+inf`、`-inf` 和有限 out-of-range/checked arithmetic overflow 分别返回
       `NonFinite` 或 `Overflow`，不 panic、不饱和成功。
 - [ ] root→parent→child fixture 中，由 child 触发的 NaN 和 overflow 在
