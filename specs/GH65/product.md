@@ -48,8 +48,10 @@ prepend、resize 或 streaming 时产生可见跳动。
    message-list state 互不影响，一方的测量、淘汰、滚动或 mutation 不改变另一方的可观察结果。
 4. **B-004 — Empty and zero-sized viewport.** 空列表产生零 content rows、零 offset、无 anchor
    和空 visible range。非空列表的 viewport rows 变为零时不渲染消息，但保留已有的 surviving
-   message/intra-row anchor；恢复为非零 rows 后从该 anchor 恢复并报告必要的 anchor/viewport
-   clamp。width 为零若无法测量则返回 typed error，不能猜测默认高度。
+   message/intra-row anchor。Paused 恢复为非零 rows 后从该 anchor 恢复并报告必要的
+   anchor/viewport clamp；Following 在零 rows 期间保持 logical bottom，恢复时必须位于包含
+   期间 append/stream growth 的最新 bottom。width 为零若无法测量则返回 typed error，不能猜测
+   默认高度。
 5. **B-005 — Row-accurate partial visibility.** 可见结果按消息顺序返回；每项同时包含稳定
    `message_id`、message-local row range 和 viewport-local row range。第一条和最后一条消息
    可为 partial range，所有 range 均为半开区间且不越过已测量高度。
@@ -60,6 +62,7 @@ prepend、resize 或 streaming 时产生可见跳动。
    update result 中报告 `viewport_clamped=true`，不能假称 exact-top 成功。
 7. **B-007 — Typed anchor navigation and mutation preservation.** 调用方可以按稳定
    `message_id + intra-message row` 导航，不需要把旧 global offset 当作 message identity；
+   合法显式导航优先于 Following/restoration，进入 Paused 并以请求 anchor 替换 stored anchor；
    unknown ID 或请求超出该消息已测量范围必须 typed 失败且零 mutation。Insert、append、
    content update、streaming delta、resize、variant change、expand/collapse 和其他高度变化后，
    原 anchor message 若仍存在就保持同一 intra-message row；若新高度更短则只允许 clamp 到
@@ -69,22 +72,30 @@ prepend、resize 或 streaming 时产生可见跳动。
    时 anchor 变为 `None`、offset 归零。未知 ID 删除必须 typed 失败且不改变状态。
 9. **B-009 — Explicit bottom-follow state.** Follow state 只有可区分的 `Following` 与
    `Paused { new_content_below }`。用户从底部向上滚动后进入 Paused；只有显式滚动到新底部或
-   jump-to-bottom 才恢复 Following 并清除提示，resize/delete/collapse 不得隐式恢复。
+   jump-to-bottom 才恢复 Following 并清除提示，resize/delete/collapse 不得隐式恢复。调用方
+   必须可通过 immutable public observation 读取 revision、follow state、stored anchor 与
+   `new_content_below`，但不能借此修改内部状态。
 10. **B-010 — Follow-bottom append and growth.** Following 时 append 或最后消息 streaming
-    growth 后，viewport 继续贴住新的最大 offset。Paused 时这些变化保留 anchor；当变化在
-    原 viewport 下方新增可见内容时 `new_content_below=true`，并持续到用户返回底部。
+    growth 后，viewport 继续贴住新的最大 offset；viewport rows=0 时 offset 使用 logical
+    bottom end、保留 anchor 且不产生 new-content indicator，恢复非零 rows 后贴住包含期间变化
+    的最新 bottom。Paused 时这些变化保留 anchor；当变化在原 viewport 下方新增可见内容时
+    `new_content_below=true`，并持续到用户返回底部。
 11. **B-011 — Update and isolated invalidation semantics.** 同一 stable ID 的 content revision、
     variant、expansion，或 B-002 任一 textual/structural 配置输入改变时，只使受影响的 exact
     measurement 失效；width 改变为所有消息建立新宽度的测量视图。未改变 exact key 的
     prepend、append、insert、delete 或重排可复用缓存，不得因结构变化重新测量全部消息。
+    Resize 必须按 entry 顺序以 old exact entry/key 与新 width 构建并深度验证 candidate config；
+    config callback 的 failure/cancellation 与 measurement 一样 typed 且整次原子回滚，同
+    width 的 no-op 不调用 config 或 measurement callback。
 12. **B-012 — Atomic measurement failure.** 一次 mutation 所需的任一测量返回 missing、
     failure 或 cancellation 时，整个 mutation 失败；消息顺序、高度索引、cache、anchor、
     follow/new-content state 和 state revision 与调用前逐字段相同。
 13. **B-013 — Typed fail-loud errors.** Duplicate/unknown message ID、invalid anchor row、
-    missing measurement、zero row height、stale state revision、state revision overflow、
-    row arithmetic overflow、coordinate conversion overflow、measurement failure 和
-    cancellation 都保留独立 typed category 及可用 source；不得返回 `Any`、仅字符串错误、
-    warning+fallback 或默认 `1 row`。
+    invalid insert index、missing measurement、zero row height、stale state revision、state
+    revision overflow、row arithmetic overflow、coordinate conversion overflow、config/
+    measurement failure 和 cancellation 都保留独立 typed category 及可用 source。Insert
+    `index == len` 合法，`index > len` 在 callback、clone 或 indexing 前 typed 失败且逐字段
+    零 mutation；不得返回 `Any`、仅字符串错误、warning+fallback 或默认 `1 row`。
 14. **B-014 — Revisioned atomic mutations.** State 使用单一 checked revision；每次成功的
     可观察 mutation 恰好递增一次，无变化或失败不递增。携带旧 expected state revision 的
     mutation 必须 typed 拒绝且不能覆盖当前高度；revision 已到最大值时，在调用测量 callback
@@ -94,15 +105,18 @@ prepend、resize 或 streaming 时产生可见跳动。
     child 的换行行数和所有 header、status、block spacing、padding、border 等结构行都被计算
     恰好一次。输出不得因只测量其中一个文本块而重叠、截断或错位。
 16. **B-016 — Exact measured/rendered revision.** 每个 visible render 调用必须同时收到产生该
-    slice 的 exact message entry、exact composite measurement key 和 message-local slice；
-    content revision、variant、expansion 或配置不同的内容不能使用旧 geometry 渲染。调用方
-    可选择任意 renderer，且更换 renderer 不改变索引、顺序或 slice 结果。
+    slice 的 exact message entry、shared immutable exact composite measurement-key handle 和
+    message-local slice；content revision、variant、expansion 或配置不同的内容不能使用旧
+    geometry 渲染。调用方可选择任意 renderer，且更换 renderer 不改变索引、顺序或 slice
+    结果。
 17. **B-017 — Render failure propagation.** Render closure 对任一 visible slice 失败时，
     MessageList 返回保留原 source 的 typed render error；不跳过该消息、不输出 partial/default
     frame，也不修改 caller-owned state。
 18. **B-018 — Logarithmic lookup and point update.** 对已测量的 `n` 条消息，从全局 row offset
     定位首条可见消息为 `O(log n)`；单条高度/content streaming delta 的索引更新为
-    `O(log n)`。构造 `k` 条 visible slices 为 `O(log n + k)`，每帧不得全表扫描或全表重测。
+    `O(log n)`。构造 `k` 条 visible slices 为 `O(log n + k)`，其中每个 key handle clone 为
+    `O(1)` 且不复制 source/style/config vectors；每帧不得全表扫描、全表重测或对每条 slice
+    深拷贝 measurement identity。
 19. **B-019 — Structural and resize cost is explicit.** Prepend、middle insert/delete/reorder
     允许 `O(n)` 重建 row index，但复用 unchanged exact cache entries；width resize 允许为
     `n` 条消息各测量一次并重建，后续同宽度查询不得重复全表测量。
@@ -123,8 +137,10 @@ prepend、resize 或 streaming 时产生可见跳动。
     fallback 代替。GH-63 是否存在不改变 core index；存在时只影响调用方选择的 renderer。
 24. **B-024 — Reproducible completion result.** 对被声明为完成的一个 exact implementation
     version，任何审阅者按该版本声明的完整验证集执行，都必须得到相同的 exact-test、
-    property、10k workload、coverage 和 compatibility 通过结果；其他版本、零匹配、ignored
-    test、部分列表或无法绑定该版本的结果不能证明完成。
+    property、10k workload、coverage 和 compatibility 通过结果。Coverage 必须由 committed
+    `gh57-critical-paths-v1` ledger 确定性生成 `gh57-child-coverage-v1`，绑定 exact head/base/
+    raw provenance，changed executable 至少 80%、ledger critical paths 逐项 100%；其他版本、
+    零匹配、ignored test、部分列表或无法绑定该版本的结果不能证明完成。
 
 ## 验收标准
 
@@ -133,28 +149,31 @@ prepend、resize 或 streaming 时产生可见跳动。
 - [ ] Cache key 深度包含 message identity、全部 TextFlow 输入和完整 composite shell 配置，
   每一项的 isolated invalidation、reuse 和 collision equality 均有 exact tests。
 - [ ] Prepend 的 exact-top 与 short-content viewport clamp、typed anchor navigation、
-  zero-row anchor retention/restoration，以及 append/stream/resize/expand/collapse/delete
-  规则均有确定 fixture。
+  typed insert-index boundary、Following/Paused 各自的 zero-row retention/restoration，以及
+  append/stream/resize/expand/collapse/delete 规则均有确定 fixture。
 - [ ] Following/Paused/new-content 状态转换完整覆盖用户 scroll、jump-to-bottom、append、
-  streaming、resize、collapse 与 delete。
+  typed navigation、zero viewport、streaming、resize、collapse 与 delete；public immutable
+  observation 可读取 indicator/revision/anchor。
 - [ ] Missing/unknown/duplicate/invalid-anchor/zero-height/state-revision-overflow/stale/
   row-overflow/failure/cancellation 都 typed、fail-loud、原子且保留 source；callback outcome
   闭合区分 measured/missing/failed/cancelled，无默认高度或 partial commit。
-- [ ] 固定 seed property oracle、确定性复杂度门禁和 10k benchmark 在当前 head 实际运行。
+- [ ] Visible slices 只 clone `O(1)` shared immutable key handle；固定 seed property oracle、
+  确定性复杂度门禁和 10k benchmark 在当前 head 实际运行。
 - [ ] GH-63 只经 render closure 消费；render failure typed 传播且不输出 partial/default frame。
 - [ ] 既有 `virtual_scroll_view` 兼容 fixture 与 crate 外 public API fixture 通过。
-- [ ] Implementation 开始前验证 GH-58/GH-60/GH-62 merged ancestry；最终证据满足 B-024。
+- [ ] Implementation 开始前验证 GH-58/GH-60/GH-62 merged ancestry；最终 exact-head evidence
+  含可复算的 GH57 child coverage artifact 并满足 B-024。
 
 ## 边界情况清单
 
 | 类别 | 判定（covered: B-xxx / N/A + 原因） |
 | --- | --- |
-| 空/缺失输入 | covered: B-004、B-008、B-012；空列表、零 viewport 与 missing measurement 均有闭合结果 |
-| 错误与失败路径 | covered: B-007、B-008、B-012、B-013、B-014、B-017 |
+| 空/缺失输入 | covered: B-004、B-008、B-012；空列表、Following/Paused 零 viewport 与 missing measurement 均有闭合结果 |
+| 错误与失败路径 | covered: B-007、B-008、B-011、B-012、B-013、B-014、B-017 |
 | 授权/权限 | N/A：MessageList 不读取权限、不执行工具、不访问文件/网络；renderer 只由调用方提供 |
 | 并发/竞态 | covered: B-003、B-012、B-014；独立实例互不影响，旧 revision fail closed |
 | 重试/幂等 | covered: B-003、B-011、B-012、B-014；no-op/retry 不重复推进 revision 或重测 unchanged key |
-| 非法状态转换 | covered: B-007、B-008、B-009、B-013、B-014；非法导航/follow/revision 转换均 typed 拒绝 |
+| 非法状态转换 | covered: B-007、B-008、B-009、B-013、B-014；非法导航/insert/follow/revision 转换均 typed 拒绝 |
 | 兼容/迁移 | covered: B-022、B-023；fixed-height API 不变，production availability 等待完整依赖 |
 | 降级/回退 | covered: B-004、B-012、B-013、B-015、B-017；禁止默认高度、单块高度或 partial frame |
 | 证据与审计完整性 | covered: B-020、B-021、B-023、B-024 |
