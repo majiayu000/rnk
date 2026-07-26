@@ -5,7 +5,10 @@ use crate::core::{
 };
 use crate::layout::{TextFlow, TextFlowError, TextFlowInput};
 use crate::reconciler::{Patch, diff};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use taffy::{NodeId, TaffyTree};
 
 /// Computed layout for an element
@@ -453,13 +456,15 @@ impl LayoutEngine {
 
     /// Remove a node from the tree
     fn remove_node(&mut self, key: NodeKey) -> bool {
-        if let Some(node_id) = self.vnode_map.remove(&key) {
-            // Remove from Taffy tree
-            if self.taffy.remove(node_id).is_ok() {
-                return true;
-            }
+        let Some(&node_id) = self.vnode_map.get(&key) else {
+            return false;
+        };
+        let subtree = self.vnode_subtree_nodes(node_id);
+        if self.taffy.remove(node_id).is_err() {
+            return false;
         }
-        false
+        self.purge_vnode_subtree(&subtree);
+        true
     }
 
     /// Replace a node with a new one
@@ -472,8 +477,11 @@ impl LayoutEngine {
                 let index = children.iter().position(|&id| id == old_node_id);
 
                 // Remove old node
-                let _ = self.taffy.remove(old_node_id);
-                self.vnode_map.remove(&old_key);
+                let subtree = self.vnode_subtree_nodes(old_node_id);
+                if self.taffy.remove(old_node_id).is_err() {
+                    return false;
+                }
+                self.purge_vnode_subtree(&subtree);
 
                 // Build new subtree
                 if let Some(new_node_id) = self.build_vnode(new_node) {
@@ -490,6 +498,32 @@ impl LayoutEngine {
             }
         }
         false
+    }
+
+    fn vnode_subtree_nodes(&self, root: NodeId) -> HashSet<NodeId> {
+        let mut nodes = HashSet::new();
+        let mut pending = vec![root];
+        while let Some(node) = pending.pop() {
+            if nodes.insert(node) {
+                pending.extend(
+                    self.taffy
+                        .children(node)
+                        .expect("mapped VNode subtree must remain in the Taffy tree"),
+                );
+            }
+        }
+        nodes
+    }
+
+    fn purge_vnode_subtree(&mut self, subtree: &HashSet<NodeId>) {
+        self.vnode_map.retain(|_, node| !subtree.contains(node));
+        self.node_map.retain(|_, node| !subtree.contains(node));
+        self.element_keys
+            .retain(|element_id, _| self.node_map.contains_key(element_id));
+        self.current_vnode_flows
+            .retain(|key, _| self.vnode_map.contains_key(key));
+        self.current_text_flows
+            .retain(|element_id, _| self.node_map.contains_key(element_id));
     }
 
     /// Reorder children of a node
@@ -655,6 +689,7 @@ mod tests;
 mod frame_flow_tests {
     use super::*;
     use crate::core::FlexDirection;
+    use crate::reconciler::Patch;
 
     fn many_distinct_text_nodes() -> (Element, Vec<ElementId>) {
         let mut root = Element::box_element();
@@ -710,6 +745,29 @@ mod frame_flow_tests {
                 &before
             ));
         }
+    }
+
+    #[test]
+    fn removing_nested_vnode_purges_descendant_flow() {
+        let leaf = VNode::text("gone").with_key("leaf");
+        let leaf_key = leaf.key;
+        let branch = VNode::box_node().with_key("branch").child(leaf);
+        let branch_key = branch.key;
+        let sibling = VNode::text("keep").with_key("sibling");
+        let root = VNode::box_node().children([branch, sibling]);
+        let sibling_key = root.children[1].key;
+        let mut engine = LayoutEngine::new();
+        engine.compute_vnode(&root, 20, 4);
+        let sibling_flow = engine.current_vnode_text_flow(sibling_key).unwrap();
+
+        assert!(engine.apply_patches(&[Patch::remove(branch_key)]));
+        assert!(engine.get_vnode_layout(branch_key).is_none());
+        assert!(engine.get_vnode_layout(leaf_key).is_none());
+        assert!(engine.current_vnode_text_flow(leaf_key).is_none());
+        assert!(Arc::ptr_eq(
+            &sibling_flow,
+            &engine.current_vnode_text_flow(sibling_key).unwrap()
+        ));
     }
 }
 

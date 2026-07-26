@@ -1,20 +1,19 @@
 //! TextFlow input, caching, and Taffy measurement bridge.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
 };
 
 use taffy::{AvailableSpace, NodeId};
 
+use super::LayoutEngine;
 use crate::components::Line;
 use crate::core::{Element, ElementType, Style, VNode, VNodeType};
 use crate::layout::{
     StyledTextRange, TextFlow, TextFlowError, TextFlowInput, TextFlowOptions, TextFlowSourceKind,
     UnicodeWidthPolicy,
 };
-
-use super::LayoutEngine;
 
 #[derive(Clone)]
 pub(super) struct NodeContext {
@@ -392,11 +391,23 @@ impl LayoutEngine {
     }
 
     fn context_nodes(&self) -> Vec<NodeId> {
-        self.node_map
-            .values()
-            .chain(self.vnode_map.values())
-            .copied()
-            .collect()
+        let Some(root) = self.root_node else {
+            return Vec::new();
+        };
+        let mut reachable = Vec::new();
+        let mut visited = HashSet::new();
+        let mut pending = vec![root];
+        while let Some(node) = pending.pop() {
+            if visited.insert(node) {
+                reachable.push(node);
+                pending.extend(
+                    self.taffy
+                        .children(node)
+                        .expect("reachable node must remain in the Taffy tree"),
+                );
+            }
+        }
+        reachable
     }
 
     pub(super) fn run_layout_and_publish(
@@ -501,6 +512,7 @@ mod tests {
         components::{Line, Span},
         core::{Color, Dimension, Overflow, TextWrap},
         layout::TextFlowDiagnostic,
+        reconciler::Patch,
     };
 
     #[test]
@@ -519,7 +531,6 @@ mod tests {
             .get_or_compute(&input, &options, &mut || false)
             .unwrap();
         assert!(Arc::ptr_eq(&baseline, &reused));
-
         let mut identities = Vec::new();
         let mut changed_input = input.clone();
         changed_input.source = "ac".into();
@@ -536,7 +547,6 @@ mod tests {
         let mut changed_input = input.clone();
         changed_input.styled_ranges[0].range = 1..2;
         identities.push((changed_input, options.clone()));
-
         options.max_width = 7;
         identities.push((input.clone(), options.clone()));
         options.max_width = 8;
@@ -565,7 +575,6 @@ mod tests {
             assert!(!Arc::ptr_eq(&baseline, &changed));
         }
     }
-
     #[test]
     fn engine_cache_is_bounded_with_deterministic_fifo_eviction() {
         let options = TextFlowOptions::new(8, TextWrap::Wrap);
@@ -589,7 +598,6 @@ mod tests {
             }
         }
         assert_eq!(cache.entries.len(), FlowCache::MAX_ENTRIES);
-
         let newest_input = TextFlowInput::plain(
             format!("entry-{}", FlowCache::MAX_ENTRIES),
             TextFlowSourceKind::Exact,
@@ -602,7 +610,6 @@ mod tests {
             .get_or_compute(&newest_input, &options, &mut || false)
             .unwrap();
         assert!(Arc::ptr_eq(&newest, &newest_again));
-
         let first_again = cache
             .get_or_compute(&first_input, &options, &mut || false)
             .unwrap();
@@ -647,7 +654,6 @@ mod tests {
         let initial_element = identity_element(5.0, Overflow::Visible);
         let (initial_vnode, initial) =
             publish_incrementally(&mut engine, None, &initial_element, 0);
-
         let width_element = identity_element(4.0, Overflow::Visible);
         let (width_vnode, width) =
             publish_incrementally(&mut engine, Some(&initial_vnode), &width_element, 1);
@@ -658,7 +664,6 @@ mod tests {
         assert_eq!(width.cache_identity().input, expected_input);
         assert_eq!(width.cache_identity().options, expected);
         assert!(!Arc::ptr_eq(&initial, &width));
-
         let overflow_element = identity_element(4.0, Overflow::Hidden);
         let (overflow_vnode, overflow) =
             publish_incrementally(&mut engine, Some(&width_vnode), &overflow_element, 1);
@@ -667,7 +672,6 @@ mod tests {
         assert_eq!(overflow.cache_identity().input, expected_input);
         assert_eq!(overflow.cache_identity().options, expected);
         assert!(!Arc::ptr_eq(&width, &overflow));
-
         engine.set_text_flow_policy(2, "…", 1);
         let tab_element = identity_element(4.0, Overflow::Hidden);
         let (tab_vnode, tab) =
@@ -677,7 +681,6 @@ mod tests {
         assert_eq!(tab.cache_identity().options, expected);
         assert!(!Arc::ptr_eq(&overflow, &tab));
         assert_ne!(tab.rows(), overflow.rows());
-
         engine.set_text_flow_policy(2, "..", 1);
         let ellipsis_element = identity_element(4.0, Overflow::Hidden);
         let (_, ellipsis) =
@@ -704,7 +707,6 @@ mod tests {
         let id = element.id;
         let mut engine = LayoutEngine::new();
         engine.try_compute(&element, 8, 2).unwrap();
-
         let flow = engine.current_text_flow(id).unwrap();
         assert_eq!(
             flow.cache_identity().input.source_kind,
@@ -724,7 +726,6 @@ mod tests {
         let id = element.id;
         let mut engine = LayoutEngine::new();
         engine.try_compute(&element, 8, 2).unwrap();
-
         let flow = engine.current_text_flow(id).unwrap();
         assert_eq!(
             flow.cache_identity().input.source_kind,
@@ -737,5 +738,48 @@ mod tests {
             TextFlowDiagnostic::StyleBoundaryNormalized { boundary, .. }
                 if *boundary == "👩".len()
         )));
+    }
+
+    #[test]
+    fn replace_and_reorder_preserve_only_live_flows() {
+        let old_leaf = VNode::text("old").with_key("old-leaf");
+        let old_leaf_key = old_leaf.key;
+        let old_branch = VNode::box_node().with_key("branch").child(old_leaf);
+        let old_branch_key = old_branch.key;
+        let root = VNode::box_node().children([old_branch, VNode::text("keep").with_key("keep")]);
+        let sibling_key = root.children[1].key;
+        let mut engine = LayoutEngine::new();
+        engine.compute_vnode(&root, 20, 4);
+        let old_branch_node = engine.vnode_map[&old_branch_key];
+        let sibling_node = engine.vnode_map[&sibling_key];
+        let sibling_flow = engine.current_vnode_text_flow(sibling_key).unwrap();
+        let new_leaf = VNode::text("new").with_key("new-leaf");
+        let new_leaf_key = new_leaf.key;
+        let replacement = VNode::box_node().with_key("branch").child(new_leaf);
+        assert!(engine.apply_patches(&[Patch::replace(old_branch_key, replacement)]));
+        assert_ne!(engine.vnode_map[&old_branch_key], old_branch_node);
+        assert!(engine.get_vnode_layout(old_leaf_key).is_none());
+        assert!(engine.current_vnode_text_flow(old_leaf_key).is_none());
+        assert_eq!(
+            engine
+                .current_vnode_text_flow(new_leaf_key)
+                .unwrap()
+                .cache_identity()
+                .input
+                .source,
+            "new"
+        );
+        assert_eq!(engine.vnode_map[&sibling_key], sibling_node);
+        assert!(Arc::ptr_eq(
+            &sibling_flow,
+            &engine.current_vnode_text_flow(sibling_key).unwrap()
+        ));
+        assert!(engine.apply_patches(&[Patch::reorder(root.key, vec![(0, 1), (1, 0)])]));
+        assert_eq!(engine.vnode_map[&sibling_key], sibling_node);
+        assert!(engine.get_vnode_layout(sibling_key).is_some());
+        assert!(Arc::ptr_eq(
+            &sibling_flow,
+            &engine.current_vnode_text_flow(sibling_key).unwrap()
+        ));
     }
 }
