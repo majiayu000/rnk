@@ -2,13 +2,18 @@
 
 mod engine;
 pub mod measure;
-pub(crate) mod text_flow;
+pub mod text_flow;
 mod utils;
 
 pub use engine::{Layout, LayoutEngine};
 pub use measure::{
     TextAlign, display_width, measure_text, measure_text_width, pad_text, truncate_middle,
     truncate_start, truncate_text, wrap_text,
+};
+pub use text_flow::{
+    StyledTextRange, TextFlow, TextFlowCache, TextFlowDiagnostic, TextFlowError, TextFlowInput,
+    TextFlowOptions, TextFlowPlacement, TextFlowPositionMapEntry, TextFlowRow, TextFlowRun,
+    TextFlowSource, TextFlowSourceKind, TextFlowToken, UnicodeWidthPolicy,
 };
 pub use utils::{
     Position, center, center_horizontal, center_vertical, h_gap, h_spacer, join_horizontal,

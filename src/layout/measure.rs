@@ -308,47 +308,7 @@ pub fn truncate_middle(text: &str, max_width: usize, ellipsis: &str) -> String {
 
 /// Count wrapped lines for a text block without allocating wrapped content.
 pub(crate) fn count_wrapped_lines_by_width(text: &str, max_width: usize) -> usize {
-    if text.is_empty() {
-        return 1;
-    }
-
-    if max_width == 0 {
-        return 1;
-    }
-
-    if let Some(lines) = ascii_wrapped_line_count_fast_path(text, max_width) {
-        return lines;
-    }
-
-    let mut lines = 1usize;
-    let mut current_width = 0usize;
-    let mut ends_with_newline = false;
-
-    for grapheme in text.graphemes(true) {
-        if grapheme.ends_with('\n') {
-            lines += 1;
-            current_width = 0;
-            ends_with_newline = true;
-            continue;
-        }
-        ends_with_newline = false;
-
-        let grapheme_width = grapheme_width(grapheme);
-        if current_width + grapheme_width > max_width {
-            lines += 1;
-            current_width = grapheme_width;
-        } else {
-            current_width += grapheme_width;
-        }
-    }
-
-    // Match `str::lines()` semantics used by the previous implementation:
-    // a trailing '\n' does not produce an extra final empty line.
-    if ends_with_newline && lines > 1 {
-        lines -= 1;
-    }
-
-    lines.max(1)
+    crate::layout::text_flow::flow_text(text, max_width, crate::core::TextWrap::Wrap).row_count()
 }
 
 fn ascii_measure_text_dimensions_fast_path(text: &str) -> Option<(usize, usize)> {
@@ -399,57 +359,6 @@ fn ascii_measure_text_dimensions_fast_path(text: &str) -> Option<(usize, usize)>
     }
 
     Some((max_width, height.max(1)))
-}
-
-fn ascii_wrapped_line_count_fast_path(text: &str, max_width: usize) -> Option<usize> {
-    if text.is_empty() {
-        return Some(1);
-    }
-
-    let bytes = text.as_bytes();
-    let mut lines = 1usize;
-    let mut current_width = 0usize;
-    let mut ends_with_line_break = false;
-    let mut i = 0usize;
-
-    while i < bytes.len() {
-        let byte = bytes[i];
-
-        if byte == b'\n' {
-            lines += 1;
-            current_width = 0;
-            ends_with_line_break = true;
-            i += 1;
-            continue;
-        }
-
-        if byte == b'\r' && i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
-            lines += 1;
-            current_width = 0;
-            ends_with_line_break = true;
-            i += 2;
-            continue;
-        }
-
-        if !byte.is_ascii() || byte < 0x20 || byte == 0x7f {
-            return None;
-        }
-
-        if current_width == max_width {
-            lines += 1;
-            current_width = 1;
-        } else {
-            current_width += 1;
-        }
-        ends_with_line_break = false;
-        i += 1;
-    }
-
-    if ends_with_line_break && lines > 1 {
-        lines -= 1;
-    }
-
-    Some(lines.max(1))
 }
 
 fn ascii_width_fast_path(text: &str) -> Option<usize> {
