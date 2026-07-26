@@ -216,56 +216,33 @@ callback counts 写进 B-002 counter。若 GH-127 在 pre-wrap 阶段增加合�
 | B-019 #128/#129/#130 compatibility | no-write paths | `cargo test --test text_flow_truncate_regressions --locked`; exact engine bridge/context_sync tests |
 | B-020 #126 ownership/order | merged dependency gate; no wrap diff | `git merge-base --is-ancestor 50f6a203c1861814d288d4bdeae0e28d877af34c HEAD`; no-write diff；`cargo test --test text_flow_wrap_interruption --locked` |
 | B-021 exhaustive fixtures/real production path | unit + public integration | every planned exact test in Critical Test Ledger; source scan rejects copied merge in integration file |
-| B-022 exact-head quality/evidence | coverage/full CI/review gate | fmt/check/clippy/all-targets/property/coverage + exact head CI/reviewThreads/independent review |
+| B-022 exact-head quality/evidence | coverage/full CI/review gate | fresh PR base/head before+after、canonical 1..EOF LCOV、fmt/check/clippy/all-targets/property/coverage + exact head CI/reviewThreads/review |
 
 ## 数据流
 
-```text
-TextFlowInput + TextFlowOptions + interruption callback
-  -> immediate interruption/options checks
-  -> typed styled-range validation + private sorted/original-ordinal plan
-  -> one source-grapheme pass
-       -> monotonic style cursor
-       -> monotonic endpoint cursor
-       -> exact ordered diagnostics
-       -> canonical TextFlowToken
-  -> existing wrap/truncate layout
-  -> existing source coverage + position map
-  -> completed immutable TextFlow
-  -> exact-identity cache publish
-```
+`TextFlowInput/options + interruption` → immediate checks → typed range validation/private
+ordinal plan → 单次 grapheme pass（style cursor + endpoint cursor + ordered diagnostics）→
+canonical tokens → existing wrap/truncate/map → completed immutable flow → exact cache publish。
 
 输入/输出仅在内存中；没有持久化、网络、权限、provider 或 terminal I/O。counter 只存在于
 test build，不进入 public result、cache 或 runtime telemetry。
 
 ## 备选方案
 
-- **每 grapheme binary-search ranges/endpoints**：拒绝；是 `O(G log R)`，不满足线性合同，
-  且重复 search 难以保持 diagnostic original order。
-- **用 `HashMap<byte, Style>` 或逐 byte table**：拒绝；source byte 数不等于 grapheme 数，
-  大 combining cluster 会放大内存，hash iteration 也不能承担 deterministic order。
-- **先排序 caller vector 并去重 boundaries**：拒绝；改变 cache identity 与
-  adjacent/empty diagnostic 重数。
-- **只缓存上次 `.find()` 结果，仍全量扫描 diagnostics**：拒绝；只修一半根因。
-- **criterion/wall-clock regression**：拒绝作为 gate；环境噪声不能证明算法阶数。
-- **把 counter 暴露为 public API**：拒绝；性能测试 seam 不能污染稳定 surface。
+- 每 grapheme binary search 是 `O(G log R)`；逐 byte/hash table 放大 combining cluster
+  内存且无稳定顺序；两者均不采用。
+- 排序写回 caller vector/去重 boundary 会破坏 cache identity 与 diagnostic 重数；只缓存
+  style `.find()` 又遗漏 diagnostic 根因，均不采用。
+- wall-clock 不能证明阶数，counter 只保留 private test seam，不进入 public API。
 
 ## 风险
 
-- **Security**：纯本地 indexes 不解释 source。极端 endpoint 使用 checked comparison；
-  禁止 allocation size/operation arithmetic overflow、panic 或执行 source controls。
-- **Compatibility**：内部排序最容易改变 diagnostics order/multiplicity 或 cache identity。
-  original ordinal、complete-flow equality 与 adjacent/empty fixtures固定当前语义。
-- **Performance**：existing validation sort 不属于本 issue 的 quadratic root cause，但
-  counter 必须明确 phase，防止实现把 `G×R` 移到未计数 helper。source scan + source review
-  同时检查所有 range traversals。
-- **Cancellation**：新增 plan building 可能形成 range-only uninterruptible pass；B-016
-  要求 bounded polling，同时 B-015 固定 typed validation precedence。
-- **Maintenance**：private plan/counter若和 production 分叉会产生假 green。unit counter必须
-  调同一 production helper，integration只验证 public结果；父 unit 文件必须通过自然拆分
-  回到 800 行以内，禁止压缩断言或继续直接追加。
-- **Dependency**：#126 已合并并固定 interruption poll density。exact ancestor + disjoint
-  no-write diff避免 GH-127 改写其断言。
+- **Security/compatibility**：checked endpoint/operation arithmetic；original ordinals、
+  complete-flow equality 与 adjacent/empty fixtures固定顺序、重数和 cache identity。
+- **Performance/cancellation**：counter phase 与 source review 防止 `G×R` 外移；plan/cursor
+  bounded polling 同时保留 validation precedence。
+- **Maintenance/dependency**：unit counter调用 production helper，integration只读 public
+  结果；自然拆分父 test 文件；#126 exact ancestor + no-write diff 固定其 polling 合同。
 
 ## Critical Test Ledger
 
@@ -450,10 +427,25 @@ cargo check --workspace --all-targets --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- \
   -D warnings -A clippy::collapsible_if -A clippy::manual_is_multiple_of
 cargo test --workspace --all-targets --all-features --locked
+: "${IMPLEMENTATION_PR:?set IMPLEMENTATION_PR to the implementation PR number}"
 BASE_SHA="$(git rev-parse "${BASE_SHA:?set BASE_SHA to the implementation PR base}^{commit}")"
 HEAD_SHA="$(git rev-parse HEAD^{commit})"
-test "$(git rev-parse HEAD)" = "$HEAD_SHA"
-test "$(git merge-base "$BASE_SHA" "$HEAD_SHA")" = "$BASE_SHA"
+PR_EVIDENCE_BEFORE="$(mktemp "${TMPDIR:-/tmp}/gh127-pr-before.XXXXXX")"
+PR_EVIDENCE_AFTER="$(mktemp "${TMPDIR:-/tmp}/gh127-pr-after.XXXXXX")"
+verify_pr_binding() {
+  local destination="$1"
+  gh pr view "$IMPLEMENTATION_PR" --repo majiayu000/rnk \
+    --json baseRefOid,headRefOid > "$destination"
+  python3 - "$destination" "$BASE_SHA" "$HEAD_SHA" <<'PY'
+import json, sys
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+if payload["baseRefOid"] != sys.argv[2] or payload["headRefOid"] != sys.argv[3]:
+    raise SystemExit("local base/head do not equal fresh implementation PR baseRefOid/headRefOid")
+PY
+  test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+  test "$(git merge-base "$BASE_SHA" "$HEAD_SHA")" = "$BASE_SHA"
+}
+verify_pr_binding "$PR_EVIDENCE_BEFORE"
 test -z "$(git status --porcelain --untracked-files=all)"
 LCOV_PATH="$(mktemp "${TMPDIR:-/tmp}/gh127-${HEAD_SHA}.lcov.XXXXXX")"
 PROVENANCE_PATH="$(mktemp "${TMPDIR:-/tmp}/gh127-${HEAD_SHA}.coverage.XXXXXX")"
@@ -526,6 +518,7 @@ def parse_lcov(text, expected_paths):
                 raise ValueError(f"duplicate SF record: {relative}")
             record = {
                 "path": relative,
+                "source_lines": sum(1 for _ in canonical.open("rb")),
                 "lines": {},
                 "branches": {},
                 "lf": None,
@@ -554,12 +547,17 @@ def parse_lcov(text, expected_paths):
         elif record is not None and line.startswith("DA:"):
             number, hits, *_ = line[3:].split(",")
             number = int(number)
+            if not 1 <= number <= record["source_lines"]:
+                raise ValueError(f"out-of-range DA line: {record['path']}:{number}")
             if number in record["lines"]:
                 raise ValueError(f"duplicate DA line: {record['path']}:{number}")
             record["lines"][number] = int(hits)
         elif record is not None and line.startswith("BRDA:"):
             number, block, branch, taken = line[5:].split(",")
-            key = (int(number), block, branch)
+            number = int(number)
+            if not 1 <= number <= record["source_lines"]:
+                raise ValueError(f"out-of-range BRDA line: {record['path']}:{number}")
+            key = (number, block, branch)
             if key in record["branches"]:
                 raise ValueError(f"duplicate BRDA entry: {record['path']}:{key}")
             record["branches"][key] = None if taken == "-" else int(taken)
@@ -599,6 +597,16 @@ fixture = (
     "BRDA:1,0,0,1\nBRF:1\nBRH:1\nend_of_record\n"
 )
 parse_lcov(fixture, expected_paths)
+fixture_eof = sum(1 for _ in fixture_source.open("rb"))
+for name, payload in (
+    ("DA line 0", fixture.replace("DA:1,1", "DA:0,1")),
+    ("DA beyond EOF", fixture.replace("DA:1,1", f"DA:{fixture_eof + 1},1")),
+    ("BRDA line 0", fixture.replace("BRDA:1,0,0,1", "BRDA:0,0,0,1")),
+    ("BRDA beyond EOF", fixture.replace(
+        "BRDA:1,0,0,1", f"BRDA:{fixture_eof + 1},0,0,1"
+    )),
+):
+    expect_failure(name, lambda payload=payload: parse_lcov(payload, expected_paths))
 expect_failure(
     "empty DA",
     lambda: parse_lcov(
@@ -712,7 +720,7 @@ Path(provenance_path).write_text(
 )
 print(json.dumps(provenance, sort_keys=True))
 PY
-test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+verify_pr_binding "$PR_EVIDENCE_AFTER"
 test "$(shasum -a 256 "$LCOV_PATH" | awk '{print $1}')" = "$LCOV_SHA256"
 test -s "$PROVENANCE_PATH"
 test -z "$(git status --porcelain --untracked-files=all)"
@@ -723,15 +731,14 @@ fi
 test ! -e "$EARLY_FAILURE_SENTINEL"
 ```
 
-coverage evidence 必须绑定 implementation PR base/head merge-base：所有 GH-127 changed
-production lines 合计 >=80%，private normalization module 的全部可执行 line/branch 各为
-100%。上述 verifier 只接受 repo root 下 canonical、tracked Rust source 的 exact `SF:`
-路径，拒绝 suffix/outside/unexpected/duplicate record，并交叉校验 `LF/LH` 与 `DA`、
-`BRF/BRH` 与 `BRDA`。两个 planned production file 任一缺失 record 或 changed-executable
-交集为空、DA 空/删除、summary 不一致、critical module 零 branch、stale head、dirty
-tracked/untracked worktree、错误 merge-base/raw checksum，或 shell early failure 被吞掉均
-失败。review evidence 必须同时保存 `LCOV_PATH` raw artifact 与
-`PROVENANCE_PATH` JSON。
+coverage evidence 必须在生成前后 fresh 绑定 implementation PR 的
+`baseRefOid/headRefOid`、local `BASE_SHA/HEAD` 与 exact merge-base。所有 GH-127 changed
+production lines 合计 >=80%，private module 可执行 line/branch 各 100%。verifier 只接受
+repo-root canonical tracked Rust `SF:`，且每条 `DA/BRDA` line 均在对应 source 的
+`1..=EOF`；拒绝 suffix/outside/unexpected/duplicate record 并核对四项 summary。任一
+missing/empty/deleted/out-of-range record、零 changed intersection/critical branch、
+stale/dirty head、错误 merge-base/hash 或 swallowed shell failure 均失败。review bundle
+保留两份 raw PR evidence、`LCOV_PATH` 与 `PROVENANCE_PATH`。
 
 ### SpecRail 与 review
 

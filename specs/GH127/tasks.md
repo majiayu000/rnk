@@ -131,7 +131,9 @@ coordinator 必须 fresh 证明：
   GH127-L1..L13 各先经 harness inventory 证明 selector 恰好一个，再实际执行且
   `matched=1/passed=1/ignored=0`；debug/release counts、property、dependency regressions、full Rust、
   >=80% changed production line coverage、critical normalization line/branch 100%、
-  exact base/head/merge-base + raw LCOV SHA-256 provenance、pinned revision/checker
+  coverage 前后 fresh GitHub implementation PR `baseRefOid/headRefOid` 与 local
+  `BASE_SHA/HEAD` 精确相等、单独 exact merge-base、raw LCOV SHA-256 provenance、pinned
+  revision/checker
   SHA-256 + byte-identical input SpecRail mirror、exact-head hosted CI、独立 review 与零
   unresolved non-outdated current threads 全部 fresh；PR #109 thread 只由 human 在证据
   满足后处理。
@@ -153,8 +155,9 @@ coordinator 必须 fresh 证明：
     tracked Rust source、无 suffix/outside/duplicate/unexpected record，`LF/LH`/`DA` 与
     `BRF/BRH`/`BRDA` summary一致，两个 planned production record 的
     changed-executable 交集均非空；
-    五路径 allowlist 非空 gate 与 Cargo.toml negative、selector ignored negative、
-    empty/deleted DA、summary mismatch、bad hash、shell early-failure negative fixtures；
+    每条 `DA/BRDA` line 在对应 canonical source 的 `1..=EOF`；五路径 allowlist 非空 gate
+    与 Cargo.toml、selector ignored、line 0/超 EOF `DA/BRDA`、empty/deleted DA、summary
+    mismatch、bad hash、shell early-failure negative fixtures；
     所有 shell block 第一行 `set -euo pipefail`，临时路径统一
     `${TMPDIR:-/tmp}` + `mktemp`，可由 Unix Bash 或 Windows Git Bash/MSYS2 执行；
     fixed revision `23caa70e76904eaa82323208d645d5781a365649` external mirror 中的
@@ -210,8 +213,9 @@ Human implementation gate
 - public complete-flow/cache/error/cancellation/retry fixtures与4096 property green。
 - #126/#128/#129/#130 regressions green且断言未修改。
 - fmt/check/clippy/all-target/all-feature tests、branch-aware coverage、fixed-revision external
-      SpecRail mirror、CI、independent review、reviewThreads 全绑定同一 exact head；
-  coverage record/summary/worktree/hash 与 shell early-failure negatives 全部 fail closed。
+      SpecRail mirror、CI、independent review、reviewThreads 全绑定同一 exact head；coverage
+  前后 fresh PR base/head、local equality、merge-base、LCOV 1..EOF line bounds、
+  record/summary/worktree/hash 与 shell early-failure negatives 全部 fail closed。
 
 ## Handoff Notes
 
