@@ -9,7 +9,6 @@ use super::super::state::{
     valid_result_transition, valid_thinking_transition,
 };
 use super::super::rollback::IdentityBackup;
-use super::super::proof::current_state_fingerprint;
 use std::collections::{BTreeMap, BTreeSet};
 
 struct MutationBackup {
@@ -141,9 +140,8 @@ impl ConversationState {
                 self.evicted_through = Some(record.event.sequence);
             }
         }
-        let state = current_state_fingerprint(self);
         self.ledger.push_back(ProcessedEventRecord::proven(
-            event, outcome.clone(), previous, state));
+            event, outcome.clone(), previous));
         Ok(outcome)
     }
 }

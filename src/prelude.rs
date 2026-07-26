@@ -61,10 +61,10 @@ pub use crate::components::chat::{
     InsertBlockUpdate, LegacyRoleConversionError, LinkContent, MessageAuthor, MessageBlock,
     MessageBlockEntry, MessageId, MessageMutationGuard, MessageRevision, MessageStatus,
     MessageTimestamp, ProcessedEventRecord, PushUpdate, QuoteContent, ReplaceBlockUpdate,
-    ResendUpdate, RetentionHistory, RetentionProof, TerminalAttachmentSummary, ThinkingContent,
-    ThinkingId, ThinkingIdentityHistory, ThinkingStatus, ToolArgument, ToolCallContent, ToolCallId,
-    ToolCallStatus, ToolResultContent, ToolResultLocation, ToolResultSlot, ToolResultStatus,
-    TypedField, TypedValue, UpdateId,
+    ResendUpdate, RetentionHistory, RetentionProof, SnapshotProof, TerminalAttachmentSummary,
+    ThinkingContent, ThinkingId, ThinkingIdentityHistory, ThinkingStatus, ToolArgument,
+    ToolCallContent, ToolCallId, ToolCallStatus, ToolResultContent, ToolResultLocation,
+    ToolResultSlot, ToolResultStatus, TypedField, TypedValue, UpdateId,
 };
 pub use crate::components::{
     Cursor, CursorShape, CursorState, CursorStyle, Gradient, Hyperlink, HyperlinkBuilder, Line,

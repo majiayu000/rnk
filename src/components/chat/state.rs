@@ -5,14 +5,6 @@ mod compact {
 use super::super::*;
 use std::{collections::{BTreeMap, BTreeSet, VecDeque}, num::NonZeroUsize};
 
-/// Opaque evidence binding a retained event to its exact post-event state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RetentionProof {
-    pub(in crate::components::chat) previous: [u64; 4],
-    pub(in crate::components::chat) state: [u64; 4],
-    pub(in crate::components::chat) record: [u64; 4],
-}
-
 /// One retained accepted event and its original outcome.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessedEventRecord {
@@ -29,9 +21,9 @@ impl ProcessedEventRecord {
     pub fn new_with_proof(event: ConversationEvent, outcome: ApplyOutcome,
         proof: RetentionProof) -> Self { Self { event, outcome, proof: Some(proof) } }
     pub(in crate::components::chat) fn proven(event: ConversationEvent, outcome: ApplyOutcome,
-        previous: [u64; 4], state: [u64; 4]) -> Self {
-        let record = super::super::proof::record_fingerprint(previous, &event, &outcome, state);
-        Self::new_with_proof(event, outcome, RetentionProof { previous, state, record })
+        previous: [u64; 4]) -> Self {
+        let record = super::super::proof::record_fingerprint(previous, &event, &outcome);
+        Self::new_with_proof(event, outcome, RetentionProof { previous, record })
     }
     /// Returns the exact accepted event.
     pub fn event(&self) -> &ConversationEvent { &self.event }
@@ -156,12 +148,19 @@ pub struct ConversationStateSnapshot {
     pub(in crate::components::chat) expected_sequence: u64,
     pub(in crate::components::chat) retention: RetentionHistory,
     pub(in crate::components::chat) identities: ConversationIdentityHistory,
+    pub(in crate::components::chat) proof: Option<SnapshotProof>,
 }
 impl ConversationStateSnapshot {
     /// Creates a snapshot value; [`ConversationState::try_restore`] performs full validation.
     pub fn new(messages: Vec<ChatMessage>, revision: ConversationRevision, expected_sequence: u64,
         retention: RetentionHistory, identities: ConversationIdentityHistory) -> Self {
-        Self { messages, revision, expected_sequence, retention, identities }
+        Self { messages, revision, expected_sequence, retention, identities, proof: None }
+    }
+    /// Rebuilds a snapshot with opaque evidence obtained from [`Self::proof`].
+    pub fn new_with_proof(messages: Vec<ChatMessage>, revision: ConversationRevision,
+        expected_sequence: u64, retention: RetentionHistory,
+        identities: ConversationIdentityHistory, proof: SnapshotProof) -> Self {
+        Self { messages, revision, expected_sequence, retention, identities, proof: Some(proof) }
     }
     /// Returns messages in conversation order.
     pub fn messages(&self) -> &[ChatMessage] { &self.messages }
@@ -173,6 +172,8 @@ impl ConversationStateSnapshot {
     pub const fn retention(&self) -> &RetentionHistory { &self.retention }
     /// Returns identity history.
     pub const fn identities(&self) -> &ConversationIdentityHistory { &self.identities }
+    /// Returns opaque evidence for lossless persistence reconstruction, when available.
+    pub const fn proof(&self) -> Option<&SnapshotProof> { self.proof.as_ref() }
 }
 
 /// Deterministic provider-independent conversation state.
@@ -229,14 +230,17 @@ impl ConversationState {
             self.thinking_seen.get(&message_id).map(set_vec).unwrap_or_default(),
             self.thinking_retired.get(&message_id).map(set_vec).unwrap_or_default(),
         )).collect();
-        ConversationStateSnapshot::new(self.messages.clone(), self.revision, self.expected_sequence,
+        let mut snapshot = ConversationStateSnapshot::new(
+            self.messages.clone(), self.revision, self.expected_sequence,
             RetentionHistory { capacity: self.ledger_capacity, records: self.ledger.iter().cloned().collect(),
                 evicted_through: self.evicted_through },
             ConversationIdentityHistory::new(set_vec(&self.seen_messages),
                 set_vec(&self.retired_messages), set_vec(&self.seen_blocks),
                 set_vec(&self.retired_blocks), thinking, set_vec(&self.seen_tool_calls),
                 set_vec(&self.retired_tool_calls),
-                self.result_slots.iter().map(|(id, slot)| (id.clone(), slot.clone())).collect()))
+                self.result_slots.iter().map(|(id, slot)| (id.clone(), slot.clone())).collect()));
+        snapshot.proof = Some(super::super::proof::snapshot_proof(&snapshot));
+        snapshot
     }
     /// Restores a snapshot only after validating every retained proof and identity history.
     pub fn try_restore(mut snapshot: ConversationStateSnapshot) -> Result<Self, ConversationError> {
@@ -447,6 +451,7 @@ fn validate_snapshot(value: &ConversationStateSnapshot) -> Result<(), Conversati
         let mut replayed = replay.snapshot();
         for (found, supplied) in replayed.retention.records.iter_mut()
             .zip(&value.retention.records) { found.proof = supplied.proof.clone(); }
+        replayed.proof = value.proof.clone();
         if replayed != *value {
             return invalid_snapshot("retained replay does not produce the restored state");
         }
