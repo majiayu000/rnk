@@ -293,10 +293,49 @@ tech ledger 与 tasks Covers，不允许只在 final catch-all 中补名字。
 ### Dependency 与 scope
 
 ```sh
-test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+set -euo pipefail
+BASE_SHA="$(git rev-parse "${BASE_SHA:?set BASE_SHA to the implementation PR base}^{commit}")"
+HEAD_SHA="$(git rev-parse HEAD^{commit})"
+test "$(git merge-base "$BASE_SHA" "$HEAD_SHA")" = "$BASE_SHA"
 git merge-base --is-ancestor 50f6a203c1861814d288d4bdeae0e28d877af34c HEAD
-git diff --name-only "$BASE_SHA...HEAD"
-git diff --exit-code "$BASE_SHA...HEAD" -- \
+ALLOWLIST_PATH="$(mktemp "${TMPDIR:-/tmp}/gh127-allowlist.XXXXXX")"
+CHANGED_PATHS="$(mktemp "${TMPDIR:-/tmp}/gh127-changed.XXXXXX")"
+UNEXPECTED_PATHS="$(mktemp "${TMPDIR:-/tmp}/gh127-unexpected.XXXXXX")"
+NEGATIVE_PATHS="$(mktemp "${TMPDIR:-/tmp}/gh127-negative.XXXXXX")"
+trap 'rm -f "$ALLOWLIST_PATH" "$CHANGED_PATHS" "$UNEXPECTED_PATHS" "$NEGATIVE_PATHS"' \
+  EXIT HUP INT TERM
+printf '%s\n' \
+  src/layout/text_flow.rs \
+  src/layout/text_flow/style_normalization.rs \
+  src/layout/text_flow/tests.rs \
+  src/layout/text_flow/tests/style_normalization.rs \
+  tests/text_flow_style_normalization.rs |
+  LC_ALL=C sort > "$ALLOWLIST_PATH"
+git diff --name-only "$BASE_SHA...$HEAD_SHA" | LC_ALL=C sort > "$CHANGED_PATHS"
+verify_changed_paths() {
+  local candidate="$1"
+  test -s "$candidate"
+  comm -23 "$candidate" "$ALLOWLIST_PATH" > "$UNEXPECTED_PATHS"
+  test ! -s "$UNEXPECTED_PATHS"
+}
+verify_changed_paths "$CHANGED_PATHS"
+test -z "$(git diff --name-only --diff-filter=D "$BASE_SHA...$HEAD_SHA")"
+for required in \
+  src/layout/text_flow/style_normalization.rs \
+  src/layout/text_flow/tests/style_normalization.rs \
+  tests/text_flow_style_normalization.rs
+do
+  test -f "$required"
+  grep -Fx "$required" "$CHANGED_PATHS"
+done
+cp "$CHANGED_PATHS" "$NEGATIVE_PATHS"
+printf '%s\n' Cargo.toml >> "$NEGATIVE_PATHS"
+LC_ALL=C sort -u -o "$NEGATIVE_PATHS" "$NEGATIVE_PATHS"
+if verify_changed_paths "$NEGATIVE_PATHS"; then
+  echo "negative allowlist fixture unexpectedly accepted Cargo.toml" >&2
+  exit 1
+fi
+git diff --exit-code "$BASE_SHA...$HEAD_SHA" -- \
   src/layout/text_flow/wrap.rs \
   src/layout/text_flow/truncate.rs \
   src/layout/engine.rs \
@@ -316,19 +355,43 @@ wiring/build integration；`tests.rs` 只承担 module declaration、必要的 s
 先列出真实 harness inventory，再执行 ledger；任何 selector 为零或多于一个都 fail closed：
 
 ```sh
-cargo test --workspace --lib --locked -- --list > /private/tmp/gh127-lib-tests.txt
+set -euo pipefail
+LIB_INVENTORY="$(mktemp "${TMPDIR:-/tmp}/gh127-lib-inventory.XXXXXX")"
+INTEGRATION_INVENTORY="$(mktemp "${TMPDIR:-/tmp}/gh127-integration-inventory.XXXXXX")"
+RESULT_PATH="$(mktemp "${TMPDIR:-/tmp}/gh127-test-result.XXXXXX")"
+IGNORED_INVENTORY="$(mktemp "${TMPDIR:-/tmp}/gh127-ignored-inventory.XXXXXX")"
+IGNORED_RESULT="$(mktemp "${TMPDIR:-/tmp}/gh127-ignored-result.XXXXXX")"
+trap 'rm -f "$LIB_INVENTORY" "$INTEGRATION_INVENTORY" "$RESULT_PATH" \
+  "$IGNORED_INVENTORY" "$IGNORED_RESULT"' EXIT HUP INT TERM
+cargo test --workspace --lib --locked -- --list > "$LIB_INVENTORY"
 cargo test --test text_flow_style_normalization --locked -- --list \
-  > /private/tmp/gh127-integration-tests.txt
+  > "$INTEGRATION_INVENTORY"
+verify_test_result() {
+  local inventory="$1"
+  local selector="$2"
+  local result="$3"
+  local matched passed ignored
+  matched="$(awk -v expected="$selector: test" \
+    '$0 == expected { n += 1 } END { print n + 0 }' "$inventory")"
+  passed="$(sed -nE \
+    's/^test result:.* ([0-9]+) passed; [0-9]+ failed; [0-9]+ ignored;.*/\1/p' \
+    "$result" | awk '{ n += $1 } END { print n + 0 }')"
+  ignored="$(sed -nE \
+    's/^test result:.* [0-9]+ passed; [0-9]+ failed; ([0-9]+) ignored;.*/\1/p' \
+    "$result" | awk '{ n += $1 } END { print n + 0 }')"
+  test "$matched" -eq 1
+  test "$passed" -eq 1
+  test "$ignored" -eq 0
+}
 for selector in \
   layout::text_flow::tests::style_normalization::styled_boundary_normalization_operation_count_is_linear \
   layout::text_flow::tests::style_normalization::styled_boundary_operation_bound_failure_reports_complete_diagnostics \
   layout::text_flow::tests::style_normalization::style_boundary_event_order_and_multiplicity_are_stable \
   layout::text_flow::tests::style_normalization::styled_range_extremes_preserve_typed_errors \
-  layout::text_flow::tests::style_normalization::styled_normalization_polling_and_cache_count_are_atomic \
-  layout::text_flow::tests::split_combining_and_zwj_style_boundary_normalizes
+  layout::text_flow::tests::style_normalization::styled_normalization_polling_and_cache_count_are_atomic
 do
-  test "$(awk -v expected="$selector: test" '$0 == expected { n += 1 } END { print n + 0 }' \
-    /private/tmp/gh127-lib-tests.txt)" -eq 1
+  cargo test --workspace --lib --locked "$selector" -- --exact > "$RESULT_PATH" 2>&1
+  verify_test_result "$LIB_INVENTORY" "$selector" "$RESULT_PATH"
 done
 for selector in \
   public_styled_flow_preserves_first_source_style_and_diagnostics \
@@ -340,14 +403,24 @@ for selector in \
   public_styled_flow_failures_and_interruption_are_atomic \
   public_styled_flow_retry_matches_cold_build
 do
-  test "$(awk -v expected="$selector: test" '$0 == expected { n += 1 } END { print n + 0 }' \
-    /private/tmp/gh127-integration-tests.txt)" -eq 1
+  cargo test --test text_flow_style_normalization --locked "$selector" -- --exact \
+    > "$RESULT_PATH" 2>&1
+  verify_test_result "$INTEGRATION_INVENTORY" "$selector" "$RESULT_PATH"
 done
+printf '%s\n' 'ignored_fixture: test' > "$IGNORED_INVENTORY"
+printf '%s\n' \
+  'test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out' \
+  > "$IGNORED_RESULT"
+if verify_test_result "$IGNORED_INVENTORY" ignored_fixture "$IGNORED_RESULT"; then
+  echo "negative ignored-test fixture unexpectedly passed" >&2
+  exit 1
+fi
 ```
 
 ### Focused 与 regression
 
 ```sh
+set -euo pipefail
 cargo test --workspace --lib --locked layout::text_flow::tests::style_normalization::styled_boundary_normalization_operation_count_is_linear -- --exact
 cargo test --release --workspace --lib --locked layout::text_flow::tests::style_normalization::styled_boundary_normalization_operation_count_is_linear -- --exact
 cargo test --workspace --lib --locked layout::text_flow::tests::style_normalization::styled_boundary_operation_bound_failure_reports_complete_diagnostics -- --exact
@@ -371,6 +444,7 @@ cargo test --test text_flow_wrap_interruption --locked
 ### Full quality 与 coverage
 
 ```sh
+set -euo pipefail
 cargo fmt --all -- --check
 cargo check --workspace --all-targets --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- \
@@ -380,8 +454,12 @@ BASE_SHA="$(git rev-parse "${BASE_SHA:?set BASE_SHA to the implementation PR bas
 HEAD_SHA="$(git rev-parse HEAD^{commit})"
 test "$(git rev-parse HEAD)" = "$HEAD_SHA"
 test "$(git merge-base "$BASE_SHA" "$HEAD_SHA")" = "$BASE_SHA"
+test -z "$(git status --porcelain --untracked-files=all)"
 LCOV_PATH="$(mktemp "${TMPDIR:-/tmp}/gh127-${HEAD_SHA}.lcov.XXXXXX")"
 PROVENANCE_PATH="$(mktemp "${TMPDIR:-/tmp}/gh127-${HEAD_SHA}.coverage.XXXXXX")"
+EARLY_FAILURE_SENTINEL="$(mktemp "${TMPDIR:-/tmp}/gh127-early-failure.XXXXXX")"
+rm -f "$EARLY_FAILURE_SENTINEL"
+trap 'rm -f "$EARLY_FAILURE_SENTINEL"' EXIT HUP INT TERM
 cargo llvm-cov clean --workspace
 cargo llvm-cov --branch --workspace --lib --all-features --lcov \
   --output-path "$LCOV_PATH" --locked
@@ -401,9 +479,165 @@ production = (
     "src/layout/text_flow.rs",
     "src/layout/text_flow/style_normalization.rs",
 )
-resolve = lambda *args: subprocess.run(
-    ["git", *args], check=True, capture_output=True, text=True
-).stdout.strip()
+root = Path(
+    subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+).resolve(strict=True)
+
+
+def resolve(*args):
+    return subprocess.run(
+        ["git", *args], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def checksum(payload, expected):
+    actual = hashlib.sha256(payload).hexdigest()
+    if actual != expected:
+        raise ValueError("raw LCOV checksum mismatch")
+    return actual
+
+
+def parse_lcov(text, expected_paths):
+    records = {}
+    record = None
+    for line in text.splitlines():
+        if line.startswith("SF:"):
+            if record is not None:
+                raise ValueError("nested SF record")
+            raw = line[3:]
+            source = Path(raw)
+            if not source.is_absolute():
+                raise ValueError(f"non-absolute/suffix SF path: {raw}")
+            try:
+                canonical = source.resolve(strict=True)
+                relative = canonical.relative_to(root).as_posix()
+            except (FileNotFoundError, ValueError) as error:
+                raise ValueError(f"outside or nonexistent SF path: {raw}") from error
+            if raw != str(canonical):
+                raise ValueError(f"non-canonical SF path: {raw}")
+            if canonical not in expected_paths:
+                raise ValueError(f"unexpected SF record: {relative}")
+            if relative in records:
+                raise ValueError(f"duplicate SF record: {relative}")
+            record = {
+                "path": relative,
+                "lines": {},
+                "branches": {},
+                "lf": None,
+                "lh": None,
+                "brf": None,
+                "brh": None,
+            }
+        elif line == "end_of_record":
+            if record is None:
+                raise ValueError("end_of_record without SF")
+            lines = record["lines"]
+            branches = record["branches"]
+            if not lines:
+                raise ValueError(f"empty/deleted DA data: {record['path']}")
+            if record["lf"] != len(lines):
+                raise ValueError(f"LF/DA mismatch: {record['path']}")
+            if record["lh"] != sum(value > 0 for value in lines.values()):
+                raise ValueError(f"LH/DA mismatch: {record['path']}")
+            if record["brf"] != len(branches):
+                raise ValueError(f"BRF/BRDA mismatch: {record['path']}")
+            branch_hits = sum(value not in (None, 0) for value in branches.values())
+            if record["brh"] != branch_hits:
+                raise ValueError(f"BRH/BRDA mismatch: {record['path']}")
+            records[record["path"]] = record
+            record = None
+        elif record is not None and line.startswith("DA:"):
+            number, hits, *_ = line[3:].split(",")
+            number = int(number)
+            if number in record["lines"]:
+                raise ValueError(f"duplicate DA line: {record['path']}:{number}")
+            record["lines"][number] = int(hits)
+        elif record is not None and line.startswith("BRDA:"):
+            number, block, branch, taken = line[5:].split(",")
+            key = (int(number), block, branch)
+            if key in record["branches"]:
+                raise ValueError(f"duplicate BRDA entry: {record['path']}:{key}")
+            record["branches"][key] = None if taken == "-" else int(taken)
+        elif record is not None and line.startswith(("LF:", "LH:", "BRF:", "BRH:")):
+            key, value = line.split(":", 1)
+            field = key.lower()
+            if record[field] is not None:
+                raise ValueError(f"duplicate {key} summary: {record['path']}")
+            record[field] = int(value)
+    if record is not None:
+        raise ValueError("unterminated SF record")
+    return records
+
+
+def expect_failure(name, action):
+    try:
+        action()
+    except (ValueError, OSError):
+        return
+    raise SystemExit(f"negative verifier fixture unexpectedly passed: {name}")
+
+
+tracked = subprocess.run(
+    ["git", "ls-files", "-z", "--", "*.rs"],
+    check=True,
+    capture_output=True,
+).stdout.split(b"\0")
+expected_paths = {
+    (root / raw.decode()).resolve(strict=True)
+    for raw in tracked
+    if raw
+}
+fixture_source = (root / production[0]).resolve(strict=True)
+fixture = (
+    f"SF:{fixture_source}\n"
+    "DA:1,1\nLF:1\nLH:1\n"
+    "BRDA:1,0,0,1\nBRF:1\nBRH:1\nend_of_record\n"
+)
+parse_lcov(fixture, expected_paths)
+expect_failure(
+    "empty DA",
+    lambda: parse_lcov(
+        fixture.replace("DA:1,1\nLF:1\nLH:1\n", "LF:0\nLH:0\n"),
+        expected_paths,
+    ),
+)
+expect_failure(
+    "deleted DA",
+    lambda: parse_lcov(fixture.replace("DA:1,1\n", ""), expected_paths),
+)
+expect_failure(
+    "inconsistent LF/LH summary",
+    lambda: parse_lcov(fixture.replace("LF:1", "LF:2"), expected_paths),
+)
+expect_failure(
+    "inconsistent BRF/BRH summary",
+    lambda: parse_lcov(fixture.replace("BRH:1", "BRH:0"), expected_paths),
+)
+expect_failure(
+    "suffix SF",
+    lambda: parse_lcov(fixture.replace(str(fixture_source), production[0]), expected_paths),
+)
+expect_failure(
+    "outside SF",
+    lambda: parse_lcov(fixture.replace(str(fixture_source), str(Path(lcov_path).resolve())), expected_paths),
+)
+expect_failure(
+    "unexpected SF",
+    lambda: parse_lcov(fixture.replace(str(fixture_source), str((root / "Cargo.toml").resolve(strict=True))), expected_paths),
+)
+expect_failure(
+    "duplicate SF",
+    lambda: parse_lcov(fixture + fixture, expected_paths),
+)
+expect_failure(
+    "bad raw hash",
+    lambda: checksum(b"negative hash fixture", "0" * 64),
+)
 if resolve("rev-parse", "HEAD") != head:
     raise SystemExit("stale coverage: current HEAD changed")
 if resolve("merge-base", base, head) != base:
@@ -411,9 +645,7 @@ if resolve("merge-base", base, head) != base:
 lcov_bytes = Path(lcov_path).read_bytes()
 if not lcov_bytes:
     raise SystemExit("empty raw LCOV artifact")
-actual_lcov_sha256 = hashlib.sha256(lcov_bytes).hexdigest()
-if actual_lcov_sha256 != expected_lcov_sha256:
-    raise SystemExit("raw LCOV checksum mismatch")
+actual_lcov_sha256 = checksum(lcov_bytes, expected_lcov_sha256)
 diff = subprocess.run(
     ["git", "diff", "--unified=0", f"{base}...{head}", "--", *production],
     check=True,
@@ -432,45 +664,27 @@ for line in diff.splitlines():
         start, count = int(match.group(1)), int(match.group(2) or 1)
         changed[current].update(range(start, start + count))
 
-records = {}
-current = None
-for line in Path(lcov_path).read_text().splitlines():
-    if line.startswith("SF:"):
-        raw = line[3:]
-        current = next((path for path in production if raw.endswith(path)), None)
-        if current:
-            records.setdefault(current, {"lines": {}, "branches": []})
-    elif current and line.startswith("DA:"):
-        number, hits, *_ = line[3:].split(",")
-        records[current]["lines"][int(number)] = int(hits)
-    elif current and line.startswith("BRDA:"):
-        taken = line.rsplit(",", 1)[1]
-        records[current]["branches"].append(None if taken == "-" else int(taken))
-    elif line == "end_of_record":
-        current = None
+records = parse_lcov(lcov_bytes.decode(), expected_paths)
 
 missing_records = sorted(set(production) - set(records))
 if missing_records:
     raise SystemExit(f"missing planned production LCOV records: {missing_records}")
 critical = "src/layout/text_flow/style_normalization.rs"
 critical_lines = records[critical]["lines"]
-critical_branches = records[critical]["branches"]
-if not critical_lines or any(hits == 0 for hits in critical_lines.values()):
+critical_branches = records[critical]["branches"].values()
+if any(hits == 0 for hits in critical_lines.values()):
     raise SystemExit("critical normalization executable line coverage is not 100%")
-if not critical_branches or any(taken in (None, 0) for taken in critical_branches):
+if not records[critical]["branches"] or any(
+    taken in (None, 0) for taken in critical_branches
+):
     raise SystemExit("critical normalization executable branch coverage is not 100%")
 
 changed_executable = []
 for path in production:
-    changed_executable.extend(
-        records[path]["lines"][line]
-        for line in changed[path]
-        if line in records[path]["lines"]
-    )
-if not changed_executable:
-    raise SystemExit("zero changed executable production lines")
-if not (changed[critical] & set(critical_lines)):
-    raise SystemExit("zero changed executable lines in critical normalization module")
+    intersection = changed[path] & set(records[path]["lines"])
+    if not intersection:
+        raise SystemExit(f"zero changed executable lines in planned record: {path}")
+    changed_executable.extend(records[path]["lines"][line] for line in intersection)
 covered = sum(hits > 0 for hits in changed_executable)
 if covered * 100 < len(changed_executable) * 80:
     raise SystemExit(
@@ -489,8 +703,8 @@ provenance = {
     "covered_changed_executable_lines": covered,
     "critical_executable_lines": len(critical_lines),
     "covered_critical_executable_lines": len(critical_lines),
-    "critical_executable_branches": len(critical_branches),
-    "covered_critical_executable_branches": len(critical_branches),
+    "critical_executable_branches": len(records[critical]["branches"]),
+    "covered_critical_executable_branches": len(records[critical]["branches"]),
 }
 Path(provenance_path).write_text(
     json.dumps(provenance, indent=2, sort_keys=True) + "\n",
@@ -501,14 +715,23 @@ PY
 test "$(git rev-parse HEAD)" = "$HEAD_SHA"
 test "$(shasum -a 256 "$LCOV_PATH" | awk '{print $1}')" = "$LCOV_SHA256"
 test -s "$PROVENANCE_PATH"
+test -z "$(git status --porcelain --untracked-files=all)"
+if bash -c 'set -euo pipefail; false; touch "$1"' _ "$EARLY_FAILURE_SENTINEL"; then
+  echo "negative early-failure fixture unexpectedly returned zero" >&2
+  exit 1
+fi
+test ! -e "$EARLY_FAILURE_SENTINEL"
 ```
 
 coverage evidence 必须绑定 implementation PR base/head merge-base：所有 GH-127 changed
 production lines 合计 >=80%，private normalization module 的全部可执行 line/branch 各为
-100%。上述 verifier 使用 diff 与 LCOV 的交集；两个 planned production file 任一缺失
-record、critical module 无 changed executable、零 executable、零 branch、stale head、错误
-merge-base、raw checksum mismatch 或只上传未校验 artifact 均失败。review evidence 必须
-同时保存 `LCOV_PATH` raw artifact 与 `PROVENANCE_PATH` JSON。
+100%。上述 verifier 只接受 repo root 下 canonical、tracked Rust source 的 exact `SF:`
+路径，拒绝 suffix/outside/unexpected/duplicate record，并交叉校验 `LF/LH` 与 `DA`、
+`BRF/BRH` 与 `BRDA`。两个 planned production file 任一缺失 record 或 changed-executable
+交集为空、DA 空/删除、summary 不一致、critical module 零 branch、stale head、dirty
+tracked/untracked worktree、错误 merge-base/raw checksum，或 shell early failure 被吞掉均
+失败。review evidence 必须同时保存 `LCOV_PATH` raw artifact 与
+`PROVENANCE_PATH` JSON。
 
 ### SpecRail 与 review
 
@@ -518,6 +741,7 @@ merge-base、raw checksum mismatch 或只上传未校验 artifact 均失败。re
   SHA-256 与 GH127/GH58 byte-identical inputs，并 fail closed：
 
 ```sh
+set -euo pipefail
 : "${SPEC_RAIL_ROOT:?set SPEC_RAIL_ROOT to the external SpecRail checkout}"
 SPEC_RAIL_REV=23caa70e76904eaa82323208d645d5781a365649
 CHECK_WORKFLOW_SHA256=8c791545f78d93649385ef0f9780454a7d4552f8da06da1fdee0de9cb8030a7e
