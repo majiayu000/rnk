@@ -23,3 +23,8 @@ pub use model::{
     ToolCallContent, ToolCallId, ToolCallStatus, ToolResultContent, ToolResultStatus, TypedField,
     TypedValue, UpdateId,
 };
+pub use state::{
+    ConversationIdentityHistory, ConversationState, ConversationStateSnapshot,
+    ProcessedEventRecord, RetentionHistory, ThinkingIdentityHistory, ToolResultLocation,
+    ToolResultSlot,
+};

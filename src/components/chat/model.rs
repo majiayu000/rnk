@@ -759,15 +759,13 @@ fn canonical_decimal(value: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod test_cases {
     use super::*;
-    #[test]
-    fn gh62_update_id_public_construction() {
+    pub(in crate::components::chat::model) fn gh62_update_id_public_construction() {
         assert_eq!(UpdateId::new("event").unwrap().as_str(), "event");
         assert!(UpdateId::new(" ").is_err());
     }
-    #[test]
-    fn gh62_empty_and_missing_contract() {
+    pub(in crate::components::chat::model) fn gh62_empty_and_missing_contract() {
         assert!(ChatMessage::new(MessageId::new(1), ChatRole::User, vec![]).is_err());
         assert!(FailureCause::new("").is_err());
     }
@@ -775,3 +773,17 @@ mod tests {
 }
 
 pub use compact::*;
+
+#[cfg(test)]
+mod tests {
+    macro_rules! case {
+        ($name:ident) => {
+            #[test]
+            fn $name() {
+                super::compact::test_cases::$name();
+            }
+        };
+    }
+    case!(gh62_update_id_public_construction);
+    case!(gh62_empty_and_missing_contract);
+}
