@@ -411,11 +411,47 @@ fn rich_history_state(capacity: usize) -> ConversationState {
 fn snapshot_with_identities(snapshot: &ConversationStateSnapshot, identities: ConversationIdentityHistory) -> ConversationStateSnapshot {
     ConversationStateSnapshot::new_with_proof(snapshot.messages().to_vec(), snapshot.revision(), snapshot.expected_sequence(), snapshot.retention().clone(), identities, snapshot.proof().unwrap().clone())
 }
+fn restored_failure(source: &FailureCause) -> FailureCause { FailureCause::new(source.as_str()).unwrap() }
+fn restored_message_status(source: &MessageStatus) -> MessageStatus { match source { MessageStatus::Pending => MessageStatus::Pending, MessageStatus::Streaming => MessageStatus::Streaming, MessageStatus::Complete => MessageStatus::Complete, MessageStatus::Cancelled => MessageStatus::Cancelled, MessageStatus::Failed(value) => MessageStatus::Failed(restored_failure(value)), _ => panic!("unsupported message status") } }
+fn restored_thinking_status(source: &ThinkingStatus) -> ThinkingStatus { match source { ThinkingStatus::Pending => ThinkingStatus::Pending, ThinkingStatus::Streaming => ThinkingStatus::Streaming, ThinkingStatus::Complete => ThinkingStatus::Complete, ThinkingStatus::Cancelled => ThinkingStatus::Cancelled, ThinkingStatus::Failed(value) => ThinkingStatus::Failed(restored_failure(value)), _ => panic!("unsupported thinking status") } }
+fn restored_call_status(source: &ToolCallStatus) -> ToolCallStatus { match source { ToolCallStatus::Pending => ToolCallStatus::Pending, ToolCallStatus::Running => ToolCallStatus::Running, ToolCallStatus::Succeeded => ToolCallStatus::Succeeded, ToolCallStatus::Cancelled => ToolCallStatus::Cancelled, ToolCallStatus::Failed(value) => ToolCallStatus::Failed(restored_failure(value)), _ => panic!("unsupported call status") } }
+fn restored_result_status(source: &ToolResultStatus) -> ToolResultStatus { match source { ToolResultStatus::Pending => ToolResultStatus::Pending, ToolResultStatus::Streaming => ToolResultStatus::Streaming, ToolResultStatus::Complete => ToolResultStatus::Complete, ToolResultStatus::Cancelled => ToolResultStatus::Cancelled, ToolResultStatus::Failed(value) => ToolResultStatus::Failed(restored_failure(value)), _ => panic!("unsupported result status") } }
+fn restored_typed_value(source: &TypedValue) -> TypedValue { match source {
+    TypedValue::Null => TypedValue::Null, TypedValue::Bool(value) => TypedValue::Bool(*value), TypedValue::Integer(value) => TypedValue::Integer(*value), TypedValue::Decimal(value) => TypedValue::Decimal(DecimalValue::new(value.as_str()).unwrap()), TypedValue::String(value) => TypedValue::String(value.to_owned()),
+    TypedValue::List(values) => TypedValue::List(values.iter().map(restored_typed_value).collect()), TypedValue::Object(fields) => TypedValue::object(fields.iter().map(|field| TypedField::new(field.name(), restored_typed_value(field.value())).unwrap()).collect()).unwrap(),
+} }
+fn restored_block(source: &MessageBlock) -> MessageBlock { match source {
+    MessageBlock::Text(value) => MessageBlock::Text(value.to_owned()), MessageBlock::Markdown(value) => MessageBlock::Markdown(value.to_owned()),
+    MessageBlock::Code(value) => { let mut found = CodeContent::new(value.content()).unwrap(); if let Some(language) = value.language() { found = found.with_language(language).unwrap(); } MessageBlock::Code(found) }
+    MessageBlock::Thinking(value) => MessageBlock::Thinking(ThinkingContent::new(ThinkingId::new(value.id().as_str()).unwrap(), value.content()).with_status(restored_thinking_status(value.status()))),
+    MessageBlock::ToolCall(value) => MessageBlock::ToolCall(ToolCallContent::new(ToolCallId::new(value.call_id().as_str()).unwrap(), value.name(), value.arguments().iter().map(|argument| ToolArgument::new(argument.name(), restored_typed_value(argument.value())).unwrap()).collect()).unwrap().with_status(restored_call_status(value.status()))),
+    MessageBlock::ToolResult(value) => MessageBlock::ToolResult(ToolResultContent::new(ToolCallId::new(value.call_id().as_str()).unwrap(), value.output()).with_status(restored_result_status(value.status()))),
+    MessageBlock::Error(value) => { let mut found = ErrorContent::new(value.message()).unwrap(); if let Some(source) = value.source() { found = found.with_source(ErrorSource::new(source.as_str()).unwrap()); } MessageBlock::Error(found) }
+    MessageBlock::Diff(value) => { let mut found = DiffContent::new(value.content()).unwrap(); if let Some(language) = value.language() { found = found.with_language(language).unwrap(); } MessageBlock::Diff(found) }
+    MessageBlock::Quote(value) => { let mut found = QuoteContent::new(value.content()).unwrap(); if let Some(attribution) = value.attribution() { found = found.with_attribution(attribution).unwrap(); } MessageBlock::Quote(found) }
+    MessageBlock::Link(value) => MessageBlock::Link(LinkContent::new(value.label(), value.target()).unwrap()),
+    MessageBlock::TerminalAttachmentSummary(value) => { let mut found = TerminalAttachmentSummary::new(value.name(), value.summary()).unwrap(); if let Some(media_type) = value.media_type() { found = found.with_media_type(media_type).unwrap(); } MessageBlock::TerminalAttachmentSummary(found) }
+    _ => panic!("unsupported message block"),
+} }
+fn restored_entry(source: &MessageBlockEntry) -> MessageBlockEntry { MessageBlockEntry::new(source.id(), restored_block(source.block())) }
 fn restored_message(source: &ChatMessage) -> ChatMessage {
-    let metadata = ChatMessageMetadata::new(source.metadata().author().cloned(), source.metadata().timestamp().cloned());
-    let blocks = source.blocks().iter().map(|entry| MessageBlockEntry::new(entry.id(), entry.block().clone())).collect();
-    ChatMessage::try_restore(source.id(), source.role(), source.status().clone(), source.revision(), blocks, metadata).unwrap()
+    let metadata = ChatMessageMetadata::new(source.metadata().author().map(|value| MessageAuthor::new(value.as_str()).unwrap()), source.metadata().timestamp().map(|value| MessageTimestamp::new(value.as_str()).unwrap()));
+    ChatMessage::try_restore(source.id(), source.role(), restored_message_status(source.status()), source.revision(), source.blocks().iter().map(restored_entry).collect(), metadata).unwrap()
 }
+fn restored_update(source: &ConversationUpdate) -> ConversationUpdate { match source {
+    ConversationUpdate::Push(value) => ConversationUpdate::push(value.guard(), restored_message(value.message())),
+    ConversationUpdate::AppendText(value) => ConversationUpdate::append_text(value.guard(), value.block_id(), value.delta()).unwrap(),
+    ConversationUpdate::AppendMessageBlock(value) => ConversationUpdate::append_message_block(value.guard(), restored_entry(value.entry())),
+    ConversationUpdate::InsertMessageBlock(value) => ConversationUpdate::insert_message_block(value.guard(), value.position(), restored_entry(value.entry())),
+    ConversationUpdate::ReplaceBlock(value) => ConversationUpdate::replace_block(value.guard(), value.block_id(), restored_block(value.replacement())),
+    ConversationUpdate::Complete(value) => ConversationUpdate::complete(value.guard()), ConversationUpdate::Cancel(value) => ConversationUpdate::cancel(value.guard()),
+    ConversationUpdate::Fail(value) => ConversationUpdate::fail(value.guard(), restored_failure(value.cause())),
+    ConversationUpdate::EditMessage(value) => ConversationUpdate::edit_message(value.guard(), value.entries().iter().map(restored_entry).collect()),
+    ConversationUpdate::DeleteMessage(value) => ConversationUpdate::delete_message(value.guard()),
+    ConversationUpdate::Resend(value) => ConversationUpdate::resend(value.source_guard(), restored_message(value.message())),
+    _ => panic!("unsupported conversation update"),
+} }
+fn restored_event(source: &ConversationEvent) -> ConversationEvent { ConversationEvent::new(UpdateId::new(source.event_id().as_str()).unwrap(), source.sequence(), restored_update(source.update())) }
 fn restored_outcome(source: &ApplyOutcome) -> ApplyOutcome {
     let affected = source.affected_messages().iter().map(|value| AffectedMessage::try_restore(
         value.message_id(), value.previous_revision(), value.applied_revision(), value.disposition(),
@@ -424,13 +460,14 @@ fn restored_outcome(source: &ApplyOutcome) -> ApplyOutcome {
 }
 fn restored_identities(source: &ConversationIdentityHistory) -> ConversationIdentityHistory {
     let thinking = source.thinking().iter().map(|value| ThinkingIdentityHistory::new(
-        value.message_id(), value.seen().to_vec(), value.retired().to_vec(),
+        value.message_id(), value.seen().iter().map(|id| ThinkingId::new(id.as_str()).unwrap()).collect(), value.retired().iter().map(|id| ThinkingId::new(id.as_str()).unwrap()).collect(),
     )).collect();
+    let slots = source.result_slots().iter().map(|(id, slot)| (ToolCallId::new(id.as_str()).unwrap(), match slot { ToolResultSlot::Vacant => ToolResultSlot::Vacant, ToolResultSlot::Occupied(value) => ToolResultSlot::Occupied(ToolResultLocation::new(value.message_id(), value.block_id())), ToolResultSlot::Retired => ToolResultSlot::Retired, _ => panic!("unsupported result slot") })).collect();
     ConversationIdentityHistory::new(
         source.seen_messages().to_vec(), source.retired_messages().to_vec(),
         source.seen_blocks().to_vec(), source.retired_blocks().to_vec(), thinking,
-        source.seen_tool_calls().to_vec(), source.retired_tool_calls().to_vec(),
-        source.result_slots().to_vec(),
+        source.seen_tool_calls().iter().map(|id| ToolCallId::new(id.as_str()).unwrap()).collect(), source.retired_tool_calls().iter().map(|id| ToolCallId::new(id.as_str()).unwrap()).collect(),
+        slots,
     )
 }
 fn identity_variant(source: &ConversationIdentityHistory, variant: &str) -> ConversationIdentityHistory {
@@ -577,7 +614,7 @@ exact!(external_adapter_reconstructs_non_fresh_snapshot_from_public_parts, {
     let state = rich_history_state(1); let expected = state.clone(); let source = state.snapshot();
     assert!(source.retention().evicted_through().is_some()); assert!(source.messages().iter().any(|message| message.revision() != MessageRevision::INITIAL));
     let records = source.retention().records().iter().map(|record| {
-        let event = ConversationEvent::new(record.event().event_id().clone(), record.event().sequence(), record.event().update().clone());
+        let event = restored_event(record.event());
         let outcome = restored_outcome(record.outcome()); let (previous, fingerprint) = record.proof().unwrap().parts();
         ProcessedEventRecord::try_new_with_proof_parts(event, outcome, previous, fingerprint).unwrap()
     }).collect();
@@ -588,6 +625,46 @@ exact!(external_adapter_reconstructs_non_fresh_snapshot_from_public_parts, {
     assert!(ConversationStateSnapshot::try_new_with_proof_parts(messages.clone(), source.revision(), source.expected_sequence(), retention.clone(), identities.clone(), retention_tail, tampered).is_err());
     let rebuilt = ConversationStateSnapshot::try_new_with_proof_parts(messages, source.revision(), source.expected_sequence(), retention, identities, retention_tail, content).unwrap();
     drop(source); drop(state); assert_eq!(ConversationState::try_restore(rebuilt).unwrap(), expected);
+});
+exact!(public_persistence_parts_survive_process_restart, {
+    const PARTS: &str = "RNK_GH62_PERSISTED_PROOF_PARTS";
+    if let Ok(parts) = std::env::var(PARTS) {
+        let values: Vec<u64> = parts.split(',').map(|value| value.parse().unwrap()).collect(); assert_eq!(values.len(), 16);
+        let array = |offset| [values[offset], values[offset + 1], values[offset + 2], values[offset + 3]];
+        let id = MessageId::new(1); let second = MessageRevision::new(2).unwrap(); let block = BlockId::new(1);
+        let message = ChatMessage::try_restore(id, ChatRole::User, MessageStatus::Streaming, second, vec![text_entry(1, "xy")], ChatMessageMetadata::default()).unwrap();
+        let update = ConversationUpdate::append_text(MessageMutationGuard::new(ConversationGuard::new(ConversationRevision::new(1)), id, MessageRevision::INITIAL), block, "y").unwrap();
+        let event = ConversationEvent::new(UpdateId::new("append").unwrap(), 1, update); let affected = AffectedMessage::try_restore(id, Some(MessageRevision::INITIAL), second, AffectedMessageDisposition::Present).unwrap();
+        let outcome = ApplyOutcome::try_restore(ConversationRevision::new(2), vec![affected]).unwrap();
+        let record = ProcessedEventRecord::try_new_with_proof_parts(event, outcome, array(0), array(4)).unwrap();
+        let retention = RetentionHistory::new(std::num::NonZeroUsize::MIN, vec![record], Some(0)).unwrap();
+        let identities = ConversationIdentityHistory::new(vec![id], vec![], vec![block], vec![], vec![ThinkingIdentityHistory::new(id, vec![], vec![])], vec![], vec![], vec![]);
+        let snapshot = ConversationStateSnapshot::try_new_with_proof_parts(vec![message], ConversationRevision::new(2), 2, retention, identities, array(8), array(12)).unwrap();
+        let restored = ConversationState::try_restore(snapshot).unwrap(); assert_eq!(restored.revision(), ConversationRevision::new(2)); assert_eq!(restored.messages()[0].blocks()[0], text_entry(1, "xy")); return;
+    }
+    let mut state = ConversationState::new(0, std::num::NonZeroUsize::MIN); apply_push(&mut state, "push", 0, message(1, ChatRole::User, vec![text_entry(1, "x")]));
+    let append = ConversationUpdate::append_text(guard(&state, MessageId::new(1)), BlockId::new(1), "y").unwrap(); state.apply_event(event("append", 1, append)).unwrap();
+    let snapshot = state.snapshot(); let record = &snapshot.retention().records()[0]; let (previous, fingerprint) = record.proof().unwrap().parts(); let (tail, content) = snapshot.proof().unwrap().parts();
+    let parts = [previous, fingerprint, tail, content].into_iter().flatten().map(|value| value.to_string()).collect::<Vec<_>>().join(",");
+    let status = std::process::Command::new(std::env::current_exe().unwrap()).arg("--exact").arg("public_persistence_parts_survive_process_restart").env(PARTS, parts).status().unwrap();
+    assert!(status.success());
+});
+exact!(public_adapter_reconstructs_every_block_and_update_variant, {
+    let failure = FailureCause::new("persisted").unwrap(); let call_id = ToolCallId::new("call").unwrap();
+    let blocks = vec![
+        MessageBlock::Text("text".into()), MessageBlock::Markdown("markdown".into()), MessageBlock::Code(CodeContent::new("code").unwrap().with_language("rs").unwrap()),
+        MessageBlock::Thinking(ThinkingContent::new(ThinkingId::new("thinking").unwrap(), "thought").with_status(ThinkingStatus::Failed(failure.clone()))),
+        MessageBlock::ToolCall(ToolCallContent::new(call_id.clone(), "tool", vec![ToolArgument::new("value", TypedValue::List(vec![TypedValue::object(vec![TypedField::new("decimal", TypedValue::Decimal(DecimalValue::new("1.5").unwrap())).unwrap()]).unwrap()])).unwrap()]).unwrap().with_status(ToolCallStatus::Failed(failure.clone()))),
+        MessageBlock::ToolResult(ToolResultContent::new(call_id, "output").with_status(ToolResultStatus::Failed(failure.clone()))),
+        MessageBlock::Error(ErrorContent::new("error").unwrap().with_source(ErrorSource::new("adapter").unwrap())), MessageBlock::Diff(DiffContent::new("+line").unwrap().with_language("diff").unwrap()),
+        MessageBlock::Quote(QuoteContent::new("quote").unwrap().with_attribution("author").unwrap()), MessageBlock::Link(LinkContent::new("label", "target").unwrap()),
+        MessageBlock::TerminalAttachmentSummary(TerminalAttachmentSummary::new("terminal", "summary").unwrap().with_media_type("text/plain").unwrap()),
+    ];
+    assert_eq!(blocks.iter().map(restored_block).collect::<Vec<_>>(), blocks);
+    let message = ChatMessage::new(MessageId::new(1), ChatRole::User, vec![text_entry(1, "message")]).unwrap().with_metadata(ChatMessageMetadata::new(Some(MessageAuthor::new("Ada").unwrap()), Some(MessageTimestamp::new("now").unwrap())));
+    let guard = MessageMutationGuard::new(ConversationGuard::new(ConversationRevision::new(7)), MessageId::new(1), MessageRevision::new(3).unwrap()); let entry = text_entry(2, "entry");
+    let updates = vec![ConversationUpdate::push(guard.conversation(), message.clone()), ConversationUpdate::append_text(guard, BlockId::new(1), "delta").unwrap(), ConversationUpdate::append_message_block(guard, entry.clone()), ConversationUpdate::insert_message_block(guard, 1, entry.clone()), ConversationUpdate::replace_block(guard, BlockId::new(1), MessageBlock::Text("replacement".into())), ConversationUpdate::complete(guard), ConversationUpdate::cancel(guard), ConversationUpdate::fail(guard, failure), ConversationUpdate::edit_message(guard, vec![entry]), ConversationUpdate::delete_message(guard), ConversationUpdate::resend(guard, message)];
+    assert_eq!(updates.iter().map(restored_update).collect::<Vec<_>>(), updates);
 });
 exact!(public_restoration_constructors_reject_contradictory_parts, {
     let id = MessageId::new(7); let second = MessageRevision::new(2).unwrap();
