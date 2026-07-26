@@ -9,6 +9,7 @@ use super::super::state::{
     valid_result_transition, valid_thinking_transition,
 };
 use super::super::rollback::IdentityBackup;
+use super::super::proof::current_state_fingerprint;
 use std::collections::{BTreeMap, BTreeSet};
 
 struct MutationBackup {
@@ -133,12 +134,16 @@ impl ConversationState {
         let outcome = ApplyOutcome { revision: next_revision, affected_messages };
         self.revision = next_revision;
         self.expected_sequence = next_sequence;
-        self.ledger.push_back(ProcessedEventRecord::proven(event, outcome.clone()));
-        while self.ledger.len() > self.ledger_capacity.get() {
+        let previous = self.ledger.back().and_then(|record| record.proof.as_ref())
+            .map_or([0; 4], |proof| proof.record);
+        while self.ledger.len() >= self.ledger_capacity.get() {
             if let Some(record) = self.ledger.pop_front() {
                 self.evicted_through = Some(record.event.sequence);
             }
         }
+        let state = current_state_fingerprint(self);
+        self.ledger.push_back(ProcessedEventRecord::proven(
+            event, outcome.clone(), previous, state));
         Ok(outcome)
     }
 }
@@ -540,7 +545,9 @@ fn edit_message(state: &mut ConversationState, message_id: MessageId,
                     block_id: *id, reason: "edit cannot change retained lifecycle status",
                 });
             }
-            if nested_terminal(&previous.block) && previous.block != replacement.block {
+            if matches!(previous.block, MessageBlock::Thinking(_) | MessageBlock::ToolCall(_)
+                | MessageBlock::ToolResult(_))
+                && nested_terminal(&previous.block) && previous.block != replacement.block {
                 return Err(ConversationError::InvalidReplacement {
                     block_id: *id, reason: "edit cannot rewrite terminal lifecycle payload",
                 });

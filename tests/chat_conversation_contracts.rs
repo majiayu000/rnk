@@ -434,6 +434,10 @@ exact!(edit_message_cannot_rewrite_terminal_lifecycle_payload, {
     let entry = MessageBlockEntry::new(BlockId::new(1), MessageBlock::ToolCall(rewritten)); let update = ConversationUpdate::edit_message(guard(&state, MessageId::new(1)), vec![entry]);
     assert!(matches!(assert_atomic_error(&mut state, event("edit-rewrite", 4, update)), ConversationError::InvalidReplacement { .. }));
 });
+exact!(edit_message_allows_retained_static_payload_changes, {
+    let mut state = text_state(4); let update = ConversationUpdate::edit_message(guard(&state, MessageId::new(1)), vec![text_entry(1, "edited")]); state.apply_event(event("static-edit", 1, update)).unwrap();
+    assert_eq!(block_text(&state, 1), "edited");
+});
 exact!(replace_block_requires_same_variant_and_identity, {
     let mut state = text_state(4); let update = ConversationUpdate::replace_block(guard(&state, MessageId::new(1)), BlockId::new(1), MessageBlock::Markdown("x".into()));
     assert!(matches!(assert_atomic_error(&mut state, event("wrong-kind", 1, update)), ConversationError::InvalidReplacement { .. }));
@@ -542,6 +546,15 @@ exact!(evicted_snapshot_rejects_forged_retained_event_with_valid_outcome, {
     let snapshot = state.snapshot(); assert_eq!(ConversationState::try_restore(snapshot.clone()).unwrap(), state); assert_eq!(snapshot.retention().evicted_through(), Some(0)); let forged = event("append", 1, ConversationUpdate::append_text(target, BlockId::new(1), "forged").unwrap()); let record = ProcessedEventRecord::new(forged, snapshot.retention().records()[0].outcome().clone());
     let forged_snapshot = ConversationStateSnapshot::new(snapshot.messages().to_vec(), snapshot.revision(), snapshot.expected_sequence(), RetentionHistory::new(snapshot.retention().capacity(), vec![record], snapshot.retention().evicted_through()).unwrap(), snapshot.identities().clone()); assert!(ConversationState::try_restore(forged_snapshot).is_err());
 });
+exact!(evicted_snapshot_rejects_genuine_retention_spliced_from_another_state, {
+    let mut alpha = text_state(1); let alpha_update = ConversationUpdate::append_text(guard(&alpha, MessageId::new(1)), BlockId::new(1), "alpha").unwrap(); alpha.apply_event(event("alpha", 1, alpha_update)).unwrap(); let alpha_snapshot = alpha.snapshot();
+    let mut beta = text_state(1); let beta_update = ConversationUpdate::append_text(guard(&beta, MessageId::new(1)), BlockId::new(1), "beta").unwrap(); beta.apply_event(event("beta", 1, beta_update)).unwrap(); let beta_snapshot = beta.snapshot();
+    let hybrid = ConversationStateSnapshot::new(beta_snapshot.messages().to_vec(), beta_snapshot.revision(), beta_snapshot.expected_sequence(), alpha_snapshot.retention().clone(), beta_snapshot.identities().clone()); assert!(ConversationState::try_restore(hybrid).is_err());
+});
+exact!(evicted_snapshot_public_proof_constructor_roundtrips, {
+    let mut state = text_state(1); let update = ConversationUpdate::append_text(guard(&state, MessageId::new(1)), BlockId::new(1), "proof").unwrap(); state.apply_event(event("proof", 1, update)).unwrap(); let snapshot = state.snapshot(); let source = &snapshot.retention().records()[0];
+    let record = ProcessedEventRecord::new_with_proof(source.event().clone(), source.outcome().clone(), source.proof().unwrap().clone()); let rebuilt = ConversationStateSnapshot::new(snapshot.messages().to_vec(), snapshot.revision(), snapshot.expected_sequence(), RetentionHistory::new(snapshot.retention().capacity(), vec![record], snapshot.retention().evicted_through()).unwrap(), snapshot.identities().clone()); assert_eq!(ConversationState::try_restore(rebuilt).unwrap(), state);
+});
 exact!(fresh_restart_state_has_no_replay_or_eviction_evidence, {
     let state = ConversationState::new(9, std::num::NonZeroUsize::MIN); assert_eq!(state.evicted_through(), None); assert!(state.snapshot().retention().records().is_empty());
 });
@@ -555,7 +568,8 @@ exact!(identical_sequences_produce_identical_state_and_outcomes, {
     let mut left = ConversationState::new(0, std::num::NonZeroUsize::new(2).unwrap()); let mut right = left.clone(); let update = ConversationUpdate::push(ConversationGuard::new(ConversationRevision::INITIAL), message(1, ChatRole::User, vec![text_entry(1, "same")])); let accepted = event("same", 0, update); assert_eq!(left.apply_event(accepted.clone()).unwrap(), right.apply_event(accepted).unwrap()); assert_eq!(left, right);
 });
 exact!(distinct_mock_adapters_produce_equal_core_events, {
-    let alpha = event("provider", 0, ConversationUpdate::push(ConversationGuard::new(ConversationRevision::INITIAL), message(1, ChatRole::Assistant, vec![text_entry(1, &["sa", "me"].concat())]))); let beta = event("provider", 0, ConversationUpdate::push(ConversationGuard::new(ConversationRevision::INITIAL), message(1, ChatRole::Assistant, vec![text_entry(1, "same")]))); assert_eq!(alpha, beta);
+    struct ChunkAdapter(Vec<&'static str>); struct PayloadAdapter { text: &'static str } impl ChunkAdapter { fn core(self) -> ConversationEvent { event("provider", 0, ConversationUpdate::push(ConversationGuard::new(ConversationRevision::INITIAL), message(1, ChatRole::Assistant, vec![text_entry(1, &self.0.concat())]))) } } impl PayloadAdapter { fn core(self) -> ConversationEvent { event("provider", 0, ConversationUpdate::push(ConversationGuard::new(ConversationRevision::INITIAL), message(1, ChatRole::Assistant, vec![text_entry(1, self.text)]))) } }
+    assert_eq!(ChunkAdapter(vec!["sa", "me"]).core(), PayloadAdapter { text: "same" }.core());
 });
 exact!(empty_static_message_requires_content_before_complete, {
     let mut state = ConversationState::new(0, std::num::NonZeroUsize::MIN); apply_push(&mut state, "empty", 0, message(1, ChatRole::Assistant, vec![text_entry(1, "")])); let update = ConversationUpdate::complete(guard(&state, MessageId::new(1))); assert!(matches!(assert_atomic_error(&mut state, event("complete", 1, update)), ConversationError::InvalidTransition { .. }));
