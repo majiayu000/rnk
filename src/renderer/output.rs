@@ -7,6 +7,7 @@ use unicode_width::UnicodeWidthStr;
 
 const TAB_STOP: usize = 4;
 
+mod cross_call_zwj;
 mod zero_width;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,6 +160,7 @@ pub struct Output {
     /// Flat grid storage for better cache locality (row-major order)
     grid: Vec<StyledChar>,
     grapheme_cells: Vec<GraphemeCell>,
+    pending_zwj: Option<cross_call_zwj::PendingZwj>,
     clip_stack: Vec<ClipRegion>,
     /// Tracks which rows have been modified since last clear_dirty()
     dirty_rows: Vec<bool>,
@@ -177,6 +179,7 @@ impl Output {
             height,
             grid,
             grapheme_cells: vec![GraphemeCell::Empty; size],
+            pending_zwj: None,
             clip_stack: Vec::new(),
             dirty_rows: vec![false; height as usize],
             dirty_cells: vec![false; size],
@@ -338,6 +341,7 @@ impl Output {
             height: self.height,
             grid: self.grid.clone(),
             grapheme_cells: self.grapheme_cells.clone(),
+            pending_zwj: self.pending_zwj,
             clip_stack: self.clip_stack.clone(),
             dirty_rows: self.dirty_rows.clone(),
             dirty_cells: self.dirty_cells.clone(),
@@ -367,8 +371,12 @@ impl Output {
 
         for source_grapheme in text.graphemes(true) {
             match source_grapheme {
-                "\n" | "\r" | "\r\n" => break,
+                "\n" | "\r" | "\r\n" => {
+                    self.clear_pending_zwj();
+                    break;
+                }
                 "\t" => {
+                    self.clear_pending_zwj();
                     let spaces = TAB_STOP - (col % TAB_STOP);
                     for _ in 0..spaces {
                         if col >= width {
@@ -381,11 +389,33 @@ impl Output {
                 _ => {
                     let safe = sanitize_grapheme(source_grapheme);
                     let grapheme_width = UnicodeWidthStr::width(safe.as_str());
-                    if grapheme_width > 0 && col >= width {
+                    if grapheme_width > 0
+                        && col >= width
+                        && !self.has_pending_zwj_at(col as i64, row as i64)
+                    {
+                        self.clear_pending_zwj();
                         break;
                     }
-                    let _ = self.write_grapheme(col as i64, row as i64, &safe, style);
-                    col = col.saturating_add(grapheme_width);
+                    let outcome = self.write_grapheme(col as i64, row as i64, &safe, style);
+                    let merged_owner_end = match &outcome {
+                        GraphemeWriteOutcome::Committed(footprint)
+                            if footprint
+                                .target_cells
+                                .first()
+                                .is_some_and(|first| usize::from(first.x) < col) =>
+                        {
+                            footprint
+                                .target_cells
+                                .last()
+                                .map(|last| usize::from(last.x).saturating_add(1))
+                        }
+                        _ => None,
+                    };
+                    if let Some(owner_end) = merged_owner_end {
+                        col = owner_end;
+                    } else {
+                        col = col.saturating_add(grapheme_width);
+                    }
                 }
             }
         }
@@ -402,11 +432,13 @@ impl Output {
 
         match sanitize_source_scalar(ch) {
             SourceScalar::Break => {
+                self.clear_pending_zwj();
                 if col < self.width as usize {
                     self.mark_dirty(row);
                 }
             }
             SourceScalar::Tab => {
+                self.clear_pending_zwj();
                 if col >= self.width as usize {
                     return;
                 }
@@ -425,7 +457,9 @@ impl Output {
                 let grapheme_width = UnicodeWidthStr::width(safe.as_str());
                 if col >= self.width as usize
                     && !(grapheme_width == 0 && col == self.width as usize)
+                    && !self.has_pending_zwj_at(col as i64, row as i64)
                 {
+                    self.clear_pending_zwj();
                     return;
                 }
                 self.mark_dirty(row);
@@ -468,15 +502,20 @@ impl Output {
         let safe = sanitize_grapheme(grapheme);
         let mut graphemes = safe.graphemes(true);
         let Some(safe_grapheme) = graphemes.next() else {
+            self.clear_pending_zwj();
             return GraphemeWriteOutcome::Clipped;
         };
         if graphemes.next().is_some() {
+            self.clear_pending_zwj();
             return GraphemeWriteOutcome::Clipped;
         }
 
         let display_width = UnicodeWidthStr::width(safe_grapheme);
         if display_width == 0 {
             return self.attach_zero_width(x, y, safe_grapheme);
+        }
+        if let Some(outcome) = self.try_complete_pending_zwj(x, y, safe_grapheme, display_width) {
+            return outcome;
         }
         let Some(footprint) = self.prospective_grapheme_write_footprint(x, y, safe_grapheme) else {
             return GraphemeWriteOutcome::Clipped;
@@ -487,7 +526,12 @@ impl Output {
             .next()
             .expect("a non-empty grapheme must have a lead scalar");
         let suffix = scalars.collect();
-        self.commit_grapheme(&footprint, lead, suffix, display_width, style);
+        self.commit_styled_grapheme(
+            &footprint,
+            StyledChar::with_style(lead, style),
+            suffix,
+            display_width,
+        );
         GraphemeWriteOutcome::Committed(footprint)
     }
 
@@ -577,13 +621,12 @@ impl Output {
             .collect()
     }
 
-    fn commit_grapheme(
+    fn commit_styled_grapheme(
         &mut self,
         footprint: &GraphemeWriteFootprint,
-        lead: char,
+        lead: StyledChar,
         suffix: String,
         display_width: usize,
-        style: &Style,
     ) {
         let width = self.width as usize;
         for position in &footprint.old_cells {
@@ -600,7 +643,7 @@ impl Output {
         for (offset, position) in footprint.target_cells.iter().enumerate() {
             let idx = position.y as usize * width + position.x as usize;
             if offset == 0 {
-                self.grid[idx] = StyledChar::with_style(lead, style);
+                self.grid[idx] = lead.clone();
                 self.grapheme_cells[idx] = GraphemeCell::Lead {
                     width: display_width,
                     suffix: suffix.clone(),

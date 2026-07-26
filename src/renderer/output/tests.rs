@@ -1,5 +1,7 @@
 use super::*;
 
+mod cross_call_zwj;
+
 fn assert_no_source_controls(text: &str) {
     assert!(
         !text
