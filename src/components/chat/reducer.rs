@@ -432,7 +432,9 @@ fn complete(state: &mut ConversationState, message_id: MessageId)
         .ok_or(ConversationError::UnknownMessage { message_id })?;
     require_active(message)?;
     let ready = match message.status {
-        MessageStatus::Pending => static_complete_ready(message),
+        MessageStatus::Pending => {
+            static_complete_ready(message, || targeted::record_block_visits(1))
+        }
         MessageStatus::Streaming => message.blocks.iter().all(|entry| {
             targeted::record_block_visits(1);
             nested_terminal(&entry.block)

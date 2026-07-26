@@ -117,6 +117,27 @@ fn correlation_ready_to_complete() -> ConversationState {
     state
 }
 
+fn pending_correlation_state() -> ConversationState {
+    let mut state = ConversationState::new(0, NonZeroUsize::new(8).unwrap());
+    push(
+        &mut state,
+        "call",
+        message(
+            1,
+            ChatRole::Assistant,
+            MessageBlock::ToolCall(
+                ToolCallContent::new(ToolCallId::new("pending").unwrap(), "tool", vec![]).unwrap(),
+            ),
+        ),
+    );
+    push(
+        &mut state,
+        "unrelated",
+        message(2, ChatRole::User, MessageBlock::Text("unrelated".into())),
+    );
+    state
+}
+
 #[test]
 fn cancel_and_fail_count_each_correlation_visit() {
     let cancel = terminate_cost(false);
@@ -155,6 +176,33 @@ fn correlated_complete_counts_each_fallback_visit() {
             message_visits: 12,
             target_lookups: 3,
             block_visits: 6,
+            global_validations: 0,
+            backup_captures: 0,
+        },
+    );
+}
+
+#[test]
+fn pending_correlated_complete_counts_rejected_readiness_scan() {
+    let mut state = pending_correlation_state();
+    let before = state.clone();
+    let update = ConversationUpdate::complete(guard(&state, MessageId::new(1)));
+    reset_cost();
+    let rejected = event(&state, "complete", update);
+    assert!(matches!(
+        state.apply_event(rejected),
+        Err(ConversationError::InvalidTransition {
+            kind: "message",
+            ..
+        })
+    ));
+    assert_eq!(state, before);
+    assert_eq!(
+        cost(),
+        ReducerCost {
+            message_visits: 4,
+            target_lookups: 2,
+            block_visits: 2,
             global_validations: 0,
             backup_captures: 0,
         },

@@ -647,16 +647,17 @@ pub(in crate::components::chat) fn same_block_identity(old: &MessageBlock,
         _ => true,
     }
 }
-pub(in crate::components::chat) fn static_complete_ready(message: &ChatMessage) -> bool {
-    !message.blocks.iter().any(|entry| matches!(entry.block,
-        MessageBlock::Thinking(_) | MessageBlock::ToolCall(_) | MessageBlock::ToolResult(_)))
-        && message.blocks.iter().any(|entry| match &entry.block {
+pub(in crate::components::chat) fn static_complete_ready(message: &ChatMessage,
+    mut visit: impl FnMut()) -> bool {
+    !message.blocks.iter().any(|entry| { visit(); matches!(entry.block,
+        MessageBlock::Thinking(_) | MessageBlock::ToolCall(_) | MessageBlock::ToolResult(_)) })
+        && message.blocks.iter().any(|entry| { visit(); match &entry.block {
             MessageBlock::Text(value) | MessageBlock::Markdown(value) => !value.is_empty(),
             MessageBlock::Code(value) => !value.content().is_empty(),
             MessageBlock::Error(_) | MessageBlock::Diff(_) | MessageBlock::Quote(_)
             | MessageBlock::Link(_) | MessageBlock::TerminalAttachmentSummary(_) => true,
             _ => false,
-        })
+        }})
 }
 
 #[cfg(test)]
@@ -725,10 +726,10 @@ pub(super) mod test_cases {
         assert!(!same_block_identity(&MessageBlock::Text("a".into()), &MessageBlock::Markdown("a".into())));
     }
     pub(in crate::components::chat::state) fn static_completion_readiness_matrix_is_exhaustive() {
-        assert!(static_complete_ready(&text_message()));
+        assert!(static_complete_ready(&text_message(), || {}));
         let empty = ChatMessage::new(MessageId::new(2), ChatRole::User,
             vec![MessageBlockEntry::new(BlockId::new(2), MessageBlock::Text(String::new()))]).unwrap();
-        assert!(!static_complete_ready(&empty));
+        assert!(!static_complete_ready(&empty, || {}));
     }
     pub(in crate::components::chat::state) fn tool_call_result_correlation_matrix_is_exhaustive() {
         let calls = [ToolCallStatus::Pending, ToolCallStatus::Running, ToolCallStatus::Succeeded,
