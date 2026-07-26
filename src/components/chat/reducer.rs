@@ -96,6 +96,10 @@ impl ConversationState {
                     actual: guard.message_revision,
                 });
             }
+            if matches!(&event.update, ConversationUpdate::EditMessage(value)
+                if value.entries.as_slice() == message.blocks.as_slice()) {
+                return Err(ConversationError::NoOpEdit { message_id: guard.message_id });
+            }
         }
         let affected_ids = affected_existing(self, &event.update);
         let affected_order = self.messages.iter().filter(|message|

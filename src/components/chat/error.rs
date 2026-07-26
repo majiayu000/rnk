@@ -92,6 +92,11 @@ pub enum ConversationError {
         /// Stable replacement explanation.
         reason: &'static str,
     },
+    /// A full-message edit supplied the existing ordered entries unchanged.
+    NoOpEdit {
+        /// Message whose edit had no observable effect.
+        message_id: MessageId,
+    },
     /// Tool-call and tool-result states are inconsistent.
     InvalidCorrelation {
         /// Tool-call identity.

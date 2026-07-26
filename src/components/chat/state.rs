@@ -452,7 +452,14 @@ fn validate_snapshot(value: &ConversationStateSnapshot) -> Result<(), Conversati
         for (found, supplied) in replayed.retention.records.iter_mut()
             .zip(&value.retention.records) { found.proof = supplied.proof.clone(); }
         replayed.proof = value.proof.clone();
-        if replayed != *value {
+        let mut supplied = value.clone();
+        supplied.identities.seen_messages.sort_unstable(); supplied.identities.retired_messages.sort_unstable();
+        supplied.identities.seen_blocks.sort_unstable(); supplied.identities.retired_blocks.sort_unstable();
+        supplied.identities.seen_tool_calls.sort(); supplied.identities.retired_tool_calls.sort();
+        supplied.identities.result_slots.sort_by(|left, right| left.0.cmp(&right.0));
+        for history in &mut supplied.identities.thinking { history.seen.sort(); history.retired.sort(); }
+        supplied.identities.thinking.sort_by_key(|history| history.message_id);
+        if replayed != supplied {
             return invalid_snapshot("retained replay does not produce the restored state");
         }
     } else {
