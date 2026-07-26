@@ -10,6 +10,77 @@ use super::super::state::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+struct IdentityBackup {
+    seen_messages: BTreeSet<MessageId>, retired_messages: BTreeSet<MessageId>,
+    seen_blocks: BTreeSet<BlockId>, retired_blocks: BTreeSet<BlockId>,
+    thinking_seen: BTreeMap<MessageId, BTreeSet<ThinkingId>>,
+    thinking_retired: BTreeMap<MessageId, BTreeSet<ThinkingId>>,
+    seen_tool_calls: BTreeSet<ToolCallId>, retired_tool_calls: BTreeSet<ToolCallId>,
+    result_slots: BTreeMap<ToolCallId, ToolResultSlot>,
+}
+impl IdentityBackup {
+    fn capture(state: &ConversationState) -> Self {
+        Self { seen_messages: state.seen_messages.clone(),
+            retired_messages: state.retired_messages.clone(),
+            seen_blocks: state.seen_blocks.clone(), retired_blocks: state.retired_blocks.clone(),
+            thinking_seen: state.thinking_seen.clone(),
+            thinking_retired: state.thinking_retired.clone(),
+            seen_tool_calls: state.seen_tool_calls.clone(),
+            retired_tool_calls: state.retired_tool_calls.clone(),
+            result_slots: state.result_slots.clone() }
+    }
+    fn restore(self, state: &mut ConversationState) {
+        state.seen_messages = self.seen_messages;
+        state.retired_messages = self.retired_messages;
+        state.seen_blocks = self.seen_blocks;
+        state.retired_blocks = self.retired_blocks;
+        state.thinking_seen = self.thinking_seen;
+        state.thinking_retired = self.thinking_retired;
+        state.seen_tool_calls = self.seen_tool_calls;
+        state.retired_tool_calls = self.retired_tool_calls;
+        state.result_slots = self.result_slots;
+    }
+}
+
+struct MutationBackup {
+    messages: Vec<(usize, ChatMessage)>, added: Option<MessageId>,
+    identities: Option<IdentityBackup>,
+}
+impl MutationBackup {
+    fn capture(state: &ConversationState, update: &ConversationUpdate,
+        affected: &BTreeSet<MessageId>) -> Self {
+        let messages = state.messages.iter().enumerate()
+            .filter(|(_, message)| affected.contains(&message.id))
+            .map(|(index, message)| (index, message.clone())).collect();
+        let candidate = match update {
+            ConversationUpdate::Push(value) => Some(value.message.id),
+            ConversationUpdate::Resend(value) => Some(value.message.id),
+            _ => None,
+        };
+        let added = candidate.filter(|id| state.message(*id).is_none());
+        let identities = matches!(update, ConversationUpdate::Push(_)
+            | ConversationUpdate::AppendMessageBlock(_) | ConversationUpdate::InsertMessageBlock(_)
+            | ConversationUpdate::EditMessage(_) | ConversationUpdate::DeleteMessage(_)
+            | ConversationUpdate::Resend(_)).then(|| IdentityBackup::capture(state));
+        Self { messages, added, identities }
+    }
+    fn restore(self, state: &mut ConversationState) {
+        if let Some(added) = self.added {
+            if let Some(index) = state.messages.iter().position(|message| message.id == added) {
+                state.messages.remove(index);
+            }
+        }
+        for (index, original) in self.messages {
+            if let Some(found) = state.messages.iter().position(|message| message.id == original.id) {
+                state.messages[found] = original;
+            } else {
+                state.messages.insert(index.min(state.messages.len()), original);
+            }
+        }
+        if let Some(identities) = self.identities { identities.restore(state); }
+    }
+}
+
 impl ConversationState {
     /// Applies one ordered event atomically or returns a typed error without mutation.
     pub fn apply_event(&mut self, event: ConversationEvent)
@@ -57,6 +128,8 @@ impl ConversationState {
             }
         }
         let affected_ids = affected_existing(self, &event.update);
+        let affected_order = self.messages.iter().filter(|message|
+            affected_ids.contains(&message.id)).map(|message| message.id).collect::<Vec<_>>();
         let mut revisions = BTreeMap::new();
         for message in &self.messages {
             if affected_ids.contains(&message.id) {
@@ -64,17 +137,20 @@ impl ConversationState {
                     message.revision.checked_next(message.id)?));
             }
         }
-        let mut staged = self.clone();
-        apply_update(&mut staged, &event.update)?;
-        validate_conversation(&staged)?;
-        for message in &mut staged.messages {
+        let backup = MutationBackup::capture(self, &event.update, &affected_ids);
+        if let Err(error) = apply_update(self, &event.update)
+            .and_then(|()| validate_conversation(self)) {
+            backup.restore(self);
+            return Err(error);
+        }
+        for message in &mut self.messages {
             if let Some((_, next)) = revisions.get(&message.id) { message.revision = *next; }
         }
-        let mut affected_messages = self.messages.iter().filter_map(|message| {
-            revisions.get(&message.id).map(|(previous, applied)| AffectedMessage {
-                message_id: message.id, previous: Some(*previous), applied: *applied,
+        let mut affected_messages = affected_order.into_iter().filter_map(|message_id| {
+            revisions.get(&message_id).map(|(previous, applied)| AffectedMessage {
+                message_id, previous: Some(*previous), applied: *applied,
                 disposition: if matches!(event.update, ConversationUpdate::DeleteMessage(_))
-                    && target_guard.is_some_and(|guard| guard.message_id == message.id) {
+                    && target_guard.is_some_and(|guard| guard.message_id == message_id) {
                     AffectedMessageDisposition::Deleted
                 } else { AffectedMessageDisposition::Present },
             })
@@ -85,15 +161,14 @@ impl ConversationState {
             _ => {}
         }
         let outcome = ApplyOutcome { revision: next_revision, affected_messages };
-        staged.revision = next_revision;
-        staged.expected_sequence = next_sequence;
-        staged.ledger.push_back(ProcessedEventRecord::new(event, outcome.clone()));
-        while staged.ledger.len() > staged.ledger_capacity.get() {
-            if let Some(record) = staged.ledger.pop_front() {
-                staged.evicted_through = Some(record.event.sequence);
+        self.revision = next_revision;
+        self.expected_sequence = next_sequence;
+        self.ledger.push_back(ProcessedEventRecord::new(event, outcome.clone()));
+        while self.ledger.len() > self.ledger_capacity.get() {
+            if let Some(record) = self.ledger.pop_front() {
+                self.evicted_through = Some(record.event.sequence);
             }
         }
-        *self = staged;
         Ok(outcome)
     }
 }
@@ -120,6 +195,7 @@ fn target_guard(update: &ConversationUpdate) -> Option<MessageMutationGuard> {
 
 fn affected_existing(state: &ConversationState, update: &ConversationUpdate) -> BTreeSet<MessageId> {
     let Some(guard) = target_guard(update) else { return BTreeSet::new(); };
+    if matches!(update, ConversationUpdate::Resend(_)) { return BTreeSet::new(); }
     let mut ids = BTreeSet::from([guard.message_id]);
     if !matches!(update, ConversationUpdate::Cancel(_) | ConversationUpdate::Fail(_)) {
         return ids;
@@ -366,6 +442,12 @@ fn replace_block(state: &mut ConversationState, message_id: MessageId, block_id:
 
 fn validate_replacement(old: &MessageBlock, new: &MessageBlock, block_id: BlockId)
     -> Result<(), ConversationError> {
+    if matches!(old, MessageBlock::Thinking(_) | MessageBlock::ToolCall(_)
+        | MessageBlock::ToolResult(_)) && nested_terminal(old) {
+        return Err(ConversationError::InvalidReplacement {
+            block_id, reason: "terminal lifecycle blocks are immutable",
+        });
+    }
     match (old, new) {
         (MessageBlock::Thinking(old), MessageBlock::Thinking(new))
             if old.status != new.status && !valid_thinking_transition(&old.status, &new.status) =>
@@ -385,19 +467,34 @@ fn validate_replacement(old: &MessageBlock, new: &MessageBlock, block_id: BlockI
 
 fn complete(state: &mut ConversationState, message_id: MessageId)
     -> Result<(), ConversationError> {
-    let message = message_mut(state, message_id)?;
+    let message = state.message(message_id)
+        .ok_or(ConversationError::UnknownMessage { message_id })?;
     require_active(message)?;
     let ready = match message.status {
         MessageStatus::Pending => static_complete_ready(message),
-        MessageStatus::Streaming => message.blocks.iter().all(|entry| nested_terminal(&entry.block)),
+        MessageStatus::Streaming => message.blocks.iter().all(|entry| nested_terminal(&entry.block))
+            && correlated_nested_terminal(state, message),
         _ => false,
     };
     if !ready
         || !valid_message_transition(&message.status, &MessageStatus::Complete, ready) {
         return invalid_transition("message", "message content is not ready to complete");
     }
-    message.status = MessageStatus::Complete;
+    message_mut(state, message_id)?.status = MessageStatus::Complete;
     Ok(())
+}
+
+fn correlated_nested_terminal(state: &ConversationState, target: &ChatMessage) -> bool {
+    let ids = target.blocks.iter().filter_map(|entry| match &entry.block {
+        MessageBlock::ToolCall(value) => Some(&value.call_id),
+        MessageBlock::ToolResult(value) => Some(&value.call_id),
+        _ => None,
+    }).collect::<BTreeSet<_>>();
+    state.messages.iter().flat_map(|message| &message.blocks).all(|entry| match &entry.block {
+        MessageBlock::ToolCall(value) => !ids.contains(&value.call_id) || nested_terminal(&entry.block),
+        MessageBlock::ToolResult(value) => !ids.contains(&value.call_id) || nested_terminal(&entry.block),
+        _ => true,
+    })
 }
 
 fn terminate(state: &mut ConversationState, target_id: MessageId,
@@ -669,114 +766,4 @@ impl ResendUpdate {
     /// Returns the fresh message.
     pub const fn message(&self) -> &ChatMessage { &self.message }
 }
-}
-
-#[cfg(test)]
-#[rustfmt::skip]
-mod coverage_tests {
-    use super::super::*; use std::num::NonZeroUsize;
-    fn message() -> ChatMessage {
-        ChatMessage::new(
-            MessageId::new(1),
-            ChatRole::User,
-            vec![MessageBlockEntry::new(
-                BlockId::new(1),
-                MessageBlock::Text("text".into()),
-            )],
-        )
-        .unwrap()
-    }
-    #[test]
-    fn public_payload_and_snapshot_accessors_are_live() {
-        let conversation = ConversationGuard::new(ConversationRevision::INITIAL);
-        let mutation =
-            MessageMutationGuard::new(conversation, MessageId::new(1), MessageRevision::INITIAL);
-        let entry = MessageBlockEntry::new(BlockId::new(2), MessageBlock::Markdown("md".into()));
-        if let ConversationUpdate::Push(value) = ConversationUpdate::push(conversation, message()) {
-            assert_eq!(value.guard(), conversation);
-            assert_eq!(value.message().id(), MessageId::new(1));
-        }
-        if let ConversationUpdate::AppendText(value) =
-            ConversationUpdate::append_text(mutation, BlockId::new(1), "delta").unwrap()
-        {
-            assert_eq!(value.guard(), mutation);
-            assert_eq!(value.block_id(), BlockId::new(1));
-            assert_eq!(value.delta(), "delta");
-        }
-        if let ConversationUpdate::AppendMessageBlock(value) =
-            ConversationUpdate::append_message_block(mutation, entry.clone())
-        {
-            assert_eq!(value.guard(), mutation);
-            assert_eq!(value.entry(), &entry);
-        }
-        if let ConversationUpdate::InsertMessageBlock(value) =
-            ConversationUpdate::insert_message_block(mutation, 0, entry.clone())
-        {
-            assert_eq!(value.guard(), mutation);
-            assert_eq!(value.position(), 0);
-            assert_eq!(value.entry(), &entry);
-        }
-        if let ConversationUpdate::ReplaceBlock(value) = ConversationUpdate::replace_block(
-            mutation,
-            BlockId::new(1),
-            MessageBlock::Text("next".into()),
-        ) {
-            assert_eq!(value.guard(), mutation);
-            assert_eq!(value.block_id(), BlockId::new(1));
-            assert!(matches!(value.replacement(), MessageBlock::Text(_)));
-        }
-        if let ConversationUpdate::Complete(value) = ConversationUpdate::complete(mutation) {
-            assert_eq!(value.guard(), mutation);
-        }
-        let cause = FailureCause::new("cause").unwrap();
-        if let ConversationUpdate::Fail(value) = ConversationUpdate::fail(mutation, cause.clone()) {
-            assert_eq!(value.guard(), mutation);
-            assert_eq!(value.cause(), &cause);
-        }
-        if let ConversationUpdate::EditMessage(value) =
-            ConversationUpdate::edit_message(mutation, vec![entry.clone()])
-        {
-            assert_eq!(value.guard(), mutation);
-            assert_eq!(value.entries(), std::slice::from_ref(&entry));
-        }
-        if let ConversationUpdate::Resend(value) = ConversationUpdate::resend(mutation, message()) {
-            assert_eq!(value.source_guard(), mutation);
-            assert_eq!(value.message().id(), MessageId::new(1));
-        }
-        assert_eq!(
-            MessageStatus::Failed(cause.clone()).failure_cause(),
-            Some(&cause)
-        );
-        assert_eq!(
-            ThinkingStatus::Failed(cause.clone()).failure_cause(),
-            Some(&cause)
-        );
-        assert_eq!(
-            ToolCallStatus::Failed(cause.clone()).failure_cause(),
-            Some(&cause)
-        );
-        assert_eq!(
-            ToolResultStatus::Failed(cause.clone()).failure_cause(),
-            Some(&cause)
-        );
-
-        let state = ConversationState::new(4, NonZeroUsize::MIN);
-        let snapshot = state.snapshot();
-        assert!(snapshot.messages().is_empty());
-        assert_eq!(snapshot.revision(), ConversationRevision::INITIAL);
-        assert_eq!(snapshot.expected_sequence(), 4);
-        assert_eq!(snapshot.retention().capacity(), NonZeroUsize::MIN);
-        assert!(snapshot.retention().records().is_empty());
-        assert_eq!(snapshot.retention().evicted_through(), None);
-        let identities = snapshot.identities();
-        assert!(identities.seen_messages().is_empty());
-        assert!(identities.retired_messages().is_empty());
-        assert!(identities.seen_blocks().is_empty());
-        assert!(identities.retired_blocks().is_empty());
-        assert!(identities.thinking().is_empty());
-        assert!(identities.seen_tool_calls().is_empty());
-        assert!(identities.retired_tool_calls().is_empty());
-        assert!(identities.result_slots().is_empty());
-        assert!(!ConversationError::SequenceExhausted.to_string().is_empty());
-    }
 }

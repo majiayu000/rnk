@@ -323,6 +323,7 @@ fn validate_snapshot(value: &ConversationStateSnapshot) -> Result<(), Conversati
     let mut previous_sequence: Option<u64> = None;
     let mut previous_revision: Option<u64> = None;
     for record in &value.retention.records {
+        validate_record_contract(record)?;
         if !event_ids.insert(record.event.event_id.clone())
             || previous_sequence.is_some_and(|previous|
                 previous.checked_add(1) != Some(record.event.sequence))
@@ -342,6 +343,9 @@ fn validate_snapshot(value: &ConversationStateSnapshot) -> Result<(), Conversati
         }
     } else if value.retention.evicted_through.is_some() {
         return invalid_snapshot("eviction boundary requires retained evidence");
+    } else if value.revision != ConversationRevision::INITIAL || !value.messages.is_empty()
+        || !snapshot_histories_are_fresh(&value.identities) {
+        return invalid_snapshot("empty retention history requires a genuinely fresh state");
     }
     if let (Some(boundary), Some(first)) = (value.retention.evicted_through,
         value.retention.records.first()) {
@@ -394,6 +398,108 @@ fn validate_snapshot(value: &ConversationStateSnapshot) -> Result<(), Conversati
     }
     if thinking_messages != seen_messages {
         return invalid_snapshot("every message lifetime requires thinking history");
+    }
+    if value.retention.evicted_through.is_none() && !value.retention.records.is_empty() {
+        let mut replay = ConversationState::new(
+            value.retention.records[0].event.sequence, value.retention.capacity);
+        for record in &value.retention.records {
+            let outcome = replay.apply_event(record.event.clone())
+                .map_err(|_| ConversationError::InvalidSnapshot {
+                    reason: "retained event cannot be replayed from its proven origin",
+                })?;
+            if outcome != record.outcome {
+                return invalid_snapshot("retained event and outcome do not agree");
+            }
+        }
+        if replay.snapshot() != *value {
+            return invalid_snapshot("retained replay does not produce the restored state");
+        }
+    } else {
+        let mut latest = BTreeMap::new();
+        for affected in value.retention.records.iter()
+            .flat_map(|record| &record.outcome.affected_messages) {
+            latest.insert(affected.message_id, affected);
+        }
+        for (id, affected) in latest {
+            match affected.disposition {
+                AffectedMessageDisposition::Present => {
+                    if value.messages.iter().find(|message| message.id == id)
+                        .is_none_or(|message| message.revision != affected.applied) {
+                        return invalid_snapshot("retained affected revision disagrees with state");
+                    }
+                }
+                AffectedMessageDisposition::Deleted => {
+                    if value.messages.iter().any(|message| message.id == id)
+                        || !retired_messages.contains(&id) {
+                        return invalid_snapshot("retained deletion disagrees with identity history");
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+fn snapshot_histories_are_fresh(value: &ConversationIdentityHistory) -> bool {
+    value.seen_messages.is_empty() && value.retired_messages.is_empty()
+        && value.seen_blocks.is_empty() && value.retired_blocks.is_empty()
+        && value.thinking.is_empty() && value.seen_tool_calls.is_empty()
+        && value.retired_tool_calls.is_empty() && value.result_slots.is_empty()
+}
+fn validate_record_contract(record: &ProcessedEventRecord) -> Result<(), ConversationError> {
+    let expected_revision = record.event.update.conversation_guard().expected().get()
+        .checked_add(1).ok_or(ConversationError::InvalidSnapshot {
+            reason: "retained guard revision is exhausted",
+        })?;
+    if expected_revision != record.outcome.revision.get() {
+        return invalid_snapshot("retained guard and outcome revisions disagree");
+    }
+    let affected = &record.outcome.affected_messages;
+    if affected.iter().map(|value| value.message_id).collect::<BTreeSet<_>>().len()
+        != affected.len() || affected.iter().any(|value| match value.previous {
+            Some(previous) => previous.checked_next(value.message_id).ok() != Some(value.applied),
+            None => value.applied != MessageRevision::INITIAL,
+        }) {
+        return invalid_snapshot("retained affected revisions are contradictory");
+    }
+    let (target, new_message, allow_correlated, deleted) = match &record.event.update {
+        ConversationUpdate::Push(value) => (None, Some(value.message.id), false, false),
+        ConversationUpdate::Resend(value) =>
+            (Some(value.source_guard), Some(value.message.id), false, false),
+        ConversationUpdate::AppendText(value) => (Some(value.guard), None, false, false),
+        ConversationUpdate::AppendMessageBlock(value) => (Some(value.guard), None, false, false),
+        ConversationUpdate::InsertMessageBlock(value) => (Some(value.guard), None, false, false),
+        ConversationUpdate::ReplaceBlock(value) => (Some(value.guard), None, false, false),
+        ConversationUpdate::Complete(value) => (Some(value.guard), None, false, false),
+        ConversationUpdate::Cancel(value) => (Some(value.guard), None, true, false),
+        ConversationUpdate::Fail(value) => (Some(value.guard), None, true, false),
+        ConversationUpdate::EditMessage(value) => (Some(value.guard), None, false, false),
+        ConversationUpdate::DeleteMessage(value) => (Some(value.guard), None, false, true),
+    };
+    if let Some(new_id) = new_message {
+        let created = affected.iter().filter(|value| value.message_id == new_id
+            && value.previous.is_none() && value.disposition == AffectedMessageDisposition::Present)
+            .count();
+        if created != 1 { return invalid_snapshot("retained creation outcome is inconsistent"); }
+    }
+    if let Some(guard) = target {
+        let target_affected = affected.iter().find(|value| value.message_id == guard.message_id);
+        if matches!(record.event.update, ConversationUpdate::Resend(_)) {
+            if target_affected.is_some() {
+                return invalid_snapshot("resend source must not be affected");
+            }
+        } else if target_affected.is_none_or(|value| value.previous != Some(guard.message_revision)
+            || value.disposition != if deleted { AffectedMessageDisposition::Deleted }
+                else { AffectedMessageDisposition::Present }) {
+            return invalid_snapshot("retained target outcome is inconsistent");
+        }
+    }
+    let expected_len = usize::from(new_message.is_some())
+        + usize::from(target.is_some() && !matches!(record.event.update, ConversationUpdate::Resend(_)));
+    if (!allow_correlated && affected.len() != expected_len)
+        || allow_correlated && affected.len() < expected_len
+        || affected.iter().any(|value| value.previous.is_none()
+            && Some(value.message_id) != new_message) {
+        return invalid_snapshot("retained affected set is inconsistent with its update");
     }
     Ok(())
 }
