@@ -42,7 +42,7 @@ implementation gate。
 | Clip bounds | `src/renderer/tree_renderer.rs:41`, `src/renderer/tree_renderer.rs:49`, `src/renderer/tree_renderer.rs:101` | `ClipBounds` 过早使用 `u16`；`clip_bound` 对负数 clamp 0，对正小数直接 cast | clip edge 先保留 signed/floor 结果，与 viewport/active clips 求交后才转换为 Output clip |
 | Tree coordinate conversion | `src/renderer/tree_renderer.rs:153`, `src/renderer/tree_renderer.rs:169`, `src/renderer/tree_renderer.rs:200`, `src/renderer/tree_renderer.rs:218`, `src/renderer/tree_renderer.rs:342` | `signed_coord` 对有限值使用 `value as i64`，`-0.5` 向零变 0；helper 不接收 current element | 改为 element-scoped、range-checked floor helper；所有 recursive call site 传当前 `element.id` |
 | Extent handling | `src/renderer/tree_renderer.rs:113` | non-finite extent 返回 unscoped NonFinite；finite negative/oversized extent 按既有规则 clamp 0/u16::MAX | 保持 finite extent compatibility，但 non-finite 与随后 checked edge overflow携带当前 element ID |
-| Text/scroll composition | `src/renderer/tree_renderer.rs:189`, `src/renderer/tree_renderer.rs:202`, `src/renderer/tree_renderer.rs:218` | text origin 用 signed x/y、content rect、padding 与 integer scroll checked add/sub；child offset 继续以 f32 累积 | 在现有 semantic boundaries 使用同一 scoped floor helper，保持 positive behavior；每个 checked failure归属当前 element |
+| Text/scroll composition | `src/renderer/tree_renderer.rs:189`, `src/renderer/tree_renderer.rs:202`, `src/renderer/tree_renderer.rs:218` | text origin 用 signed x/y、content rect、padding 与 integer scroll checked add/sub；child offset 继续以 f32 累积 | 每个既有 f32 semantic boundary用wider shadow查范围、用原f32舍入结果继续累积；padding独立floor后再checked integer add；每个 failure归属当前 element |
 | Border/background paint | `src/renderer/tree_renderer.rs:177`, `src/renderer/tree_renderer.rs:247`, `src/renderer/tree_renderer.rs:331` | staged fill/paint 可在 checked arithmetic 中返回无 owner Overflow | background、border 与 paint helper 显式携带 owner，staged failure不回落到 root |
 | Projection error/flow validation | `src/renderer/tree_renderer/projection.rs:127`, `src/renderer/tree_renderer/projection.rs:174`, `src/renderer/tree_renderer/projection.rs:256`, `src/renderer/tree_renderer/projection.rs:311` | `NonFiniteCoordinate`/`CoordinateOverflow` 没有 ID；`validate_tree_flows` 已知 child ID，但 `validate_flow`/`validate_row_footprints` 丢失它，overflow最终使用 root fallback | coordinate variants在产生点携带 `ElementId`；flow validation签名逐层传当前 child ID；root fallback只服务真正无 owner 的 non-coordinate malformed/finish failure |
 | Projection transaction | `src/renderer/tree_renderer/projection.rs:228`, `src/renderer/tree_renderer/projection.rs:241`, `src/renderer/tree_renderer/projection.rs:250` | 先 validate，复制 staged Output，finish/round-trip成功后一次 `commit_staged` | 保持一次 publish boundary；coordinate failure前后的 projection builder永不逃逸 |
@@ -89,11 +89,19 @@ overlay同一固定revision的`workflow.yaml`、`states.yaml`、`labels.yaml`和
 2. PR #137（GH-124）在本 packet 最初的 `b4f39ed...` anchor之后，于
    `2026-07-26T08:36:49Z` 合入 main；final head
    `4d135668943e06aaefb8ffffe7f8267337fc9d19`、merge commit
-   `84a7492ecff9a5ae560cf7627438909282558f2a` 直接修改
-   `src/renderer/tree_renderer/projection/staged.rs` 与
-   `src/renderer/tree_renderer/projection/tests.rs`，并新增zero-width子模块。fresh expected
-   main必须包含该merge；实现前重新定位zero-width owner contract，并逐条重跑两项已命名
-   exact regression且证明`matched=1`。
+   `84a7492ecff9a5ae560cf7627438909282558f2a`。其fresh、排序、newline-terminated file set
+   必须精确为
+   `src/renderer/output.rs`、`src/renderer/output/tests.rs`、
+   `src/renderer/output/zero_width.rs`、
+   `src/renderer/tree_renderer/projection/staged.rs`、
+   `src/renderer/tree_renderer/projection/tests.rs`、
+   `src/renderer/tree_renderer/projection/tests/zero_width.rs`，SHA-256固定为
+   `ee2af110e7751fc058e8b87dde9b15666e161808317cc8b4481cd93f0dcb06be`。
+   与本文件12路径implementation manifest的受控交集必须精确为
+   `projection/staged.rs`和`projection/tests.rs`上述两路径；其余10个implementation路径
+   与PR #137集合无交集。missing、unexpected或额外交集都必须阻断并重新冻结spec。
+   fresh expected main必须包含该merge；实现前在两条受控交集路径上重新定位zero-width
+   owner contract，并逐条重跑两项已命名exact regression且证明`matched=1`。
 3. issue #131 当前无 spec、branch 或 PR，但其 VirtualText traversal/flow validation scope
    预计与 `tree_renderer.rs`、`projection.rs` 和 caller tests 冲突。coordinator 必须先取得
    #131 的 frozen manifest：若与本文件12路径implementation manifest相交，则两者串行
@@ -106,12 +114,13 @@ PR #137 merge证据必须在实现时fresh查询并证明属于上述exact expec
 
 ### 2. Scoped floor conversion
 
-在 `tree_renderer.rs` 保留一个权威、element-scoped coordinate accumulator。概念接口为：
+在 `tree_renderer.rs` 保留一个权威、element-scoped coordinate boundary checker。概念
+接口为：
 
 ```text
 CheckedCoordinate::from_f32(element_id, operand)
-  .add_f32(operand)
-  .sub_integer(operand)
+  .add_f32_boundary(operand)
+  .sub_f32_boundary(operand)
   .floor_i64()
   -> Result<i64, ProjectionError>
 ```
@@ -120,21 +129,28 @@ CheckedCoordinate::from_f32(element_id, operand)
 
 - 每个来自 root offset、layout、ancestor、padding 或其他坐标源的 `f32` operand 都必须在
   任何算术前单独用 `is_finite` 验证。原始 NaN/`+inf`/`-inf` 分类为 scoped NonFinite。
-- 通过验证的 operand 转为 `f64`（或更宽的精确 domain）后才按源表达式的原顺序 add/sub；
-  禁止保留 `offset_x + layout.x - scroll` 这类先在 `f32` 中运算再交给 helper 的路径。
-- 每一步 wider-domain 组合后都检查 `[-f32::MAX, f32::MAX]`。有限 operands 的结果一旦
-  超出该范围，或 wider arithmetic 自身产生非有限值，分类为 scoped Overflow，而不是
-  NonFinite；即使后续相反项可能抵消也不得继续。
+- 每个现有递归/offset/scroll `f32` 运算边界先把“上一边界已经舍入的 `f32` accumulator”
+  和本次raw operand提升到 `f64`（或更宽精确domain），按原操作/顺序只计算本边界shadow。
+  shadow超出`[-f32::MAX, f32::MAX]`或自身非有限时立即分类scoped Overflow；即使后续项可
+  抵消也不得继续。
+- shadow通过后，下一边界必须接收本边界原 `f32` add/sub的IEEE-754舍入结果；不得把shadow
+  或一个跨多边界的wider accumulator继续传给child。必须锁定
+  `-33_554_432.0f32 + 1.0 + 33_554_432.0 == 0.0`，同时
+  `f32::MAX + f32::MAX`在首个越界shadow处为Overflow。
 - 最终值执行 `floor`，再用精确 half-open signed bound `[-2^63, 2^63)` 检查。下界可接受，
   上界 `2^63` 必须拒绝；不得依赖 saturating cast。通过后才转 `i64`。
-- `-0.0` floor/cast 为 0；非负小数结果与现状相同。整数 content/scroll/edge 组合继续使用
-  `checked_*`，并通过同一 accumulator 的 scoped Overflow constructor 报错。
+- `-0.0` floor/cast 为 0；非负小数结果与现状相同。padding保持现有独立quantization
+  boundary：先对screen origin与padding分别调用scoped `signed_coord`/floor，再用checked
+  integer add组合；`origin=0.5`与`padding=0.5`仍得到0，禁止先相加为1.0再floor。
+  integer content/scroll/edge组合继续使用`checked_*`，并通过同一scoped Overflow
+  constructor报错。
 - finite extent 的既有 clamp policy不变；只有 non-finite extent与计算 edge overflow进入
   scoped coordinate error，避免把 GH-132 扩成 layout dimension迁移。
 
-递归 offset 必须以这个 wider accumulator/值传递，不能降回 `f32` 后再供下一层组合。不得
-创建第二个 alias helper。所有 x/y/root offset/layout/ancestor/padding/scroll/text/
-background/border call site经同一权威 accumulator或其 scoped checked integer操作。
+递归 offset 必须以每个现有边界的rounded `f32`结果传递，同时在每个边界运行上述wider
+shadow guard；不得创建第二个alias helper。所有x/y/root offset/layout/ancestor/scroll/
+text/background/border call site经同一权威boundary checker或其scoped checked integer
+操作；padding遵守上述独立floor边界。
 
 ### 3. Signed clip 与组合数据流
 
@@ -145,9 +161,10 @@ floor 后的 signed origin，content/border integer inset和extent用 checked ad
 ```text
 each f32 layout/ancestor operand
   -> element-scoped finite validation
-  -> ordered f64/wider composition + per-step f32-range Overflow check
+  -> per-boundary f64/wider shadow range check
+  -> same boundary's original rounded f32 result feeds the next boundary
   -> floor + signed-domain check
-  -> checked signed origin/content/scroll composition
+  -> independently floored padding + checked signed origin/content/scroll composition
   -> signed own clip ∩ signed ancestor clip ∩ Output active clip ∩ terminal viewport
   -> checked ClipRegion only at Output boundary
   -> StagedFrame prospective write
@@ -262,7 +279,7 @@ MissingCurrentFlow和 PR #137 zero-width tests都是 mandatory regressions。
 | --- | --- | --- |
 | B-001 | `tree_renderer.rs` scoped floor helper | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::signed_coordinates_use_one_floor_conversion -- --exact` |
 | B-002 | tree/projection negative visibility | `cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::negative_fractional_x_and_y_clip_instead_of_painting_at_zero -- --exact` |
-| B-003 | conversion compatibility matrix | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::negative_zero_positive_fractional_and_integral_coordinates_are_compatible -- --exact` |
+| B-003 | conversion compatibility matrix, f32 boundary rounding and independent padding floor | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::negative_zero_positive_fractional_and_integral_coordinates_are_compatible -- --exact` |
 | B-004 | recursive coordinate composition | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::signed_coordinate_composition_is_checked_and_axis_independent -- --exact` |
 | B-005 | signed clip/scroll/ancestor projection | `cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::negative_fractional_scroll_ancestor_and_clip_preserve_signed_disposition -- --exact` |
 | B-006 | finite operands / f32-range / signed bound overflow | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::finite_operands_that_overflow_f32_composition_and_i64_bounds_classify_overflow -- --exact` |
@@ -323,7 +340,7 @@ fixture/produce/validate modes fail-closed验证。CI、review与 reviewThreads�
 - **Security / privacy:** 错误若包含 source/frame dump会泄漏用户文本；B-013只允许
   ID和closed classification，并要求Display/source regression。
 - **Compatibility:** floor改变负 fractional可见结果是目标；正 fractional、整数、extent
-  clamp与 public enum必须由 B-003/B-020锁定。
+  clamp、每个现有f32边界的舍入与padding独立floor必须由 B-003/B-020锁定。
 - **Correctness:** clip若先转u16会重新引入 clamp；owner若存在线程式 mutable “current ID”
   容易跨递归串扰。设计要求显式参数/variant携带，不使用全局或 thread-local owner。
 - **Atomicity:** error可能发生在 staged earlier writes之后；single `commit_staged` 与
@@ -338,7 +355,9 @@ fixture/produce/validate modes fail-closed验证。CI、review与 reviewThreads�
 ## 测试计划
 
 - [ ] Unit：floor、`-0.0`、positive compatibility、i64 half-open bounds、NaN/±inf、
-      x/y/padding/scroll/ancestor/background/border owner。
+      `-33_554_432 + 1 + 33_554_432 == 0`、`f32::MAX + f32::MAX` Overflow、
+      `origin 0.5 + padding 0.5`独立floor为0，以及x/y/padding/scroll/ancestor/background/
+      border owner。
 - [ ] Projection：negative fractional x/y/scroll/ancestor/clip、terminal/active clip、
       early-write failure、forward/reverse零发布。
 - [ ] Caller integration：nested child NaN与overflow分别通过 string和TestRenderer；dynamic

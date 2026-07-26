@@ -25,7 +25,8 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     1. fresh SpecRail implement route对 issue #132、merged product/tech返回 `allowed`；
     2. issue只有唯一 canonical `ready_to_implement`且无冲突 readiness label；
     3. PR #137 已最终 merged、非 draft，其 merge commit是fresh expected main祖先，fresh
-       file list与两条zero-width focused tests均以`matched=1`重跑；
+       6路径file set、newline SHA-256和与GH132 manifest精确两路径受控交集均匹配；两条
+       zero-width focused tests各以`matched=1`重跑；
     4. #131已有 frozen planned-change manifest；若与GH132相交，coordinator记录serial
        ownership，确认没有并发writer；
     5. 在首次 implementation edit 前，worktree porcelain精确为空，`HEAD`精确等于fresh
@@ -85,6 +86,43 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     PR137_MERGE_SHA="$(printf '%s\n' "$PR137_JSON" | jq -r '.mergeCommit.oid')"
     test -n "$PR137_MERGE_SHA"
     git merge-base --is-ancestor "$PR137_MERGE_SHA" "$EXPECTED_MAIN_SHA"
+    PR137_EXPECTED_FILES="$(printf '%s\n' \
+      src/renderer/output.rs \
+      src/renderer/output/tests.rs \
+      src/renderer/output/zero_width.rs \
+      src/renderer/tree_renderer/projection/staged.rs \
+      src/renderer/tree_renderer/projection/tests.rs \
+      src/renderer/tree_renderer/projection/tests/zero_width.rs)"
+    PR137_ACTUAL_FILES="$(printf '%s\n' "$PR137_JSON" |
+      jq -r '.files[].path' | LC_ALL=C sort)"
+    test "$PR137_ACTUAL_FILES" = "$PR137_EXPECTED_FILES"
+    PR137_FILES_SHA256="$(printf '%s\n' "$PR137_ACTUAL_FILES" | python3 -c \
+      'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+    test "$PR137_FILES_SHA256" = \
+      ee2af110e7751fc058e8b87dde9b15666e161808317cc8b4481cd93f0dcb06be
+    IMPLEMENTATION_MANIFEST_JSON="$(sed -n \
+      '/<!-- specrail-planned-changes/{n;p;}' specs/GH132/tech.md)"
+    GH132_IMPLEMENTATION_FILES="$(printf '%s\n' "$IMPLEMENTATION_MANIFEST_JSON" |
+      jq -r '.paths[]' | LC_ALL=C sort)"
+    test "$(printf '%s\n' "$GH132_IMPLEMENTATION_FILES" | wc -l |
+      tr -d ' ')" -eq 12
+    PR137_EXPECTED_OVERLAP="$(printf '%s\n' \
+      src/renderer/tree_renderer/projection/staged.rs \
+      src/renderer/tree_renderer/projection/tests.rs)"
+    PR137_ACTUAL_OVERLAP="$(comm -12 \
+      <(printf '%s\n' "$PR137_ACTUAL_FILES") \
+      <(printf '%s\n' "$GH132_IMPLEMENTATION_FILES"))"
+    test "$PR137_ACTUAL_OVERLAP" = "$PR137_EXPECTED_OVERLAP"
+    GH132_NON_DEPENDENCY_FILES="$(comm -23 \
+      <(printf '%s\n' "$GH132_IMPLEMENTATION_FILES") \
+      <(printf '%s\n' "$PR137_ACTUAL_FILES"))"
+    test "$(printf '%s\n' "$GH132_NON_DEPENDENCY_FILES" | wc -l |
+      tr -d ' ')" -eq 10
+    test -z "$(comm -12 \
+      <(printf '%s\n' "$GH132_NON_DEPENDENCY_FILES") \
+      <(printf '%s\n' "$PR137_ACTUAL_FILES"))"
+    printf 'PR137_FILES_SHA256=%s\nPR137_OVERLAP=%s\n' \
+      "$PR137_FILES_SHA256" "$PR137_ACTUAL_OVERLAP"
     cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::projection_zero_width_only_attaches_to_the_same_flow_sequence -- --exact
     cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::synthetic_ellipsis_projection_failure_commits_neither_cells_nor_projection -- --exact
     ```
@@ -93,8 +131,11 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     revision，未设置、路径/revision/hash错误时命令立即失败，不得跳过或降级为 warning。
     `SPEC_RAIL_MIRROR`必须保留到交付证据归档完成；route JSON还必须证明artifact路径均为
     mirror内的`specs/GH132/{product,tech,tasks}.md`，duplicate evidence为fresh collector
-    输出，且没有open PR或remote branch占用GH132实现token。两条filtered test还必须逐条
-    记录`matched=1`、`passed=1`、`ignored=0`，不能只看exit 0。
+    输出，且没有open PR或remote branch占用GH132实现token。PR #137 sorted file set、
+    newline digest与两路径受控交集必须逐字匹配；同一比较器还要用one-missing、
+    one-unexpected和one-additional-overlap fixture证明均fail closed，任何变化都停止并重新
+    冻结spec。两条filtered test还必须逐条记录`matched=1`、`passed=1`、`ignored=0`，不能
+    只看exit 0。
     上述整段必须在任何 implementation source/test edit 前运行并保存输出。
     人工核对 GH132 spec approval、#131 frozen manifest 与无共享writer。
   - Covers: B-020, B-021
@@ -112,12 +153,15 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     `src/renderer/tree_renderer/projection/tests.rs`、
     `src/renderer/tree_renderer/projection/tests/coordinates.rs`。
   - Done when:
-    1. 单一 scoped wider accumulator先逐个验证`f32` operand有限，再按顺序组合；每步超出
-       `f32`范围或最终floor超出`[-2^63,2^63)`均为Overflow，`-0.0`与正向行为兼容；
-       exact fixture至少覆盖`f32::MAX + f32::MAX`、负向MAX组合、nested ancestor累积、
-       scroll subtraction与own/ancestor clip edge组合，逐轴区分Overflow/NonFinite；
-    2. x/y/root offset/layout/ancestor/padding/scroll/text/background/border/clip都使用同一
-       scoped转换或checked constructor；
+    1. 单一scoped boundary checker先逐个验证`f32` operand有限；每个现有f32语义边界用
+       wider shadow按原顺序检测范围，但下一边界继续使用该边界原f32舍入结果；shadow超出
+       f32范围或最终floor超出`[-2^63,2^63)`均为Overflow，`-0.0`与正向行为兼容；
+       exact fixture至少覆盖`f32::MAX + f32::MAX`、负向MAX组合、
+       `-33_554_432 + 1 + 33_554_432 == 0`、nested ancestor累积、scroll subtraction与
+       own/ancestor clip edge组合，逐轴区分Overflow/NonFinite；
+    2. x/y/root offset/layout/ancestor/scroll/text/background/border/clip都使用同一scoped
+       boundary checker或checked constructor；padding保持独立signed conversion/floor，
+       再与screen origin checked integer add，exact fixture锁定`0.5 + 0.5`仍为列/行0；
     3. clip edges在viewport/active-clip交集前保持signed half-open；
     4. coordinate variants在产生点携带exact current element ID；
        `validate_tree_flows -> validate_flow(element.id, ...) ->
