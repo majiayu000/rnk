@@ -5,9 +5,11 @@
 
 #[allow(unused_imports)]
 use super::*;
-use crate::components::{Span, Text};
-use crate::core::{Element, Props, Style, TextWrap, VNode};
+use crate::components::{Line, Span, Text};
+use crate::core::{Color, Element, Props, Style, TextWrap, VNode};
+use crate::layout::{TextFlowError, TextFlowSource, TextFlowSourceKind};
 use crate::reconciler::Patch;
+use std::sync::Arc;
 
 #[test]
 fn test_layout_engine_creation() {
@@ -670,4 +672,125 @@ fn test_node_count() {
 
     // root + text "A" + inner box + text "B" = 4 nodes
     assert_eq!(engine.node_count(), 4);
+}
+
+#[test]
+fn incremental_no_patch_refreshes_source_and_style() {
+    let mut engine = LayoutEngine::new();
+    let first = fixed_width_parent(Text::new("a\r\nb").key("flow").into_element());
+    let first_result = engine.try_compute_element_incremental(&first, None, 80, 10);
+    let (first_vnode, _) = first_result.unwrap();
+    let source_update = fixed_width_parent(Text::new("a\nb").key("flow").into_element());
+    let source_id = source_update.children.get(0).unwrap().id;
+    let (source_vnode, source_outcome) = engine
+        .try_compute_element_incremental(&source_update, Some(&first_vnode), 80, 10)
+        .unwrap();
+    assert_eq!(source_outcome.patch_count, 0);
+    let source_flow = engine.current_text_flow(source_id).unwrap();
+    assert_eq!(source_flow.cache_identity().input.source, "a\nb");
+    let mut styled = Text::new("a\nb").key("flow").into_element();
+    styled.spans.as_mut().unwrap()[0].spans[0].style.color = Some(Color::Red);
+    let styled = fixed_width_parent(styled);
+    let styled_id = styled.children.get(0).unwrap().id;
+    let (_, style_outcome) = engine
+        .try_compute_element_incremental(&styled, Some(&source_vnode), 80, 10)
+        .unwrap();
+    assert_eq!(style_outcome.patch_count, 0);
+    let styled_flow = engine.current_text_flow(styled_id).unwrap();
+    let color = styled_flow.logical_rows()[0].runs[0].style.color;
+    assert_eq!(color, Some(Color::Red));
+}
+
+#[test]
+fn plain_text_style_is_published() {
+    let mut text = Element::text("plain");
+    text.style.color = Some(Color::Blue);
+    let id = text.id;
+    let mut engine = LayoutEngine::new();
+    engine.try_compute(&text, 20, 4).unwrap();
+    let flow = engine.current_text_flow(id).unwrap();
+    let color = flow.logical_rows()[0].runs[0].style.color;
+    assert_eq!(color, Some(Color::Blue));
+}
+
+#[test]
+fn alignable_crlf_spans_keep_exact_source_domain() {
+    let text = Text::new("a\r\nb\r\n").into_element();
+    let id = text.id;
+    let mut engine = LayoutEngine::new();
+    engine.try_compute(&text, 20, 4).unwrap();
+    let flow = engine.current_text_flow(id).unwrap();
+    assert_eq!(
+        flow.cache_identity().input.source_kind,
+        TextFlowSourceKind::Exact
+    );
+    let ranges: Vec<_> = flow
+        .tokens()
+        .iter()
+        .filter_map(|token| token.source_range())
+        .collect();
+    assert_eq!(ranges, [0..1, 1..3, 3..4, 4..6]);
+}
+
+#[test]
+fn known_dimensions_publish_final_width_flow() {
+    let mut text = Element::text("abcdefgh");
+    text.style.width = Dimension::Points(4.0);
+    let id = text.id;
+    let mut engine = LayoutEngine::new();
+    engine.try_compute(&text, 80, 10).unwrap();
+    let flow = engine.current_text_flow(id).unwrap();
+    assert_eq!(flow.cache_identity().options.max_width, 4);
+    assert_eq!(flow.row_count(), 2);
+}
+
+#[test]
+fn reconstructed_source_domain_uses_text_content_truth() {
+    let mut text = Element::text("truth");
+    text.spans = Some(vec![Line::raw("different")]);
+    let id = text.id;
+    let mut engine = LayoutEngine::new();
+    engine.try_compute(&text, 20, 4).unwrap();
+    let flow = engine.current_text_flow(id).unwrap();
+    assert_eq!(flow.cache_identity().input.source, "truth");
+    assert!(flow.tokens().iter().all(|token| matches!(
+        token.source,
+        TextFlowSource::Source {
+            kind: TextFlowSourceKind::Reconstructed,
+            ..
+        }
+    )));
+}
+
+#[test]
+fn text_flow_failure_is_atomic() {
+    let text = Element::text("stable");
+    let id = text.id;
+    let mut engine = LayoutEngine::new();
+    engine.try_compute(&text, 20, 4).unwrap();
+    let published = engine.current_text_flow(id).unwrap();
+    let layout = engine.get_layout(id).unwrap();
+    engine.set_text_flow_policy(0, "…", 1);
+    let failure = engine.try_compute(&Element::text("new"), 20, 4);
+    assert_eq!(failure, Err(TextFlowError::InvalidTabStop));
+    let current = engine.current_text_flow(id).unwrap();
+    assert!(Arc::ptr_eq(&published, &current));
+    assert_eq!(engine.get_layout(id).unwrap().width, layout.width);
+    engine.set_text_flow_policy(4, "…", 1);
+    let cancelled = engine.try_compute_interruptible(&Element::text("cancel"), 20, 4, || true);
+    assert_eq!(cancelled, Err(TextFlowError::Interrupted));
+    let current = engine.current_text_flow(id).unwrap();
+    assert!(Arc::ptr_eq(&published, &current));
+}
+
+#[test]
+fn try_compute_entrypoints_return_text_flow_error() {
+    let mut engine = LayoutEngine::new();
+    engine.set_text_flow_policy(0, "..", 1);
+    let direct = engine.try_compute(&Element::text("x"), 4, 4);
+    assert_eq!(direct, Err(TextFlowError::InvalidTabStop));
+    let vnode = engine.try_compute_vnode(&VNode::text("x"), 4, 4);
+    assert_eq!(vnode, Err(TextFlowError::InvalidTabStop));
+    let incremental = engine.try_compute_element_incremental(&Element::text("x"), None, 4, 4);
+    assert!(matches!(incremental, Err(TextFlowError::InvalidTabStop)));
 }
