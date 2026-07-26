@@ -96,6 +96,42 @@ proptest! {
                 prop_assert!(!begins_inside_another);
             }
         }
+
+        let expected_non_break: String = source
+            .graphemes(true)
+            .filter(|grapheme| !matches!(*grapheme, "\n" | "\r" | "\r\n"))
+            .collect();
+        for wrap_width in 1..=grapheme_ranges.len().max(1) {
+            let wrapped = TextFlow::try_build(
+                &input,
+                &TextFlowOptions::new(wrap_width, TextWrap::Wrap),
+            ).expect("every positive width must preserve row-backed source order");
+            let mut reconstructed = String::new();
+            let mut last_token_index = None;
+            for (row_index, row) in wrapped.logical_rows().iter().enumerate() {
+                prop_assert_eq!(row.index, row_index);
+                prop_assert_eq!(&wrapped.rows()[row_index], &row.text);
+                let run_text = row
+                    .runs
+                    .iter()
+                    .map(|run| run.text.as_str())
+                    .collect::<String>();
+                prop_assert_eq!(&run_text, &row.text);
+                for run in &row.runs {
+                    if let Some(previous) = last_token_index {
+                        prop_assert!(previous < run.token_index);
+                    }
+                    last_token_index = Some(run.token_index);
+                    let range = wrapped.tokens()[run.token_index]
+                        .source_range()
+                        .expect("wrap rows must contain source-backed runs");
+                    let source_grapheme = &source[range];
+                    prop_assert!(!matches!(source_grapheme, "\n" | "\r" | "\r\n"));
+                    reconstructed.push_str(source_grapheme);
+                }
+            }
+            prop_assert_eq!(&reconstructed, &expected_non_break);
+        }
     }
 }
 

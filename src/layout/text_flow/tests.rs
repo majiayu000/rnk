@@ -44,16 +44,27 @@ fn build(source: &str, width: usize, wrap: TextWrap) -> TextFlow {
     TextFlow::try_build(&plain_input(source), &TextFlowOptions::new(width, wrap)).unwrap()
 }
 
+fn source_from_rows(flow: &TextFlow, source: &str) -> String {
+    let mut reconstructed = String::new();
+    for run in flow.logical_rows.iter().flat_map(|row| &row.runs) {
+        let range = flow.tokens[run.token_index]
+            .source_range()
+            .expect("wrapped rows must contain source-backed runs");
+        reconstructed.push_str(&source[range]);
+    }
+    reconstructed
+}
+
 #[test]
 fn text_flow_shared_result() {
     let flow = build("ab cd", 3, TextWrap::Wrap);
-    assert_eq!(flow.rows(), &["ab".to_string(), "cd".to_string()]);
+    assert_eq!(flow.rows(), &["ab ".to_string(), "cd".to_string()]);
     assert_eq!(
         flow.logical_rows
             .iter()
             .map(|row| row.text.as_str())
             .collect::<Vec<_>>(),
-        ["ab", "cd"]
+        ["ab ", "cd"]
     );
     for row in &flow.logical_rows {
         for run in &row.runs {
@@ -399,12 +410,12 @@ fn text_flow_wrap() {
     let flow = build("aaaa bbbb cccc", 6, TextWrap::Wrap);
     assert_eq!(
         flow.rows(),
-        &["aaaa".to_string(), "bbbb".to_string(), "cccc".to_string()]
+        &["aaaa ".to_string(), "bbbb ".to_string(), "cccc".to_string()]
     );
-    assert!(matches!(
+    assert_eq!(
         flow.tokens[4].placement,
-        TextFlowPlacement::Omitted { row: 0 }
-    ));
+        TextFlowPlacement::Positioned { row: 0, column: 4 }
+    );
     assert_eq!(
         flow.tokens
             .iter()
@@ -415,6 +426,70 @@ fn text_flow_wrap() {
             }),
         "aaaa bbbb cccc".len()
     );
+}
+
+#[test]
+fn wrap_preserves_trailing_whitespace_across_rows() {
+    let source = "ab   ";
+    let flow = build(source, 3, TextWrap::Wrap);
+    assert_eq!(flow.rows(), &["ab ".to_string(), "  ".to_string()]);
+    assert_eq!(source_from_rows(&flow, source), source);
+    assert!(flow.logical_rows().iter().all(|row| row.width <= 3));
+}
+
+#[test]
+fn wrap_preserves_inter_word_whitespace_across_widths() {
+    let source = "ab  cd";
+    for (width, expected) in [
+        (1, vec!["a", "b", " ", " ", "c", "d"]),
+        (2, vec!["ab", "  ", "cd"]),
+        (3, vec!["ab ", " cd"]),
+        (4, vec!["ab  ", "cd"]),
+        (5, vec!["ab  ", "cd"]),
+        (6, vec!["ab  cd"]),
+    ] {
+        let flow = build(source, width, TextWrap::Wrap);
+        assert_eq!(flow.rows(), &expected);
+        assert_eq!(source_from_rows(&flow, source), source);
+        assert!(flow.logical_rows().iter().all(|row| row.width <= width));
+    }
+}
+
+#[test]
+fn wrap_preserves_whitespace_extremes_and_keeps_hard_breaks_distinct() {
+    for source in ["  ab", "ab  cd", "ab  "] {
+        let zero = build(source, 0, TextWrap::Wrap);
+        assert_eq!(zero.rows(), &["".to_string()]);
+        assert_eq!(
+            zero.tokens()
+                .iter()
+                .filter_map(TextFlowToken::source_range)
+                .map(|range| &source[range])
+                .collect::<String>(),
+            source
+        );
+        assert!(
+            zero.tokens()
+                .iter()
+                .all(|token| matches!(token.placement, TextFlowPlacement::Omitted { row: 0 }))
+        );
+
+        for width in [1, source.len()] {
+            let flow = build(source, width, TextWrap::Wrap);
+            assert_eq!(source_from_rows(&flow, source), source);
+            assert_eq!(flow.rows().concat(), source);
+        }
+    }
+
+    let source = "a \n b";
+    let flow = build(source, 1, TextWrap::Wrap);
+    assert_eq!(source_from_rows(&flow, source), "a  b");
+    let hard_break = &flow.tokens()[2];
+    assert_eq!(hard_break.source_range(), Some(2..3));
+    assert!(matches!(
+        hard_break.placement(),
+        TextFlowPlacement::HardBreak { .. }
+    ));
 }
 
 #[test]
@@ -521,7 +596,7 @@ fn text_flow_immediate_interruption_precedes_empty_and_cache_results() {
 fn wrapped_text_keeps_every_word() {
     assert_eq!(
         flow_rows("aaaa bbbb cccc dddd", 10, TextWrap::Wrap),
-        vec!["aaaa bbbb", "cccc dddd"]
+        vec!["aaaa bbbb ", "cccc dddd"]
     );
 }
 
