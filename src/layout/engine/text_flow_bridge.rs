@@ -1,9 +1,11 @@
 //! TextFlow input, caching, and Taffy measurement bridge.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
 use taffy::{AvailableSpace, NodeId};
-use unicode_segmentation::UnicodeSegmentation;
 
 use crate::components::Line;
 use crate::core::{Element, ElementType, Style, VNode, VNodeType};
@@ -87,13 +89,18 @@ impl TextFlowPolicy {
     }
 }
 
-/// Engine-local logical cache. Hits always compare the complete identity.
+/// Engine-local logical cache with deterministic FIFO eviction.
+///
+/// Hits compare the complete identity, while the fixed entry limit bounds both
+/// retained flows and lookup work independently of frame history.
 #[derive(Clone, Default)]
 pub(super) struct FlowCache {
-    entries: Vec<Arc<TextFlow>>,
+    entries: VecDeque<Arc<TextFlow>>,
 }
 
 impl FlowCache {
+    const MAX_ENTRIES: usize = 64;
+
     pub(super) fn get_or_compute(
         &mut self,
         input: &TextFlowInput,
@@ -113,7 +120,10 @@ impl FlowCache {
             options,
             interrupted,
         )?);
-        self.entries.push(Arc::clone(&flow));
+        if self.entries.len() >= Self::MAX_ENTRIES {
+            self.entries.pop_front();
+        }
+        self.entries.push_back(Arc::clone(&flow));
         Ok(flow)
     }
 }
@@ -157,70 +167,79 @@ pub(super) fn compatibility_text(element: &Element) -> String {
 }
 
 fn aligned_input(source: &str, lines: &[Line], style: &Style) -> TextFlowInput {
-    let source_parts: Vec<_> = source
-        .grapheme_indices(true)
-        .map(|(start, text)| (text, start..start + text.len()))
-        .collect();
     let mut cursor = 0;
     let mut ranges = Vec::new();
 
     for (line_index, line) in lines.iter().enumerate() {
         for span in &line.spans {
-            let start = source_parts
-                .get(cursor)
-                .map_or(source.len(), |(_, range)| range.start);
-            for grapheme in span.content.graphemes(true) {
-                let Some((source_grapheme, _)) = source_parts.get(cursor) else {
-                    return reconstructed_input(source, style);
-                };
-                if !graphemes_align(source_grapheme, grapheme) {
-                    return reconstructed_input(source, style);
-                }
-                cursor += 1;
+            let start = cursor;
+            if !consume_aligned_fragment(source, &mut cursor, &span.content) {
+                return reconstructed_input(source, style);
             }
-            let end = source_parts
-                .get(cursor)
-                .map_or(source.len(), |(_, range)| range.start);
             ranges.push(StyledTextRange {
-                range: start..end,
+                range: start..cursor,
                 style: style.clone().merge(&span.style),
             });
         }
         if line_index + 1 < lines.len() {
-            let Some((source_grapheme, range)) = source_parts.get(cursor) else {
+            let Some(break_len) = hard_break_prefix_len(&source[cursor..]) else {
                 return reconstructed_input(source, style);
             };
-            if !is_hard_break(source_grapheme) {
-                return reconstructed_input(source, style);
-            }
             ranges.push(StyledTextRange {
-                range: range.clone(),
+                range: cursor..cursor + break_len,
                 style: style.clone(),
             });
-            cursor += 1;
+            cursor += break_len;
         }
     }
 
-    if source_parts[cursor..]
-        .iter()
-        .any(|(grapheme, _)| !is_hard_break(grapheme))
-    {
-        return reconstructed_input(source, style);
+    while cursor < source.len() {
+        let Some(break_len) = hard_break_prefix_len(&source[cursor..]) else {
+            return reconstructed_input(source, style);
+        };
+        cursor += break_len;
     }
     TextFlowInput::plain(source, TextFlowSourceKind::Exact, style.clone())
         .with_styled_ranges(ranges)
+}
+
+fn consume_aligned_fragment(source: &str, source_cursor: &mut usize, visible: &str) -> bool {
+    let mut visible_cursor = 0;
+    while visible_cursor < visible.len() {
+        let source_rest = &source[*source_cursor..];
+        let visible_rest = &visible[visible_cursor..];
+        if let (Some(source_break), Some(visible_break)) = (
+            hard_break_prefix_len(source_rest),
+            hard_break_prefix_len(visible_rest),
+        ) {
+            *source_cursor += source_break;
+            visible_cursor += visible_break;
+            continue;
+        }
+        let Some(visible_scalar) = visible_rest.chars().next() else {
+            return false;
+        };
+        if !source_rest.starts_with(visible_scalar) {
+            return false;
+        }
+        *source_cursor += visible_scalar.len_utf8();
+        visible_cursor += visible_scalar.len_utf8();
+    }
+    true
 }
 
 fn reconstructed_input(source: &str, style: &Style) -> TextFlowInput {
     TextFlowInput::plain(source, TextFlowSourceKind::Reconstructed, style.clone())
 }
 
-fn graphemes_align(source: &str, visible: &str) -> bool {
-    source == visible || is_hard_break(source) && is_hard_break(visible)
-}
-
-fn is_hard_break(grapheme: &str) -> bool {
-    matches!(grapheme, "\n" | "\r" | "\r\n")
+fn hard_break_prefix_len(text: &str) -> Option<usize> {
+    if text.starts_with("\r\n") {
+        Some(2)
+    } else if text.starts_with(['\r', '\n']) {
+        Some(1)
+    } else {
+        None
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -429,7 +448,11 @@ impl LayoutEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{Color, Overflow, TextWrap};
+    use crate::{
+        components::{Line, Span},
+        core::{Color, Dimension, Overflow, TextWrap},
+        layout::TextFlowDiagnostic,
+    };
 
     #[test]
     fn engine_cache_compares_every_logical_identity_value() {
@@ -492,5 +515,178 @@ mod tests {
                 .unwrap();
             assert!(!Arc::ptr_eq(&baseline, &changed));
         }
+    }
+
+    #[test]
+    fn engine_cache_is_bounded_with_deterministic_fifo_eviction() {
+        let options = TextFlowOptions::new(8, TextWrap::Wrap);
+        let mut cache = FlowCache::default();
+        let first_input = TextFlowInput::plain("entry-0", TextFlowSourceKind::Exact, Style::new());
+        let first = cache
+            .get_or_compute(&first_input, &options, &mut || false)
+            .unwrap();
+        let mut oldest_retained = None;
+        for index in 1..=FlowCache::MAX_ENTRIES {
+            let input = TextFlowInput::plain(
+                format!("entry-{index}"),
+                TextFlowSourceKind::Exact,
+                Style::new(),
+            );
+            let flow = cache
+                .get_or_compute(&input, &options, &mut || false)
+                .unwrap();
+            if index == 1 {
+                oldest_retained = Some(flow);
+            }
+        }
+        assert_eq!(cache.entries.len(), FlowCache::MAX_ENTRIES);
+
+        let newest_input = TextFlowInput::plain(
+            format!("entry-{}", FlowCache::MAX_ENTRIES),
+            TextFlowSourceKind::Exact,
+            Style::new(),
+        );
+        let newest = cache
+            .get_or_compute(&newest_input, &options, &mut || false)
+            .unwrap();
+        let newest_again = cache
+            .get_or_compute(&newest_input, &options, &mut || false)
+            .unwrap();
+        assert!(Arc::ptr_eq(&newest, &newest_again));
+
+        let first_again = cache
+            .get_or_compute(&first_input, &options, &mut || false)
+            .unwrap();
+        assert!(!Arc::ptr_eq(&first, &first_again));
+        let second_input = TextFlowInput::plain("entry-1", TextFlowSourceKind::Exact, Style::new());
+        let second_again = cache
+            .get_or_compute(&second_input, &options, &mut || false)
+            .unwrap();
+        assert!(!Arc::ptr_eq(
+            oldest_retained.as_ref().unwrap(),
+            &second_again
+        ));
+        assert_eq!(cache.entries.len(), FlowCache::MAX_ENTRIES);
+    }
+
+    fn identity_element(width: f32, overflow_x: Overflow) -> Element {
+        let mut element = Element::text("a\tbcdef").with_key("identity");
+        element.style.width = Dimension::Points(width);
+        element.style.text_wrap = TextWrap::TruncateEnd;
+        element.style.overflow_x = overflow_x;
+        element
+    }
+
+    fn publish_incrementally(
+        engine: &mut LayoutEngine,
+        previous: Option<&VNode>,
+        element: &Element,
+        expected_patch_count: usize,
+    ) -> (VNode, Arc<TextFlow>) {
+        let (current, outcome) = engine
+            .try_compute_element_incremental(element, previous, 40, 4)
+            .unwrap();
+        assert_eq!(outcome.patch_count, expected_patch_count);
+        assert_eq!(outcome.used_reconciler, previous.is_some());
+        let flow = engine.current_text_flow(element.id).unwrap();
+        (current, flow)
+    }
+
+    #[test]
+    fn incremental_publication_changes_each_engine_cache_input_independently() {
+        let mut engine = LayoutEngine::new();
+        let initial_element = identity_element(5.0, Overflow::Visible);
+        let (initial_vnode, initial) =
+            publish_incrementally(&mut engine, None, &initial_element, 0);
+
+        let width_element = identity_element(4.0, Overflow::Visible);
+        let (width_vnode, width) =
+            publish_incrementally(&mut engine, Some(&initial_vnode), &width_element, 1);
+        let mut expected_input = initial.cache_identity().input.clone();
+        expected_input.default_style.width = Dimension::Points(4.0);
+        let mut expected = initial.cache_identity().options.clone();
+        expected.max_width = 4;
+        assert_eq!(width.cache_identity().input, expected_input);
+        assert_eq!(width.cache_identity().options, expected);
+        assert!(!Arc::ptr_eq(&initial, &width));
+
+        let overflow_element = identity_element(4.0, Overflow::Hidden);
+        let (overflow_vnode, overflow) =
+            publish_incrementally(&mut engine, Some(&width_vnode), &overflow_element, 1);
+        expected_input.default_style.overflow_x = Overflow::Hidden;
+        expected.overflow_x = Overflow::Hidden;
+        assert_eq!(overflow.cache_identity().input, expected_input);
+        assert_eq!(overflow.cache_identity().options, expected);
+        assert!(!Arc::ptr_eq(&width, &overflow));
+
+        engine.set_text_flow_policy(2, "…", 1);
+        let tab_element = identity_element(4.0, Overflow::Hidden);
+        let (tab_vnode, tab) =
+            publish_incrementally(&mut engine, Some(&overflow_vnode), &tab_element, 0);
+        expected.tab_stop = 2;
+        assert_eq!(tab.cache_identity().input, overflow.cache_identity().input);
+        assert_eq!(tab.cache_identity().options, expected);
+        assert!(!Arc::ptr_eq(&overflow, &tab));
+        assert_ne!(tab.rows(), overflow.rows());
+
+        engine.set_text_flow_policy(2, "..", 1);
+        let ellipsis_element = identity_element(4.0, Overflow::Hidden);
+        let (_, ellipsis) =
+            publish_incrementally(&mut engine, Some(&tab_vnode), &ellipsis_element, 0);
+        expected.ellipsis = "..".into();
+        assert_eq!(ellipsis.cache_identity().input, tab.cache_identity().input);
+        assert_eq!(ellipsis.cache_identity().options, expected);
+        assert!(!Arc::ptr_eq(&tab, &ellipsis));
+        assert_ne!(ellipsis.rows(), tab.rows());
+    }
+
+    fn split_style_element(source: &str, first: &str, second: &str) -> Element {
+        let mut element = Element::text(source);
+        element.spans = Some(vec![Line::from_spans(vec![
+            Span::new(first).color(Color::Red),
+            Span::new(second).color(Color::Blue),
+        ])]);
+        element
+    }
+
+    #[test]
+    fn split_combining_span_boundary_preserves_first_source_style() {
+        let element = split_style_element("e\u{301}", "e", "\u{301}");
+        let id = element.id;
+        let mut engine = LayoutEngine::new();
+        engine.try_compute(&element, 8, 2).unwrap();
+
+        let flow = engine.current_text_flow(id).unwrap();
+        assert_eq!(
+            flow.cache_identity().input.source_kind,
+            TextFlowSourceKind::Exact
+        );
+        assert_eq!(flow.tokens().len(), 1);
+        assert_eq!(flow.tokens()[0].style.color, Some(Color::Red));
+        assert!(flow.diagnostics().iter().any(|diagnostic| matches!(
+            diagnostic,
+            TextFlowDiagnostic::StyleBoundaryNormalized { boundary: 1, .. }
+        )));
+    }
+
+    #[test]
+    fn split_zwj_span_boundary_preserves_first_source_style() {
+        let element = split_style_element("👩‍💻", "👩", "\u{200d}💻");
+        let id = element.id;
+        let mut engine = LayoutEngine::new();
+        engine.try_compute(&element, 8, 2).unwrap();
+
+        let flow = engine.current_text_flow(id).unwrap();
+        assert_eq!(
+            flow.cache_identity().input.source_kind,
+            TextFlowSourceKind::Exact
+        );
+        assert_eq!(flow.tokens().len(), 1);
+        assert_eq!(flow.tokens()[0].style.color, Some(Color::Red));
+        assert!(flow.diagnostics().iter().any(|diagnostic| matches!(
+            diagnostic,
+            TextFlowDiagnostic::StyleBoundaryNormalized { boundary, .. }
+                if *boundary == "👩".len()
+        )));
     }
 }
