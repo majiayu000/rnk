@@ -170,6 +170,7 @@ pub use crate::renderer::{
     try_render_to_string_no_trim,
     try_render_to_string_raw,
     try_render_to_string_with_options,
+    try_render_to_string_with_tab_stop,
 };
 
 // =============================================================================

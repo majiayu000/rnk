@@ -1,6 +1,3 @@
-use std::error::Error;
-use std::io;
-
 use rnk::testing::TestRenderer;
 use rnk::{Element, TextCoordinateError, TextRenderError};
 
@@ -24,19 +21,6 @@ fn typed_error_reaches_remaining_callers() {
             ..
         })
     ));
-
-    let io_error = TextRenderError::io(
-        "writing terminal frame",
-        io::Error::new(io::ErrorKind::BrokenPipe, "closed"),
-    );
-    assert!(matches!(io_error, TextRenderError::Io { .. }));
-    assert_eq!(
-        io_error
-            .source()
-            .and_then(|source| source.downcast_ref::<io::Error>())
-            .map(io::Error::kind),
-        Some(io::ErrorKind::BrokenPipe)
-    );
 }
 
 #[test]

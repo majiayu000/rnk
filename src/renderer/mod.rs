@@ -69,7 +69,7 @@ pub use render_to_string::{
     RenderOptions, render_to_string, render_to_string_auto, render_to_string_no_trim,
     render_to_string_raw, render_to_string_with_options, try_render_to_string,
     try_render_to_string_auto, try_render_to_string_no_trim, try_render_to_string_raw,
-    try_render_to_string_with_options,
+    try_render_to_string_with_options, try_render_to_string_with_tab_stop,
 };
 
 // Frame rate control

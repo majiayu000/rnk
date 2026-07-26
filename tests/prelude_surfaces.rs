@@ -57,9 +57,15 @@ fn testing_prelude_exports_snapshot_helpers() {
 
 #[test]
 fn try_render_to_string_surface() {
-    use rnk::prelude::{Text, TextRenderError, try_render_to_string};
+    use rnk::prelude::{
+        Text, TextRenderError, try_render_to_string, try_render_to_string_with_tab_stop,
+    };
 
     let element = Text::new("typed surface").into_element();
     let rendered: Result<String, TextRenderError> = try_render_to_string(&element, 30);
     assert_eq!(rendered.unwrap(), "typed surface");
+    assert_eq!(
+        try_render_to_string_with_tab_stop(&element, 30, 4).unwrap(),
+        "typed surface"
+    );
 }

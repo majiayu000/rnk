@@ -249,13 +249,60 @@ mod typed_error_tests {
             .borrow()
             .get_measurement_by_key_dims("child");
 
-        let missing_id = corrected
+        let flow_candidate = keyed_root("flow retry");
+        layout_engine.set_text_flow_policy(0, "…", 2);
+        let flow_failure = RenderPipeline::try_render_dynamic_frame(
+            &flow_candidate,
+            20,
+            4,
+            &mut layout_engine,
+            &runtime_context,
+            &mut previous_vnode,
+        );
+        assert!(matches!(
+            flow_failure,
+            Err(TextRenderError::Flow {
+                source: TextFlowError::InvalidTabStop,
+                ..
+            })
+        ));
+        assert!(layout_engine.get_all_layouts().is_empty());
+        assert!(!layout_engine.has_tree());
+        assert_eq!(previous_vnode, corrected_vnode);
+        assert_eq!(
+            runtime_context
+                .borrow()
+                .get_measurement_by_key_dims("child"),
+            corrected_measurement
+        );
+
+        layout_engine.set_text_flow_policy(4, "…", 3);
+        let flow_retry_output = RenderPipeline::try_render_dynamic_frame(
+            &flow_candidate,
+            20,
+            4,
+            &mut layout_engine,
+            &runtime_context,
+            &mut previous_vnode,
+        )
+        .unwrap();
+        assert!(flow_retry_output.contains("flow retry"));
+        assert_eq!(layout_engine.get_all_layouts().len(), 2);
+        assert_eq!(layout_engine.get_all_vnode_layouts().len(), 2);
+        assert_eq!(layout_engine.node_count(), 4);
+        assert_ne!(previous_vnode, corrected_vnode);
+        let flow_vnode = previous_vnode.clone();
+        let flow_measurement = runtime_context
+            .borrow()
+            .get_measurement_by_key_dims("child");
+
+        let missing_id = flow_candidate
             .children
             .get(0)
             .expect("test root has one child")
             .id;
         let projection_failure = RenderPipeline::try_render_dynamic_frame_with_renderer(
-            &corrected,
+            &flow_candidate,
             20,
             4,
             &mut layout_engine,
@@ -273,16 +320,16 @@ mod typed_error_tests {
                 if element_id == missing_id
         ));
         assert!(layout_engine.get_all_layouts().is_empty());
-        assert_eq!(previous_vnode, corrected_vnode);
+        assert_eq!(previous_vnode, flow_vnode);
         assert_eq!(
             runtime_context
                 .borrow()
                 .get_measurement_by_key_dims("child"),
-            corrected_measurement
+            flow_measurement
         );
 
         let retry_output = RenderPipeline::try_render_dynamic_frame(
-            &corrected,
+            &flow_candidate,
             20,
             4,
             &mut layout_engine,
@@ -290,7 +337,9 @@ mod typed_error_tests {
             &mut previous_vnode,
         )
         .unwrap();
-        assert!(retry_output.contains("corrected"));
+        assert!(retry_output.contains("flow retry"));
         assert_eq!(layout_engine.get_all_layouts().len(), 2);
+        assert_eq!(layout_engine.get_all_vnode_layouts().len(), 2);
+        assert_eq!(layout_engine.node_count(), 4);
     }
 }

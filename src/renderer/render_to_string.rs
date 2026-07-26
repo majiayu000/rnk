@@ -8,6 +8,8 @@ use crate::layout::LayoutEngine;
 use crate::renderer::tree_renderer::try_render_element_tree;
 use crate::renderer::{Output, Terminal, TextRenderError};
 
+const DEFAULT_TEXT_FLOW_TAB_STOP: usize = 4;
+
 /// Options for controlling render-to-string behavior.
 #[derive(Debug, Clone)]
 pub struct RenderOptions {
@@ -42,7 +44,38 @@ pub fn try_render_to_string_with_options(
     width: u16,
     options: &RenderOptions,
 ) -> Result<String, TextRenderError> {
-    let raw = RenderHelper.try_render_to_output(element, width)?;
+    try_render_to_string_with_options_and_tab_stop(
+        element,
+        width,
+        options,
+        DEFAULT_TEXT_FLOW_TAB_STOP,
+    )
+}
+
+/// Render an element with an explicit tab-stop policy.
+///
+/// A tab stop of zero or one larger than the supported TextFlow expansion
+/// returns the corresponding [`TextRenderError::Flow`] source.
+pub fn try_render_to_string_with_tab_stop(
+    element: &Element,
+    width: u16,
+    tab_stop: usize,
+) -> Result<String, TextRenderError> {
+    try_render_to_string_with_options_and_tab_stop(
+        element,
+        width,
+        &RenderOptions::default(),
+        tab_stop,
+    )
+}
+
+fn try_render_to_string_with_options_and_tab_stop(
+    element: &Element,
+    width: u16,
+    options: &RenderOptions,
+    tab_stop: usize,
+) -> Result<String, TextRenderError> {
+    let raw = RenderHelper.try_render_to_output(element, width, tab_stop)?;
 
     if !options.normalize_line_endings {
         return Ok(raw);
@@ -144,8 +177,15 @@ pub fn render_to_string_auto(element: &Element) -> String {
 }
 
 pub fn try_render_to_string_auto(element: &Element) -> Result<String, TextRenderError> {
+    try_render_to_string_auto_with_size_provider(element, Terminal::size)
+}
+
+fn try_render_to_string_auto_with_size_provider(
+    element: &Element,
+    size_provider: impl FnOnce() -> std::io::Result<(u16, u16)>,
+) -> Result<String, TextRenderError> {
     let (width, _) =
-        Terminal::size().map_err(|source| TextRenderError::io("querying terminal size", source))?;
+        size_provider().map_err(|source| TextRenderError::io("querying terminal size", source))?;
     try_render_to_string(element, width)
 }
 
@@ -157,8 +197,10 @@ impl RenderHelper {
         &self,
         element: &Element,
         width: u16,
+        tab_stop: usize,
     ) -> Result<String, TextRenderError> {
         let mut engine = LayoutEngine::new();
+        engine.set_text_flow_policy(tab_stop, "…", 1);
         let layout_width = width;
         let content_height = self.try_resolve_render_height(element, layout_width, &mut engine)?;
         let render_width = layout_width;
@@ -292,6 +334,9 @@ impl RenderHelper {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+    use std::io;
+
     use super::*;
     use crate::components::{Box, Text};
     use crate::core::BorderStyle;
@@ -351,5 +396,32 @@ mod tests {
 
         assert!(output.contains("line-0"));
         assert!(output.contains("line-1099"));
+    }
+
+    #[test]
+    fn auto_size_failure_preserves_terminal_io_source() {
+        let element = Element::text("never rendered");
+        let error = try_render_to_string_auto_with_size_provider(&element, || {
+            Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "terminal size provider closed",
+            ))
+        })
+        .unwrap_err();
+
+        assert!(matches!(
+            &error,
+            TextRenderError::Io {
+                operation: "querying terminal size",
+                ..
+            }
+        ));
+        assert_eq!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<io::Error>())
+                .map(io::Error::kind),
+            Some(io::ErrorKind::BrokenPipe)
+        );
     }
 }
