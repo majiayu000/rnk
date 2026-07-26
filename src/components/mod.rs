@@ -1,6 +1,7 @@
 //! UI Components
 
 mod action;
+pub mod chat;
 mod display;
 mod feedback;
 mod input;
