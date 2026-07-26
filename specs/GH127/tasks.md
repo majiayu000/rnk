@@ -129,7 +129,7 @@ coordinator 必须 fresh 证明：
   product/tech/tasks B-set 均 exact `B-001..B-022`，task Covers union 无遗漏；
   manifest 五路径是唯一完整 allowed set，actual diff是其非空子集；父 unit file <=800 行；
   GH127-L1..L13 各先经 harness inventory 证明 selector 恰好一个，再实际执行且
-  1 passed/0 ignored；debug/release counts、property、dependency regressions、full Rust、
+  `matched=1/passed=1/ignored=0`；debug/release counts、property、dependency regressions、full Rust、
   >=80% changed production line coverage、critical normalization line/branch 100%、
   exact base/head/merge-base + raw LCOV SHA-256 provenance、pinned revision/checker
   SHA-256 + byte-identical input SpecRail mirror、exact-head hosted CI、独立 review 与零
@@ -148,7 +148,15 @@ coordinator 必须 fresh 证明：
     `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -A clippy::collapsible_if -A clippy::manual_is_multiple_of`；
     `cargo test --workspace --all-targets --all-features --locked`；
     tech Verification Plan 的 fresh exact-head `cargo llvm-cov` + diff/LCOV fail-closed
-    verifier，并保留 raw LCOV 与 checksum/provenance JSON；
+    verifier，并保留 raw LCOV 与 checksum/provenance JSON；coverage 前后 exact HEAD
+    不变且 tracked/untracked porcelain 为空；LCOV `SF:` canonical exact、仅限 repo-root
+    tracked Rust source、无 suffix/outside/duplicate/unexpected record，`LF/LH`/`DA` 与
+    `BRF/BRH`/`BRDA` summary一致，两个 planned production record 的
+    changed-executable 交集均非空；
+    五路径 allowlist 非空 gate 与 Cargo.toml negative、selector ignored negative、
+    empty/deleted DA、summary mismatch、bad hash、shell early-failure negative fixtures；
+    所有 shell block 第一行 `set -euo pipefail`，临时路径统一
+    `${TMPDIR:-/tmp}` + `mktemp`，可由 Unix Bash 或 Windows Git Bash/MSYS2 执行；
     fixed revision `23caa70e76904eaa82323208d645d5781a365649` external mirror 中的
     checker SHA-256、byte-identical GH127/GH58 inputs、`check_workflow.py` 与
     `route_gate.py`（同时记录 target route gate 不存在）；
@@ -193,14 +201,17 @@ Human implementation gate
 
 - exact base、human spec approval、readiness 与 #126/#128/#129/#130 ancestry fresh。
 - actual implementation diff 是 manifest 五路径非空子集；no-write paths diff为空；
-  `src/layout/text_flow/tests.rs <= 800` 行。
-- GH127-L1..L13 每项 test selector恰好发现并执行一个 nonignored test。
+  三个 required new file 存在，`src/layout/text_flow/tests.rs <= 800` 行；额外
+  `Cargo.toml` fixture 必须被 allowlist gate 拒绝。
+- GH127-L1..L13 每项 test selector 均 `matched=1/passed=1/ignored=0`，ignored fixture
+  必须被拒绝。
 - 2k/4k/8k debug/release counts 同时满足 absolute bound、doubling slope 和完整 failure
       diagnostics；无 wall-clock gate。
 - public complete-flow/cache/error/cancellation/retry fixtures与4096 property green。
 - #126/#128/#129/#130 regressions green且断言未修改。
 - fmt/check/clippy/all-target/all-feature tests、branch-aware coverage、fixed-revision external
-      SpecRail mirror、CI、independent review、reviewThreads 全绑定同一 exact head。
+      SpecRail mirror、CI、independent review、reviewThreads 全绑定同一 exact head；
+  coverage record/summary/worktree/hash 与 shell early-failure negatives 全部 fail closed。
 
 ## Handoff Notes
 

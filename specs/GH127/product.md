@@ -135,6 +135,13 @@ identity 与 interruption 原子性。
     byte-identical 的外部 SpecRail mirror、独立 review、零 unresolved non-outdated
     actionable threads 与 required CI 全部 fresh 通过后，才能宣称完成。新增 unit tests
     必须进入自然拆分文件，并让被触碰的 `src/layout/text_flow/tests.rs` 回到 800 行以内。
+    exact-head gate 还必须强制实际 diff 为五路径 manifest 的非空子集、三个新文件存在；
+    ledger selector 每项 `matched=1/passed=1/ignored=0`；coverage 前后 tracked/untracked
+    worktree 为空，且 LCOV `SF:` 是 repo-root canonical tracked Rust path，record 不重复、
+    不越界、不靠 suffix 命中，`LF/LH` 与 `DA`、`BRF/BRH` 与 `BRDA` 一致，两个 planned
+    production record 都有非空 changed-executable 交集。Cargo.toml allowlist、ignored
+    selector、empty/deleted DA、summary mismatch、bad hash 与 shell early-failure negative
+    fixtures 必须全部 fail closed。
 
 ## 验收标准
 
@@ -151,7 +158,8 @@ identity 与 interruption 原子性。
       `50f6a203c1861814d288d4bdeae0e28d877af34c`；#126/#128/#129/#130 与 full
       workspace gates 未被弱化。
 - [ ] current exact head coverage raw artifact/provenance、CI、immutable SpecRail mirror、
-      独立 review 与 reviewThreads 证据完整。
+      独立 review 与 reviewThreads 证据完整；验证脚本在 Unix Bash 与 Windows
+      Git Bash/MSYS2 runner 使用 `${TMPDIR:-/tmp}` + `mktemp`，不得绑定机器专用路径。
 
 ## 边界情况清单
 
