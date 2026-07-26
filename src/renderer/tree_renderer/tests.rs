@@ -1,6 +1,7 @@
 use super::*;
-use crate::components::{Box, Span, Text};
-use crate::core::{BorderStyle, Overflow};
+use crate::components::{Box, Line, Span, Text};
+use crate::core::{BorderStyle, Color, Overflow};
+use crate::renderer::output::StyledChar;
 
 fn text_with_border(
     content: &str,
@@ -51,12 +52,20 @@ fn fixed_plain_text(content: &str, width: u16, height: u16) -> Element {
 }
 
 fn render_tree_for_test(element: &Element, width: u16, height: u16) -> Output {
+    layout_and_render_for_test(element, width, height).1
+}
+
+fn layout_and_render_for_test(
+    element: &Element,
+    width: u16,
+    height: u16,
+) -> (LayoutEngine, Output) {
     let mut engine = LayoutEngine::new();
     engine.compute(element, width, height);
 
     let mut output = Output::new(width, height);
     render_element_tree(element, &engine, &mut output, 0.0, 0.0);
-    output
+    (engine, output)
 }
 
 #[test]
@@ -94,6 +103,153 @@ fn rich_spans_do_not_overwrite_right_border() {
 
     assert_eq!(output.cell_at(5, 1).map(|cell| cell.ch), Some('│'));
     assert_eq!(output.render(), "┌────┐\r\n│abcd│\r\n└────┘");
+}
+
+#[test]
+fn styled_width_five_renders_every_published_row() {
+    let mut element = Text::spans(vec![
+        Span::new("abc").color(Color::Red),
+        Span::new("def").color(Color::Blue),
+    ])
+    .into_element();
+    element.style.width = 5.into();
+    element.style.height = 2.into();
+
+    let output = render_tree_for_test(&element, 5, 2);
+
+    assert_eq!(
+        (0..5)
+            .map(|column| output.cell_at(column, 0).unwrap().ch)
+            .collect::<String>(),
+        "abcde"
+    );
+    assert_eq!(output.cell_at(0, 1).unwrap().ch, 'f');
+    assert_eq!(output.cell_at(0, 1).unwrap().fg, Some(Color::Blue));
+    assert_eq!(
+        (0..5)
+            .map(|column| output.cell_at(column, 0).unwrap().fg)
+            .collect::<Vec<_>>(),
+        vec![
+            Some(Color::Red),
+            Some(Color::Red),
+            Some(Color::Red),
+            Some(Color::Blue),
+            Some(Color::Blue),
+        ]
+    );
+}
+
+#[test]
+fn split_combining_and_zwj_spans_render_as_canonical_egcs() {
+    let mut element = Element::text("e\u{301}👩\u{200d}💻");
+    element.spans = Some(vec![Line::from_spans(vec![
+        Span::new("e").color(Color::Red),
+        Span::new("\u{301}").color(Color::Blue),
+        Span::new("👩").color(Color::Green),
+        Span::new("\u{200d}💻").color(Color::Yellow),
+    ])]);
+    element.style.width = 3.into();
+    element.style.height = 1.into();
+
+    let (engine, output) = layout_and_render_for_test(&element, 3, 1);
+    let flow = engine.current_text_flow(element.id).unwrap();
+    let runs = flow
+        .logical_rows()
+        .iter()
+        .flat_map(|row| &row.runs)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        runs.iter().map(|run| run.text.as_str()).collect::<Vec<_>>(),
+        vec!["e\u{301}", "👩\u{200d}💻"]
+    );
+    assert_eq!(output.cell_at(0, 0).unwrap().ch, 'e');
+    assert_eq!(output.cell_at(0, 0).unwrap().fg, Some(Color::Red));
+    assert_eq!(output.cell_at(1, 0).unwrap().ch, '👩');
+    assert_eq!(output.cell_at(1, 0).unwrap().fg, Some(Color::Green));
+    assert!(output.render().contains("e\u{301}"));
+    assert!(output.render().contains("👩\u{200d}💻"));
+}
+
+#[test]
+fn styled_crlf_whitespace_and_wide_egcs_follow_published_geometry() {
+    let mut crlf = Element::text("a\r\nb");
+    crlf.spans = Some(vec![
+        Line::from(Span::new("a").color(Color::Red)),
+        Line::from(Span::new("b").color(Color::Blue)),
+    ]);
+    crlf.style.width = 2.into();
+    crlf.style.height = 2.into();
+    let crlf_output = render_tree_for_test(&crlf, 2, 2);
+    assert_eq!(crlf_output.cell_at(0, 0).unwrap().ch, 'a');
+    assert_eq!(crlf_output.cell_at(0, 0).unwrap().fg, Some(Color::Red));
+    assert_eq!(crlf_output.cell_at(0, 1).unwrap().ch, 'b');
+    assert_eq!(crlf_output.cell_at(0, 1).unwrap().fg, Some(Color::Blue));
+
+    let mut whitespace = Text::spans(vec![
+        Span::new("ab ").color(Color::Red),
+        Span::new(" cd").color(Color::Blue),
+    ])
+    .into_element();
+    whitespace.style.width = 3.into();
+    whitespace.style.height = 2.into();
+    let whitespace_output = render_tree_for_test(&whitespace, 3, 2);
+    assert_eq!(
+        (0..3)
+            .map(|column| whitespace_output.cell_at(column, 0).unwrap().ch)
+            .collect::<String>(),
+        "ab "
+    );
+    assert_eq!(
+        (0..3)
+            .map(|column| whitespace_output.cell_at(column, 1).unwrap().ch)
+            .collect::<String>(),
+        " cd"
+    );
+    assert_eq!(
+        whitespace_output.cell_at(0, 1).unwrap().fg,
+        Some(Color::Blue)
+    );
+
+    let mut wide = Text::spans(vec![
+        Span::new("界").color(Color::Red),
+        Span::new("a").color(Color::Blue),
+    ])
+    .into_element();
+    wide.style.width = 2.into();
+    wide.style.height = 2.into();
+    let wide_output = render_tree_for_test(&wide, 2, 2);
+    assert_eq!(wide_output.cell_at(0, 0).unwrap().ch, '界');
+    assert_eq!(wide_output.cell_at(0, 0).unwrap().fg, Some(Color::Red));
+    assert_eq!(wide_output.cell_at(0, 1).unwrap().ch, 'a');
+    assert_eq!(wide_output.cell_at(0, 1).unwrap().fg, Some(Color::Blue));
+}
+
+#[test]
+fn every_published_run_is_written_at_its_position() {
+    let mut element = Text::spans(vec![
+        Span::new("ab").color(Color::Red),
+        Span::new("cd").color(Color::Green),
+        Span::new("ef").color(Color::Blue),
+    ])
+    .into_element();
+    element.style.width = 2.into();
+    element.style.height = 3.into();
+
+    let (engine, output) = layout_and_render_for_test(&element, 2, 3);
+    let flow = engine.current_text_flow(element.id).unwrap();
+    let runs = flow
+        .logical_rows()
+        .iter()
+        .flat_map(|row| &row.runs)
+        .collect::<Vec<_>>();
+
+    assert_eq!(runs.len(), 6);
+    for run in runs {
+        let cell = output.cell_at(run.column, run.row).unwrap();
+        assert_eq!(cell.ch, run.text.chars().next().unwrap());
+        assert!(cell.same_style(&StyledChar::with_style(cell.ch, &run.style)));
+    }
 }
 
 #[test]

@@ -489,6 +489,201 @@ fn ordinary_unicode_and_structured_style_are_unchanged() {
 }
 
 #[test]
+fn whole_egc_writes_are_atomic_at_bounds_and_nested_clips() {
+    let mut bounded = Output::new(4, 1);
+    bounded.write(0, 0, "abcd", &Style::default());
+    bounded.write(3, 0, "你", &Style::default());
+    assert_eq!(bounded.render(), "abcd");
+
+    let mut clipped = Output::new(4, 1);
+    clipped.write(0, 0, "abcd", &Style::default());
+    clipped.clip(ClipRegion {
+        x1: 1,
+        y1: 0,
+        x2: 4,
+        y2: 1,
+    });
+    clipped.clip(ClipRegion {
+        x1: 1,
+        y1: 0,
+        x2: 2,
+        y2: 1,
+    });
+    clipped.write(1, 0, "你", &Style::default());
+    clipped.unclip();
+    clipped.unclip();
+    assert_eq!(clipped.render(), "abcd");
+}
+
+#[test]
+fn combining_and_zwj_suffixes_preserve_grapheme_order() {
+    let mut output = Output::new(8, 1);
+    output.write(0, 0, "e\u{301}\u{323}", &Style::default());
+    output.write(1, 0, "👩\u{200d}💻", &Style::default());
+
+    assert_eq!(output.render(), "e\u{301}\u{323}👩\u{200d}💻");
+}
+
+#[test]
+fn zero_width_attachments_follow_the_existing_lead_in_order() {
+    let mut output = Output::new(4, 1);
+    output.write_char(0, 0, 'e', &Style::default());
+    output.write_char(1, 0, '\u{301}', &Style::default());
+    output.write_char(1, 0, '\u{323}', &Style::default());
+    assert_eq!(output.render(), "e\u{301}\u{323}");
+
+    let mut no_lead = Output::new(2, 1);
+    no_lead.write_char(0, 0, '\u{301}', &Style::default());
+    assert_eq!(no_lead.render(), "");
+}
+
+#[test]
+fn repaint_clears_complete_old_and_target_footprints() {
+    let mut wide_over_narrow = Output::new(4, 1);
+    wide_over_narrow.write(0, 0, "ABC", &Style::default());
+    wide_over_narrow.clear_dirty();
+    wide_over_narrow.write(0, 0, "你", &Style::default());
+    assert_eq!(wide_over_narrow.render(), "你C");
+    assert_eq!(
+        wide_over_narrow.dirty_cell_positions().collect::<Vec<_>>(),
+        vec![CellPosition { x: 0, y: 0 }, CellPosition { x: 1, y: 0 }]
+    );
+
+    let mut narrow_over_wide = Output::new(4, 1);
+    narrow_over_wide.write(0, 0, "你", &Style::default());
+    narrow_over_wide.clear_dirty();
+    narrow_over_wide.write(1, 0, "X", &Style::default());
+    assert_eq!(narrow_over_wide.render(), " X");
+    assert_eq!(
+        narrow_over_wide.dirty_cell_positions().collect::<Vec<_>>(),
+        vec![CellPosition { x: 0, y: 0 }, CellPosition { x: 1, y: 0 }]
+    );
+
+    let mut wide_over_wide = Output::new(5, 1);
+    wide_over_wide.write(1, 0, "你", &Style::default());
+    wide_over_wide.clear_dirty();
+    wide_over_wide.write(2, 0, "界", &Style::default());
+    assert_eq!(wide_over_wide.render(), "  界");
+    assert_eq!(
+        wide_over_wide.dirty_cell_positions().collect::<Vec<_>>(),
+        vec![
+            CellPosition { x: 1, y: 0 },
+            CellPosition { x: 2, y: 0 },
+            CellPosition { x: 3, y: 0 },
+        ]
+    );
+}
+
+#[test]
+fn active_clips_report_grapheme_visibility() {
+    let mut output = Output::new(5, 2);
+    output.write(0, 0, "abc", &Style::default());
+    output.clear_dirty();
+    output.clip(ClipRegion {
+        x1: 0,
+        y1: 0,
+        x2: 4,
+        y2: 2,
+    });
+    output.clip(ClipRegion {
+        x1: 1,
+        y1: 0,
+        x2: 4,
+        y2: 1,
+    });
+
+    let before_grid = output.grid.iter().map(|cell| cell.ch).collect::<Vec<_>>();
+    let before_metadata = output.grapheme_cells.clone();
+    let before_dirty = output.dirty_cells.clone();
+    assert!(output.active_clips_contain_grapheme(1, 0, 2));
+    assert!(!output.active_clips_contain_grapheme(3, 0, 2));
+    assert!(!output.active_clips_contain_grapheme(1, 1, 2));
+    assert!(!output.active_clips_contain_grapheme(-1, 0, 2));
+    assert!(!output.active_clips_contain_grapheme(4, 0, 2));
+    assert_eq!(
+        output.grid.iter().map(|cell| cell.ch).collect::<Vec<_>>(),
+        before_grid
+    );
+    assert_eq!(output.grapheme_cells, before_metadata);
+    assert_eq!(output.dirty_cells, before_dirty);
+    assert_eq!(output.clip_depth(), 2);
+}
+
+#[test]
+fn staged_snapshot_and_write_footprint_are_isolated() {
+    let mut source = Output::new(6, 2);
+    source.write(1, 0, "你", &Style::default());
+    source.clear_dirty();
+    source.clip(ClipRegion {
+        x1: 0,
+        y1: 0,
+        x2: 6,
+        y2: 2,
+    });
+    source.clip(ClipRegion {
+        x1: 2,
+        y1: 0,
+        x2: 3,
+        y2: 1,
+    });
+
+    let mut staged = source.staged_snapshot();
+    assert_eq!((staged.width, staged.height), (6, 2));
+    assert_eq!(staged.clip_depth(), 2);
+    assert_eq!(staged.cell_at(1, 0).map(|cell| cell.ch), Some('你'));
+    assert_eq!(staged.cell_at(2, 0).map(|cell| cell.ch), Some('\0'));
+    assert!(
+        staged
+            .prospective_grapheme_write_footprint(2, 0, "X")
+            .is_none(),
+        "the old wide lead outside the inner clip makes the repaint atomic miss"
+    );
+
+    staged.unclip();
+    let footprint = staged
+        .prospective_grapheme_write_footprint(2, 0, "X")
+        .expect("the outer clip contains both target and prior wide footprint");
+    assert_eq!(footprint.target_cells, vec![CellPosition { x: 2, y: 0 }]);
+    assert_eq!(
+        footprint.old_cells,
+        vec![CellPosition { x: 1, y: 0 }, CellPosition { x: 2, y: 0 }]
+    );
+    assert!(matches!(
+        staged.write_grapheme(2, 0, "X", &Style::default()),
+        GraphemeWriteOutcome::Committed(_)
+    ));
+    assert!(matches!(
+        staged.write_grapheme(4, 0, "\x1b", &Style::default()),
+        GraphemeWriteOutcome::Committed(_)
+    ));
+    staged.unclip();
+
+    assert_eq!(source.cell_at(1, 0).map(|cell| cell.ch), Some('你'));
+    assert_eq!(source.cell_at(2, 0).map(|cell| cell.ch), Some('\0'));
+    assert_eq!(source.cell_at(4, 0).map(|cell| cell.ch), Some(' '));
+    assert_eq!(source.clip_depth(), 2);
+    assert_eq!(source.dirty_cell_positions().count(), 0);
+
+    assert_eq!(staged.cell_at(1, 0).map(|cell| cell.ch), Some(' '));
+    assert_eq!(staged.cell_at(2, 0).map(|cell| cell.ch), Some('X'));
+    assert_eq!(staged.cell_at(4, 0).map(|cell| cell.ch), Some('␛'));
+    assert_eq!(
+        staged.dirty_cell_positions().collect::<Vec<_>>(),
+        vec![
+            CellPosition { x: 1, y: 0 },
+            CellPosition { x: 2, y: 0 },
+            CellPosition { x: 4, y: 0 },
+        ]
+    );
+    assert_no_source_controls(&staged.render());
+
+    let mut receiver = Output::new(1, 1);
+    receiver.commit_staged(staged);
+    assert_eq!((receiver.width, receiver.height), (6, 2));
+    assert_eq!(receiver.render(), "  X ␛");
+}
+
+#[test]
 #[cfg(debug_assertions)]
 #[should_panic(expected = "Output::unclip called with an empty clip stack")]
 fn test_unclip_panics_when_stack_is_empty_in_debug() {
