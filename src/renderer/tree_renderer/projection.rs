@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::ops::Range;
 
-use crate::core::{Display, Element, ElementId};
+use crate::core::{Display, Element, ElementId, ElementType};
 use crate::layout::LayoutEngine;
 use crate::layout::text_flow::{
     TextFlow, TextFlowPlacement, TextFlowRow, TextFlowRun, TextFlowSource, TextFlowToken,
@@ -257,7 +257,7 @@ fn validate_tree_flows(
     element: &Element,
     layout_engine: &LayoutEngine,
 ) -> Result<(), ProjectionError> {
-    if element.style.display == Display::None {
+    if element.style.display == Display::None || element.element_type == ElementType::VirtualText {
         return Ok(());
     }
     if element.spans.is_some() || element.text_content.is_some() {

@@ -1,6 +1,13 @@
 use rnk::components::{Line, Span, Text};
 use rnk::core::{Children, ElementType, TextWrap};
-use rnk::{Color, Element, ElementId, Style, render_to_string};
+use rnk::testing::TestRenderer;
+use rnk::{Color, Element, ElementId, Style, render_to_string, try_render_to_string};
+
+fn virtual_text(content: &str) -> Element {
+    let mut element = Element::new(ElementType::VirtualText);
+    element.text_content = Some(content.to_owned());
+    element
+}
 
 #[test]
 fn exact_crlf_and_trailing_break_ranges() {
@@ -214,4 +221,56 @@ fn external_element_struct_literal_compiles() {
     };
 
     assert_eq!(element.get_text(), Some("literal"));
+
+    let span_only = Element {
+        id: ElementId::new(),
+        element_type: ElementType::Text,
+        style: Style::new(),
+        children: Children::new(),
+        text_content: None,
+        spans: Some(vec![Line::raw("span"), Line::raw("only")]),
+        key: None,
+        accessibility: None,
+        scroll_offset_x: None,
+        scroll_offset_y: None,
+    };
+
+    assert_eq!(render_to_string(&span_only, 20), "span\nonly");
+}
+
+#[test]
+fn direct_virtual_text_fallible_public_render_is_empty() {
+    let result = try_render_to_string(&virtual_text("hidden"), 20);
+
+    assert!(
+        matches!(result, Ok(ref output) if output.is_empty()),
+        "unexpected public render result: {result:?}"
+    );
+}
+
+#[test]
+fn direct_virtual_text_compatibility_public_render_is_empty() {
+    assert_eq!(render_to_string(&virtual_text("hidden"), 20), "");
+}
+
+#[test]
+fn nested_virtual_text_public_render_is_empty() {
+    let mut element = Element::box_element();
+    element.add_child(virtual_text("hidden"));
+
+    assert_eq!(try_render_to_string(&element, 20).unwrap(), "");
+    assert_eq!(render_to_string(&element, 20), "");
+}
+
+#[test]
+fn test_renderer_skips_direct_and_nested_virtual_text() {
+    let renderer = TestRenderer::new(20, 2);
+    let direct = virtual_text("hidden");
+    assert_eq!(renderer.try_render_to_plain(&direct).unwrap(), "");
+    assert_eq!(renderer.render_to_plain(&direct), "");
+
+    let mut nested = Element::box_element();
+    nested.add_child(virtual_text("hidden"));
+    assert_eq!(renderer.try_render_to_plain(&nested).unwrap(), "");
+    assert_eq!(renderer.render_to_plain(&nested), "");
 }

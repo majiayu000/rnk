@@ -3,7 +3,7 @@
 //! This module centralizes recursive element rendering so all call sites
 //! (runtime, render_to_string, static content, tests) use one code path.
 
-use crate::core::{Display, Element, Overflow, Style};
+use crate::core::{Display, Element, ElementType, Overflow, Style};
 use crate::layout::LayoutEngine;
 use crate::renderer::Output;
 use crate::renderer::TextRenderError;
@@ -158,7 +158,7 @@ fn render_element_tree_staged(
     offset_y: f32,
     inherited_clip: Option<ClipBounds>,
 ) -> Result<(), ProjectionError> {
-    if element.style.display == Display::None {
+    if element.style.display == Display::None || element.element_type == ElementType::VirtualText {
         return Ok(());
     }
 
