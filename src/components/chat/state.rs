@@ -222,8 +222,9 @@ impl ConversationState {
     pub(in crate::components::chat) fn message_position(&self, id: MessageId) -> Option<usize> {
         self.message_index.position(&self.messages, id)
     }
-    pub(in crate::components::chat) fn rebuild_message_index(&mut self) {
-        self.message_index = match MessageIndex::rebuild(&self.messages) {
+    pub(in crate::components::chat) fn rebuild_message_index(&mut self,
+        mut visit: impl FnMut()) {
+        self.message_index = match MessageIndex::rebuild_with(&self.messages, &mut visit) {
             Ok(index) => index,
             Err(()) => panic!("active transcript contains duplicate message identities"),
         };

@@ -147,7 +147,7 @@ fn cancel_and_fail_count_each_correlation_visit() {
     assert_eq!(
         cancel.0,
         ReducerCost {
-            message_visits: 21,
+            message_visits: 27,
             target_lookups: 3,
             block_visits: 12,
             global_validations: 1,
@@ -210,6 +210,68 @@ fn pending_correlated_complete_counts_rejected_readiness_scan() {
 }
 
 #[test]
+fn push_counts_index_rebuild_validation_and_identity_backup_visits() {
+    let mut state = ConversationState::new(0, NonZeroUsize::new(8).unwrap());
+    push(
+        &mut state,
+        "first",
+        message(1, ChatRole::User, MessageBlock::Text("first".into())),
+    );
+    push(
+        &mut state,
+        "second",
+        message(2, ChatRole::User, MessageBlock::Text("second".into())),
+    );
+    reset_cost();
+    push(
+        &mut state,
+        "third",
+        message(3, ChatRole::User, MessageBlock::Text("third".into())),
+    );
+    assert_eq!(
+        cost(),
+        ReducerCost {
+            message_visits: 25,
+            target_lookups: 1,
+            block_visits: 6,
+            global_validations: 1,
+            backup_captures: 1,
+        },
+    );
+}
+
+#[test]
+fn append_block_counts_existing_and_candidate_identity_backup_visits() {
+    let mut state = ConversationState::new(0, NonZeroUsize::new(8).unwrap());
+    push(
+        &mut state,
+        "first",
+        message(1, ChatRole::User, MessageBlock::Text("first".into())),
+    );
+    push(
+        &mut state,
+        "second",
+        message(2, ChatRole::User, MessageBlock::Text("second".into())),
+    );
+    let update = ConversationUpdate::append_message_block(
+        guard(&state, MessageId::new(1)),
+        MessageBlockEntry::new(BlockId::new(3), MessageBlock::Text("third".into())),
+    );
+    reset_cost();
+    apply(&mut state, "append-block", update);
+    assert_eq!(
+        cost(),
+        ReducerCost {
+            message_visits: 18,
+            target_lookups: 3,
+            block_visits: 7,
+            global_validations: 1,
+            backup_captures: 1,
+        },
+    );
+}
+
+#[test]
 fn target_revision_exhaustion_is_atomic_and_locally_counted() {
     let mut state = ConversationState::new(0, NonZeroUsize::new(4).unwrap());
     state.messages = vec![message(
@@ -220,7 +282,7 @@ fn target_revision_exhaustion_is_atomic_and_locally_counted() {
     state.messages[0].revision = MessageRevision::new(u64::MAX).unwrap();
     state.seen_messages.insert(MessageId::new(1));
     state.seen_blocks.insert(BlockId::new(1));
-    state.rebuild_message_index();
+    state.rebuild_message_index(|| {});
     let before = state.clone();
     let update =
         ConversationUpdate::append_text(guard(&state, MessageId::new(1)), BlockId::new(1), "x")

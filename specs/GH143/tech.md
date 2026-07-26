@@ -6,7 +6,7 @@ GH-143
 
 <!-- specrail-requires-planned-changes-v1 -->
 <!-- specrail-planned-changes
-{"version":1,"issue":143,"complete":true,"paths":["specs/GH143/product.md","specs/GH143/tech.md","specs/GH143/tasks.md","src/components/chat/state.rs","src/components/chat/state/message_index.rs","src/components/chat/state/tests.rs","src/components/chat/reducer.rs","src/components/chat/reducer/targeted.rs","src/components/chat/reducer/targeted/correlation_tests.rs","tests/chat_targeted_updates.rs"],"spec_refs":["specs/GH62/product.md","specs/GH62/tech.md","specs/GH62/tasks.md","specs/GH143/product.md","specs/GH143/tech.md","specs/GH143/tasks.md"]}
+{"version":1,"issue":143,"complete":true,"paths":["specs/GH143/product.md","specs/GH143/tech.md","specs/GH143/tasks.md","src/components/chat/mod.rs","src/components/chat/state.rs","src/components/chat/state/message_index.rs","src/components/chat/state/tests.rs","src/components/chat/reducer.rs","src/components/chat/reducer/targeted.rs","src/components/chat/reducer/targeted/correlation_tests.rs","tests/chat_targeted_updates.rs"],"spec_refs":["specs/GH62/product.md","specs/GH62/tech.md","specs/GH62/tasks.md","specs/GH143/product.md","specs/GH143/tech.md","specs/GH143/tasks.md"]}
 -->
 
 ## Product Spec
@@ -107,11 +107,11 @@ Thinking、replay、rejected atomicity、Push/Delete/Resend 与 snapshot roundtr
 | B-004 | private cost fixtures | `cargo test --lib components::chat::reducer::targeted::tests::front_and_end_targets_have_equal_cost -- --exact` |
 | B-005 | direct revision/outcome builder | `cargo test --test chat_targeted_updates targeted_outcome_advances_only_target -- --exact` |
 | B-006 | preflight-before-mutation path | `cargo test --test chat_targeted_updates append_rejection_matrix_is_fully_atomic -- --exact`; `cargo test --test chat_targeted_updates targeted_preflight_errors_preserve_the_complete_state -- --exact`; `cargo test --lib components::chat::reducer::targeted::correlation_tests::target_revision_exhaustion_is_atomic_and_locally_counted -- --exact` |
-| B-007 | MessageIndex mutation + backup restore | `cargo test --test chat_targeted_updates push_delete_resend_keep_lookup_and_order_consistent -- --exact` |
+| B-007 | MessageIndex mutation + backup restore | `cargo test --test chat_targeted_updates push_delete_resend_keep_lookup_and_order_consistent -- --exact`; `cargo test --lib components::chat::reducer::targeted::correlation_tests::push_counts_index_rebuild_validation_and_identity_backup_visits -- --exact` |
 | B-008 | `try_restore()` index rebuild | `cargo test --test chat_targeted_updates snapshot_restore_rebuilds_target_lookup -- --exact` |
 | B-009 | correlation fallback | `cargo test --lib components::chat::reducer::targeted::correlation_tests::correlated_complete_counts_each_fallback_visit -- --exact`; `cargo test --lib components::chat::reducer::targeted::correlation_tests::pending_correlated_complete_counts_rejected_readiness_scan -- --exact`; `cargo test --lib components::chat::reducer::targeted::correlation_tests::cancel_and_fail_count_each_correlation_visit -- --exact`; `cargo test --test chat_conversation_contracts cancel_cascades_across_correlated_messages_atomically -- --exact` |
 | B-010 | common replay/proof entry | `cargo test --test chat_conversation_contracts replay_is_idempotent_and_bounded -- --exact`; `cargo test --test chat_conversation_contracts event_id_conflict_is_typed -- --exact` |
-| B-011 | test-only `ReducerCost` | `cargo test --lib components::chat::reducer::targeted::tests::cost_dimensions_are_independent -- --exact`; `cargo test --lib components::chat::reducer::targeted::correlation_tests::correlated_complete_counts_each_fallback_visit -- --exact`; `cargo test --lib components::chat::reducer::targeted::correlation_tests::pending_correlated_complete_counts_rejected_readiness_scan -- --exact`; `cargo test --lib components::chat::reducer::targeted::correlation_tests::cancel_and_fail_count_each_correlation_visit -- --exact` |
+| B-011 | test-only `ReducerCost` | `cargo test --lib components::chat::reducer::targeted::tests::cost_dimensions_are_independent -- --exact`; `cargo test --lib components::chat::reducer::targeted::correlation_tests::correlated_complete_counts_each_fallback_visit -- --exact`; `cargo test --lib components::chat::reducer::targeted::correlation_tests::pending_correlated_complete_counts_rejected_readiness_scan -- --exact`; `cargo test --lib components::chat::reducer::targeted::correlation_tests::cancel_and_fail_count_each_correlation_visit -- --exact`; `cargo test --lib components::chat::reducer::targeted::correlation_tests::push_counts_index_rebuild_validation_and_identity_backup_visits -- --exact`; `cargo test --lib components::chat::reducer::targeted::correlation_tests::append_block_counts_existing_and_candidate_identity_backup_visits -- --exact` |
 | B-012 | existing contract suites | `cargo test --workspace --all-targets --all-features --locked` |
 | B-013 | targeted classifier + counters | `cargo test --lib components::chat::reducer::targeted::tests::local_paths_skip_global_work -- --exact` |
 
@@ -158,6 +158,21 @@ private `MessageIndex::rebuild` → restored state。无网络、文件持久化
 - [ ] Compatibility: 现有 chat contract、snapshot/proof、doc tests 原样通过。
 - [ ] Coverage: changed production lines ≥80%，`message_index.rs` 与 targeted fast path
   executable line/branch 100%。
+- [ ] SpecRail: 将 `SPEC_RAIL_ROOT` 指向可信且固定 revision 的 SpecRail checkout，
+  再在临时镜像中运行本 packet，不能假设 rnk checkout 内自带 SpecRail scripts：
+
+  ```sh
+  test -n "$SPEC_RAIL_ROOT" && test -d "$SPEC_RAIL_ROOT/checks"
+  specrail_tmp="$(mktemp -d)"
+  cp -R "$SPEC_RAIL_ROOT"/. "$specrail_tmp"/
+  mkdir -p "$specrail_tmp/specs/GH143"
+  cp specs/GH143/product.md specs/GH143/tech.md specs/GH143/tasks.md \
+    "$specrail_tmp/specs/GH143/"
+  python3 "$specrail_tmp/checks/check_workflow.py" \
+    --repo "$specrail_tmp" --spec-dir specs/GH143
+  python3 "$specrail_tmp/tools/spec_depth_audit.py" \
+    --spec-dir "$specrail_tmp/specs/GH143" --gate
+  ```
 - [ ] Full verification:
   `cargo fmt --all -- --check`；
   `cargo check --workspace --all-targets --all-features --locked`；

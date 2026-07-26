@@ -16,8 +16,16 @@ impl MessageIndex {
     }
 
     pub(super) fn rebuild(messages: &[ChatMessage]) -> Result<Self, ()> {
+        Self::rebuild_with(messages, &mut || {})
+    }
+
+    pub(in crate::components::chat) fn rebuild_with(
+        messages: &[ChatMessage],
+        visit: &mut dyn FnMut(),
+    ) -> Result<Self, ()> {
         let mut positions = BTreeMap::new();
         for (position, message) in messages.iter().enumerate() {
+            visit();
             if positions.insert(message.id, position).is_some() {
                 return Err(());
             }
@@ -38,16 +46,24 @@ impl MessageIndex {
         Some(position)
     }
 
+    #[cfg(test)]
+    pub(super) fn insert_position_for_test(&mut self, id: MessageId, position: usize) {
+        self.positions.insert(id, position);
+    }
+
     pub(in crate::components::chat) fn inconsistent_id(
         &self,
         messages: &[ChatMessage],
+        visit: &mut dyn FnMut(),
     ) -> Option<MessageId> {
         for (position, message) in messages.iter().enumerate() {
+            visit();
             if self.positions.get(&message.id) != Some(&position) {
                 return Some(message.id);
             }
         }
         self.positions.iter().find_map(|(id, position)| {
+            visit();
             messages
                 .get(*position)
                 .is_none_or(|message| message.id != *id)

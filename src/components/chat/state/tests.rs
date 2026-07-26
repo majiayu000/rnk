@@ -56,7 +56,41 @@ fn message_index_fails_loudly_for_out_of_bounds_position() {
 fn message_index_reports_wrong_message_at_recorded_position() {
     let index = MessageIndex::rebuild(&[indexed_message(1)]).unwrap();
     assert_eq!(
-        index.inconsistent_id(&[indexed_message(2)]),
+        index.inconsistent_id(&[indexed_message(2)], &mut || {}),
         Some(MessageId::new(2)),
     );
+}
+
+#[test]
+fn message_index_validation_reports_out_of_bounds_position() {
+    let index = MessageIndex::rebuild(&[indexed_message(1)]).unwrap();
+    assert_eq!(
+        index.inconsistent_id(&[], &mut || {}),
+        Some(MessageId::new(1)),
+    );
+}
+
+#[test]
+fn message_index_validation_reports_extra_wrong_identity() {
+    let messages = [indexed_message(1)];
+    let mut index = MessageIndex::rebuild(&messages).unwrap();
+    index.insert_position_for_test(MessageId::new(2), 0);
+    assert_eq!(
+        index.inconsistent_id(&messages, &mut || {}),
+        Some(MessageId::new(2)),
+    );
+}
+
+#[test]
+fn message_index_reports_every_rebuild_and_validation_visit() {
+    let messages = [indexed_message(1), indexed_message(2)];
+    let mut rebuild_visits = 0;
+    let index = MessageIndex::rebuild_with(&messages, &mut || rebuild_visits += 1).unwrap();
+    assert_eq!(rebuild_visits, 2);
+    let mut validation_visits = 0;
+    assert_eq!(
+        index.inconsistent_id(&messages, &mut || validation_visits += 1),
+        None,
+    );
+    assert_eq!(validation_visits, 4);
 }

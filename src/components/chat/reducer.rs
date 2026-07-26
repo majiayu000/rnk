@@ -42,7 +42,9 @@ impl MutationBackup {
             | ConversationUpdate::AppendMessageBlock(_) | ConversationUpdate::InsertMessageBlock(_)
             | ConversationUpdate::EditMessage(_) | ConversationUpdate::DeleteMessage(_)
             | ConversationUpdate::Resend(_))
-            .then(|| IdentityBackup::capture(state, update, affected));
+            .then(|| IdentityBackup::capture(state, update, affected,
+                || targeted::record_message_visits(1),
+                || targeted::record_block_visits(1)));
         Self { messages, added, identities }
     }
     fn restore(self, state: &mut ConversationState) {
@@ -62,7 +64,7 @@ impl MutationBackup {
                 state.messages.insert(index.min(state.messages.len()), original);
             }
         }
-        state.rebuild_message_index();
+        state.rebuild_message_index(|| targeted::record_message_visits(1));
         if let Some(identities) = self.identities { identities.restore(state); }
     }
 }
@@ -240,7 +242,7 @@ fn push(state: &mut ConversationState, message: &ChatMessage, _resend_source: Op
         register_new_entry(state, message.id, entry, false, &permitted_result_calls)?;
     }
     state.messages.push(message.clone());
-    state.rebuild_message_index();
+    state.rebuild_message_index(|| targeted::record_message_visits(1));
     Ok(())
 }
 
@@ -597,7 +599,7 @@ fn delete_message(state: &mut ConversationState, message_id: MessageId)
     let message = state.messages[position].clone();
     for entry in &message.blocks { retire_entry(state, message_id, entry); }
     state.messages.remove(position);
-    state.rebuild_message_index();
+    state.rebuild_message_index(|| targeted::record_message_visits(1));
     state.retired_messages.insert(message_id);
     Ok(())
 }
@@ -636,7 +638,8 @@ fn live_call_ids(state: &ConversationState) -> BTreeSet<ToolCallId> {
 
 fn validate_conversation(state: &ConversationState) -> Result<(), ConversationError> {
     targeted::record_global_validation();
-    if let Some(message_id) = state.message_index.inconsistent_id(&state.messages) {
+    if let Some(message_id) = state.message_index.inconsistent_id(&state.messages,
+        &mut || targeted::record_message_visits(1)) {
         return Err(ConversationError::InvalidMessage {
             message_id,
             reason: "message position index is inconsistent",

@@ -371,7 +371,7 @@ mod tests {
                 .iter()
                 .flat_map(|message| message.blocks.iter().map(|entry| entry.id)),
         );
-        state.rebuild_message_index();
+        state.rebuild_message_index(|| {});
         state
     }
 
@@ -479,7 +479,7 @@ mod tests {
         result_message.status = MessageStatus::Complete;
         let mut state = ConversationState::new(0, NonZeroUsize::new(4).unwrap());
         state.messages = vec![call_message, result_message];
-        state.rebuild_message_index();
+        state.rebuild_message_index(|| {});
         let update = ConversationUpdate::complete(target_guard(&state, MessageId::new(1)));
         reset_cost();
         state
