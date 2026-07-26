@@ -7,6 +7,8 @@ use unicode_width::UnicodeWidthStr;
 
 const TAB_STOP: usize = 4;
 
+mod zero_width;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SourceScalar {
     Break,
@@ -495,13 +497,10 @@ impl Output {
         y: i64,
         display_width: usize,
     ) -> Option<GraphemeWriteFootprint> {
-        let target_cells = self.target_cells(x, y, display_width)?;
         if display_width == 0 {
-            return Some(GraphemeWriteFootprint {
-                target_cells,
-                old_cells: Vec::new(),
-            });
+            return self.zero_width_attachment_footprint(x, y);
         }
+        let target_cells = self.target_cells(x, y, display_width)?;
         if !self.active_clips_contain_grapheme(x, y, display_width) {
             return None;
         }
@@ -614,33 +613,6 @@ impl Output {
             }
             self.mark_cell_dirty(*position);
         }
-    }
-
-    fn attach_zero_width(&mut self, x: i64, y: i64, text: &str) -> GraphemeWriteOutcome {
-        if y < 0 || y >= i64::from(self.height) || x <= 0 || x > i64::from(self.width) {
-            return GraphemeWriteOutcome::Clipped;
-        }
-        let previous = CellPosition {
-            x: (x - 1) as u16,
-            y: y as u16,
-        };
-        let owner = self.owner_footprint(previous);
-        if owner.is_empty() || !self.active_clips_contain_cells(&owner) {
-            return GraphemeWriteOutcome::Clipped;
-        }
-        let lead = owner[0];
-        let idx = lead.y as usize * self.width as usize + lead.x as usize;
-        let GraphemeCell::Lead { suffix, .. } = &mut self.grapheme_cells[idx] else {
-            return GraphemeWriteOutcome::Clipped;
-        };
-        suffix.push_str(text);
-        for position in &owner {
-            self.mark_cell_dirty(*position);
-        }
-        GraphemeWriteOutcome::Committed(GraphemeWriteFootprint {
-            target_cells: Vec::new(),
-            old_cells: owner,
-        })
     }
 
     /// Fill a rectangle with a character
