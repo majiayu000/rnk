@@ -25,12 +25,13 @@ GH-132: https://github.com/majiayu000/rnk/issues/132
 selection；GH-131 / merged PR #142 继续拥有 VirtualText/span-only compatibility。GH-132
 不复制或顺带修复两者。
 
-issue #132 当前 label 是 `ready_to_implement`，但起草前缺少本 packet。implx auto 的
-creation-time route artifact `gh132-route-gate.json` 明确给出
+issue #132 的 readiness 会随人工 workflow 推进而变化；2026-07-27 round-5 fresh 查询得到
+唯一 `ready_to_spec`。implx auto 的 creation-time route artifact
+`gh132-route-gate.json` 明确给出
 `current_state=ready_to_spec`、`route=write_spec`、`decision=allowed`。该 artifact 只授权
 写 spec；它不是后续实现的可执行 gate 依赖。本 PR 不改 label，implementation 仍等待人工
-spec approval，并按 Tasks 中文档化的 `SPEC_RAIL_ROOT` fail-closed 运行 fresh
-implementation gate。
+spec approval，并按 Tasks 中文档化的 `SPEC_RAIL_ROOT` fail-closed fresh 查询 live issue
+labels、验证唯一 canonical readiness，再把该原值传入 implementation gate。
 
 ## Codebase Context
 
@@ -45,7 +46,7 @@ fresh current main 上重新定位行号、签名和三条 PR #142 受控交集�
 | Extent handling | `src/renderer/tree_renderer.rs:113` | non-finite extent 返回 unscoped NonFinite；finite negative/oversized extent 按既有规则 clamp 0/u16::MAX | 保持 finite extent compatibility，但 non-finite 与随后 checked edge overflow携带当前 element ID |
 | Text/scroll composition | `src/renderer/tree_renderer.rs:189`, `src/renderer/tree_renderer.rs:202`, `src/renderer/tree_renderer.rs:218` | text origin 用 signed x/y、content rect、padding 与 integer scroll checked add/sub；child offset 继续以 f32 累积 | 每个既有 f32 semantic boundary用wider shadow查范围、用原f32舍入结果继续累积；padding独立floor后再checked integer add；每个 failure归属当前 element |
 | Border/background paint | `src/renderer/tree_renderer.rs:177`, `src/renderer/tree_renderer.rs:247`, `src/renderer/tree_renderer.rs:331` | staged fill/paint 可在 checked arithmetic 中返回无 owner Overflow | background、border 与 paint helper 显式携带 owner，staged failure不回落到 root |
-| Projection error/flow validation | `src/renderer/tree_renderer/projection.rs:127`, `src/renderer/tree_renderer/projection.rs:174`, `src/renderer/tree_renderer/projection.rs:256`, `src/renderer/tree_renderer/projection.rs:311` | `NonFiniteCoordinate`/`CoordinateOverflow` 没有 ID；`validate_tree_flows` 已知 child ID，但 `validate_flow`/`validate_row_footprints` 丢失它，overflow最终使用 root fallback | coordinate variants在产生点携带 `ElementId`；flow validation签名逐层传当前 child ID；root fallback只服务真正无 owner 的 non-coordinate malformed/finish failure |
+| Projection error/flow validation | `src/renderer/tree_renderer/projection.rs:127`, `src/renderer/tree_renderer/projection.rs:174`, `src/renderer/tree_renderer/projection.rs:256`, `src/renderer/tree_renderer/projection.rs:311` | `NonFiniteCoordinate`/`CoordinateOverflow` 没有 ID；`validate_tree_flows` 已知 child ID，但 `validate_flow`/`validate_row_footprints` 丢失它；reverse-cell duplicate 的 publish 与 round-trip 检测分别已知当前 `ProjectionId` 和 `record.id`，却仍可落到 root fallback | coordinate variants在产生点携带 `ElementId`；flow validation签名逐层传当前 child ID；`DuplicateReverseCell(ProjectionId)`在 publish 使用当前 ID、round-trip 使用 `record.id`；root fallback只服务真正无 owner 的 non-coordinate malformed/finish failure |
 | Projection transaction | `src/renderer/tree_renderer/projection.rs:228`, `src/renderer/tree_renderer/projection.rs:241`, `src/renderer/tree_renderer/projection.rs:250` | 先 validate，复制 staged Output，finish/round-trip成功后一次 `commit_staged` | 保持一次 publish boundary；coordinate failure前后的 projection builder永不逃逸 |
 | Staged coordinate arithmetic | `src/renderer/tree_renderer/projection/staged.rs:46`, `src/renderer/tree_renderer/projection/staged.rs:71`, `src/renderer/tree_renderer/projection/staged.rs:187`, `src/renderer/tree_renderer/projection/staged.rs:212`, `src/renderer/tree_renderer/projection/staged.rs:266` | flow token有 `ProjectionId`，但 base add、paint/fill/checkpoint overflow仍生成无 owner variant | flow使用 `id.element_id`；background/border入口显式传 owner；所有 checked failures构造 scoped coordinate error |
 | Public error surface | `src/renderer/error.rs:30`, `src/renderer/error.rs:48`, `src/renderer/error.rs:97`, `src/renderer/error.rs:137` | `TextCoordinateError::{NonFinite,Overflow}` 与 `TextRenderError::Coordinate` 已存在，`source()` 保留 typed cause；Display只含 ID/classification | 不增 public variant/字段；增加 safe display/source-chain regression，证明不泄漏 frame/source contents |
@@ -82,9 +83,11 @@ overlay同一固定revision的`workflow.yaml`、`states.yaml`、`labels.yaml`和
 
 开始任何实现 edit 前必须同时满足：
 
-1. GH-132 spec PR 已 merged，存在 human approval，issue 有唯一 canonical
-   `ready_to_implement`，fresh route gate 对 `implement` 返回 `allowed`。在首次 source/test
-   edit前必须fetch `origin/main`，把解析出的 exact SHA记录为
+1. GH-132 spec PR 已 merged且存在 human approval；fresh GitHub query 必须证明 issue 恰有
+   一个 SpecRail `labels.yaml` 声明的 canonical readiness，把该 live 原值逐字传给 route
+   gate，随后同时要求其为 `ready_to_implement` 且 `implement` decision 为 `allowed`。
+   `ready_to_spec` 或任何其他状态必须 fail closed，禁止把 `ready_to_implement` 硬编码为
+   route 输入。在首次 source/test edit前必须fetch `origin/main`，把解析出的 exact SHA记录为
    `GH132_IMPLEMENTATION_BASE_SHA`，并同时证明worktree porcelain为空且`HEAD`逐字等于该
    SHA；只证明某个旧SHA是ancestor不满足此 gate。
 2. PR #137（GH-124）在本 packet 最初的 `b4f39ed...` anchor之后，于
@@ -205,9 +208,12 @@ scoped variants。owner在产生点确定：
   conversion时的root参数补 ID；exact test必须把该错误转换到public
   `TextRenderError::Coordinate`并断言注入child而非root；
 - `MissingLayout`/`MissingCurrentFlow` 继续携带自身 ID；
-- `DuplicateForwardRecord(ProjectionId)`使用`ProjectionId.element_id`；只有
-  `DuplicateReverseCell`、无ID的malformed projection、writer/clip finish failure与test-only
-  injected failure可使用调用入口fallback；
+- `DuplicateForwardRecord(ProjectionId)`与`DuplicateReverseCell(ProjectionId)`都使用
+  `ProjectionId.element_id`；reverse-cell duplicate 在
+  `ProjectionBuilder::publish` 使用当前 publish ID，在 `validate_round_trip` 使用当前
+  `record.id`，两处都不得丢成 ownerless variant；
+- 只有无ID的malformed projection、writer/clip finish failure与test-only injected
+  failure可使用调用入口fallback；
 - round-trip/malformed/finish等真正无 current owner 的 **non-coordinate** 错误才接受
   `try_render_element_tree` 提供的 root fallback；所有 coordinate variants已经scoped，
   `into_text_render_error` 不得为其读取或覆盖 fallback。
@@ -296,7 +302,7 @@ MissingCurrentFlow和 PR #137 zero-width tests都是 mandatory regressions。
 | B-006 | finite operands / f32-range / signed bound overflow | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::finite_operands_that_overflow_f32_composition_and_i64_bounds_classify_overflow -- --exact` |
 | B-007 | non-finite classification | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::nan_and_infinities_classify_as_non_finite_for_each_coordinate_source -- --exact` |
 | B-008 | scoped current owner, including flow validation | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::nested_coordinate_failures_report_exact_current_child -- --exact`; `cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::coordinates::nested_flow_validation_overflow_reaches_public_error_with_exact_child -- --exact` |
-| B-009 | owner/fallback boundary | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::coordinate_owner_survives_conversion_and_only_unscoped_failures_use_root_fallback -- --exact`; the nested validation test must also prove conversion ignores the root fallback |
+| B-009 | owner/fallback boundary | `cargo test --workspace --lib --locked renderer::tree_renderer::tests::coordinates::coordinate_owner_survives_conversion_and_only_unscoped_failures_use_root_fallback -- --exact`; this exact test must inject reverse-cell duplicates at both publish and round-trip validation with distinct root/current IDs and assert the current `ProjectionId`/`record.id`; the nested validation test must also prove conversion ignores the root fallback |
 | B-010 | public string caller | `cargo test --test text_flow_renderer_error_paths --locked nested_child_coordinate_errors_reach_string_api_with_exact_id -- --exact` |
 | B-011 | public TestRenderer callers | `cargo test --test text_flow_renderer_error_paths --locked nested_child_coordinate_errors_reach_test_renderer_with_exact_id -- --exact` |
 | B-012 | dynamic/App typed chain + canonical filtered identity | `cargo test --workspace --lib --locked renderer::static_content::tests::filter_static_elements_preserves_original_ids_for_retained_dynamic_nodes -- --exact`; `cargo test --workspace --lib --locked renderer::pipeline::typed_error_tests::nested_child_coordinate_errors_keep_id_and_candidate_state -- --exact`; `cargo test --workspace --lib --locked renderer::app::tests::nested_child_coordinate_error_reaches_app_io_source_chain -- --exact` |
@@ -366,8 +372,10 @@ owner attribution与transaction failure关键分支 100%。`cargo-llvm-cov` 固�
 `0.8.7`；raw JSON、base/head/merge-base、diff SHA-256、tool version、command和threshold
 必须进入可重算provenance artifact，并由
 `tests/text_flow_renderer_error_paths.rs::gh132_current_head_coverage_contract` 的
-fixture/produce/validate modes fail-closed验证。CI、review与 reviewThreads也必须fresh query
-同一 head。
+fixture/produce/validate modes fail-closed验证。coverage目录必须解析到worktree之外，且
+验证前后的worktree都保持clean。长时间coverage/full gates结束后必须再次fetch main并
+fresh查询PR，逐字确认head、base、current main与merge-base仍等于开始时记录值；CI、
+review与 reviewThreads使用这次最终查询并绑定同一 head。
 
 ## 风险
 

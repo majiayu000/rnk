@@ -11,9 +11,10 @@ GH-132: https://github.com/majiayu000/rnk/issues/132
 - Route at spec creation:
   `ready_to_spec -> write_spec` (`gh132-route-gate.json`, decision `allowed`)
 
-当前 issue 的 `ready_to_implement` label 早于本 packet，不能作为实现授权。本 task plan是
-spec-only交付的一部分；所有 implementation checkbox保持未完成，直到 human spec approval
-和 `SP132-T1` fresh gate全部通过。
+2026-07-27 round-5 fresh 查询得到 issue 唯一 readiness 为 `ready_to_spec`；该快照不能
+作为未来 route 的硬编码输入。本 task plan是spec-only交付的一部分；所有 implementation
+checkbox保持未完成，直到 human spec approval 和 `SP132-T1` 对届时 live readiness 的
+fresh gate全部通过。
 
 ## 实现任务
 
@@ -22,8 +23,10 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
   - Dependencies: GH-132 spec PR 已 merged并有 human approval；不得把本 spec PR的创建、
     agent review或当前 premature label当作批准。
   - Done when:
-    1. fresh SpecRail implement route对 issue #132、merged product/tech返回 `allowed`；
-    2. issue只有唯一 canonical `ready_to_implement`且无冲突 readiness label；
+    1. fresh GitHub query证明 issue #132 只有一个由 pinned SpecRail `labels.yaml` 声明的
+       canonical readiness，并把该逐字值传给 implement route，不得硬编码；
+    2. 上述 live readiness 必须是 `ready_to_implement`，且fresh SpecRail implement route
+       对 merged product/tech返回 `allowed`；`ready_to_spec`或任何其他值都fail closed；
     3. PR #137 已最终 merged、非 draft，其 merge commit是fresh expected main祖先，fresh
        6路径file set、newline SHA-256和与GH132 manifest精确两路径受控交集均匹配；两条
        zero-width focused tests各以`matched=1`重跑；
@@ -74,6 +77,22 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
       'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
       "$SPEC_RAIL_ROOT/checks/github_duplicate_evidence.py")" = \
       eab228a33d84a43cde1ba3587d5edde50993ae11c5c5a522ee8d01b64b284d55
+    ISSUE_JSON="$(gh issue view 132 --repo majiayu000/rnk \
+      --json number,state,labels)"
+    test "$(printf '%s\n' "$ISSUE_JSON" | jq -r '.number')" = "132"
+    test "$(printf '%s\n' "$ISSUE_JSON" | jq -r '.state')" = "OPEN"
+    CANONICAL_READINESS_LABELS="$(awk '
+      /^  readiness:/ { inside = 1; next }
+      inside && /^    - / { sub(/^    - /, ""); print; next }
+      inside { exit }' "$SPEC_RAIL_ROOT/labels.yaml" | LC_ALL=C sort)"
+    ISSUE_LABELS="$(printf '%s\n' "$ISSUE_JSON" |
+      jq -r '.labels[].name' | LC_ALL=C sort)"
+    LIVE_READINESS_LABELS="$(comm -12 \
+      <(printf '%s\n' "$CANONICAL_READINESS_LABELS") \
+      <(printf '%s\n' "$ISSUE_LABELS"))"
+    test "$(printf '%s\n' "$LIVE_READINESS_LABELS" |
+      awk 'NF { count++ } END { print count + 0 }')" -eq 1
+    LIVE_ROUTE_STATE="$LIVE_READINESS_LABELS"
     WORKTREE_STATUS="$(git status --porcelain=v1 --untracked-files=all)"
     test -z "$WORKTREE_STATUS"
     git fetch --no-tags origin main
@@ -92,9 +111,10 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     python3 "$SPEC_RAIL_MIRROR/checks/github_duplicate_evidence.py" \
       --github-repo majiayu000/rnk --issue 132 --remote origin --json \
       > "$SPEC_RAIL_MIRROR/evidence/gh132-duplicate.json"
+    test "$LIVE_ROUTE_STATE" = "ready_to_implement"
     python3 "$SPEC_RAIL_MIRROR/checks/route_gate.py" \
       --repo "$SPEC_RAIL_MIRROR" \
-      --route implement --issue 132 --state ready_to_implement \
+      --route implement --issue 132 --state "$LIVE_ROUTE_STATE" \
       --artifact product_spec=specs/GH132/product.md \
       --artifact tech_spec=specs/GH132/tech.md \
       --duplicate-evidence "$SPEC_RAIL_MIRROR/evidence/gh132-duplicate.json" \
@@ -230,8 +250,10 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     4. coordinate variants在产生点携带exact current element ID；
        `validate_tree_flows -> validate_flow(element.id, ...) ->
        validate_row_footprints(element.id, ...)`逐层保留child owner；coordinate overflow、
-       malformed flow和带`ProjectionId`的duplicate均消费已有owner，root fallback只用于
-       错误数据中真正没有ID的finish failure；
+       malformed flow和带`ProjectionId`的forward/reverse duplicate均消费已有owner；
+       reverse duplicate在publish使用当前`ProjectionId`、round-trip validation使用
+       `record.id`；exact fixture分别注入两处duplicate并让root/current ID不同，断言public
+       error精确归属current owner。root fallback只用于错误数据中真正没有ID的finish failure；
     5. caller Output与projection只在全部校验成功后single commit；
     6. 两个既有tests文件只增加子模块声明，新增fixture放到各自`coordinates.rs`，所有
        production/test文件低于800行，不压缩旧测试、不用`#[rustfmt::skip]`。
@@ -426,6 +448,15 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     : "${SPEC_RAIL_ROOT:?set the pinned SpecRail checkout root}"
     : "${GH132_PR_EVIDENCE:?set the exact-head PR evidence JSON path}"
     case "$GH132_EVIDENCE_DIR" in /*) ;; *) exit 1 ;; esac
+    WORKTREE_ROOT="$(git rev-parse --show-toplevel)"
+    WORKTREE_REAL="$(python3 -c \
+      'import os,sys; print(os.path.realpath(sys.argv[1]))' "$WORKTREE_ROOT")"
+    GH132_EVIDENCE_REAL="$(python3 -c \
+      'import os,sys; print(os.path.realpath(sys.argv[1]))' "$GH132_EVIDENCE_DIR")"
+    case "$GH132_EVIDENCE_REAL/" in
+      "$WORKTREE_REAL/"*) exit 1 ;;
+    esac
+    GH132_EVIDENCE_DIR="$GH132_EVIDENCE_REAL"
     SPEC_RAIL_REV=bfc60f26164af5df1ebd3b5cb79d07379fc416b7
     test "$(git -C "$SPEC_RAIL_ROOT" rev-parse 'HEAD^{commit}')" = "$SPEC_RAIL_REV"
     test "$(git -C "$SPEC_RAIL_ROOT" remote get-url origin)" = \
@@ -440,7 +471,7 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     git fetch --no-tags origin main
     EXPECTED_CURRENT_MAIN_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
     PR_JSON="$(gh pr view "$GH132_IMPLEMENTATION_PR" --repo majiayu000/rnk \
-      --json baseRefOid,headRefOid,body)"
+      --json baseRefOid,headRefOid,body,statusCheckRollup)"
     PR_BASE_SHA="$(printf '%s\n' "$PR_JSON" | jq -r '.baseRefOid')"
     PR_HEAD_SHA="$(printf '%s\n' "$PR_JSON" | jq -r '.headRefOid')"
     test "$PR_BASE_SHA" = "$EXPECTED_CURRENT_MAIN_SHA"
@@ -465,6 +496,7 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
       "$EXPECTED_CURRENT_MAIN_SHA...$PR_HEAD_SHA" | LC_ALL=C sort)"
     test "$ACTUAL_CHANGED_PATHS" = "$EXPECTED_CHANGED_PATHS"
     GH132_MERGE_BASE_SHA="$(git merge-base "$EXPECTED_CURRENT_MAIN_SHA" "$PR_HEAD_SHA")"
+    test "$GH132_MERGE_BASE_SHA" = "$EXPECTED_CURRENT_MAIN_SHA"
     GH132_DIFF_SHA256="$(git diff --no-ext-diff --binary \
       "$EXPECTED_CURRENT_MAIN_SHA...$PR_HEAD_SHA" -- | python3 -c \
       'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
@@ -504,6 +536,58 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     cargo check --workspace --all-targets --all-features --locked
     cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -A clippy::collapsible_if -A clippy::manual_is_multiple_of
     cargo test --workspace --all-targets --all-features --locked
+    git fetch --no-tags origin main
+    FINAL_CURRENT_MAIN_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
+    FINAL_PR_JSON="$(gh pr view "$GH132_IMPLEMENTATION_PR" \
+      --repo majiayu000/rnk \
+      --json baseRefOid,headRefOid,body,statusCheckRollup)"
+    FINAL_PR_BASE_SHA="$(printf '%s\n' "$FINAL_PR_JSON" |
+      jq -r '.baseRefOid')"
+    FINAL_PR_HEAD_SHA="$(printf '%s\n' "$FINAL_PR_JSON" |
+      jq -r '.headRefOid')"
+    FINAL_MERGE_BASE_SHA="$(git merge-base \
+      "$FINAL_CURRENT_MAIN_SHA" "$FINAL_PR_HEAD_SHA")"
+    test "$FINAL_CURRENT_MAIN_SHA" = "$EXPECTED_CURRENT_MAIN_SHA"
+    test "$FINAL_PR_BASE_SHA" = "$PR_BASE_SHA"
+    test "$FINAL_PR_HEAD_SHA" = "$PR_HEAD_SHA"
+    test "$FINAL_MERGE_BASE_SHA" = "$GH132_MERGE_BASE_SHA"
+    test "$(git rev-parse 'HEAD^{commit}')" = "$FINAL_PR_HEAD_SHA"
+    FINAL_CI_TOTAL="$(printf '%s\n' "$FINAL_PR_JSON" |
+      jq '[.statusCheckRollup[] | select(.__typename == "CheckRun")] | length')"
+    FINAL_CI_SUCCESS="$(printf '%s\n' "$FINAL_PR_JSON" |
+      jq '[.statusCheckRollup[] |
+           select(.__typename == "CheckRun" and
+                  .status == "COMPLETED" and .conclusion == "SUCCESS")] |
+          length')"
+    test "$FINAL_CI_TOTAL" -gt 0
+    test "$FINAL_CI_SUCCESS" -eq "$FINAL_CI_TOTAL"
+    FINAL_CI_SHA256="$(printf '%s\n' "$FINAL_PR_JSON" |
+      jq -S '.statusCheckRollup' | python3 -c \
+      'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+    FINAL_CI_RUN_IDS="$(printf '%s\n' "$FINAL_PR_JSON" | jq -r '
+      [.statusCheckRollup[] |
+       select(.__typename == "CheckRun") |
+       .detailsUrl |
+       capture("/actions/runs/(?<run>[0-9]+)(/|$)").run] |
+      unique | .[]')"
+    test -n "$FINAL_CI_RUN_IDS"
+    printf '%s\n' "$FINAL_PR_JSON" |
+      jq -e --arg head "$FINAL_PR_HEAD_SHA" \
+        --arg base "$FINAL_PR_BASE_SHA" --arg main "$FINAL_CURRENT_MAIN_SHA" \
+        --arg merge_base "$FINAL_MERGE_BASE_SHA" \
+        --arg diff "$GH132_DIFF_SHA256" \
+        '.body | contains($head) and contains($base) and contains($main) and
+                 contains($merge_base) and contains($diff)' >/dev/null
+    while IFS= read -r run_id; do
+      test -n "$run_id"
+      printf '%s\n' "$FINAL_PR_JSON" |
+        jq -e --arg run_id "$run_id" '.body | contains($run_id)' >/dev/null
+    done <<<"$FINAL_CI_RUN_IDS"
+    FINAL_WORKTREE_STATUS="$(git status --porcelain=v1 --untracked-files=all)"
+    test -z "$FINAL_WORKTREE_STATUS"
+    printf 'FINAL_HEAD=%s\nFINAL_BASE=%s\nFINAL_MAIN=%s\nFINAL_MERGE_BASE=%s\nFINAL_CI_SHA256=%s\n' \
+      "$FINAL_PR_HEAD_SHA" "$FINAL_PR_BASE_SHA" "$FINAL_CURRENT_MAIN_SHA" \
+      "$FINAL_MERGE_BASE_SHA" "$FINAL_CI_SHA256"
     ```
     `PR_BASE_SHA` 必须与fresh current main完全相等，且该 SHA 必须是PR head的exact
     merge-base；仅证明PR137或旧main是ancestor不够。另逐条运行Tech mapping和ledger全部
@@ -518,8 +602,13 @@ spec-only交付的一部分；所有 implementation checkbox保持未完成，�
     保留到全部mapped/full tests结束。`SPEC_RAIL_GATE_REPO`必须保留到PR gate JSON归档；
     它的`HEAD`必须等于`PR_HEAD_SHA`，overlay只允许来自已校验的固定SpecRail revision，
     不得拿SpecRail自身git history代替implementation history。PR body必须包含同一exact
-    head、base与diff SHA-256。
-    最后fresh查询PR exact head、CI、reviewThreads、coverage与SpecRail required PR gate。
+    head、base、current main、merge-base、diff SHA-256与最终CI run ID。evidence目录
+    realpath必须在worktree之外；coverage创建前和
+    所有长门禁后worktree都必须clean。最后一次fresh fetch/query必须逐字证明head、base、
+    current main和merge-base与长门禁前记录值不变，并从该最终PR JSON验证全部CheckRun
+    success、计算CI evidence digest；之后才查询reviewThreads、coverage与SpecRail required
+    PR gate。evidence path gate还必须以relative、worktree自身、worktree child和经symlink
+    指回worktree的fixture证明均fail closed，并证明一个真实外部目录通过。
   - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009,
     B-010, B-011, B-012, B-013, B-014, B-015, B-016, B-017, B-018, B-019,
     B-020, B-021
