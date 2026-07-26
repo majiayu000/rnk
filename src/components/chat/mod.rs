@@ -148,6 +148,65 @@ fn restore_map<K: Ord, V>(map: &mut BTreeMap<K, V>, key: K, value: Option<V>) {
 }
 }
 
+#[rustfmt::skip]
+mod proof {
+use super::*;
+use std::{collections::{BTreeMap, BTreeSet}, fmt::Debug};
+
+fn fingerprint(value: &impl Debug) -> [u64; 4] {
+    let bytes = format!("{value:?}"); let mut found = [
+        0xcbf29ce484222325_u64, 0x84222325cbf29ce4, 0x9e3779b97f4a7c15, 0x517cc1b727220a95];
+    for byte in bytes.bytes() {
+        for (index, hash) in found.iter_mut().enumerate() {
+            *hash ^= u64::from(byte).wrapping_add(index as u64 * 0x9d);
+            *hash = hash.wrapping_mul(0x100000001b3).rotate_left((index * 11 + 5) as u32);
+        }
+    }
+    found
+}
+pub(super) fn record_fingerprint(previous: [u64; 4], event: &ConversationEvent,
+    outcome: &ApplyOutcome, state: [u64; 4]) -> [u64; 4] {
+    fingerprint(&(previous, event, outcome, state))
+}
+pub(super) fn current_state_fingerprint(state: &ConversationState) -> [u64; 4] {
+    fingerprint(&((&state.messages, state.revision, state.expected_sequence,
+        state.ledger_capacity, state.evicted_through), (&state.seen_messages,
+        &state.retired_messages, &state.seen_blocks, &state.retired_blocks,
+        &state.thinking_seen, &state.thinking_retired, &state.seen_tool_calls,
+        &state.retired_tool_calls, &state.result_slots)))
+}
+fn snapshot_state_fingerprint(value: &ConversationStateSnapshot) -> [u64; 4] {
+    let identities = &value.identities;
+    let seen_messages = identities.seen_messages().iter().copied().collect::<BTreeSet<_>>();
+    let retired_messages = identities.retired_messages().iter().copied().collect::<BTreeSet<_>>();
+    let seen_blocks = identities.seen_blocks().iter().copied().collect::<BTreeSet<_>>();
+    let retired_blocks = identities.retired_blocks().iter().copied().collect::<BTreeSet<_>>();
+    let thinking_seen = identities.thinking().iter().map(|history| (history.message_id(),
+        history.seen().iter().cloned().collect::<BTreeSet<_>>())).collect::<BTreeMap<_, _>>();
+    let thinking_retired = identities.thinking().iter().map(|history| (history.message_id(),
+        history.retired().iter().cloned().collect::<BTreeSet<_>>())).collect::<BTreeMap<_, _>>();
+    let seen_calls = identities.seen_tool_calls().iter().cloned().collect::<BTreeSet<_>>();
+    let retired_calls = identities.retired_tool_calls().iter().cloned().collect::<BTreeSet<_>>();
+    let result_slots = identities.result_slots().iter().cloned().collect::<BTreeMap<_, _>>();
+    fingerprint(&((&value.messages, value.revision, value.expected_sequence,
+        value.retention.capacity, value.retention.evicted_through), (seen_messages,
+        retired_messages, seen_blocks, retired_blocks, thinking_seen, thinking_retired,
+        seen_calls, retired_calls, result_slots)))
+}
+pub(super) fn evicted_proofs_are_valid(value: &ConversationStateSnapshot) -> bool {
+    let mut prior = None;
+    for record in &value.retention.records {
+        let Some(proof) = &record.proof else { return false; };
+        if proof.record != record_fingerprint(proof.previous, &record.event,
+            &record.outcome, proof.state)
+            || prior.is_some_and(|previous| proof.previous != previous) { return false; }
+        prior = Some(proof.record);
+    }
+    value.retention.records.last().and_then(|record| record.proof.as_ref())
+        .is_some_and(|proof| proof.state == snapshot_state_fingerprint(value))
+}
+}
+
 pub use error::ConversationError;
 pub use model::{
     AffectedMessage, AffectedMessageDisposition, AppendTextUpdate, ApplyOutcome, BlockId,
@@ -163,8 +222,8 @@ pub use model::{
 };
 pub use state::{
     ConversationIdentityHistory, ConversationState, ConversationStateSnapshot,
-    ProcessedEventRecord, RetentionHistory, ThinkingIdentityHistory, ToolResultLocation,
-    ToolResultSlot,
+    ProcessedEventRecord, RetentionHistory, RetentionProof, ThinkingIdentityHistory,
+    ToolResultLocation, ToolResultSlot,
 };
 
 macro_rules! failure_cause_accessor {

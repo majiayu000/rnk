@@ -5,24 +5,40 @@ mod compact {
 use super::super::*;
 use std::{collections::{BTreeMap, BTreeSet, VecDeque}, num::NonZeroUsize};
 
+/// Opaque evidence binding a retained event to its exact post-event state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetentionProof {
+    pub(in crate::components::chat) previous: [u64; 4],
+    pub(in crate::components::chat) state: [u64; 4],
+    pub(in crate::components::chat) record: [u64; 4],
+}
+
 /// One retained accepted event and its original outcome.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessedEventRecord {
     pub(in crate::components::chat) event: ConversationEvent,
     pub(in crate::components::chat) outcome: ApplyOutcome,
-    proven: bool,
+    pub(in crate::components::chat) proof: Option<RetentionProof>,
 }
 impl ProcessedEventRecord {
     /// Creates an externally assembled record that restoration must replay from its origin.
     pub fn new(event: ConversationEvent, outcome: ApplyOutcome) -> Self {
-        Self { event, outcome, proven: false }
+        Self { event, outcome, proof: None }
     }
-    pub(in crate::components::chat) fn proven(event: ConversationEvent,
-        outcome: ApplyOutcome) -> Self { Self { event, outcome, proven: true } }
+    /// Rebuilds a retained record with opaque evidence obtained from [`Self::proof`].
+    pub fn new_with_proof(event: ConversationEvent, outcome: ApplyOutcome,
+        proof: RetentionProof) -> Self { Self { event, outcome, proof: Some(proof) } }
+    pub(in crate::components::chat) fn proven(event: ConversationEvent, outcome: ApplyOutcome,
+        previous: [u64; 4], state: [u64; 4]) -> Self {
+        let record = super::super::proof::record_fingerprint(previous, &event, &outcome, state);
+        Self::new_with_proof(event, outcome, RetentionProof { previous, state, record })
+    }
     /// Returns the exact accepted event.
     pub fn event(&self) -> &ConversationEvent { &self.event }
     /// Returns the original successful outcome.
     pub fn outcome(&self) -> &ApplyOutcome { &self.outcome }
+    /// Returns opaque evidence for lossless persistence reconstruction, when available.
+    pub fn proof(&self) -> Option<&RetentionProof> { self.proof.as_ref() }
 }
 
 /// Bounded replay history and its honest eviction boundary.
@@ -225,7 +241,15 @@ impl ConversationState {
     /// Restores a snapshot only after validating every retained proof and identity history.
     pub fn try_restore(mut snapshot: ConversationStateSnapshot) -> Result<Self, ConversationError> {
         validate_snapshot(&snapshot)?;
-        for record in &mut snapshot.retention.records { record.proven = true; }
+        if snapshot.retention.evicted_through.is_none() && !snapshot.retention.records.is_empty() {
+            let first = snapshot.retention.records[0].event.sequence;
+            let mut replay = Self::new(first, snapshot.retention.capacity);
+            for record in &snapshot.retention.records {
+                replay.apply_event(record.event.clone()).map_err(|_|
+                    ConversationError::InvalidSnapshot { reason: "retained proof upgrade failed" })?;
+            }
+            snapshot.retention.records = replay.ledger.into();
+        }
         let identities = &snapshot.identities;
         let thinking_seen = identities.thinking.iter().map(|history|
             (history.message_id, history.seen.iter().cloned().collect())).collect();
@@ -358,7 +382,7 @@ fn validate_snapshot(value: &ConversationStateSnapshot) -> Result<(), Conversati
         if boundary.checked_add(1) != Some(first.event.sequence) {
             return invalid_snapshot("eviction boundary is not contiguous with ledger");
         }
-        if value.retention.records.iter().any(|record| !record.proven) {
+        if !super::super::proof::evicted_proofs_are_valid(value) {
             return invalid_snapshot("evicted history requires reducer-proven retained records");
         }
     }
@@ -422,7 +446,7 @@ fn validate_snapshot(value: &ConversationStateSnapshot) -> Result<(), Conversati
         }
         let mut replayed = replay.snapshot();
         for (found, supplied) in replayed.retention.records.iter_mut()
-            .zip(&value.retention.records) { found.proven = supplied.proven; }
+            .zip(&value.retention.records) { found.proof = supplied.proof.clone(); }
         if replayed != *value {
             return invalid_snapshot("retained replay does not produce the restored state");
         }
