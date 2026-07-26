@@ -154,8 +154,11 @@ prepend、resize 或 streaming 时产生可见跳动。
     property、10k workload、coverage 和 compatibility 通过结果。Coverage 必须由 committed
     `gh57-critical-paths-v1` ledger 确定性生成 `gh57-child-coverage-v1`，绑定 exact head/base/
     raw provenance，changed executable 至少 80%、ledger critical paths 逐项 100%；coverage
-    contract 的每次调用都显式提供受支持的 `GH65_COVERAGE_MODE`，missing/unknown mode fail
-    closed，ledger 中的 fixture 命令也不能省略该模式。其他版本、零匹配、ignored test、
+    contract 的每次调用都显式提供受支持且与阶段匹配的 `GH65_COVERAGE_MODE`。任何会发现并
+    执行该 contract 的强制 full `cargo llvm-cov --workspace --all-targets` 或
+    `cargo test --workspace --all-targets` 路径，以及 ledger fixture 命令，都必须使用
+    `GH65_COVERAGE_MODE=fixture`；producer/validator 分别只使用 `produce`/`validate`。
+    missing、unknown 或阶段错误的 mode 必须 fail closed。其他版本、零匹配、ignored test、
     部分列表或无法绑定该版本的结果不能证明完成。
 
 ## 验收标准
@@ -181,8 +184,8 @@ prepend、resize 或 streaming 时产生可见跳动。
 - [ ] GH-63 只经 render closure 消费；render failure typed 传播且不输出 partial/default frame。
 - [ ] 既有 `virtual_scroll_view` 兼容 fixture 与 crate 外 public API fixture 通过。
 - [ ] Implementation 开始前验证 GH-58/GH-60/GH-62 merged ancestry；最终 exact-head evidence
-  含可复算的 GH57 child coverage artifact，所有 coverage contract invocation 显式给 mode，
-  并满足 B-024。
+  含可复算的 GH57 child coverage artifact；ledger、full all-target coverage/test 与
+  produce/validate 的每次 contract invocation 都显式提供阶段正确的 mode，并满足 B-024。
 
 ## 边界情况清单
 
