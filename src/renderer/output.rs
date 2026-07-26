@@ -2,7 +2,77 @@
 
 use crate::core::{Color, Style};
 use std::fmt::Write as FmtWrite;
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
+const TAB_STOP: usize = 4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceScalar {
+    Break,
+    Tab,
+    Visible(char),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+enum GraphemeCell {
+    #[default]
+    Empty,
+    Lead {
+        width: usize,
+        suffix: String,
+    },
+    Continuation {
+        lead_col: usize,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CellPosition {
+    pub(crate) x: u16,
+    pub(crate) y: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GraphemeWriteFootprint {
+    pub(crate) target_cells: Vec<CellPosition>,
+    pub(crate) old_cells: Vec<CellPosition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum GraphemeWriteOutcome {
+    Committed(GraphemeWriteFootprint),
+    Clipped,
+}
+
+fn sanitize_source_scalar(ch: char) -> SourceScalar {
+    match ch {
+        '\n' | '\r' => SourceScalar::Break,
+        '\t' => SourceScalar::Tab,
+        '\0'..='\u{001f}' => {
+            let code_point = 0x2400 + u32::from(ch);
+            SourceScalar::Visible(
+                char::from_u32(code_point)
+                    .expect("C0 control picture code points must be valid Unicode scalars"),
+            )
+        }
+        '\u{007f}' => SourceScalar::Visible('\u{2421}'),
+        '\u{0080}'..='\u{009f}' => SourceScalar::Visible('\u{fffd}'),
+        _ => SourceScalar::Visible(ch),
+    }
+}
+
+fn sanitize_grapheme(grapheme: &str) -> String {
+    grapheme
+        .chars()
+        .map(|ch| match sanitize_source_scalar(ch) {
+            SourceScalar::Visible(ch) => ch,
+            SourceScalar::Break if ch == '\n' => '␊',
+            SourceScalar::Break => '␍',
+            SourceScalar::Tab => '␉',
+        })
+        .collect()
+}
 
 /// A styled character in the output grid
 #[derive(Debug, Clone, Default)]
@@ -86,9 +156,11 @@ pub struct Output {
     pub height: u16,
     /// Flat grid storage for better cache locality (row-major order)
     grid: Vec<StyledChar>,
+    grapheme_cells: Vec<GraphemeCell>,
     clip_stack: Vec<ClipRegion>,
     /// Tracks which rows have been modified since last clear_dirty()
     dirty_rows: Vec<bool>,
+    dirty_cells: Vec<bool>,
     /// Quick check if any row is dirty
     any_dirty: bool,
 }
@@ -102,8 +174,10 @@ impl Output {
             width,
             height,
             grid,
+            grapheme_cells: vec![GraphemeCell::Empty; size],
             clip_stack: Vec::new(),
             dirty_rows: vec![false; height as usize],
+            dirty_cells: vec![false; size],
             any_dirty: false,
         }
     }
@@ -146,6 +220,7 @@ impl Output {
     /// Clear all dirty flags
     pub fn clear_dirty(&mut self) {
         self.dirty_rows.fill(false);
+        self.dirty_cells.fill(false);
         self.any_dirty = false;
     }
 
@@ -176,7 +251,10 @@ impl Output {
 
         let mut last_content_idx = 0;
         for (i, cell) in self.row_iter(row_idx).enumerate() {
-            if cell.ch != '\0' && (cell.ch != ' ' || cell.has_style()) {
+            let metadata = &self.grapheme_cells[row_idx * self.width as usize + i];
+            let has_suffix =
+                matches!(metadata, GraphemeCell::Lead { suffix, .. } if !suffix.is_empty());
+            if cell.ch != '\0' && (cell.ch != ' ' || cell.has_style() || has_suffix) {
                 last_content_idx = i + 1;
             }
         }
@@ -207,6 +285,11 @@ impl Output {
             }
 
             line.push(cell.ch);
+            if let GraphemeCell::Lead { suffix, .. } =
+                &self.grapheme_cells[row_idx * self.width as usize + i]
+            {
+                line.push_str(suffix);
+            }
         }
 
         if current_style.is_some() {
@@ -225,6 +308,47 @@ impl Output {
         }
     }
 
+    fn mark_cell_dirty(&mut self, position: CellPosition) {
+        let idx = position.y as usize * self.width as usize + position.x as usize;
+        self.dirty_cells[idx] = true;
+        self.mark_dirty(position.y as usize);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn dirty_cell_positions(&self) -> impl Iterator<Item = CellPosition> + '_ {
+        let width = self.width as usize;
+        self.dirty_cells
+            .iter()
+            .enumerate()
+            .filter_map(move |(idx, dirty)| {
+                dirty.then_some(CellPosition {
+                    x: (idx % width) as u16,
+                    y: (idx / width) as u16,
+                })
+            })
+    }
+
+    /// Create an isolated frame copy for transactional renderer staging.
+    #[allow(dead_code)] // T5 consumes this crate-private handoff.
+    pub(crate) fn staged_snapshot(&self) -> Self {
+        Self {
+            width: self.width,
+            height: self.height,
+            grid: self.grid.clone(),
+            grapheme_cells: self.grapheme_cells.clone(),
+            clip_stack: self.clip_stack.clone(),
+            dirty_rows: self.dirty_rows.clone(),
+            dirty_cells: self.dirty_cells.clone(),
+            any_dirty: self.any_dirty,
+        }
+    }
+
+    /// Publish a fully validated staged frame in one replacement.
+    #[allow(dead_code)] // T5 consumes this crate-private handoff.
+    pub(crate) fn commit_staged(&mut self, staged: Self) {
+        *self = staged;
+    }
+
     /// Write text at position with style
     pub fn write(&mut self, x: u16, y: u16, text: &str, style: &Style) {
         let mut col = x as usize;
@@ -234,52 +358,34 @@ impl Output {
             return;
         }
 
-        // Mark row as dirty before any modifications
+        // Preserve the existing dirty contract for every in-bounds write attempt.
         self.mark_dirty(row);
 
         let width = self.width as usize;
-        let clip_region = self.clip_stack.last().cloned();
 
-        if text.is_ascii() && clip_region.is_none() {
-            for byte in text.bytes() {
-                if byte == b'\n' || col >= width {
-                    break;
+        for source_grapheme in text.graphemes(true) {
+            match source_grapheme {
+                "\n" | "\r" | "\r\n" => break,
+                "\t" => {
+                    let spaces = TAB_STOP - (col % TAB_STOP);
+                    for _ in 0..spaces {
+                        if col >= width {
+                            break;
+                        }
+                        let _ = self.write_grapheme(col as i64, row as i64, " ", style);
+                        col += 1;
+                    }
                 }
-                self.write_char_at(col, row, byte as char, 1, style);
-                col += 1;
-            }
-            return;
-        }
-
-        if clip_region.is_none() {
-            for ch in text.chars() {
-                if ch == '\n' || col >= width {
-                    break;
+                _ => {
+                    let safe = sanitize_grapheme(source_grapheme);
+                    let grapheme_width = UnicodeWidthStr::width(safe.as_str());
+                    if grapheme_width > 0 && col >= width {
+                        break;
+                    }
+                    let _ = self.write_grapheme(col as i64, row as i64, &safe, style);
+                    col = col.saturating_add(grapheme_width);
                 }
-
-                let char_width = ch.width().unwrap_or(1);
-                self.write_char_at(col, row, ch, char_width, style);
-                col += char_width;
             }
-            return;
-        }
-
-        for ch in text.chars() {
-            if ch == '\n' || col >= width {
-                break;
-            }
-
-            // Check clip region
-            let char_width = ch.width().unwrap_or(1);
-            if let Some(clip) = clip_region.as_ref()
-                && !clip.contains(col as u16, row as u16)
-            {
-                col += char_width;
-                continue;
-            }
-
-            self.write_char_at(col, row, ch, char_width, style);
-            col += char_width;
         }
     }
 
@@ -288,67 +394,253 @@ impl Output {
         let col = x as usize;
         let row = y as usize;
 
-        if row >= self.height as usize || col >= self.width as usize {
+        if row >= self.height as usize {
             return;
         }
 
-        // Mark row as dirty before any modifications
-        self.mark_dirty(row);
-
-        // Check clip region
-        if let Some(clip) = self.clip_stack.last()
-            && !clip.contains(x, y)
-        {
-            return;
+        match sanitize_source_scalar(ch) {
+            SourceScalar::Break => {
+                if col < self.width as usize {
+                    self.mark_dirty(row);
+                }
+            }
+            SourceScalar::Tab => {
+                if col >= self.width as usize {
+                    return;
+                }
+                self.mark_dirty(row);
+                let spaces = TAB_STOP - (col % TAB_STOP);
+                for offset in 0..spaces {
+                    let target_col = col + offset;
+                    if target_col >= self.width as usize {
+                        break;
+                    }
+                    let _ = self.write_grapheme(target_col as i64, row as i64, " ", style);
+                }
+            }
+            SourceScalar::Visible(ch) => {
+                let safe = sanitize_grapheme(&ch.to_string());
+                let grapheme_width = UnicodeWidthStr::width(safe.as_str());
+                if col >= self.width as usize
+                    && !(grapheme_width == 0 && col == self.width as usize)
+                {
+                    return;
+                }
+                self.mark_dirty(row);
+                let _ = self.write_grapheme(col as i64, row as i64, &safe, style);
+            }
         }
-
-        let char_width = ch.width().unwrap_or(1);
-        self.write_char_at(col, row, ch, char_width, style);
     }
 
-    /// Core character placement logic handling wide-char boundaries and placeholders
-    fn write_char_at(
+    pub(crate) fn active_clips_contain_grapheme(
+        &self,
+        x: i64,
+        y: i64,
+        display_width: usize,
+    ) -> bool {
+        if display_width == 0 {
+            return false;
+        }
+        self.target_cells(x, y, display_width)
+            .is_some_and(|cells| self.active_clips_contain_cells(&cells))
+    }
+
+    pub(crate) fn prospective_grapheme_write_footprint(
+        &self,
+        x: i64,
+        y: i64,
+        grapheme: &str,
+    ) -> Option<GraphemeWriteFootprint> {
+        let safe = sanitize_grapheme(grapheme);
+        let display_width = UnicodeWidthStr::width(safe.as_str());
+        self.prospective_footprint_for_width(x, y, display_width)
+    }
+
+    pub(crate) fn write_grapheme(
         &mut self,
-        col: usize,
-        row: usize,
-        ch: char,
-        char_width: usize,
+        x: i64,
+        y: i64,
+        grapheme: &str,
+        style: &Style,
+    ) -> GraphemeWriteOutcome {
+        let safe = sanitize_grapheme(grapheme);
+        let mut graphemes = safe.graphemes(true);
+        let Some(safe_grapheme) = graphemes.next() else {
+            return GraphemeWriteOutcome::Clipped;
+        };
+        if graphemes.next().is_some() {
+            return GraphemeWriteOutcome::Clipped;
+        }
+
+        let display_width = UnicodeWidthStr::width(safe_grapheme);
+        if display_width == 0 {
+            return self.attach_zero_width(x, y, safe_grapheme);
+        }
+        let Some(footprint) = self.prospective_grapheme_write_footprint(x, y, safe_grapheme) else {
+            return GraphemeWriteOutcome::Clipped;
+        };
+
+        let mut scalars = safe_grapheme.chars();
+        let lead = scalars
+            .next()
+            .expect("a non-empty grapheme must have a lead scalar");
+        let suffix = scalars.collect();
+        self.commit_grapheme(&footprint, lead, suffix, display_width, style);
+        GraphemeWriteOutcome::Committed(footprint)
+    }
+
+    fn prospective_footprint_for_width(
+        &self,
+        x: i64,
+        y: i64,
+        display_width: usize,
+    ) -> Option<GraphemeWriteFootprint> {
+        let target_cells = self.target_cells(x, y, display_width)?;
+        if display_width == 0 {
+            return Some(GraphemeWriteFootprint {
+                target_cells,
+                old_cells: Vec::new(),
+            });
+        }
+        if !self.active_clips_contain_grapheme(x, y, display_width) {
+            return None;
+        }
+
+        let mut old_cells = Vec::new();
+        for target in &target_cells {
+            for old in self.owner_footprint(*target) {
+                if !old_cells.contains(&old) {
+                    old_cells.push(old);
+                }
+            }
+        }
+        old_cells.sort_by_key(|position| (position.y, position.x));
+        if !self.active_clips_contain_cells(&old_cells) {
+            return None;
+        }
+        Some(GraphemeWriteFootprint {
+            target_cells,
+            old_cells,
+        })
+    }
+
+    fn target_cells(&self, x: i64, y: i64, display_width: usize) -> Option<Vec<CellPosition>> {
+        if y < 0 || y >= i64::from(self.height) || x < 0 {
+            return None;
+        }
+        if display_width == 0 {
+            return (x <= i64::from(self.width)).then(Vec::new);
+        }
+
+        let mut cells = Vec::with_capacity(display_width);
+        for offset in 0..display_width {
+            let offset = i64::try_from(offset).ok()?;
+            let cell_x = x.checked_add(offset)?;
+            if cell_x >= i64::from(self.width) {
+                return None;
+            }
+            cells.push(CellPosition {
+                x: u16::try_from(cell_x).ok()?,
+                y: u16::try_from(y).ok()?,
+            });
+        }
+        Some(cells)
+    }
+
+    fn active_clips_contain_cells(&self, cells: &[CellPosition]) -> bool {
+        cells.iter().all(|position| {
+            self.clip_stack
+                .iter()
+                .all(|clip| clip.contains(position.x, position.y))
+        })
+    }
+
+    fn owner_footprint(&self, position: CellPosition) -> Vec<CellPosition> {
+        let width = self.width as usize;
+        let idx = position.y as usize * width + position.x as usize;
+        let (lead_col, owner_width) = match &self.grapheme_cells[idx] {
+            GraphemeCell::Empty => return Vec::new(),
+            GraphemeCell::Lead { width, .. } => (position.x as usize, *width),
+            GraphemeCell::Continuation { lead_col } => {
+                let lead_idx = position.y as usize * width + *lead_col;
+                match &self.grapheme_cells[lead_idx] {
+                    GraphemeCell::Lead { width, .. } => (*lead_col, *width),
+                    _ => return Vec::new(),
+                }
+            }
+        };
+        (lead_col..lead_col.saturating_add(owner_width))
+            .filter(|col| *col < width)
+            .map(|col| CellPosition {
+                x: col as u16,
+                y: position.y,
+            })
+            .collect()
+    }
+
+    fn commit_grapheme(
+        &mut self,
+        footprint: &GraphemeWriteFootprint,
+        lead: char,
+        suffix: String,
+        display_width: usize,
         style: &Style,
     ) {
         let width = self.width as usize;
-        let row_start = row * width;
-        let idx = row_start + col;
-
-        // Handle wide character at buffer boundary - skip if it won't fit
-        if char_width == 2 && col + 1 >= width {
-            self.grid[idx] = StyledChar::with_style(' ', style);
-            return;
+        for position in &footprint.old_cells {
+            let idx = position.y as usize * width + position.x as usize;
+            self.grid[idx] = StyledChar::new(' ');
+            self.grapheme_cells[idx] = GraphemeCell::Empty;
+            self.mark_cell_dirty(*position);
         }
 
-        // Handle overwriting wide character's second half (placeholder)
-        if self.grid[idx].ch == '\0' && col > 0 {
-            self.grid[idx - 1] = StyledChar::new(' ');
-        }
-
-        // Handle overwriting wide character's first half
-        let old_char_width = self.grid[idx].ch.width().unwrap_or(1);
-        if old_char_width == 2 && col + 1 < width {
-            self.grid[idx + 1] = StyledChar::new(' ');
-        }
-
-        self.grid[idx] = StyledChar::with_style(ch, style);
-
-        // For wide characters (width=2), mark the next cell as a placeholder
-        if char_width == 2 && col + 1 < width {
-            let next_idx = idx + 1;
-            if self.grid[next_idx].ch != '\0' {
-                let next_char_width = self.grid[next_idx].ch.width().unwrap_or(1);
-                if next_char_width == 2 && col + 2 < width {
-                    self.grid[idx + 2] = StyledChar::new(' ');
-                }
+        let first = footprint
+            .target_cells
+            .first()
+            .expect("a visible grapheme must own at least one target cell");
+        for (offset, position) in footprint.target_cells.iter().enumerate() {
+            let idx = position.y as usize * width + position.x as usize;
+            if offset == 0 {
+                self.grid[idx] = StyledChar::with_style(lead, style);
+                self.grapheme_cells[idx] = GraphemeCell::Lead {
+                    width: display_width,
+                    suffix: suffix.clone(),
+                };
+            } else {
+                self.grid[idx] = StyledChar::new('\0');
+                self.grapheme_cells[idx] = GraphemeCell::Continuation {
+                    lead_col: first.x as usize,
+                };
             }
-            self.grid[next_idx] = StyledChar::new('\0');
+            self.mark_cell_dirty(*position);
         }
+    }
+
+    fn attach_zero_width(&mut self, x: i64, y: i64, text: &str) -> GraphemeWriteOutcome {
+        if y < 0 || y >= i64::from(self.height) || x <= 0 || x > i64::from(self.width) {
+            return GraphemeWriteOutcome::Clipped;
+        }
+        let previous = CellPosition {
+            x: (x - 1) as u16,
+            y: y as u16,
+        };
+        let owner = self.owner_footprint(previous);
+        if owner.is_empty() || !self.active_clips_contain_cells(&owner) {
+            return GraphemeWriteOutcome::Clipped;
+        }
+        let lead = owner[0];
+        let idx = lead.y as usize * self.width as usize + lead.x as usize;
+        let GraphemeCell::Lead { suffix, .. } = &mut self.grapheme_cells[idx] else {
+            return GraphemeWriteOutcome::Clipped;
+        };
+        suffix.push_str(text);
+        for position in &owner {
+            self.mark_cell_dirty(*position);
+        }
+        GraphemeWriteOutcome::Committed(GraphemeWriteFootprint {
+            target_cells: Vec::new(),
+            old_cells: owner,
+        })
     }
 
     /// Fill a rectangle with a character
@@ -489,302 +781,4 @@ impl Output {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_output_creation() {
-        let output = Output::new(80, 24);
-        assert_eq!(output.width, 80);
-        assert_eq!(output.height, 24);
-    }
-
-    #[test]
-    fn test_write_text() {
-        let mut output = Output::new(80, 24);
-        output.write(0, 0, "Hello", &Style::default());
-
-        assert_eq!(output.cell_at(0, 0).unwrap().ch, 'H');
-        assert_eq!(output.cell_at(4, 0).unwrap().ch, 'o');
-    }
-
-    #[test]
-    fn test_styled_output() {
-        let mut output = Output::new(80, 24);
-        let style = Style {
-            color: Some(Color::Green),
-            bold: true,
-            ..Style::default()
-        };
-
-        output.write(0, 0, "Test", &style);
-
-        let rendered = output.render();
-        assert!(rendered.contains("\x1b["));
-    }
-
-    #[test]
-    fn test_wide_char_placeholder() {
-        let mut output = Output::new(80, 24);
-        output.write(0, 0, "你好", &Style::default());
-
-        // '你' at position 0, placeholder at position 1
-        assert_eq!(output.cell_at(0, 0).unwrap().ch, '你');
-        assert_eq!(output.cell_at(1, 0).unwrap().ch, '\0');
-        // '好' at position 2, placeholder at position 3
-        assert_eq!(output.cell_at(2, 0).unwrap().ch, '好');
-        assert_eq!(output.cell_at(3, 0).unwrap().ch, '\0');
-    }
-
-    #[test]
-    fn test_overwrite_wide_char_placeholder() {
-        let mut output = Output::new(80, 24);
-        // Write a wide char first
-        output.write(0, 0, "你", &Style::default());
-        assert_eq!(output.cell_at(0, 0).unwrap().ch, '你');
-        assert_eq!(output.cell_at(1, 0).unwrap().ch, '\0');
-
-        // Overwrite the placeholder with a narrow char
-        output.write_char(1, 0, 'X', &Style::default());
-
-        // The wide char should be replaced with space (broken)
-        assert_eq!(output.cell_at(0, 0).unwrap().ch, ' ');
-        assert_eq!(output.cell_at(1, 0).unwrap().ch, 'X');
-    }
-
-    #[test]
-    fn test_write_overwrite_wide_char_placeholder() {
-        let mut output = Output::new(80, 24);
-        output.write(0, 0, "你", &Style::default());
-
-        // Overwrite placeholder through `write()` path to keep behavior aligned with `write_char()`.
-        output.write(1, 0, "XY", &Style::default());
-
-        assert_eq!(output.cell_at(0, 0).unwrap().ch, ' ');
-        assert_eq!(output.cell_at(1, 0).unwrap().ch, 'X');
-        assert_eq!(output.cell_at(2, 0).unwrap().ch, 'Y');
-    }
-
-    #[test]
-    fn test_overwrite_wide_char_first_half() {
-        let mut output = Output::new(80, 24);
-        // Write a wide char first
-        output.write(0, 0, "你", &Style::default());
-        assert_eq!(output.cell_at(0, 0).unwrap().ch, '你');
-        assert_eq!(output.cell_at(1, 0).unwrap().ch, '\0');
-
-        // Overwrite the first half with a narrow char
-        output.write_char(0, 0, 'X', &Style::default());
-
-        // The wide char's placeholder should be cleared
-        assert_eq!(output.cell_at(0, 0).unwrap().ch, 'X');
-        assert_eq!(output.cell_at(1, 0).unwrap().ch, ' ');
-    }
-
-    #[test]
-    fn test_wide_char_render_no_duplicate() {
-        let mut output = Output::new(80, 24);
-        output.write(0, 0, "你好世界", &Style::default());
-
-        let rendered = output.render();
-        // Should contain exactly these 4 chars, no placeholders visible
-        assert_eq!(rendered, "你好世界");
-    }
-
-    #[test]
-    fn test_raw_mode_line_endings() {
-        // Raw mode requires CRLF line endings, not just LF
-        let mut output = Output::new(40, 5);
-        output.write(0, 0, "Line 1", &Style::default());
-        output.write(0, 1, "Line 2", &Style::default());
-        output.write(0, 2, "Line 3", &Style::default());
-
-        let rendered = output.render();
-
-        // Must use CRLF for raw mode compatibility
-        assert!(
-            rendered.contains("\r\n"),
-            "Output must use CRLF line endings for raw mode"
-        );
-
-        // Count that we don't have standalone LF (without CR before it)
-        let lines: Vec<&str> = rendered.split("\r\n").collect();
-        assert!(lines.len() >= 3, "Should have at least 3 lines");
-
-        // Verify no standalone LF within lines
-        for line in &lines {
-            assert!(
-                !line.contains('\n'),
-                "Should not have standalone LF within lines"
-            );
-        }
-    }
-
-    #[test]
-    fn test_line_alignment_in_output() {
-        // Test that multi-line output will render with correct alignment
-        let mut output = Output::new(20, 3);
-        output.write(0, 0, "AAAA", &Style::default());
-        output.write(0, 1, "BBBB", &Style::default());
-        output.write(0, 2, "CCCC", &Style::default());
-
-        let rendered = output.render();
-        let lines: Vec<&str> = rendered.split("\r\n").collect();
-
-        assert_eq!(lines[0], "AAAA");
-        assert_eq!(lines[1], "BBBB");
-        assert_eq!(lines[2], "CCCC");
-    }
-
-    #[test]
-    fn test_wide_char_at_boundary() {
-        // Wide char at end of buffer should be replaced with space
-        let mut output = Output::new(5, 1);
-        output.write(3, 0, "你", &Style::default());
-
-        // Position 3 should be a space, position 4 is at boundary
-        assert_eq!(output.cell_at(3, 0).unwrap().ch, '你');
-        assert_eq!(output.cell_at(4, 0).unwrap().ch, '\0');
-
-        // Now test when wide char would extend past buffer
-        let mut output2 = Output::new(5, 1);
-        output2.write(4, 0, "你", &Style::default());
-
-        // Should write a space instead since wide char won't fit
-        assert_eq!(output2.cell_at(4, 0).unwrap().ch, ' ');
-    }
-
-    #[test]
-    fn test_wide_char_at_exact_boundary() {
-        // Test when wide char is at the last valid position
-        let mut output = Output::new(4, 1);
-        output.write(2, 0, "你", &Style::default());
-
-        // Wide char at position 2-3 should fit exactly
-        assert_eq!(output.cell_at(2, 0).unwrap().ch, '你');
-        assert_eq!(output.cell_at(3, 0).unwrap().ch, '\0');
-    }
-
-    #[test]
-    fn test_dirty_tracking_initial_state() {
-        let output = Output::new(80, 24);
-        assert!(!output.is_dirty());
-        assert!(!output.is_row_dirty(0));
-    }
-
-    #[test]
-    fn test_dirty_tracking_after_write() {
-        let mut output = Output::new(80, 24);
-        output.write(0, 5, "Hello", &Style::default());
-
-        assert!(output.is_dirty());
-        assert!(output.is_row_dirty(5));
-        assert!(!output.is_row_dirty(0));
-        assert!(!output.is_row_dirty(6));
-    }
-
-    #[test]
-    fn test_dirty_tracking_after_write_char() {
-        let mut output = Output::new(80, 24);
-        output.write_char(10, 3, 'X', &Style::default());
-
-        assert!(output.is_dirty());
-        assert!(output.is_row_dirty(3));
-        assert!(!output.is_row_dirty(2));
-    }
-
-    #[test]
-    fn test_dirty_tracking_clear() {
-        let mut output = Output::new(80, 24);
-        output.write(0, 0, "Test", &Style::default());
-        output.write(0, 5, "Test", &Style::default());
-
-        assert!(output.is_dirty());
-        assert!(output.is_row_dirty(0));
-        assert!(output.is_row_dirty(5));
-
-        output.clear_dirty();
-
-        assert!(!output.is_dirty());
-        assert!(!output.is_row_dirty(0));
-        assert!(!output.is_row_dirty(5));
-    }
-
-    #[test]
-    fn test_dirty_row_indices() {
-        let mut output = Output::new(80, 24);
-        output.write(0, 1, "A", &Style::default());
-        output.write(0, 3, "B", &Style::default());
-        output.write(0, 7, "C", &Style::default());
-
-        let dirty: Vec<usize> = output.dirty_row_indices().collect();
-        assert_eq!(dirty, vec![1, 3, 7]);
-    }
-
-    #[test]
-    fn test_render_dirty_rows() {
-        let mut output = Output::new(80, 24);
-        output.write(0, 0, "Line 0", &Style::default());
-        output.write(0, 2, "Line 2", &Style::default());
-
-        let dirty_rows = output.render_dirty_rows();
-        assert_eq!(dirty_rows.len(), 2);
-        assert_eq!(dirty_rows[0].0, 0);
-        assert_eq!(dirty_rows[0].1, "Line 0");
-        assert_eq!(dirty_rows[1].0, 2);
-        assert_eq!(dirty_rows[1].1, "Line 2");
-    }
-
-    #[test]
-    fn test_render_after_clear_dirty_preserves_content() {
-        let mut output = Output::new(10, 2);
-        output.write(0, 0, "A", &Style::default());
-        output.clear_dirty();
-        assert_eq!(output.render(), "A");
-    }
-
-    #[test]
-    fn test_render_sparse_dirty_rows_preserves_line_gaps() {
-        let mut output = Output::new(10, 4);
-        output.write(0, 2, "C", &Style::default());
-        assert_eq!(output.render(), "\r\n\r\nC");
-    }
-
-    #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "Output::unclip called with an empty clip stack")]
-    fn test_unclip_panics_when_stack_is_empty_in_debug() {
-        let mut output = Output::new(10, 5);
-        output.unclip();
-    }
-
-    #[test]
-    fn test_clip_depth_tracks_push_and_pop() {
-        let mut output = Output::new(10, 5);
-        assert_eq!(output.clip_depth(), 0);
-
-        output.clip(ClipRegion {
-            x1: 0,
-            y1: 0,
-            x2: 5,
-            y2: 5,
-        });
-        assert_eq!(output.clip_depth(), 1);
-
-        output.unclip();
-        assert_eq!(output.clip_depth(), 0);
-    }
-
-    #[test]
-    #[should_panic(expected = "Output::render called with an unbalanced clip stack")]
-    fn test_render_panics_with_active_clip_stack() {
-        let mut output = Output::new(10, 5);
-        output.clip(ClipRegion {
-            x1: 0,
-            y1: 0,
-            x2: 5,
-            y2: 5,
-        });
-        let _ = output.render();
-    }
-}
+mod tests;

@@ -7,6 +7,7 @@ use crate::core::{Overflow, Style, TextWrap};
 
 use super::measure::grapheme_width;
 
+mod truncate;
 mod wrap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -493,13 +494,14 @@ fn classify_grapheme(grapheme: &str) -> (String, TokenClass) {
 }
 
 fn layout_tokens(
-    tokens: &mut [TextFlowToken],
+    tokens: &mut Vec<TextFlowToken>,
     options: &TextFlowOptions,
     interrupted: &mut impl FnMut() -> bool,
 ) -> Result<Vec<TextFlowRow>, TextFlowError> {
     let mut rows = Vec::new();
     let mut line_start = 0;
-    for index in 0..tokens.len() {
+    let source_token_count = tokens.len();
+    for index in 0..source_token_count {
         if tokens[index].class != TokenClass::HardBreak {
             continue;
         }
@@ -509,10 +511,10 @@ fn layout_tokens(
         };
         line_start = index + 1;
     }
-    if line_start < tokens.len() || tokens.is_empty() {
+    if line_start < source_token_count || source_token_count == 0 {
         layout_line(
             tokens,
-            line_start..tokens.len(),
+            line_start..source_token_count,
             options,
             &mut rows,
             interrupted,
@@ -522,7 +524,7 @@ fn layout_tokens(
 }
 
 fn layout_line(
-    tokens: &mut [TextFlowToken],
+    tokens: &mut Vec<TextFlowToken>,
     range: Range<usize>,
     options: &TextFlowOptions,
     rows: &mut Vec<TextFlowRow>,
@@ -538,40 +540,8 @@ fn layout_line(
     }
     match options.text_wrap {
         TextWrap::Wrap => wrap::wrap_line(tokens, range, options, rows, interrupted),
-        _ => truncate_line(tokens, range, options, rows, interrupted),
+        _ => truncate::truncate_line(tokens, range, options, rows, interrupted),
     }
-}
-
-fn truncate_line(
-    tokens: &mut [TextFlowToken],
-    range: Range<usize>,
-    options: &TextFlowOptions,
-    rows: &mut Vec<TextFlowRow>,
-    interrupted: &mut impl FnMut() -> bool,
-) -> Result<(), TextFlowError> {
-    let mut placed = Vec::new();
-    let mut width = 0usize;
-    let mut truncating = false;
-    let row = rows.len();
-    for index in range {
-        if interrupted() {
-            return Err(TextFlowError::Interrupted);
-        }
-        let token_width = token_width_at(&mut tokens[index], width, options.tab_stop)?;
-        if !truncating
-            && width
-                .checked_add(token_width)
-                .ok_or(TextFlowError::ArithmeticOverflow)?
-                <= options.max_width
-        {
-            placed.push(index);
-            width += token_width;
-        } else {
-            truncating = true;
-            tokens[index].placement = TextFlowPlacement::Truncated { row };
-        }
-    }
-    place_row(tokens, &placed, options.tab_stop, rows)
 }
 
 fn token_width_at(
