@@ -217,6 +217,9 @@ impl StagedFrame {
         height: u16,
         style: &Style,
     ) -> Result<(), ProjectionError> {
+        if x >= self.fill_bounds.x2 || y >= self.fill_bounds.y2 {
+            return Ok(());
+        }
         let Some(layout_rect) = VisibleRect::from_origin_size(x, y, width, height)? else {
             return Ok(());
         };

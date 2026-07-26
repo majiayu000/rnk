@@ -649,17 +649,43 @@ fn staged_fill_with_no_intersection_performs_no_candidate_visits() {
 }
 
 #[test]
-fn staged_fill_empty_or_overflowing_rectangles_are_checked_without_iteration() {
+fn staged_fill_empty_and_positive_offscreen_boundaries_do_not_iterate() {
     let caller = Output::new(4, 3);
     let mut staged = StagedFrame::new(&caller, ProjectionOptions::default());
     staged
         .fill_rect(0, 0, 0, u16::MAX, &background_style())
         .unwrap();
-    assert_eq!(
-        staged.fill_rect(i64::MAX, 0, 1, 1, &background_style()),
-        Err(ProjectionError::CoordinateOverflow)
-    );
     assert_eq!(staged.fill_candidate_visits(), 0);
+
+    let before_render = caller.render();
+    let before_dirty = caller.dirty_cell_positions().collect::<Vec<_>>();
+    for (x, y, width, height) in [
+        (i64::MAX, 0, 1, 1),
+        (i64::MAX - 65_534, 0, u16::MAX, 1),
+        (0, i64::MAX, 1, 1),
+        (0, i64::MAX - 65_534, 1, u16::MAX),
+    ] {
+        let mut staged = StagedFrame::new(&caller, ProjectionOptions::default());
+        assert_eq!(
+            staged.fill_rect(x, y, width, height, &background_style()),
+            Ok(())
+        );
+        assert_eq!(staged.fill_candidate_visits(), 0);
+
+        let (output, projection) = staged.finish().unwrap();
+        assert_eq!(output.render(), before_render);
+        assert_eq!(
+            output.dirty_cell_positions().collect::<Vec<_>>(),
+            before_dirty
+        );
+        assert!(projection.forward.is_empty());
+        assert!(projection.reverse.is_empty());
+        assert_eq!(caller.render(), before_render);
+        assert_eq!(
+            caller.dirty_cell_positions().collect::<Vec<_>>(),
+            before_dirty
+        );
+    }
 
     let mut clipped = Output::new(4, 3);
     clipped.clip(ClipRegion {
