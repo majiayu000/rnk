@@ -259,60 +259,141 @@ fn validate_snapshot(value: &ConversationStateSnapshot) -> Result<(), Conversati
     let retired_messages: BTreeSet<_> = value.identities.retired_messages.iter().copied().collect();
     let seen_blocks: BTreeSet<_> = value.identities.seen_blocks.iter().copied().collect();
     let retired_blocks: BTreeSet<_> = value.identities.retired_blocks.iter().copied().collect();
+    let seen_tool_calls: BTreeSet<_> =
+        value.identities.seen_tool_calls.iter().cloned().collect();
+    let retired_tool_calls: BTreeSet<_> =
+        value.identities.retired_tool_calls.iter().cloned().collect();
     if !retired_messages.is_subset(&seen_messages) || !retired_blocks.is_subset(&seen_blocks) {
         return invalid_snapshot("retired identities must also be seen");
     }
+    if !retired_tool_calls.is_subset(&seen_tool_calls) {
+        return invalid_snapshot("retired tool calls must also be seen");
+    }
     let mut active_messages = BTreeSet::new();
     let mut active_blocks = BTreeSet::new();
+    let mut active_thinking = BTreeMap::<MessageId, BTreeSet<ThinkingId>>::new();
+    let mut active_calls = BTreeMap::<ToolCallId, &ToolCallStatus>::new();
+    let mut active_results =
+        BTreeMap::<ToolCallId, (&ToolResultStatus, ToolResultLocation)>::new();
     for message in &value.messages {
         if !active_messages.insert(message.id) || !seen_messages.contains(&message.id)
             || retired_messages.contains(&message.id) {
             return invalid_snapshot("active message history is contradictory");
+        }
+        if message.blocks.is_empty() || message_terminal(&message.status)
+            && message.blocks.iter().any(|entry| nested_active(&entry.block)) {
+            return invalid_snapshot("active message structure is contradictory");
         }
         for entry in &message.blocks {
             if !active_blocks.insert(entry.id) || !seen_blocks.contains(&entry.id)
                 || retired_blocks.contains(&entry.id) {
                 return invalid_snapshot("active block history is contradictory");
             }
+            match &entry.block {
+                MessageBlock::Thinking(thinking) => {
+                    if !active_thinking.entry(message.id).or_default().insert(thinking.id.clone()) {
+                        return invalid_snapshot("active thinking identity is duplicated");
+                    }
+                }
+                MessageBlock::ToolCall(call) => {
+                    if !seen_tool_calls.contains(&call.call_id)
+                        || retired_tool_calls.contains(&call.call_id)
+                        || active_calls.insert(call.call_id.clone(), &call.status).is_some() {
+                        return invalid_snapshot("active tool-call history is contradictory");
+                    }
+                }
+                MessageBlock::ToolResult(result) => {
+                    let location = ToolResultLocation::new(message.id, entry.id);
+                    if active_results.insert(result.call_id.clone(),
+                        (&result.status, location)).is_some() {
+                        return invalid_snapshot("active tool result is duplicated");
+                    }
+                }
+                _ => {}
+            }
         }
     }
+    if seen_messages != active_messages.union(&retired_messages).copied().collect()
+        || seen_blocks != active_blocks.union(&retired_blocks).copied().collect()
+        || seen_tool_calls != active_calls.keys().cloned()
+            .chain(retired_tool_calls.iter().cloned()).collect() {
+        return invalid_snapshot("seen identities must be active or retired");
+    }
     let mut event_ids = BTreeSet::new();
-    let mut previous_sequence = None;
+    let mut previous_sequence: Option<u64> = None;
+    let mut previous_revision: Option<u64> = None;
     for record in &value.retention.records {
         if !event_ids.insert(record.event.event_id.clone())
-            || previous_sequence.is_some_and(|previous| previous >= record.event.sequence)
+            || previous_sequence.is_some_and(|previous|
+                previous.checked_add(1) != Some(record.event.sequence))
             || record.event.sequence >= value.expected_sequence
-            || record.outcome.revision > value.revision {
+            || record.outcome.revision > value.revision
+            || previous_revision.is_some_and(|previous: u64|
+                previous.checked_add(1) != Some(record.outcome.revision.get())) {
             return invalid_snapshot("retained records are unordered or contradictory");
         }
         previous_sequence = Some(record.event.sequence);
+        previous_revision = Some(record.outcome.revision.get());
+    }
+    if let Some(last) = value.retention.records.last() {
+        if last.event.sequence.checked_add(1) != Some(value.expected_sequence)
+            || last.outcome.revision != value.revision {
+            return invalid_snapshot("retained tail does not match current counters");
+        }
+    } else if value.retention.evicted_through.is_some() {
+        return invalid_snapshot("eviction boundary requires retained evidence");
     }
     if let (Some(boundary), Some(first)) = (value.retention.evicted_through,
         value.retention.records.first()) {
-        if boundary >= first.event.sequence { return invalid_snapshot("eviction boundary overlaps ledger"); }
+        if boundary.checked_add(1) != Some(first.event.sequence) {
+            return invalid_snapshot("eviction boundary is not contiguous with ledger");
+        }
     }
     let slots: BTreeMap<_, _> = value.identities.result_slots.iter().cloned().collect();
-    if slots.len() != value.identities.result_slots.len() {
+    if slots.len() != value.identities.result_slots.len()
+        || slots.keys().any(|call_id| !seen_tool_calls.contains(call_id))
+        || seen_tool_calls.iter().any(|call_id| !slots.contains_key(call_id)) {
         return invalid_snapshot("result slot history contains duplicates");
     }
-    for (call_id, slot) in slots {
-        if !value.identities.seen_tool_calls.contains(&call_id) {
-            return invalid_snapshot("result slot references unseen call");
-        }
-        if let ToolResultSlot::Occupied(location) = slot {
-            let found = value.messages.iter().any(|message| message.id == location.message_id
-                && message.blocks.iter().any(|entry| entry.id == location.block_id
-                    && matches!(&entry.block, MessageBlock::ToolResult(result)
-                        if result.call_id == call_id)));
-            if !found { return invalid_snapshot("occupied result slot has no live result"); }
+    for (call_id, slot) in &slots {
+        match (slot, active_results.get(call_id)) {
+            (ToolResultSlot::Occupied(location), Some((_, found))) if location == found => {}
+            (ToolResultSlot::Vacant | ToolResultSlot::Retired, None) => {}
+            _ => return invalid_snapshot("result slot does not match live result"),
         }
     }
+    for (call_id, (result, _)) in &active_results {
+        let call = active_calls.get(call_id)
+            .ok_or(ConversationError::InvalidSnapshot {
+                reason: "tool result has no active call",
+            })?;
+        if !valid_call_result(call, Some(result)) {
+            return invalid_snapshot("call/result status matrix is contradictory");
+        }
+    }
+    for (call_id, call) in &active_calls {
+        if !valid_call_result(call, active_results.get(call_id).map(|(status, _)| *status)) {
+            return invalid_snapshot("call/result status matrix is contradictory");
+        }
+    }
+    let mut thinking_messages = BTreeSet::new();
     for history in &value.identities.thinking {
-        if !seen_messages.contains(&history.message_id) || !unique_slice(&history.seen)
+        if !thinking_messages.insert(history.message_id)
+            || !seen_messages.contains(&history.message_id) || !unique_slice(&history.seen)
             || !unique_slice(&history.retired)
             || !history.retired.iter().all(|id| history.seen.contains(id)) {
             return invalid_snapshot("thinking history is contradictory");
         }
+        let seen: BTreeSet<_> = history.seen.iter().cloned().collect();
+        let retired: BTreeSet<_> = history.retired.iter().cloned().collect();
+        let active = active_thinking.get(&history.message_id).cloned().unwrap_or_default();
+        if active.iter().any(|id| !seen.contains(id) || retired.contains(id))
+            || seen != active.union(&retired).cloned().collect() {
+            return invalid_snapshot("active thinking history is contradictory");
+        }
+    }
+    if thinking_messages != seen_messages {
+        return invalid_snapshot("every message lifetime requires thinking history");
     }
     Ok(())
 }
@@ -472,6 +553,9 @@ pub(super) mod test_cases {
     }
     pub(in crate::components::chat::state) fn message_revision_checked_increment_is_exhaustive() {
         assert_eq!(MessageRevision::INITIAL.checked_next(MessageId::new(1)).unwrap().get(), 2);
+        let maximum = MessageRevision::new(u64::MAX).unwrap();
+        assert_eq!(maximum.checked_next(MessageId::new(9)),
+            Err(ConversationError::MessageRevisionExhausted { message_id: MessageId::new(9) }));
     }
     pub(in crate::components::chat::state) fn block_id_state_lifetime_rules_are_exhaustive() {
         let seen = BTreeSet::from([BlockId::new(1)]); let retired = BTreeSet::from([BlockId::new(1)]);
@@ -492,8 +576,15 @@ pub(super) mod test_cases {
         assert!(matches!(ToolResultSlot::Retired, ToolResultSlot::Retired));
     }
     pub(in crate::components::chat::state) fn revision_exhaustion_is_checked_and_atomic_at_u64_max() {
-        assert_eq!(ConversationRevision::new(u64::MAX).checked_next(),
-            Err(ConversationError::RevisionExhausted));
+        let mut state = ConversationState::new(1, NonZeroUsize::MIN);
+        state.revision = ConversationRevision::new(u64::MAX);
+        let before = state.clone();
+        let update = ConversationUpdate::complete(MessageMutationGuard::new(
+            ConversationGuard::new(ConversationRevision::new(u64::MAX)),
+            MessageId::new(404), MessageRevision::INITIAL));
+        let event = ConversationEvent::new(UpdateId::new("overflow").unwrap(), 1, update);
+        assert_eq!(state.apply_event(event), Err(ConversationError::RevisionExhausted));
+        assert_eq!(state, before);
     }
 }
 }

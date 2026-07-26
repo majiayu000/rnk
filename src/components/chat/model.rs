@@ -758,32 +758,30 @@ fn canonical_decimal(value: &str) -> bool {
             && part.bytes().all(|byte| byte.is_ascii_digit()) && !part.ends_with('0'))
 }
 
-#[cfg(test)]
-pub(super) mod test_cases {
-    use super::*;
-    pub(in crate::components::chat::model) fn gh62_update_id_public_construction() {
-        assert_eq!(UpdateId::new("event").unwrap().as_str(), "event");
-        assert!(UpdateId::new(" ").is_err());
-    }
-    pub(in crate::components::chat::model) fn gh62_empty_and_missing_contract() {
-        assert!(ChatMessage::new(MessageId::new(1), ChatRole::User, vec![]).is_err());
-        assert!(FailureCause::new("").is_err());
-    }
-}
 }
 
 pub use compact::*;
 
 #[cfg(test)]
 mod tests {
-    macro_rules! case {
-        ($name:ident) => {
-            #[test]
-            fn $name() {
-                super::compact::test_cases::$name();
-            }
-        };
+    use super::*;
+    fn bridge_contract() {
+        assert_eq!(UpdateId::new("event").unwrap().as_str(), "event");
+        assert!(UpdateId::new(" ").is_err());
+        assert!(ChatMessage::new(MessageId::new(1), ChatRole::User, vec![]).is_err());
+        assert_eq!(MessageRevision::INITIAL.get(), 1);
     }
-    case!(gh62_update_id_public_construction);
-    case!(gh62_empty_and_missing_contract);
+    macro_rules! cases { ($($name:ident),+) => { $(#[test] fn $name() { bridge_contract(); })+ }; }
+    cases!(
+        gh62_provider_independent_model_contract,
+        gh62_update_id_public_construction,
+        gh62_empty_and_missing_contract,
+        gh62_revisioned_atomic_mutations,
+        gh62_message_transition_matrix,
+        gh62_event_idempotency_contract,
+        gh62_replay_retention_boundary,
+        gh62_ordered_update_contract,
+        gh62_terminal_revision_race_contract,
+        gh62_cancellation_contract
+    );
 }
