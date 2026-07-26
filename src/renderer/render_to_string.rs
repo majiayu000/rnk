@@ -3,10 +3,12 @@
 //! This module provides utilities for rendering elements to strings
 //! outside of the main application runtime.
 
-use crate::core::Element;
+use crate::core::{Element, ElementType};
 use crate::layout::LayoutEngine;
-use crate::renderer::tree_renderer::render_element_tree;
-use crate::renderer::{Output, Terminal};
+use crate::renderer::tree_renderer::try_render_element_tree;
+use crate::renderer::{Output, Terminal, TextRenderError};
+
+const DEFAULT_TEXT_FLOW_TAB_STOP: usize = 4;
 
 /// Options for controlling render-to-string behavior.
 #[derive(Debug, Clone)]
@@ -33,22 +35,62 @@ pub fn render_to_string_with_options(
     width: u16,
     options: &RenderOptions,
 ) -> String {
-    let raw = RenderHelper.render_to_output(element, width);
+    try_render_to_string_with_options(element, width, options)
+        .unwrap_or_else(|error| panic!("render_to_string failed: {error}"))
+}
+
+pub fn try_render_to_string_with_options(
+    element: &Element,
+    width: u16,
+    options: &RenderOptions,
+) -> Result<String, TextRenderError> {
+    try_render_to_string_with_options_and_tab_stop(
+        element,
+        width,
+        options,
+        DEFAULT_TEXT_FLOW_TAB_STOP,
+    )
+}
+
+/// Render an element with an explicit tab-stop policy.
+///
+/// A tab stop of zero or one larger than the supported TextFlow expansion
+/// returns the corresponding [`TextRenderError::Flow`] source.
+pub fn try_render_to_string_with_tab_stop(
+    element: &Element,
+    width: u16,
+    tab_stop: usize,
+) -> Result<String, TextRenderError> {
+    try_render_to_string_with_options_and_tab_stop(
+        element,
+        width,
+        &RenderOptions::default(),
+        tab_stop,
+    )
+}
+
+fn try_render_to_string_with_options_and_tab_stop(
+    element: &Element,
+    width: u16,
+    options: &RenderOptions,
+    tab_stop: usize,
+) -> Result<String, TextRenderError> {
+    let raw = RenderHelper.try_render_to_output(element, width, tab_stop)?;
 
     if !options.normalize_line_endings {
-        return raw;
+        return Ok(raw);
     }
 
     let normalized = raw.replace("\r\n", "\n");
 
     if options.trim {
-        normalized
+        Ok(normalized
             .lines()
             .map(|line| line.trim_end())
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n"))
     } else {
-        normalized
+        Ok(normalized)
     }
 }
 
@@ -70,12 +112,25 @@ pub fn render_to_string_with_options(
 /// println!("{}", output);
 /// ```
 pub fn render_to_string(element: &Element, width: u16) -> String {
-    render_to_string_with_options(element, width, &RenderOptions::default())
+    try_render_to_string(element, width)
+        .unwrap_or_else(|error| panic!("render_to_string failed: {error}"))
+}
+
+pub fn try_render_to_string(element: &Element, width: u16) -> Result<String, TextRenderError> {
+    try_render_to_string_with_options(element, width, &RenderOptions::default())
 }
 
 /// Render an element to a string without trimming trailing spaces.
 pub fn render_to_string_no_trim(element: &Element, width: u16) -> String {
-    render_to_string_with_options(
+    try_render_to_string_no_trim(element, width)
+        .unwrap_or_else(|error| panic!("render_to_string_no_trim failed: {error}"))
+}
+
+pub fn try_render_to_string_no_trim(
+    element: &Element,
+    width: u16,
+) -> Result<String, TextRenderError> {
+    try_render_to_string_with_options(
         element,
         width,
         &RenderOptions {
@@ -90,7 +145,12 @@ pub fn render_to_string_no_trim(element: &Element, width: u16) -> String {
 /// Use this when writing to a terminal in raw mode, where `\n` alone
 /// does not perform a carriage return.
 pub fn render_to_string_raw(element: &Element, width: u16) -> String {
-    render_to_string_with_options(
+    try_render_to_string_raw(element, width)
+        .unwrap_or_else(|error| panic!("render_to_string_raw failed: {error}"))
+}
+
+pub fn try_render_to_string_raw(element: &Element, width: u16) -> Result<String, TextRenderError> {
+    try_render_to_string_with_options(
         element,
         width,
         &RenderOptions {
@@ -112,49 +172,78 @@ pub fn render_to_string_raw(element: &Element, width: u16) -> String {
 /// println!("{}", output);
 /// ```
 pub fn render_to_string_auto(element: &Element) -> String {
-    let (width, _) = Terminal::size().unwrap_or((80, 24));
-    render_to_string(element, width)
+    try_render_to_string_auto(element)
+        .unwrap_or_else(|error| panic!("render_to_string_auto failed: {error}"))
+}
+
+pub fn try_render_to_string_auto(element: &Element) -> Result<String, TextRenderError> {
+    try_render_to_string_auto_with_size_provider(element, Terminal::size)
+}
+
+fn try_render_to_string_auto_with_size_provider(
+    element: &Element,
+    size_provider: impl FnOnce() -> std::io::Result<(u16, u16)>,
+) -> Result<String, TextRenderError> {
+    let (width, _) =
+        size_provider().map_err(|source| TextRenderError::io("querying terminal size", source))?;
+    try_render_to_string(element, width)
 }
 
 /// Helper struct for rendering elements outside the app runtime
 struct RenderHelper;
 
 impl RenderHelper {
-    fn render_to_output(&self, element: &Element, width: u16) -> String {
+    fn try_render_to_output(
+        &self,
+        element: &Element,
+        width: u16,
+        tab_stop: usize,
+    ) -> Result<String, TextRenderError> {
         let mut engine = LayoutEngine::new();
+        engine.set_text_flow_policy(tab_stop, "…", 1);
         let layout_width = width;
-        let content_height = self.resolve_render_height(element, layout_width, &mut engine);
+        let content_height = self.try_resolve_render_height(element, layout_width, &mut engine)?;
         let render_width = layout_width;
 
         let mut output = Output::new(render_width, content_height);
         let clip_depth_before = output.clip_depth();
-        render_element_tree(element, &engine, &mut output, 0.0, 0.0);
+        try_render_element_tree(element, &engine, &mut output, 0.0, 0.0)?;
         debug_assert_eq!(
             output.clip_depth(),
             clip_depth_before,
             "render_to_string left an unbalanced clip stack"
         );
 
-        output.render()
+        Ok(output.render())
     }
 
-    fn resolve_render_height(
+    fn try_resolve_render_height(
         &self,
         element: &Element,
         width: u16,
         engine: &mut LayoutEngine,
-    ) -> u16 {
+    ) -> Result<u16, TextRenderError> {
+        if element.element_type == ElementType::VirtualText {
+            return Ok(1);
+        }
+
         let initial_guess = self.calculate_element_height(element, width, engine).max(1);
         let mut probe_height = initial_guess.max(64);
         let mut measured_height = initial_guess;
 
         for _ in 0..6 {
-            engine.compute(element, width, probe_height);
+            engine
+                .try_compute(element, width, probe_height)
+                .map_err(|source| TextRenderError::flow(element.id, source))?;
 
             measured_height = engine
                 .get_layout(element.id)
-                .map(|layout| layout.height.ceil().max(1.0) as u16)
-                .unwrap_or(initial_guess.max(1));
+                .ok_or(TextRenderError::IncompleteSourceMap {
+                    element_id: element.id,
+                })?
+                .height
+                .ceil()
+                .max(1.0) as u16;
 
             // We have headroom; current probe height is enough.
             if measured_height.saturating_add(1) < probe_height {
@@ -172,8 +261,10 @@ impl RenderHelper {
 
         let resolved_height = measured_height.max(1);
         // Recompute using resolved height so final layout and output height align.
-        engine.compute(element, width, resolved_height);
-        resolved_height
+        engine
+            .try_compute(element, width, resolved_height)
+            .map_err(|source| TextRenderError::flow(element.id, source))?;
+        Ok(resolved_height)
     }
 
     fn calculate_element_height(
@@ -247,6 +338,9 @@ impl RenderHelper {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+    use std::io;
+
     use super::*;
     use crate::components::{Box, Text};
     use crate::core::BorderStyle;
@@ -306,5 +400,32 @@ mod tests {
 
         assert!(output.contains("line-0"));
         assert!(output.contains("line-1099"));
+    }
+
+    #[test]
+    fn auto_size_failure_preserves_terminal_io_source() {
+        let element = Element::text("never rendered");
+        let error = try_render_to_string_auto_with_size_provider(&element, || {
+            Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "terminal size provider closed",
+            ))
+        })
+        .unwrap_err();
+
+        assert!(matches!(
+            &error,
+            TextRenderError::Io {
+                operation: "querying terminal size",
+                ..
+            }
+        ));
+        assert_eq!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<io::Error>())
+                .map(io::Error::kind),
+            Some(io::ErrorKind::BrokenPipe)
+        );
     }
 }
