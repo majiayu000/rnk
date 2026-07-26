@@ -196,7 +196,8 @@ pub(super) fn record_fingerprint(previous: [u64; 4], event: &ConversationEvent,
     outcome: &ApplyOutcome) -> [u64; 4] {
     fingerprint(&(previous, event, outcome))
 }
-fn snapshot_state_fingerprint(value: &ConversationStateSnapshot) -> [u64; 4] {
+fn snapshot_state_fingerprint(retention_tail: [u64; 4],
+    value: &ConversationStateSnapshot) -> [u64; 4] {
     let identities = &value.identities;
     let seen_messages = identities.seen_messages().iter().copied().collect::<BTreeSet<_>>();
     let retired_messages = identities.retired_messages().iter().copied().collect::<BTreeSet<_>>();
@@ -209,7 +210,7 @@ fn snapshot_state_fingerprint(value: &ConversationStateSnapshot) -> [u64; 4] {
     let seen_calls = identities.seen_tool_calls().iter().cloned().collect::<BTreeSet<_>>();
     let retired_calls = identities.retired_tool_calls().iter().cloned().collect::<BTreeSet<_>>();
     let result_slots = identities.result_slots().iter().cloned().collect::<BTreeMap<_, _>>();
-    fingerprint(&((&value.messages, value.revision, value.expected_sequence,
+    fingerprint(&(retention_tail, (&value.messages, value.revision, value.expected_sequence,
         value.retention.capacity, value.retention.evicted_through), (seen_messages,
         retired_messages, seen_blocks, retired_blocks, thinking_seen, thinking_retired,
         seen_calls, retired_calls, result_slots)))
@@ -217,7 +218,7 @@ fn snapshot_state_fingerprint(value: &ConversationStateSnapshot) -> [u64; 4] {
 pub(super) fn snapshot_proof(value: &ConversationStateSnapshot) -> SnapshotProof {
     let retention_tail = value.retention.records.last().and_then(|record| record.proof.as_ref())
         .map_or([0; 4], |proof| proof.record);
-    SnapshotProof { retention_tail, content: snapshot_state_fingerprint(value) }
+    SnapshotProof { retention_tail, content: snapshot_state_fingerprint(retention_tail, value) }
 }
 pub(super) fn evicted_proofs_are_valid(value: &ConversationStateSnapshot) -> bool {
     let mut prior = None;
@@ -229,7 +230,7 @@ pub(super) fn evicted_proofs_are_valid(value: &ConversationStateSnapshot) -> boo
         prior = Some(proof.record);
     }
     value.proof.as_ref().is_some_and(|proof| proof.retention_tail == prior.unwrap_or([0; 4])
-        && proof.content == snapshot_state_fingerprint(value))
+        && proof.content == snapshot_state_fingerprint(proof.retention_tail, value))
 }
 }
 

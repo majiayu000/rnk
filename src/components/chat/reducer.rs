@@ -11,6 +11,13 @@ use super::super::state::{
 use super::super::rollback::IdentityBackup;
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(test)]
+thread_local! { static COST_CALLS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) }; }
+#[cfg(test)]
+fn reset_cost_calls() { COST_CALLS.set((0, 0)); }
+#[cfg(test)]
+fn cost_calls() -> (usize, usize) { COST_CALLS.get() }
+
 struct MutationBackup {
     messages: Vec<(usize, ChatMessage)>, added: Option<MessageId>,
     identities: Option<IdentityBackup>,
@@ -18,6 +25,8 @@ struct MutationBackup {
 impl MutationBackup {
     fn capture(state: &ConversationState, update: &ConversationUpdate,
         affected: &BTreeSet<MessageId>) -> Self {
+        #[cfg(test)]
+        COST_CALLS.with(|calls| { let (validation, backup) = calls.get(); calls.set((validation, backup + 1)); });
         let messages = state.messages.iter().enumerate()
             .filter(|(_, message)| affected.contains(&message.id))
             .map(|(index, message)| (index, message.clone())).collect();
@@ -111,10 +120,14 @@ impl ConversationState {
                     message.revision.checked_next(message.id)?));
             }
         }
-        let backup = MutationBackup::capture(self, &event.update, &affected_ids);
-        if let Err(error) = apply_update(self, &event.update)
-            .and_then(|()| validate_conversation(self)) {
-            backup.restore(self);
+        let global_validation = requires_global_validation(&event.update);
+        let backup = global_validation.then(|| MutationBackup::capture(
+            self, &event.update, &affected_ids));
+        let result = apply_update(self, &event.update).and_then(|()| {
+            if global_validation { validate_conversation(self) } else { Ok(()) }
+        });
+        if let Err(error) = result {
+            if let Some(backup) = backup { backup.restore(self); }
             return Err(error);
         }
         for message in &mut self.messages {
@@ -153,6 +166,17 @@ impl ConversationState {
 fn new_affected(message_id: MessageId) -> AffectedMessage {
     AffectedMessage { message_id, previous: None, applied: MessageRevision::INITIAL,
         disposition: AffectedMessageDisposition::Present }
+}
+
+fn requires_global_validation(update: &ConversationUpdate) -> bool {
+    match update {
+        ConversationUpdate::AppendText(_) | ConversationUpdate::Complete(_) => false,
+        ConversationUpdate::Push(_) | ConversationUpdate::AppendMessageBlock(_)
+        | ConversationUpdate::InsertMessageBlock(_) | ConversationUpdate::ReplaceBlock(_)
+        | ConversationUpdate::Cancel(_) | ConversationUpdate::Fail(_)
+        | ConversationUpdate::EditMessage(_) | ConversationUpdate::DeleteMessage(_)
+        | ConversationUpdate::Resend(_) => true,
+    }
 }
 
 fn target_guard(update: &ConversationUpdate) -> Option<MessageMutationGuard> {
@@ -350,13 +374,7 @@ fn append_text(state: &mut ConversationState, message_id: MessageId, block_id: B
         .ok_or(ConversationError::UnknownBlock { message_id, block_id })?;
     match &mut entry.block {
         MessageBlock::Text(value) | MessageBlock::Markdown(value) => value.push_str(delta),
-        MessageBlock::Code(value) => {
-            let mut replacement = CodeContent::new(format!("{}{}", value.content(), delta))?;
-            if let Some(language) = value.language() {
-                replacement = replacement.with_language(language)?;
-            }
-            entry.block = MessageBlock::Code(replacement);
-        }
+        MessageBlock::Code(value) => value.append_text(delta),
         MessageBlock::Thinking(value) => match value.status {
             ThinkingStatus::Pending => {
                 value.content.push_str(delta); value.status = ThinkingStatus::Streaming;
@@ -620,6 +638,8 @@ fn live_call_ids(state: &ConversationState) -> BTreeSet<ToolCallId> {
 }
 
 fn validate_conversation(state: &ConversationState) -> Result<(), ConversationError> {
+    #[cfg(test)]
+    COST_CALLS.with(|calls| { let (validation, backup) = calls.get(); calls.set((validation + 1, backup)); });
     let mut calls = BTreeMap::<ToolCallId, &ToolCallStatus>::new();
     let mut results = BTreeMap::<ToolCallId, (&ToolResultStatus, ToolResultLocation)>::new();
     for message in &state.messages {
@@ -749,5 +769,27 @@ impl ResendUpdate {
     pub const fn source_guard(&self) -> MessageMutationGuard { self.source_guard }
     /// Returns the fresh message.
     pub const fn message(&self) -> &ChatMessage { &self.message }
+}
+
+#[cfg(test)]
+mod cost_tests {
+use super::*;
+fn text_message(id: u64, text: &str) -> ChatMessage { ChatMessage::new(MessageId::new(id), ChatRole::User, vec![MessageBlockEntry::new(BlockId::new(id), MessageBlock::Text(text.into()))]).unwrap() }
+fn apply(state: &mut ConversationState, id: &str, update: ConversationUpdate) -> Result<ApplyOutcome, ConversationError> { state.apply_event(ConversationEvent::new(UpdateId::new(id).unwrap(), state.expected_sequence(), update)) }
+#[test] fn local_updates_skip_global_validation_and_full_backup() {
+    let mut state = ConversationState::new(0, std::num::NonZeroUsize::new(4).unwrap()); let revision = state.revision(); apply(&mut state, "push", ConversationUpdate::push(ConversationGuard::new(revision), text_message(1, "x"))).unwrap();
+    reset_cost_calls(); let guard = MessageMutationGuard::new(ConversationGuard::new(state.revision()), MessageId::new(1), state.message(MessageId::new(1)).unwrap().revision()); apply(&mut state, "append", ConversationUpdate::append_text(guard, BlockId::new(1), "y").unwrap()).unwrap(); assert_eq!(cost_calls(), (0, 0));
+    reset_cost_calls(); let guard = MessageMutationGuard::new(ConversationGuard::new(state.revision()), MessageId::new(1), state.message(MessageId::new(1)).unwrap().revision()); apply(&mut state, "complete", ConversationUpdate::complete(guard)).unwrap(); assert_eq!(cost_calls(), (0, 0));
+    reset_cost_calls(); let revision = state.revision(); apply(&mut state, "push-two", ConversationUpdate::push(ConversationGuard::new(revision), text_message(2, "z"))).unwrap(); assert_eq!(cost_calls(), (1, 1));
+}
+#[test] fn global_validation_scope_is_exhaustive() {
+    let conversation = ConversationGuard::new(ConversationRevision::INITIAL); let guard = MessageMutationGuard::new(conversation, MessageId::new(1), MessageRevision::INITIAL); let entry = MessageBlockEntry::new(BlockId::new(1), MessageBlock::Text("x".into())); let message = text_message(2, "y");
+    let updates = vec![ConversationUpdate::push(conversation, message.clone()), ConversationUpdate::append_text(guard, BlockId::new(1), "x").unwrap(), ConversationUpdate::append_message_block(guard, entry.clone()), ConversationUpdate::insert_message_block(guard, 0, entry.clone()), ConversationUpdate::replace_block(guard, BlockId::new(1), MessageBlock::Text("y".into())), ConversationUpdate::complete(guard), ConversationUpdate::cancel(guard), ConversationUpdate::fail(guard, FailureCause::new("x").unwrap()), ConversationUpdate::edit_message(guard, vec![entry]), ConversationUpdate::delete_message(guard), ConversationUpdate::resend(guard, message)];
+    assert_eq!(updates.iter().map(requires_global_validation).collect::<Vec<_>>(), vec![true, false, true, true, true, false, true, true, true, true, true]);
+}
+#[test] fn rejected_local_updates_remain_atomic_without_backup() {
+    let mut state = ConversationState::new(0, std::num::NonZeroUsize::new(4).unwrap()); let revision = state.revision(); apply(&mut state, "push", ConversationUpdate::push(ConversationGuard::new(revision), text_message(1, "x"))).unwrap(); let guard = MessageMutationGuard::new(ConversationGuard::new(state.revision()), MessageId::new(1), MessageRevision::INITIAL); apply(&mut state, "complete", ConversationUpdate::complete(guard)).unwrap();
+    let before = state.clone(); reset_cost_calls(); let guard = MessageMutationGuard::new(ConversationGuard::new(state.revision()), MessageId::new(1), state.message(MessageId::new(1)).unwrap().revision()); assert!(apply(&mut state, "late", ConversationUpdate::append_text(guard, BlockId::new(1), "late").unwrap()).is_err()); assert_eq!(state, before); assert_eq!(cost_calls(), (0, 0));
+}
 }
 }

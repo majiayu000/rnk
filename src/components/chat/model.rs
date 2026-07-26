@@ -274,6 +274,7 @@ macro_rules! language_payload {
 }
 language_payload!(CodeContent, "Code content.", "code_content", true);
 language_payload!(DiffContent, "Diff content.", "diff_content", false);
+impl CodeContent { pub(in crate::components::chat) fn append_text(&mut self, value: &str) { self.content.push_str(value); } }
 
 /// Quoted content and optional attribution.
 #[derive(Debug, Clone, PartialEq, Eq)]
