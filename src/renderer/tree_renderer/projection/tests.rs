@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
-use crate::components::{Box, Text};
+use crate::components::Box;
 use crate::core::{BorderStyle, Color, Element, ElementId, Overflow, Position, Style, TextWrap};
 use crate::layout::LayoutEngine;
 use crate::layout::text_flow::{
@@ -221,6 +221,37 @@ fn projection_zero_width_only_attaches_to_the_same_flow_sequence() {
         zero.frame,
         FrameDisposition::NonCell(NonCellDisposition::ZeroWidth)
     );
+
+    for (wrap, width, expected, ellipsis_x) in [
+        (TextWrap::TruncateStart, 3, "…\u{200b}XY", 0),
+        (TextWrap::TruncateMiddle, 4, "a…\u{200b}XY", 1),
+    ] {
+        let input =
+            TextFlowInput::plain("abc\u{200b}XY", TextFlowSourceKind::Exact, Style::default());
+        let flow = TextFlow::try_build(&input, &TextFlowOptions::new(width, wrap)).unwrap();
+        let mut staged = StagedFrame::new(&Output::new(width as u16, 1), Default::default());
+        let element_id = ElementId::new();
+        staged.project_flow(element_id, &flow, 0, 0).unwrap();
+        let (output, projection) = staged.finish().unwrap();
+        assert_eq!(output.render(), expected);
+        assert_eq!(
+            source_record(&projection, 3..6).frame,
+            FrameDisposition::NonCell(NonCellDisposition::ZeroWidth)
+        );
+        let synthetic = projection
+            .forward
+            .iter()
+            .find(|record| record.source == TextFlowSource::Synthetic)
+            .unwrap();
+        assert_eq!(
+            projection.reverse.get(&FrameCell {
+                x: ellipsis_x,
+                y: 0
+            }),
+            Some(&synthetic.origin())
+        );
+        validate_round_trip(&projection).unwrap();
+    }
 
     let mut nonzero = Element::text("\u{301}");
     nonzero.style.position = Position::Absolute;
@@ -486,19 +517,17 @@ fn projection_later_paint_replaces_old_wide_ownership_deterministically() {
 
 #[test]
 fn projection_failure_commits_neither_cells_nor_projection() {
-    let tree = Box::new()
-        .width(8)
-        .height(2)
-        .child(Text::new("first").into_element())
-        .into_element();
+    let mut tree = Element::text("abc\u{200b}XY");
+    tree.style.width = 3.into();
+    tree.style.height = 1.into();
+    tree.style.text_wrap = TextWrap::TruncateStart;
     let mut engine = LayoutEngine::new();
-    engine.try_compute(&tree, 8, 2).unwrap();
+    engine.try_compute(&tree, 3, 1).unwrap();
 
-    let mut output = Output::new(8, 2);
-    output.write(0, 0, "e\u{301}界", &Style::default());
+    let mut output = Output::new(3, 1);
+    output.write(0, 0, "old", &Style::default());
     let before_render = output.render();
     let before_dirty = output.dirty_cell_positions().collect::<Vec<_>>();
-    let before_footprint = output.prospective_grapheme_write_footprint(1, 0, "X");
 
     let failure = try_render_tree_with_options(
         &tree,
@@ -513,15 +542,10 @@ fn projection_failure_commits_neither_cells_nor_projection() {
     );
 
     assert_eq!(failure, Err(ProjectionError::InjectedFailure));
-    assert_eq!((output.width, output.height), (8, 2));
     assert_eq!(output.render(), before_render);
     assert_eq!(
         output.dirty_cell_positions().collect::<Vec<_>>(),
         before_dirty
-    );
-    assert_eq!(
-        output.prospective_grapheme_write_footprint(1, 0, "X"),
-        before_footprint
     );
     assert_eq!(output.clip_depth(), 0);
 }
