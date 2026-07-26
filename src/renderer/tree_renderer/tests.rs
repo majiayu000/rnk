@@ -1,6 +1,6 @@
 use super::*;
 use crate::components::{Box, Line, Span, Text};
-use crate::core::{BorderStyle, Color, Overflow};
+use crate::core::{BorderStyle, Color, ElementType, Overflow};
 use crate::renderer::output::StyledChar;
 
 fn text_with_border(
@@ -66,6 +66,76 @@ fn layout_and_render_for_test(
     let mut output = Output::new(width, height);
     render_element_tree(element, &engine, &mut output, 0.0, 0.0);
     (engine, output)
+}
+
+fn virtual_text(content: &str) -> Element {
+    let mut element = Element::new(ElementType::VirtualText);
+    element.text_content = Some(content.to_owned());
+    element
+}
+
+#[test]
+fn direct_virtual_text_is_skipped_by_fallible_and_compatibility_rendering() {
+    let element = virtual_text("hidden");
+    let mut engine = LayoutEngine::new();
+    engine.try_compute(&element, 8, 1).unwrap();
+
+    let mut fallible_output = Output::new(8, 1);
+    try_render_element_tree(&element, &engine, &mut fallible_output, 0.0, 0.0).unwrap();
+    assert_eq!(fallible_output.render(), "");
+
+    let mut compatibility_output = Output::new(8, 1);
+    render_element_tree(&element, &engine, &mut compatibility_output, 0.0, 0.0);
+    assert_eq!(compatibility_output.render(), "");
+}
+
+#[test]
+fn nested_virtual_text_is_skipped_by_fallible_and_compatibility_rendering() {
+    let mut element = Element::box_element();
+    element.add_child(virtual_text("hidden"));
+    let mut engine = LayoutEngine::new();
+    engine.try_compute(&element, 8, 1).unwrap();
+
+    let mut fallible_output = Output::new(8, 1);
+    try_render_element_tree(&element, &engine, &mut fallible_output, 0.0, 0.0).unwrap();
+    assert_eq!(fallible_output.render(), "");
+
+    let mut compatibility_output = Output::new(8, 1);
+    render_element_tree(&element, &engine, &mut compatibility_output, 0.0, 0.0);
+    assert_eq!(compatibility_output.render(), "");
+}
+
+#[test]
+fn span_only_element_renders_canonical_lines_and_styles() {
+    let mut element = Element::new(ElementType::Text);
+    element.spans = Some(vec![
+        Line::from(Span::new("red").color(Color::Red)),
+        Line::from(Span::new("blue").color(Color::Blue)),
+    ]);
+    element.style.width = 4.into();
+    element.style.height = 2.into();
+
+    let (engine, output) = layout_and_render_for_test(&element, 4, 2);
+    let flow = engine.current_text_flow(element.id).unwrap();
+
+    assert_eq!(
+        flow.cache_identity().input.source_kind,
+        crate::layout::TextFlowSourceKind::Canonical
+    );
+    assert_eq!(
+        (0..3)
+            .map(|column| output.cell_at(column, 0).unwrap().ch)
+            .collect::<String>(),
+        "red"
+    );
+    assert_eq!(
+        (0..4)
+            .map(|column| output.cell_at(column, 1).unwrap().ch)
+            .collect::<String>(),
+        "blue"
+    );
+    assert_eq!(output.cell_at(0, 0).unwrap().fg, Some(Color::Red));
+    assert_eq!(output.cell_at(0, 1).unwrap().fg, Some(Color::Blue));
 }
 
 #[test]
