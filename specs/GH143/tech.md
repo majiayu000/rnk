@@ -6,7 +6,7 @@ GH-143
 
 <!-- specrail-requires-planned-changes-v1 -->
 <!-- specrail-planned-changes
-{"version":1,"issue":143,"complete":true,"paths":["specs/GH143/product.md","specs/GH143/tech.md","specs/GH143/tasks.md","src/components/chat/state.rs","src/components/chat/state/message_index.rs","src/components/chat/state/tests.rs","src/components/chat/reducer.rs","src/components/chat/reducer/targeted.rs","tests/chat_targeted_updates.rs"],"spec_refs":["specs/GH62/product.md","specs/GH62/tech.md","specs/GH62/tasks.md","specs/GH143/product.md","specs/GH143/tech.md","specs/GH143/tasks.md"]}
+{"version":1,"issue":143,"complete":true,"paths":["specs/GH143/product.md","specs/GH143/tech.md","specs/GH143/tasks.md","src/components/chat/state.rs","src/components/chat/state/message_index.rs","src/components/chat/state/tests.rs","src/components/chat/reducer.rs","src/components/chat/reducer/targeted.rs","src/components/chat/reducer/targeted/correlation_tests.rs","tests/chat_targeted_updates.rs"],"spec_refs":["specs/GH62/product.md","specs/GH62/tech.md","specs/GH62/tasks.md","specs/GH143/product.md","specs/GH143/tech.md","specs/GH143/tasks.md"]}
 -->
 
 ## Product Spec
@@ -106,12 +106,12 @@ Thinking、replay、rejected atomicity、Push/Delete/Resend 与 snapshot roundtr
 | B-003 | target block mutation | `cargo test --test chat_targeted_updates append_supported_blocks_preserves_typed_payloads -- --exact` |
 | B-004 | private cost fixtures | `cargo test --lib components::chat::reducer::targeted::tests::front_and_end_targets_have_equal_cost -- --exact` |
 | B-005 | direct revision/outcome builder | `cargo test --test chat_targeted_updates targeted_outcome_advances_only_target -- --exact` |
-| B-006 | preflight-before-mutation path | `cargo test --test chat_targeted_updates rejected_targeted_updates_are_fully_atomic -- --exact` |
+| B-006 | preflight-before-mutation path | `cargo test --test chat_targeted_updates append_rejection_matrix_is_fully_atomic -- --exact`; `cargo test --test chat_targeted_updates targeted_preflight_errors_preserve_the_complete_state -- --exact`; `cargo test --lib components::chat::reducer::targeted::correlation_tests::target_revision_exhaustion_is_atomic_and_locally_counted -- --exact` |
 | B-007 | MessageIndex mutation + backup restore | `cargo test --test chat_targeted_updates push_delete_resend_keep_lookup_and_order_consistent -- --exact` |
 | B-008 | `try_restore()` index rebuild | `cargo test --test chat_targeted_updates snapshot_restore_rebuilds_target_lookup -- --exact` |
-| B-009 | correlation fallback | `cargo test --lib components::chat::reducer::targeted::tests::correlated_complete_records_global_visits -- --exact`; `cargo test --test chat_conversation_contracts cancel_cascades_across_correlated_messages_atomically -- --exact` |
+| B-009 | correlation fallback | `cargo test --lib components::chat::reducer::targeted::correlation_tests::correlated_complete_counts_each_fallback_visit -- --exact`; `cargo test --lib components::chat::reducer::targeted::correlation_tests::cancel_and_fail_count_each_correlation_visit -- --exact`; `cargo test --test chat_conversation_contracts cancel_cascades_across_correlated_messages_atomically -- --exact` |
 | B-010 | common replay/proof entry | `cargo test --test chat_conversation_contracts replay_is_idempotent_and_bounded -- --exact`; `cargo test --test chat_conversation_contracts event_id_conflict_is_typed -- --exact` |
-| B-011 | test-only `ReducerCost` | `cargo test --lib components::chat::reducer::targeted::tests::cost_dimensions_are_independent -- --exact` |
+| B-011 | test-only `ReducerCost` | `cargo test --lib components::chat::reducer::targeted::tests::cost_dimensions_are_independent -- --exact`; `cargo test --lib components::chat::reducer::targeted::correlation_tests::correlated_complete_counts_each_fallback_visit -- --exact`; `cargo test --lib components::chat::reducer::targeted::correlation_tests::cancel_and_fail_count_each_correlation_visit -- --exact` |
 | B-012 | existing contract suites | `cargo test --workspace --all-targets --all-features --locked` |
 | B-013 | targeted classifier + counters | `cargo test --lib components::chat::reducer::targeted::tests::local_paths_skip_global_work -- --exact` |
 

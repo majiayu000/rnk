@@ -23,16 +23,21 @@ impl MutationBackup {
     fn capture(state: &ConversationState, update: &ConversationUpdate,
         affected: &BTreeSet<MessageId>) -> Self {
         targeted::record_backup_capture();
-        targeted::record_message_visits(state.messages.len());
         let messages = state.messages.iter().enumerate()
-            .filter(|(_, message)| affected.contains(&message.id))
+            .filter(|(_, message)| {
+                targeted::record_message_visits(1);
+                affected.contains(&message.id)
+            })
             .map(|(index, message)| (index, message.clone())).collect();
         let candidate = match update {
             ConversationUpdate::Push(value) => Some(value.message.id),
             ConversationUpdate::Resend(value) => Some(value.message.id),
             _ => None,
         };
-        let added = candidate.filter(|id| state.message(*id).is_none());
+        let added = candidate.filter(|id| {
+            targeted::record_target_lookup();
+            state.message(*id).is_none()
+        });
         let identities = matches!(update, ConversationUpdate::Push(_)
             | ConversationUpdate::AppendMessageBlock(_) | ConversationUpdate::InsertMessageBlock(_)
             | ConversationUpdate::EditMessage(_) | ConversationUpdate::DeleteMessage(_)
@@ -41,12 +46,17 @@ impl MutationBackup {
         Self { messages, added, identities }
     }
     fn restore(self, state: &mut ConversationState) {
-        if let Some(index) = self.added.and_then(|added|
-            state.messages.iter().position(|message| message.id == added)) {
+        if let Some(index) = self.added.and_then(|added| state.messages.iter().position(|message| {
+            targeted::record_message_visits(1);
+            message.id == added
+        })) {
             state.messages.remove(index);
         }
         for (index, original) in self.messages {
-            if let Some(found) = state.messages.iter().position(|message| message.id == original.id) {
+            if let Some(found) = state.messages.iter().position(|message| {
+                targeted::record_message_visits(1);
+                message.id == original.id
+            }) {
                 state.messages[found] = original;
             } else {
                 state.messages.insert(index.min(state.messages.len()), original);
@@ -121,12 +131,13 @@ impl ConversationState {
             ));
         }
         let affected_ids = targeted::affected_existing(self, &event.update);
-        targeted::record_message_visits(self.messages.len());
-        let affected_order = self.messages.iter().filter(|message|
-            affected_ids.contains(&message.id)).map(|message| message.id).collect::<Vec<_>>();
+        let affected_order = self.messages.iter().filter(|message| {
+            targeted::record_message_visits(1);
+            affected_ids.contains(&message.id)
+        }).map(|message| message.id).collect::<Vec<_>>();
         let mut revisions = BTreeMap::new();
-        targeted::record_message_visits(self.messages.len());
         for message in &self.messages {
+            targeted::record_message_visits(1);
             if affected_ids.contains(&message.id) {
                 revisions.insert(message.id, (message.revision,
                     message.revision.checked_next(message.id)?));
@@ -142,8 +153,8 @@ impl ConversationState {
             if let Some(backup) = backup { backup.restore(self); }
             return Err(error);
         }
-        targeted::record_message_visits(self.messages.len());
         for message in &mut self.messages {
+            targeted::record_message_visits(1);
             if let Some((_, next)) = revisions.get(&message.id) { message.revision = *next; }
         }
         let mut affected_messages = affected_order.into_iter().filter_map(|message_id| {
@@ -188,6 +199,7 @@ fn apply_update(state: &mut ConversationState, update: &ConversationUpdate)
             edit_message(state, value.guard.message_id, &value.entries),
         ConversationUpdate::DeleteMessage(value) => delete_message(state, value.guard.message_id),
         ConversationUpdate::Resend(value) => {
+            targeted::record_target_lookup();
             let source = state.message(value.source_guard.message_id)
                 .ok_or(ConversationError::UnknownMessage {
                     message_id: value.source_guard.message_id,
@@ -342,6 +354,7 @@ fn append_text(state: &mut ConversationState, message_id: MessageId, block_id: B
 
 fn insert_block(state: &mut ConversationState, message_id: MessageId, position: Option<usize>,
     entry: &MessageBlockEntry) -> Result<(), ConversationError> {
+    targeted::record_target_lookup();
     let message = state.message(message_id)
         .ok_or(ConversationError::UnknownMessage { message_id })?;
     require_active(message)?;
@@ -414,13 +427,16 @@ fn validate_replacement(old: &MessageBlock, new: &MessageBlock, block_id: BlockI
 
 fn complete(state: &mut ConversationState, message_id: MessageId)
     -> Result<(), ConversationError> {
+    targeted::record_target_lookup();
     let message = state.message(message_id)
         .ok_or(ConversationError::UnknownMessage { message_id })?;
     require_active(message)?;
     let ready = match message.status {
         MessageStatus::Pending => static_complete_ready(message),
-        MessageStatus::Streaming => message.blocks.iter().all(|entry| nested_terminal(&entry.block))
-            && correlated_nested_terminal(state, message),
+        MessageStatus::Streaming => message.blocks.iter().all(|entry| {
+            targeted::record_block_visits(1);
+            nested_terminal(&entry.block)
+        }) && correlated_nested_terminal(state, message),
         _ => false,
     };
     if !ready
@@ -432,10 +448,13 @@ fn complete(state: &mut ConversationState, message_id: MessageId)
 }
 
 fn correlated_nested_terminal(state: &ConversationState, target: &ChatMessage) -> bool {
-    let ids = target.blocks.iter().filter_map(|entry| match &entry.block {
-        MessageBlock::ToolCall(value) => Some(&value.call_id),
-        MessageBlock::ToolResult(value) => Some(&value.call_id),
-        _ => None,
+    let ids = target.blocks.iter().filter_map(|entry| {
+        targeted::record_block_visits(1);
+        match &entry.block {
+            MessageBlock::ToolCall(value) => Some(&value.call_id),
+            MessageBlock::ToolResult(value) => Some(&value.call_id),
+            _ => None,
+        }
     }).collect::<BTreeSet<_>>();
     for message in &state.messages {
         targeted::record_message_visits(1);
@@ -455,17 +474,23 @@ fn correlated_nested_terminal(state: &ConversationState, target: &ChatMessage) -
 
 fn terminate(state: &mut ConversationState, target_id: MessageId,
     cause: Option<FailureCause>) -> Result<(), ConversationError> {
+    targeted::record_target_lookup();
     let target = state.message(target_id)
         .ok_or(ConversationError::UnknownMessage { message_id: target_id })?;
     require_active(target)?;
-    let correlations = target.blocks.iter().filter_map(|entry| match &entry.block {
-        MessageBlock::ToolCall(value) => Some(value.call_id.clone()),
-        MessageBlock::ToolResult(value) => Some(value.call_id.clone()),
-        _ => None,
+    let correlations = target.blocks.iter().filter_map(|entry| {
+        targeted::record_block_visits(1);
+        match &entry.block {
+            MessageBlock::ToolCall(value) => Some(value.call_id.clone()),
+            MessageBlock::ToolResult(value) => Some(value.call_id.clone()),
+            _ => None,
+        }
     }).collect::<BTreeSet<_>>();
     for message in &mut state.messages {
+        targeted::record_message_visits(1);
         let is_target = message.id == target_id;
         for entry in &mut message.blocks {
+            targeted::record_block_visits(1);
             let correlated = match &entry.block {
                 MessageBlock::ToolCall(value) => correlations.contains(&value.call_id),
                 MessageBlock::ToolResult(value) => correlations.contains(&value.call_id),
@@ -502,6 +527,7 @@ fn edit_message(state: &mut ConversationState, message_id: MessageId,
             message_id, reason: "edited message must contain at least one block",
         });
     }
+    targeted::record_target_lookup();
     let current = state.message(message_id)
         .ok_or(ConversationError::UnknownMessage { message_id })?.clone();
     let old = current.blocks.iter().map(|entry| (entry.id, entry))
@@ -563,6 +589,7 @@ fn lifecycle_status_changed(old: &MessageBlock, new: &MessageBlock) -> bool {
 
 fn delete_message(state: &mut ConversationState, message_id: MessageId)
     -> Result<(), ConversationError> {
+    targeted::record_target_lookup();
     let position = state.message_position(message_id)
         .ok_or(ConversationError::UnknownMessage { message_id })?;
     let message = state.messages[position].clone();
@@ -592,11 +619,17 @@ fn retire_entry(state: &mut ConversationState, message_id: MessageId,
 }
 
 fn live_call_ids(state: &ConversationState) -> BTreeSet<ToolCallId> {
-    state.messages.iter().flat_map(|message| message.blocks.iter()).filter_map(|entry| {
-        if let MessageBlock::ToolCall(value) = &entry.block {
-            Some(value.call_id.clone())
-        } else { None }
-    }).collect()
+    let mut ids = BTreeSet::new();
+    for message in &state.messages {
+        targeted::record_message_visits(1);
+        for entry in &message.blocks {
+            targeted::record_block_visits(1);
+            if let MessageBlock::ToolCall(value) = &entry.block {
+                ids.insert(value.call_id.clone());
+            }
+        }
+    }
+    ids
 }
 
 fn validate_conversation(state: &ConversationState) -> Result<(), ConversationError> {
@@ -612,7 +645,10 @@ fn validate_conversation(state: &ConversationState) -> Result<(), ConversationEr
     for message in &state.messages {
         targeted::record_message_visits(1);
         if message_terminal(&message.status)
-            && message.blocks.iter().any(|entry| nested_active(&entry.block)) {
+            && message.blocks.iter().any(|entry| {
+                targeted::record_block_visits(1);
+                nested_active(&entry.block)
+            }) {
             return Err(ConversationError::InvalidMessage {
                 message_id: message.id, reason: "terminal message contains active nested block",
             });
@@ -666,6 +702,7 @@ fn validate_conversation(state: &ConversationState) -> Result<(), ConversationEr
 
 fn message_mut(state: &mut ConversationState, message_id: MessageId)
     -> Result<&mut ChatMessage, ConversationError> {
+    targeted::record_target_lookup();
     let position = state.message_position(message_id)
         .ok_or(ConversationError::UnknownMessage { message_id })?;
     Ok(&mut state.messages[position])

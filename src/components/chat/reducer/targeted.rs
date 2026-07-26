@@ -43,28 +43,35 @@ pub(super) fn affected_existing(
     ) {
         return ids;
     }
+    record_target_lookup();
     let Some(target) = state.message(guard.message_id) else {
         return ids;
     };
     let correlations = target
         .blocks
         .iter()
-        .filter_map(|entry| match &entry.block {
-            MessageBlock::ToolCall(value) => Some(value.call_id.clone()),
-            MessageBlock::ToolResult(value) => Some(value.call_id.clone()),
-            _ => None,
+        .filter_map(|entry| {
+            record_block_visit();
+            match &entry.block {
+                MessageBlock::ToolCall(value) => Some(value.call_id.clone()),
+                MessageBlock::ToolResult(value) => Some(value.call_id.clone()),
+                _ => None,
+            }
         })
         .collect::<BTreeSet<_>>();
-    record_message_visits(state.messages.len());
     for message in &state.messages {
-        if message.blocks.iter().any(|entry| match &entry.block {
-            MessageBlock::ToolCall(value) if correlations.contains(&value.call_id) => {
-                nested_active(&entry.block)
+        record_message_visits(1);
+        if message.blocks.iter().any(|entry| {
+            record_block_visit();
+            match &entry.block {
+                MessageBlock::ToolCall(value) if correlations.contains(&value.call_id) => {
+                    nested_active(&entry.block)
+                }
+                MessageBlock::ToolResult(value) if correlations.contains(&value.call_id) => {
+                    nested_active(&entry.block)
+                }
+                _ => false,
             }
-            MessageBlock::ToolResult(value) if correlations.contains(&value.call_id) => {
-                nested_active(&entry.block)
-            }
-            _ => false,
         }) {
             ids.insert(message.id);
         }
@@ -521,7 +528,7 @@ mod tests {
             ))
             .unwrap();
         let cost = cost();
-        assert_eq!(cost.target_lookups, 0);
+        assert_eq!(cost.target_lookups, 1);
         assert_eq!(cost.global_validations, 1);
         assert_eq!(cost.backup_captures, 1);
         assert!(cost.message_visits > 0);
@@ -732,3 +739,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "targeted/correlation_tests.rs"]
+mod correlation_tests;
