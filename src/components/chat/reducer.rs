@@ -687,3 +687,113 @@ impl ResendUpdate {
     pub const fn message(&self) -> &ChatMessage { &self.message }
 }
 }
+
+#[cfg(test)]
+#[rustfmt::skip]
+mod coverage_tests {
+    use super::super::*; use std::num::NonZeroUsize;
+    fn message() -> ChatMessage {
+        ChatMessage::new(
+            MessageId::new(1),
+            ChatRole::User,
+            vec![MessageBlockEntry::new(
+                BlockId::new(1),
+                MessageBlock::Text("text".into()),
+            )],
+        )
+        .unwrap()
+    }
+    #[test]
+    fn public_payload_and_snapshot_accessors_are_live() {
+        let conversation = ConversationGuard::new(ConversationRevision::INITIAL);
+        let mutation =
+            MessageMutationGuard::new(conversation, MessageId::new(1), MessageRevision::INITIAL);
+        let entry = MessageBlockEntry::new(BlockId::new(2), MessageBlock::Markdown("md".into()));
+        if let ConversationUpdate::Push(value) = ConversationUpdate::push(conversation, message()) {
+            assert_eq!(value.guard(), conversation);
+            assert_eq!(value.message().id(), MessageId::new(1));
+        }
+        if let ConversationUpdate::AppendText(value) =
+            ConversationUpdate::append_text(mutation, BlockId::new(1), "delta").unwrap()
+        {
+            assert_eq!(value.guard(), mutation);
+            assert_eq!(value.block_id(), BlockId::new(1));
+            assert_eq!(value.delta(), "delta");
+        }
+        if let ConversationUpdate::AppendMessageBlock(value) =
+            ConversationUpdate::append_message_block(mutation, entry.clone())
+        {
+            assert_eq!(value.guard(), mutation);
+            assert_eq!(value.entry(), &entry);
+        }
+        if let ConversationUpdate::InsertMessageBlock(value) =
+            ConversationUpdate::insert_message_block(mutation, 0, entry.clone())
+        {
+            assert_eq!(value.guard(), mutation);
+            assert_eq!(value.position(), 0);
+            assert_eq!(value.entry(), &entry);
+        }
+        if let ConversationUpdate::ReplaceBlock(value) = ConversationUpdate::replace_block(
+            mutation,
+            BlockId::new(1),
+            MessageBlock::Text("next".into()),
+        ) {
+            assert_eq!(value.guard(), mutation);
+            assert_eq!(value.block_id(), BlockId::new(1));
+            assert!(matches!(value.replacement(), MessageBlock::Text(_)));
+        }
+        if let ConversationUpdate::Complete(value) = ConversationUpdate::complete(mutation) {
+            assert_eq!(value.guard(), mutation);
+        }
+        let cause = FailureCause::new("cause").unwrap();
+        if let ConversationUpdate::Fail(value) = ConversationUpdate::fail(mutation, cause.clone()) {
+            assert_eq!(value.guard(), mutation);
+            assert_eq!(value.cause(), &cause);
+        }
+        if let ConversationUpdate::EditMessage(value) =
+            ConversationUpdate::edit_message(mutation, vec![entry.clone()])
+        {
+            assert_eq!(value.guard(), mutation);
+            assert_eq!(value.entries(), &[entry.clone()]);
+        }
+        if let ConversationUpdate::Resend(value) = ConversationUpdate::resend(mutation, message()) {
+            assert_eq!(value.source_guard(), mutation);
+            assert_eq!(value.message().id(), MessageId::new(1));
+        }
+        assert_eq!(
+            MessageStatus::Failed(cause.clone()).failure_cause(),
+            Some(&cause)
+        );
+        assert_eq!(
+            ThinkingStatus::Failed(cause.clone()).failure_cause(),
+            Some(&cause)
+        );
+        assert_eq!(
+            ToolCallStatus::Failed(cause.clone()).failure_cause(),
+            Some(&cause)
+        );
+        assert_eq!(
+            ToolResultStatus::Failed(cause.clone()).failure_cause(),
+            Some(&cause)
+        );
+
+        let state = ConversationState::new(4, NonZeroUsize::MIN);
+        let snapshot = state.snapshot();
+        assert!(snapshot.messages().is_empty());
+        assert_eq!(snapshot.revision(), ConversationRevision::INITIAL);
+        assert_eq!(snapshot.expected_sequence(), 4);
+        assert_eq!(snapshot.retention().capacity(), NonZeroUsize::MIN);
+        assert!(snapshot.retention().records().is_empty());
+        assert_eq!(snapshot.retention().evicted_through(), None);
+        let identities = snapshot.identities();
+        assert!(identities.seen_messages().is_empty());
+        assert!(identities.retired_messages().is_empty());
+        assert!(identities.seen_blocks().is_empty());
+        assert!(identities.retired_blocks().is_empty());
+        assert!(identities.thinking().is_empty());
+        assert!(identities.seen_tool_calls().is_empty());
+        assert!(identities.retired_tool_calls().is_empty());
+        assert!(identities.result_slots().is_empty());
+        assert!(!ConversationError::SequenceExhausted.to_string().is_empty());
+    }
+}
