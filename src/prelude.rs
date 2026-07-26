@@ -52,6 +52,20 @@ pub use crate::components::{Box, Box as LayoutBox, Spacer, Static, Transform};
 // Display Components - Text & Content
 // =============================================================================
 
+pub use crate::components::chat::{
+    AffectedMessage, AffectedMessageDisposition, AppendTextUpdate, ApplyOutcome, BlockId,
+    BlockUpdate, ChatMessage, ChatMessageMetadata, ChatRole, CodeContent, ConversationError,
+    ConversationEvent, ConversationGuard, ConversationIdentityHistory, ConversationRevision,
+    ConversationState, ConversationStateSnapshot, ConversationUpdate, DecimalValue, DiffContent,
+    EditMessageUpdate, ErrorContent, ErrorSource, FailUpdate, FailureCause, GuardedUpdate,
+    InsertBlockUpdate, LegacyRoleConversionError, LinkContent, MessageAuthor, MessageBlock,
+    MessageBlockEntry, MessageId, MessageMutationGuard, MessageRevision, MessageStatus,
+    MessageTimestamp, ProcessedEventRecord, PushUpdate, QuoteContent, ReplaceBlockUpdate,
+    ResendUpdate, RetentionHistory, TerminalAttachmentSummary, ThinkingContent, ThinkingId,
+    ThinkingIdentityHistory, ThinkingStatus, ToolArgument, ToolCallContent, ToolCallId,
+    ToolCallStatus, ToolResultContent, ToolResultLocation, ToolResultSlot, ToolResultStatus,
+    TypedField, TypedValue, UpdateId,
+};
 pub use crate::components::{
     Cursor, CursorShape, CursorState, CursorStyle, Gradient, Hyperlink, HyperlinkBuilder, Line,
     Message, MessageRole, Newline, Span, Text, ThinkingBlock, ToolCall, set_hyperlinks_supported,
