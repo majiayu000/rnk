@@ -29,10 +29,18 @@ impl Output {
         };
         let lead = footprint.old_cells[0];
         let idx = lead.y as usize * self.width as usize + lead.x as usize;
-        let GraphemeCell::Lead { suffix, .. } = &mut self.grapheme_cells[idx] else {
-            return GraphemeWriteOutcome::Clipped;
+        let (owner_width, ends_with_zwj) = {
+            let GraphemeCell::Lead { width, suffix } = &mut self.grapheme_cells[idx] else {
+                return GraphemeWriteOutcome::Clipped;
+            };
+            suffix.push_str(text);
+            (*width, suffix.ends_with('\u{200d}'))
         };
-        suffix.push_str(text);
+        if !ends_with_zwj {
+            self.clear_pending_zwj();
+        } else {
+            self.update_pending_zwj(lead, x, y, owner_width);
+        }
         for position in &footprint.old_cells {
             self.mark_cell_dirty(*position);
         }
