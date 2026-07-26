@@ -411,6 +411,28 @@ fn rich_history_state(capacity: usize) -> ConversationState {
 fn snapshot_with_identities(snapshot: &ConversationStateSnapshot, identities: ConversationIdentityHistory) -> ConversationStateSnapshot {
     ConversationStateSnapshot::new_with_proof(snapshot.messages().to_vec(), snapshot.revision(), snapshot.expected_sequence(), snapshot.retention().clone(), identities, snapshot.proof().unwrap().clone())
 }
+fn restored_message(source: &ChatMessage) -> ChatMessage {
+    let metadata = ChatMessageMetadata::new(source.metadata().author().cloned(), source.metadata().timestamp().cloned());
+    let blocks = source.blocks().iter().map(|entry| MessageBlockEntry::new(entry.id(), entry.block().clone())).collect();
+    ChatMessage::try_restore(source.id(), source.role(), source.status().clone(), source.revision(), blocks, metadata).unwrap()
+}
+fn restored_outcome(source: &ApplyOutcome) -> ApplyOutcome {
+    let affected = source.affected_messages().iter().map(|value| AffectedMessage::try_restore(
+        value.message_id(), value.previous_revision(), value.applied_revision(), value.disposition(),
+    ).unwrap()).collect();
+    ApplyOutcome::try_restore(source.revision(), affected).unwrap()
+}
+fn restored_identities(source: &ConversationIdentityHistory) -> ConversationIdentityHistory {
+    let thinking = source.thinking().iter().map(|value| ThinkingIdentityHistory::new(
+        value.message_id(), value.seen().to_vec(), value.retired().to_vec(),
+    )).collect();
+    ConversationIdentityHistory::new(
+        source.seen_messages().to_vec(), source.retired_messages().to_vec(),
+        source.seen_blocks().to_vec(), source.retired_blocks().to_vec(), thinking,
+        source.seen_tool_calls().to_vec(), source.retired_tool_calls().to_vec(),
+        source.result_slots().to_vec(),
+    )
+}
 fn identity_variant(source: &ConversationIdentityHistory, variant: &str) -> ConversationIdentityHistory {
     let mut seen_messages = source.seen_messages().to_vec(); let mut retired_messages = source.retired_messages().to_vec(); let mut seen_blocks = source.seen_blocks().to_vec(); let mut retired_blocks = source.retired_blocks().to_vec(); let mut thinking = source.thinking().to_vec(); let mut seen_calls = source.seen_tool_calls().to_vec(); let mut retired_calls = source.retired_tool_calls().to_vec(); let mut result_slots = source.result_slots().to_vec();
     let index = thinking.iter().position(|value| value.seen().len() > 1).unwrap();
@@ -550,6 +572,34 @@ exact!(restore_snapshot_roundtrip_preserves_histories, {
     let state = setup_correlated(); assert_eq!(ConversationState::try_restore(state.snapshot()).unwrap(), state);
     let snapshot = state.snapshot(); let records = snapshot.retention().records().iter().map(|record| ProcessedEventRecord::new(record.event().clone(), record.outcome().clone())).collect(); let external = ConversationStateSnapshot::new(snapshot.messages().to_vec(), snapshot.revision(), snapshot.expected_sequence(), RetentionHistory::new(snapshot.retention().capacity(), records, None).unwrap(), snapshot.identities().clone()); assert_eq!(ConversationState::try_restore(external).unwrap(), state);
     let empty = ConversationStateSnapshot::new(snapshot.messages().to_vec(), snapshot.revision(), snapshot.expected_sequence(), RetentionHistory::new(snapshot.retention().capacity(), vec![], None).unwrap(), snapshot.identities().clone()); assert!(ConversationState::try_restore(empty).is_err());
+});
+exact!(external_adapter_reconstructs_non_fresh_snapshot_from_public_parts, {
+    let state = rich_history_state(1); let expected = state.clone(); let source = state.snapshot();
+    assert!(source.retention().evicted_through().is_some()); assert!(source.messages().iter().any(|message| message.revision() != MessageRevision::INITIAL));
+    let records = source.retention().records().iter().map(|record| {
+        let event = ConversationEvent::new(record.event().event_id().clone(), record.event().sequence(), record.event().update().clone());
+        let outcome = restored_outcome(record.outcome()); let (previous, fingerprint) = record.proof().unwrap().parts();
+        ProcessedEventRecord::try_new_with_proof_parts(event, outcome, previous, fingerprint).unwrap()
+    }).collect();
+    let messages: Vec<_> = source.messages().iter().map(restored_message).collect(); let identities = restored_identities(source.identities());
+    let retention = RetentionHistory::new(source.retention().capacity(), records, source.retention().evicted_through()).unwrap();
+    let (retention_tail, content) = source.proof().unwrap().parts();
+    let mut tampered = content; tampered[0] ^= 1;
+    assert!(ConversationStateSnapshot::try_new_with_proof_parts(messages.clone(), source.revision(), source.expected_sequence(), retention.clone(), identities.clone(), retention_tail, tampered).is_err());
+    let rebuilt = ConversationStateSnapshot::try_new_with_proof_parts(messages, source.revision(), source.expected_sequence(), retention, identities, retention_tail, content).unwrap();
+    drop(source); drop(state); assert_eq!(ConversationState::try_restore(rebuilt).unwrap(), expected);
+});
+exact!(public_restoration_constructors_reject_contradictory_parts, {
+    let id = MessageId::new(7); let second = MessageRevision::new(2).unwrap();
+    assert!(ChatMessage::try_restore(id, ChatRole::User, MessageStatus::Pending, MessageRevision::INITIAL, vec![], ChatMessageMetadata::default()).is_err());
+    assert!(AffectedMessage::try_restore(id, None, second, AffectedMessageDisposition::Present).is_err());
+    assert!(AffectedMessage::try_restore(id, None, MessageRevision::INITIAL, AffectedMessageDisposition::Deleted).is_err());
+    let affected = AffectedMessage::try_restore(id, Some(MessageRevision::INITIAL), second, AffectedMessageDisposition::Present).unwrap();
+    assert!(ApplyOutcome::try_restore(ConversationRevision::INITIAL, vec![affected.clone()]).is_err());
+    assert!(ApplyOutcome::try_restore(ConversationRevision::new(1), vec![]).is_err());
+    assert!(ApplyOutcome::try_restore(ConversationRevision::new(1), vec![affected.clone(), affected]).is_err());
+    let source = text_state(1).snapshot(); let record = &source.retention().records()[0]; let outcome = restored_outcome(record.outcome()); let (previous, mut fingerprint) = record.proof().unwrap().parts(); fingerprint[0] ^= 1;
+    assert!(ProcessedEventRecord::try_new_with_proof_parts(record.event().clone(), outcome, previous, fingerprint).is_err());
 });
 exact!(restore_accepts_reordered_identity_history_sets, {
     for capacity in [1, 32] { let state = rich_history_state(capacity); let snapshot = state.snapshot();

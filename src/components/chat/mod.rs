@@ -61,6 +61,20 @@ pub struct SnapshotProof {
     pub(in crate::components::chat) content: [u64; 4],
 }
 
+impl RetentionProof {
+    /// Returns opaque adapter-owned persistence parts without defining a wire encoding.
+    pub const fn parts(&self) -> ([u64; 4], [u64; 4]) {
+        (self.previous, self.record)
+    }
+}
+
+impl SnapshotProof {
+    /// Returns opaque adapter-owned persistence parts without defining a wire encoding.
+    pub const fn parts(&self) -> ([u64; 4], [u64; 4]) {
+        (self.retention_tail, self.content)
+    }
+}
+
 #[rustfmt::skip]
 mod rollback {
 use super::*;
@@ -237,6 +251,112 @@ pub use state::{
     ProcessedEventRecord, RetentionHistory, ThinkingIdentityHistory, ToolResultLocation,
     ToolResultSlot,
 };
+
+impl AffectedMessage {
+    /// Reconstructs one persisted affected-message revision after local validation.
+    pub fn try_restore(
+        message_id: MessageId,
+        previous: Option<MessageRevision>,
+        applied: MessageRevision,
+        disposition: AffectedMessageDisposition,
+    ) -> Result<Self, ConversationError> {
+        let expected = match previous {
+            Some(value) => value.checked_next(message_id)?,
+            None => MessageRevision::INITIAL,
+        };
+        if applied != expected
+            || previous.is_none() && disposition == AffectedMessageDisposition::Deleted
+        {
+            return Err(ConversationError::InvalidSnapshot {
+                reason: "affected message revisions are contradictory",
+            });
+        }
+        Ok(Self {
+            message_id,
+            previous,
+            applied,
+            disposition,
+        })
+    }
+}
+
+impl ApplyOutcome {
+    /// Reconstructs one persisted successful outcome after local validation.
+    pub fn try_restore(
+        revision: ConversationRevision,
+        affected_messages: Vec<AffectedMessage>,
+    ) -> Result<Self, ConversationError> {
+        let unique = affected_messages
+            .iter()
+            .map(AffectedMessage::message_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        if revision == ConversationRevision::INITIAL
+            || affected_messages.is_empty()
+            || unique.len() != affected_messages.len()
+        {
+            return Err(ConversationError::InvalidSnapshot {
+                reason: "apply outcome is contradictory",
+            });
+        }
+        Ok(Self {
+            revision,
+            affected_messages,
+        })
+    }
+}
+
+impl ProcessedEventRecord {
+    /// Reconstructs a proven record after authenticating its opaque proof parts.
+    pub fn try_new_with_proof_parts(
+        event: ConversationEvent,
+        outcome: ApplyOutcome,
+        previous: [u64; 4],
+        record: [u64; 4],
+    ) -> Result<Self, ConversationError> {
+        if proof::record_fingerprint(previous, &event, &outcome) != record {
+            return Err(ConversationError::InvalidSnapshot {
+                reason: "retained record proof is contradictory",
+            });
+        }
+        Ok(Self::new_with_proof(
+            event,
+            outcome,
+            RetentionProof { previous, record },
+        ))
+    }
+}
+
+impl ConversationStateSnapshot {
+    /// Reconstructs a proven snapshot after authenticating its opaque proof parts.
+    pub fn try_new_with_proof_parts(
+        messages: Vec<ChatMessage>,
+        revision: ConversationRevision,
+        expected_sequence: u64,
+        retention: RetentionHistory,
+        identities: ConversationIdentityHistory,
+        retention_tail: [u64; 4],
+        content: [u64; 4],
+    ) -> Result<Self, ConversationError> {
+        let supplied = SnapshotProof {
+            retention_tail,
+            content,
+        };
+        let value = Self::new_with_proof(
+            messages,
+            revision,
+            expected_sequence,
+            retention,
+            identities,
+            supplied.clone(),
+        );
+        if proof::snapshot_proof(&value) != supplied {
+            return Err(ConversationError::InvalidSnapshot {
+                reason: "snapshot proof is contradictory",
+            });
+        }
+        Ok(value)
+    }
+}
 
 macro_rules! failure_cause_accessor {
     ($ty:ty) => {
