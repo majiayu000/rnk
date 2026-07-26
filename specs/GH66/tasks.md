@@ -25,6 +25,7 @@ packet，不得用 alias/private field/sidecar 绕过。
 运行：
 
 ```sh
+set -euo pipefail
 cargo fmt --all -- --check
 cargo check --workspace --all-targets --all-features --locked
 ```
@@ -42,6 +43,9 @@ SpecRail source固定为`https://github.com/majiayu000/specrail.git` commit
 `specs/GH66`三文件复制到该checkout的同路径并运行：
 
 ```sh
+set -euo pipefail
+GH66_SPECRAIL_CHECKOUT="$(mktemp -d "${TMPDIR:-/tmp}/rnk-gh66-specrail.XXXXXX")"
+trap 'rm -rf "$GH66_SPECRAIL_CHECKOUT"' EXIT
 git clone https://github.com/majiayu000/specrail.git "$GH66_SPECRAIL_CHECKOUT"
 git -C "$GH66_SPECRAIL_CHECKOUT" checkout --detach \
   23caa70e76904eaa82323208d645d5781a365649
@@ -70,8 +74,23 @@ implementation时每项先用`--list --exact --include-ignored`证明matched=1�
 | R2-F003 / prior F004 | B-014 | validated nonempty restored seeding | T5；durable restart exact |
 | R2-F004 / prior F012 | B-011/B-012 | shared `order_satisfied` | T4/T5；Unknown/retry exacts |
 | R2-F005 | B-021–B-023 | no focus/mouse mutation or restore claim | T3/T5/T7；shutdown + PTY exacts |
-| R2-F006 | B-009/B-010 | disposition-first seven-phase deletion | T4；delta/lifecycle exacts |
+| R2-F006 | B-009/B-010 | disposition-first eight-phase deletion | T4；delta/lifecycle exacts |
 | R2-F007 | B-006/B-018 | offset-aware write-all | T2/T3；writer fault exact |
+
+continue_once correction的十项正/反例闭环（每个existing exact test保留ledger唯一项）：
+
+| Finding | Product/Tech | Positive fixture | Negative fail-closed fixture |
+| --- | --- | --- | --- |
+| R3-F001 | B-002/B-013 request context | same ID/digest/context dedupes | same bytes/different width或theme conflicts atomically |
+| R3-F002 | B-014/B-025 recovery evidence | exact record restores recoverable Unknown | missing/mismatched record becomes UnrecoverableUnknown、TreatAsCommitted拒绝 |
+| R3-F003 | B-021/B-023 public suspend/resume | public Running→Suspended→Running | wrong typestate或stage failure保持retryable、非Running |
+| R3-F004 | B-011/B-012 audit-first lookup | exact duplicate两choice返回same receipt | conflicting duplicate零mutation |
+| R3-F005 | B-010 TreatAsCommitted transition | audit后atomic live removal且replay无第二effect | audit failure保留live/blocker |
+| R3-F006 | B-007 cancellation generation | current handle取消当前attempt，retry token fresh | stale clone不能取消retry/shutdown后attempt |
+| R3-F007 | B-022/B-023 shutdown DAG | retried writer触发fresh flush再release | old Completed flush不得授权release |
+| R3-F008 | B-002/B-012/B-024 digest secrecy | domain SHA-256稳定验证 | observation/Debug/Display/audit不得含secret bytes |
+| R3-F009 | B-022/B-028 shared lease | coordinator与legacy串行正常 | legacy/controller/panic contention不能绕过 |
+| R3-F010 | B-030/B-031 provenance | head/base/main/merge-base四字段fresh一致 | conflation、dirty、drift、缺env、nonportable temp、command failure均nonzero且sentinel不运行 |
 
 ## Implementation Tasks
 
@@ -97,13 +116,16 @@ implementation时每项先用`--list --exact --include-ignored`证明matched=1�
 - [ ] `SP66-T2` 实现 concrete commit types、namespaced identity、stable receipt/attempt outcome、closed error和ANSI sanitizer。Covers: B-002, B-004, B-005, B-006, B-017, B-018, B-024 | Owner: `scrollback-contract-owner` | Done when: sync sink/types/error/source/sanitizer合同完整且exact tests通过 | Verify: T2四个exact tests与公共checkpoint
   - Covers: B-002, B-004, B-005, B-006, B-017, B-018, B-024。
   - Dependencies: SP66-T1 handoff。
-  - File ownership: 独占新增 `src/components/chat/inline/types.rs`、
+  - File ownership: 独占`Cargo.toml`/`Cargo.lock`中SHA-256 direct dependency及新增
+    `src/components/chat/inline/types.rs`、
     `src/components/chat/inline/sanitize.rs`、`src/components/chat/inline/sink.rs`；接管
     `src/components/chat/inline.rs`、`src/components/chat/inline/tests.rs`、
     `tests/inline_chat_shell.rs`。
-  - Done when: validated namespace+ID、canonical LF content、cancellation/control request、
+  - Done when: validated namespace+ID、domain-separated SHA-256 digest、canonical LF content、
+    frozen projection context、per-attempt cancellation generation/control request、
     stable `Arc` receipt handle与per-attempt disposition完全一致；双namespace同message不碰撞；
     closed primary outcomes及`Complete | Failed(nonempty ordered cleanup errors)`可crate外穷举，
+    same bytes/different width/theme atomic conflict；raw bytes不进入identity/audit/Debug/Display；
     primary/repaint error各自保留`io::Error::source`；sanitizer只接受printable
     Unicode/LF/library SGR，transport reset规则可观察，empty/only-SGR/whitespace不commit。
   - Verify:
@@ -118,8 +140,9 @@ implementation时每项先用`--list --exact --include-ignored`证明matched=1�
 - [ ] `SP66-T3` 实现 native staged transport、process-local ledger、entry lease/rollback与session恢复原语。Covers: B-005, B-006, B-007, B-008, B-018, B-022, B-025 | Owner: `native-terminal-owner` | Done when: fault matrix、dedupe、bounded ledger、exclusive lease和entry rollback完整 | Verify: T3两个exact tests、file-size gate与公共checkpoint
   - Covers: B-005, B-006, B-007, B-008, B-018, B-022, B-025。
   - Dependencies: SP66-T2 handoff。
-  - File ownership: 独占 `src/renderer/terminal.rs`（只增加child module/export且保持<800）、
-    新增 `src/renderer/terminal/inline_scrollback.rs`、
+  - File ownership: 独占 `src/renderer/terminal.rs`（拆出child并保持<800）、
+    `src/renderer/terminal_controller.rs`、`src/runtime/panic_handler.rs`，新增
+    `src/renderer/terminal/{inline_scrollback,lease}.rs`、
     `src/components/chat/inline/session.rs`；从T2接管
     `src/components/chat/inline/sink.rs`、`src/components/chat/inline/tests.rs`。
   - Done when: offset-aware helper循环接受positive shorts；首个zero/error/cancel且accepted=0为
@@ -129,15 +152,17 @@ implementation时每项先用`--list --exact --include-ignored`证明matched=1�
     flush后才confirm，duplicate共享original receipt但attempt disposition不同；entry在首次
     mutation前取得process-wide lease，逐stage acquire/逆序rollback并聚合primary+cleanup；
     nested/cross-thread entry拒绝，rollback成功才Free；entry/Drop/panic恢复失败将lease标
-    Poisoned，只有typed recovery验证成功才Free；session只inline且sink/render borrow互斥，
-    terminal backend没有focus/mouse mutation命令。
+    Poisoned，只有typed recovery验证成功才Free；Terminal lifecycle、controller与panic全部
+    经同一registry，contention不能绕过；session只inline且sink/render borrow互斥，terminal
+    backend没有focus/mouse mutation命令。
   - Verify:
     `cargo test --workspace --lib --locked components::chat::inline::tests::native_confirmed_dedup_is_process_local -- --exact`；
     `cargo test --workspace --lib --locked components::chat::inline::tests::partial_write_flush_broken_pipe_outcomes_are_typed -- --exact`；
     `test "$(wc -l < src/renderer/terminal.rs)" -lt 800`；
     公共checkpoint命令。
   - Handoff: 保存offset/fault/repaint matrix、cancel barriers、receipt identity、entry rollback、
-    focus/mouse零序列与lease contention evidence；停止写后将tests交T4，session/sink冻结只读。
+    focus/mouse零序列、legacy/controller/panic contention evidence；停止写后将tests交T4，
+    session/sink/lease冻结只读。
 
 - [ ] `SP66-T4` 实现 shell staging、single-in-flight、confirmed-only removal、order/retry/overflow状态机。Covers: B-002, B-003, B-007, B-009, B-010, B-011, B-012, B-017, B-019, B-020, B-026 | Owner: `inline-lifecycle-owner` | Done when: terminal staging、dedupe、三态、顺序、retry与checked transition合同完整 | Verify: T4六个exact tests与公共checkpoint
   - Covers: B-002, B-003, B-007, B-009, B-010, B-011, B-012, B-017, B-019, B-020, B-026。
@@ -146,10 +171,12 @@ implementation时每项先用`--list --exact --include-ignored`证明matched=1�
     `src/components/chat/inline.rs`、`src/components/chat/inline/tests.rs`、
     `tests/inline_chat_shell.rs`；上游model/view和native paths只读。
   - Done when: O(n) bootstrap一次，后续`synchronize`先按GH62 Present/Deleted分支且Deleted不查
-    snapshot；Live/Staged/NotCommitted/Unknown/ResolvedCommitted/Abandoned/Confirmed删除矩阵
-    逐phase断言，Unknown删除后仍block且confirmed scrollback不变；唯一`order_satisfied =
+    snapshot；Live/Staged/NotCommitted/Unknown/UnrecoverableUnknown/ResolvedCommitted/
+    Abandoned/Confirmed删除矩阵逐phase断言，两种Unknown删除后仍block；唯一`order_satisfied =
     Confirmed | ResolvedCommitted | Abandoned`供commit/retry/resolve共用，两种resolution均能
-    解锁后继retry/resolve，多restored Unknown按序处理；reentry/capacity/revision/conflict原子。
+    解锁后继retry/resolve；resolution先audit lookup再phase gate，exact duplicate幂等、conflict
+    原子拒绝，TreatAsCommitted在audit后移除live/source且replay零第二effect；reentry/capacity/
+    revision/conflict原子。
   - Verify:
     `cargo test --workspace --lib --locked components::chat::inline::tests::gh66_scrollback_lifecycle_contract -- --exact`；
     `cargo test --workspace --lib --locked components::chat::inline::tests::duplicate_terminal_render_and_delta_are_single_effect -- --exact`；
@@ -169,10 +196,12 @@ implementation时每项先用`--list --exact --include-ignored`证明matched=1�
     `src/components/chat/inline.rs`、`src/components/chat/inline/tests.rs`、
     `tests/inline_chat_shell.rs`；从T3接管`src/components/chat/inline/{sink,session}.rs`。
   - Done when: restored constructor消费validated GH62 Conversation+recovery render，按source order
-    seed非空完整IDs；durable再ID-first lookup frozen record，unclean native全部初始化Unknown；
+    seed非空完整IDs；durable再ID-first lookup frozen record；unclean native有exact record才
+    recoverable Unknown，否则UnrecoverableUnknown且禁TreatAsCommitted；
     coordinator不公开内部mutable sink/shell borrow，wrapper可实际执行bootstrap/synchronize、
-    native/durable commit、retry/reconcile/resolve/render/shutdown并安全拆借字段；partial shutdown
-    只重试unfinished stages；composer/focus typed且draft安全。
+    native/durable commit、retry/reconcile/resolve/per-attempt cancel/public suspend/resume/render/
+    shutdown并安全拆借字段；stale cancellation clone不能影响retry；restoration DAG中writer
+    retry重置flush/release，fresh flush后才release；composer/focus typed且draft安全。
   - Verify:
     `cargo test --test inline_chat_shell --locked durable_sink_cross_retry_and_restart_reconstruction_is_exactly_once -- --exact`；
     `cargo test --test inline_chat_shell --locked public_observation_is_not_a_restore_snapshot -- --exact`；
@@ -211,14 +240,17 @@ implementation时每项先用`--list --exact --include-ignored`证明matched=1�
     docs/prelude只读。
   - Done when: 非ignored PTY同一test分别spawn normal/cancel/typed-failure/panic、每个entry
     acquisition failure、shutdown first-failure/second-success、nested/cross-thread lease和
-    suspend/resume子进程；以termios/captured bytes验证raw/cursor/paste prior值、无altscreen/
+    public suspend/resume子进程、legacy/controller/panic lease contention；以termios/captured
+    bytes验证raw/cursor/paste prior值、无altscreen/
     focus/mouse mode序列、SGR reset及first-write failure后立即repaint；repaint/restoration失败
-    必须由typed cleanup/report使测试失败；
+    必须由typed cleanup/report使测试失败；模拟old flush已Completed后output stage retry，必须
+    捕获第二次flush发生在lease release之前；
     `gh66_current_head_coverage_contract`从committed ledger+diff+raw生成确定性
     `gh57-child-coverage-v1`，validate重算全部sets/hash/percent；critical exact set逐项100%，
     changed executable>=80%；fixture含全部negative schema/provenance/threshold cases；collect/
-    produce/validate均显式获得PR/head/base/merge-base/absolute destinations，fresh start/end facts
-    与clean exact head一致。
+    produce/validate均显式获得PR/head/PR-base/current-main/merge-base/portable absolute
+    destinations，fresh start/end facts与clean exact head一致；所有mandatory shell fences经
+    `bash -n`，failure/缺env/dirty/drift/路径负fixture必须nonzero且不运行sentinel。
   - Verify:
     `cargo test --test inline_chat_shell_pty --locked inline_pty_restores_terminal_on_normal_cancel_failure_and_panic -- --exact`；
     `GH66_COVERAGE_MODE=fixture cargo test --test inline_chat_shell --locked gh66_current_head_coverage_contract -- --exact`；
@@ -238,7 +270,8 @@ implementation时每项先用`--list --exact --include-ignored`证明matched=1�
   - File ownership: 无writable repo path；不得resolve thread、approve或merge。
   - Done when: product/tech/tasks sets严格相等；manifest/diff/ownership/compile checkpoints、
     dependency final PR evidence/ancestry、全部exact/full/PTY/coverage、fresh CI、
-    reviewThreads、merge state和SpecRail PR gate绑定同一head；删除任一证据的负审计blocked。
+    reviewThreads、merge state和SpecRail PR gate绑定同一head；PR evidence/body必须分别列
+    head/PR-base/current-main/merge-base并匹配immutable artifact；删除/合并/漂移任一证据blocked。
   - Verify: 重跑tech Verification Plan与coverage validate；fresh GitHub读取current
     head/checks/reviews/reviewThreads/mergeability；`git status --short`为空且head未变。
   - Handoff: 只报告merge-ready或blocked evidence；即使全部green，最终approval、merge、
