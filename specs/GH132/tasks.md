@@ -44,6 +44,9 @@ fresh gate全部通过。
   - Verify:
     ```sh
     set -euo pipefail
+    unset PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONINSPECT PYTHONUSERBASE
+    PYTHON_BIN="$(command -v python3)"; case "$PYTHON_BIN" in /*) test -x "$PYTHON_BIN";; *) exit 1;; esac
+    export PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONSAFEPATH=1
     run_exact() {
       GH132_LIST="$("$@" -- --exact --list --format terse 2>&1)"
       GH132_MATCHED="$(printf '%s\n' "$GH132_LIST" |
@@ -74,17 +77,17 @@ fresh gate全部通过。
       https://github.com/majiayu000/specrail.git
     SPEC_RAIL_PINNED_MIRROR="$(mktemp -d "${TMPDIR:-/tmp}/gh132-specrail-pinned.XXXXXX")"
     git -C "$SPEC_RAIL_ROOT" ls-tree -rz --full-tree "$SPEC_RAIL_REV" |
-      python3 -c 'import sys; from pathlib import PurePosixPath as P; rows=[(m.split(),p.decode()) for m,p in (r.split(b"\t",1) for r in sys.stdin.buffer.read().split(b"\0") if r)]; rows and all(len(m)==3 and m[0] in {b"100644",b"100755"} and m[1]==b"blob" and p and not P(p).is_absolute() and ".." not in P(p).parts and P(p).as_posix()==p for m,p in rows) or sys.exit("unsafe SpecRail tree entry")'
+      "$PYTHON_BIN" -I -S -c 'import sys; from pathlib import PurePosixPath as P; rows=[(m.split(),p.decode()) for m,p in (r.split(b"\t",1) for r in sys.stdin.buffer.read().split(b"\0") if r)]; rows and all(len(m)==3 and m[0] in {b"100644",b"100755"} and m[1]==b"blob" and p and not P(p).is_absolute() and ".." not in P(p).parts and P(p).as_posix()==p for m,p in rows) or sys.exit("unsafe SpecRail tree entry")'
     git -C "$SPEC_RAIL_ROOT" archive "$SPEC_RAIL_REV" | tar -xf - -C "$SPEC_RAIL_PINNED_MIRROR"
-    git -C "$SPEC_RAIL_ROOT" ls-tree -rz --full-tree "$SPEC_RAIL_REV" | python3 -c 'import hashlib,sys; from pathlib import Path,PurePosixPath as P; root=Path(sys.argv[1]).resolve(strict=True); rows=[(m.split(),p.decode()) for m,p in (r.split(b"\t",1) for r in sys.stdin.buffer.read().split(b"\0") if r)]; expected={p:m[2].decode() for m,p in rows}; nodes=list(root.rglob("*")); actual={n.relative_to(root).as_posix() for n in nodes if n.is_file() and not n.is_symlink()}; expected.keys()==actual and all(not n.is_symlink() and (n.is_file() or n.is_dir()) for n in nodes) and all(hashlib.sha1(b"blob "+str(len(d)).encode()+b"\0"+d).hexdigest()==oid for p,oid in expected.items() for d in [root.joinpath(*P(p).parts).read_bytes()]) or sys.exit("SpecRail archive mirror mismatch")' "$SPEC_RAIL_PINNED_MIRROR"
+    git -C "$SPEC_RAIL_ROOT" ls-tree -rz --full-tree "$SPEC_RAIL_REV" | "$PYTHON_BIN" -I -S -c 'import hashlib,sys; from pathlib import Path,PurePosixPath as P; root=Path(sys.argv[1]).resolve(strict=True); rows=[(m.split(),p.decode()) for m,p in (r.split(b"\t",1) for r in sys.stdin.buffer.read().split(b"\0") if r)]; expected={p:m[2].decode() for m,p in rows}; nodes=list(root.rglob("*")); actual={n.relative_to(root).as_posix() for n in nodes if n.is_file() and not n.is_symlink()}; expected.keys()==actual and all(not n.is_symlink() and (n.is_file() or n.is_dir()) for n in nodes) and all(hashlib.sha1(b"blob "+str(len(d)).encode()+b"\0"+d).hexdigest()==oid for p,oid in expected.items() for d in [root.joinpath(*P(p).parts).read_bytes()]) or sys.exit("SpecRail archive mirror mismatch")' "$SPEC_RAIL_PINNED_MIRROR"
     unset SPEC_RAIL_ROOT
-    python3 -c 'import hashlib,sys; from pathlib import Path; r=Path(sys.argv[1]); e={"checks/route_gate.py":"d77cad0763713ca589be1c4278edcec7c90c017bc383fd6a7976402be22a7433","checks/check_workflow.py":"c5bd73060037b0e8febace0e5ee8473e17973e1ca17257ea1517a94e05fa7549","checks/github_duplicate_evidence.py":"eab228a33d84a43cde1ba3587d5edde50993ae11c5c5a522ee8d01b64b284d55","checks/duplicate_work_gate.py":"c109124d511983b9579d11e0bf2378569435e73036a22f058ed377fb5232317c"}; a={p:hashlib.sha256((r/p).read_bytes()).hexdigest() for p in e}; a==e or sys.exit("pinned SpecRail entry hash mismatch")' "$SPEC_RAIL_PINNED_MIRROR"
+    "$PYTHON_BIN" -I -S -c 'import hashlib,sys; from pathlib import Path; r=Path(sys.argv[1]); e={"checks/route_gate.py":"d77cad0763713ca589be1c4278edcec7c90c017bc383fd6a7976402be22a7433","checks/check_workflow.py":"c5bd73060037b0e8febace0e5ee8473e17973e1ca17257ea1517a94e05fa7549","checks/github_duplicate_evidence.py":"eab228a33d84a43cde1ba3587d5edde50993ae11c5c5a522ee8d01b64b284d55","checks/duplicate_work_gate.py":"c109124d511983b9579d11e0bf2378569435e73036a22f058ed377fb5232317c"}; a={p:hashlib.sha256((r/p).read_bytes()).hexdigest() for p in e}; a==e or sys.exit("pinned SpecRail entry hash mismatch")' "$SPEC_RAIL_PINNED_MIRROR"
     chmod -R a-w "$SPEC_RAIL_PINNED_MIRROR"
     SPEC_RAIL_MIRROR="$(mktemp -d "${TMPDIR:-/tmp}/gh132-specrail-adopted.XXXXXX")"
     cp -R "$SPEC_RAIL_PINNED_MIRROR/." "$SPEC_RAIL_MIRROR/"
     chmod u+w "$SPEC_RAIL_MIRROR" "$SPEC_RAIL_MIRROR/specs" \
       "$SPEC_RAIL_MIRROR/workflow.yaml"
-    export PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH="$SPEC_RAIL_MIRROR/checks"
+    run_specrail() { "$PYTHON_BIN" -I -S -c 'import runpy,sys; from pathlib import Path; c=Path(sys.argv[1]).resolve(strict=True); s=(c/sys.argv[2]).resolve(strict=True); s.parent==c and s.is_file() or sys.exit("unsafe SpecRail entry"); sys.path.insert(0,str(c)); sys.path[0]==str(c) or sys.exit("SpecRail path isolation failed"); sys.argv=[str(s),*sys.argv[3:]]; runpy.run_path(str(s),run_name="__main__")' "$SPEC_RAIL_MIRROR/checks" "$@"; }
     ISSUE_JSON="$(gh issue view 132 --repo majiayu000/rnk \
       --json number,state,labels)"
     test "$(printf '%s\n' "$ISSUE_JSON" | jq -r '.number')" = "132"
@@ -102,9 +105,9 @@ fresh gate全部通过。
       awk 'NF { count++ } END { print count + 0 }')" -eq 1
     LIVE_ROUTE_STATE="$LIVE_READINESS_LABELS"
     WORKTREE_ROOT="$(git rev-parse --show-toplevel)"
-    WORKTREE_REAL="$(python3 -c \
+    WORKTREE_REAL="$("$PYTHON_BIN" -I -S -c \
       'import os,sys; print(os.path.realpath(sys.argv[1]))' "$WORKTREE_ROOT")"
-    GH132_BRANCH_DECISION_REAL="$(python3 -c \
+    GH132_BRANCH_DECISION_REAL="$("$PYTHON_BIN" -I -S -c \
       'import os,sys; print(os.path.realpath(sys.argv[1]))' \
       "$GH132_BRANCH_OWNERSHIP_DECISION")"
     test -f "$GH132_BRANCH_DECISION_REAL"
@@ -122,24 +125,22 @@ fresh gate全部通过。
     mkdir -p "$SPEC_RAIL_MIRROR/specs/GH132" "$SPEC_RAIL_MIRROR/evidence"
     cp specs/GH132/product.md specs/GH132/tech.md specs/GH132/tasks.md \
       "$SPEC_RAIL_MIRROR/specs/GH132/"
-    python3 -c 'from pathlib import Path; import sys; config=Path(sys.argv[1]); text=config.read_text(encoding="utf-8"); old="  impl_branch: \"{agent}/gh{issue_number}-{slug}\"\\n"; new="  impl_branch: \"{agent}/impl_gh{issue_number}-{slug}\"\\n"; text.count(old) == 1 or sys.exit("unexpected pinned impl_branch template"); config.write_text(text.replace(old,new),encoding="utf-8")' \
+    "$PYTHON_BIN" -I -S -c 'from pathlib import Path; import sys; config=Path(sys.argv[1]); text=config.read_text(encoding="utf-8"); old="  impl_branch: \"{agent}/gh{issue_number}-{slug}\"\\n"; new="  impl_branch: \"{agent}/impl_gh{issue_number}-{slug}\"\\n"; text.count(old) == 1 or sys.exit("unexpected pinned impl_branch template"); config.write_text(text.replace(old,new),encoding="utf-8")' \
       "$SPEC_RAIL_MIRROR/workflow.yaml"
-    python3 "$SPEC_RAIL_MIRROR/checks/check_workflow.py" \
-      --repo "$SPEC_RAIL_MIRROR" --spec-dir specs/GH132
+    run_specrail check_workflow.py --repo "$SPEC_RAIL_MIRROR" --spec-dir specs/GH132
     test "$(awk '$1 == "auth_mode:" { print $2 }' \
       "$SPEC_RAIL_MIRROR/workflow.yaml")" = "review"
     test "$(awk '$1 == "impl_branch:" { print $2 }' \
       "$SPEC_RAIL_MIRROR/workflow.yaml")" = \
       '"{agent}/impl_gh{issue_number}-{slug}"'
     GH132_DUPLICATE_RAW="$SPEC_RAIL_MIRROR/evidence/gh132-duplicate-raw.json"
-    python3 "$SPEC_RAIL_MIRROR/checks/github_duplicate_evidence.py" \
+    run_specrail github_duplicate_evidence.py \
       --github-repo majiayu000/rnk --issue 132 --remote origin --json \
       > "$GH132_DUPLICATE_RAW"
     test "$LIVE_ROUTE_STATE" = "ready_to_implement"
     GH132_RETAINED_SPEC_BRANCH=spec/GH132-signed-coordinate-errors
-    GH132_BRANCH_CLASS_JSON="$(PYTHONPATH="$SPEC_RAIL_MIRROR/checks" \
-      python3 -c 'import json,sys; from pathlib import Path; from duplicate_work_gate import impl_branch_token,matching_contract_branches; from specrail_lib import load_pack; evidence=json.load(open(sys.argv[2],encoding="utf-8")); token=impl_branch_token(load_pack(Path(sys.argv[1])),132); print(json.dumps({"token":token,"configured":matching_contract_branches(evidence["remote_branches"],token),"legacy":matching_contract_branches(evidence["remote_branches"],"gh132")}))' \
-      "$SPEC_RAIL_MIRROR" "$GH132_DUPLICATE_RAW")"
+    GH132_BRANCH_CLASS_JSON="$("$PYTHON_BIN" -I -S -c 'import json,sys; from pathlib import Path; c=Path(sys.argv.pop(1)).resolve(strict=True); sys.path.insert(0,str(c)); sys.path[0]==str(c) or sys.exit("SpecRail path isolation failed"); from duplicate_work_gate import impl_branch_token,matching_contract_branches; from specrail_lib import load_pack; evidence=json.load(open(sys.argv[2],encoding="utf-8")); token=impl_branch_token(load_pack(Path(sys.argv[1])),132); print(json.dumps({"token":token,"configured":matching_contract_branches(evidence["remote_branches"],token),"legacy":matching_contract_branches(evidence["remote_branches"],"gh132")}))' \
+      "$SPEC_RAIL_MIRROR/checks" "$SPEC_RAIL_MIRROR" "$GH132_DUPLICATE_RAW")"
     test "$(printf '%s\n' "$GH132_BRANCH_CLASS_JSON" | jq -r '.token')" = \
       "impl_gh132"
     test "$(printf '%s\n' "$GH132_BRANCH_CLASS_JSON" |
@@ -172,7 +173,7 @@ fresh gate全部通过。
       (.source | type == "string" and length > 0) and
       (.authorized_at | type == "string" and length > 0)' \
       "$GH132_BRANCH_DECISION_REAL" >/dev/null
-    python3 "$SPEC_RAIL_MIRROR/checks/route_gate.py" \
+    run_specrail route_gate.py \
       --repo "$SPEC_RAIL_MIRROR" \
       --route implement --issue 132 --state "$LIVE_ROUTE_STATE" \
       --artifact product_spec=specs/GH132/product.md \
@@ -198,7 +199,7 @@ fresh gate全部通过。
     PR137_ACTUAL_FILES="$(printf '%s\n' "$PR137_JSON" |
       jq -r '.files[].path' | LC_ALL=C sort)"
     test "$PR137_ACTUAL_FILES" = "$PR137_EXPECTED_FILES"
-    PR137_FILES_SHA256="$(printf '%s\n' "$PR137_ACTUAL_FILES" | python3 -c \
+    PR137_FILES_SHA256="$(printf '%s\n' "$PR137_ACTUAL_FILES" | "$PYTHON_BIN" -I -S -c \
       'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
     test "$PR137_FILES_SHA256" = \
       ee2af110e7751fc058e8b87dde9b15666e161808317cc8b4481cd93f0dcb06be
@@ -242,7 +243,7 @@ fresh gate全部通过。
     PR142_ACTUAL_FILES="$(printf '%s\n' "$PR142_JSON" |
       jq -r '.files[].path' | LC_ALL=C sort)"
     test "$PR142_ACTUAL_FILES" = "$PR142_EXPECTED_FILES"
-    PR142_FILES_SHA256="$(printf '%s\n' "$PR142_ACTUAL_FILES" | python3 -c \
+    PR142_FILES_SHA256="$(printf '%s\n' "$PR142_ACTUAL_FILES" | "$PYTHON_BIN" -I -S -c \
       'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
     test "$PR142_FILES_SHA256" = \
       6db38f157f5fe455302e2c37d55f503b2a74f61795e522d8ab507132befdc3a9
@@ -485,22 +486,17 @@ fresh gate全部通过。
   - Verify:
     ```sh
     set -euo pipefail
+    unset PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONINSPECT PYTHONUSERBASE
+    PYTHON_BIN="$(command -v python3)"; case "$PYTHON_BIN" in /*) test -x "$PYTHON_BIN";; *) exit 1;; esac
+    export PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONSAFEPATH=1
     run_exact() {
       GH132_LIST="$("$@" -- --exact --list --format terse 2>&1)"
-      GH132_MATCHED="$(printf '%s\n' "$GH132_LIST" |
-        awk -F ': ' '$2 == "test" { count++ } END { print count + 0 }')"
-      test "$GH132_MATCHED" -eq 1
+      test "$(printf '%s\n' "$GH132_LIST" | awk -F ': ' '$2 == "test" {n++} END {print n+0}')" -eq 1
       GH132_RESULT="$("$@" -- --exact 2>&1)" || {
         printf '%s\n' "$GH132_RESULT" >&2; return 1
       }
       printf '%s\n' "$GH132_RESULT"
-      GH132_COUNTS="$(printf '%s\n' "$GH132_RESULT" | awk '
-        /^test result:/ { for (i = 1; i <= NF; i++) {
-          if ($i == "passed;") passed += $(i - 1)
-          if ($i == "failed;") failed += $(i - 1)
-          if ($i == "ignored;") ignored += $(i - 1) } }
-        END { printf "%d %d %d\n", passed, failed, ignored }')"
-      test "$GH132_COUNTS" = "1 0 0"
+      test "$(printf '%s\n' "$GH132_RESULT" | awk '/^test result:/{for(i=1;i<=NF;i++){if($i=="passed;")p+=$(i-1);if($i=="failed;")f+=$(i-1);if($i=="ignored;")g+=$(i-1)}}END{print p+0,f+0,g+0}')" = "1 0 0"
     }
     : "${GH132_IMPLEMENTATION_PR:?set implementation PR}" \
       "${GH132_IMPLEMENTATION_BASE_SHA:?set SP132-T1 base}" \
@@ -514,15 +510,15 @@ fresh gate全部通过。
     case "$GH132_EVIDENCE_DIR" in /*) ;; *) exit 1 ;; esac
     case "$GH132_REVIEW_BUNDLE_ROOT" in /*) ;; *) exit 1 ;; esac
     WORKTREE_ROOT="$(git rev-parse --show-toplevel)"
-    WORKTREE_REAL="$(python3 -c \
+    WORKTREE_REAL="$("$PYTHON_BIN" -I -S -c \
       'import os,sys; print(os.path.realpath(sys.argv[1]))' "$WORKTREE_ROOT")"
-    GH132_EVIDENCE_REAL="$(python3 -c \
+    GH132_EVIDENCE_REAL="$("$PYTHON_BIN" -I -S -c \
       'import os,sys; print(os.path.realpath(sys.argv[1]))' "$GH132_EVIDENCE_DIR")"
     case "$GH132_EVIDENCE_REAL/" in
       "$WORKTREE_REAL/"*) exit 1 ;;
     esac
     GH132_EVIDENCE_DIR="$GH132_EVIDENCE_REAL"
-    GH132_REVIEW_BUNDLE_REAL="$(python3 -c \
+    GH132_REVIEW_BUNDLE_REAL="$("$PYTHON_BIN" -I -S -c \
       'import os,sys; print(os.path.realpath(sys.argv[1]))' \
       "$GH132_REVIEW_BUNDLE_ROOT")"
     test -d "$GH132_REVIEW_BUNDLE_REAL"
@@ -535,16 +531,16 @@ fresh gate全部通过。
     mkdir -p "$GH132_EVIDENCE_DIR"
     SPEC_RAIL_MIRROR="$(mktemp -d "$GH132_EVIDENCE_DIR/specrail-pinned.XXXXXX")"
     git -C "$SPEC_RAIL_ROOT" ls-tree -rz --full-tree "$SPEC_RAIL_EXPECTED_SHA" |
-      python3 -c 'import sys; from pathlib import PurePosixPath as P; rows=[(m.split(),p.decode()) for m,p in (r.split(b"\t",1) for r in sys.stdin.buffer.read().split(b"\0") if r)]; rows and all(len(m)==3 and m[0] in {b"100644",b"100755"} and m[1]==b"blob" and p and not P(p).is_absolute() and ".." not in P(p).parts and P(p).as_posix()==p for m,p in rows) or sys.exit("unsafe SpecRail tree entry")'
+      "$PYTHON_BIN" -I -S -c 'import sys; from pathlib import PurePosixPath as P; rows=[(m.split(),p.decode()) for m,p in (r.split(b"\t",1) for r in sys.stdin.buffer.read().split(b"\0") if r)]; rows and all(len(m)==3 and m[0] in {b"100644",b"100755"} and m[1]==b"blob" and p and not P(p).is_absolute() and ".." not in P(p).parts and P(p).as_posix()==p for m,p in rows) or sys.exit("unsafe SpecRail tree entry")'
     git -C "$SPEC_RAIL_ROOT" archive "$SPEC_RAIL_EXPECTED_SHA" | tar -xf - -C "$SPEC_RAIL_MIRROR"
-    git -C "$SPEC_RAIL_ROOT" ls-tree -rz --full-tree "$SPEC_RAIL_EXPECTED_SHA" | python3 -c 'import hashlib,sys; from pathlib import Path,PurePosixPath as P; root=Path(sys.argv[1]).resolve(strict=True); rows=[(m.split(),p.decode()) for m,p in (r.split(b"\t",1) for r in sys.stdin.buffer.read().split(b"\0") if r)]; expected={p:m[2].decode() for m,p in rows}; nodes=list(root.rglob("*")); actual={n.relative_to(root).as_posix() for n in nodes if n.is_file() and not n.is_symlink()}; expected.keys()==actual and all(not n.is_symlink() and (n.is_file() or n.is_dir()) for n in nodes) and all(hashlib.sha1(b"blob "+str(len(d)).encode()+b"\0"+d).hexdigest()==oid for p,oid in expected.items() for d in [root.joinpath(*P(p).parts).read_bytes()]) or sys.exit("SpecRail archive mirror mismatch")' "$SPEC_RAIL_MIRROR"
+    git -C "$SPEC_RAIL_ROOT" ls-tree -rz --full-tree "$SPEC_RAIL_EXPECTED_SHA" | "$PYTHON_BIN" -I -S -c 'import hashlib,sys; from pathlib import Path,PurePosixPath as P; root=Path(sys.argv[1]).resolve(strict=True); rows=[(m.split(),p.decode()) for m,p in (r.split(b"\t",1) for r in sys.stdin.buffer.read().split(b"\0") if r)]; expected={p:m[2].decode() for m,p in rows}; nodes=list(root.rglob("*")); actual={n.relative_to(root).as_posix() for n in nodes if n.is_file() and not n.is_symlink()}; expected.keys()==actual and all(not n.is_symlink() and (n.is_file() or n.is_dir()) for n in nodes) and all(hashlib.sha1(b"blob "+str(len(d)).encode()+b"\0"+d).hexdigest()==oid for p,oid in expected.items() for d in [root.joinpath(*P(p).parts).read_bytes()]) or sys.exit("SpecRail archive mirror mismatch")' "$SPEC_RAIL_MIRROR"
     chmod -R a-w "$SPEC_RAIL_MIRROR"
     unset SPEC_RAIL_ROOT
-    export PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH="$SPEC_RAIL_MIRROR/checks"
-    test "$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
+    run_specrail() { "$PYTHON_BIN" -I -S -c 'import runpy,sys; from pathlib import Path; c=Path(sys.argv[1]).resolve(strict=True); s=(c/sys.argv[2]).resolve(strict=True); s.parent==c and s.is_file() or sys.exit("unsafe SpecRail entry"); sys.path.insert(0,str(c)); sys.path[0]==str(c) or sys.exit("SpecRail path isolation failed"); sys.argv=[str(s),*sys.argv[3:]]; runpy.run_path(str(s),run_name="__main__")' "$SPEC_RAIL_MIRROR/checks" "$@"; }
+    test "$("$PYTHON_BIN" -I -S -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
       "$SPEC_RAIL_MIRROR/checks/pr_gate.py")" = \
       10cb7412ff504291d136a2c1486bc96e6b5e811c8040d1f61a8d222994e87873
-    test "$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
+    test "$("$PYTHON_BIN" -I -S -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
       "$SPEC_RAIL_MIRROR/checks/github_pr_evidence.py")" = \
       95567e96d515e90f85687e3ad24a256419f7a6ef76fac54d6c5da346f3cd2173
     WORKTREE_STATUS="$(git status --porcelain=v1 --untracked-files=all)"
@@ -561,9 +557,6 @@ fresh gate全部通过。
       "${TMPDIR:-/tmp}/gh132-specrail-pr-gate.XXXXXX")"
     git clone --quiet --no-local --no-checkout "$WORKTREE_ROOT" "$SPEC_RAIL_GATE_REPO"
     git -C "$SPEC_RAIL_GATE_REPO" checkout --quiet --detach "$PR_HEAD_SHA"
-    cp "$SPEC_RAIL_MIRROR/workflow.yaml" "$SPEC_RAIL_MIRROR/states.yaml" \
-      "$SPEC_RAIL_MIRROR/labels.yaml" "$SPEC_RAIL_GATE_REPO/"
-    cp -R "$SPEC_RAIL_MIRROR/schemas" "$SPEC_RAIL_GATE_REPO/"
     test "$(git merge-base "$PR_HEAD_SHA" "$EXPECTED_CURRENT_MAIN_SHA")" = \
       "$EXPECTED_CURRENT_MAIN_SHA"
     git merge-base --is-ancestor "$GH132_IMPLEMENTATION_BASE_SHA" \
@@ -573,17 +566,81 @@ fresh gate全部通过。
     test "$(printf '%s\n' "$IMPLEMENTATION_MANIFEST_JSON" | jq -r '.paths | length')" -eq 12
     EXPECTED_CHANGED_PATHS="$(printf '%s\n' "$IMPLEMENTATION_MANIFEST_JSON" |
       jq -r '.paths[]' | LC_ALL=C sort)"
-    ACTUAL_CHANGED_PATHS="$(git diff --name-only \
-      "$EXPECTED_CURRENT_MAIN_SHA...$PR_HEAD_SHA" | LC_ALL=C sort)"
-    test "$ACTUAL_CHANGED_PATHS" = "$EXPECTED_CHANGED_PATHS"
+    git diff --raw -z --no-renames "$EXPECTED_CURRENT_MAIN_SHA...$PR_HEAD_SHA" -- |
+      "$PYTHON_BIN" -I -S -c 'import sys; from pathlib import PurePosixPath as P; raw=[x for x in sys.stdin.buffer.read().split(b"\0") if x]; len(raw)%2==0 or sys.exit("malformed implementation diff"); rows=[(m.split(),p.decode()) for m,p in zip(raw[0::2],raw[1::2])]; expected=sys.argv[1].splitlines(); actual=[p for _,p in rows]; len(expected)==len(set(expected))==12 and len(actual)==len(set(actual)) and set(actual)==set(expected) and all(len(m)==5 and m[1] in {b"100644",b"100755"} and m[4] in {b"A",b"M"} and p and not P(p).is_absolute() and ".." not in P(p).parts and P(p).as_posix()==p for m,p in rows) or sys.exit("unsafe implementation diff path or mode")' "$EXPECTED_CHANGED_PATHS"
     GH132_MERGE_BASE_SHA="$(git merge-base "$EXPECTED_CURRENT_MAIN_SHA" "$PR_HEAD_SHA")"
     test "$GH132_MERGE_BASE_SHA" = "$EXPECTED_CURRENT_MAIN_SHA"
     GH132_DIFF_SHA256="$(git diff --no-ext-diff --binary \
-      "$EXPECTED_CURRENT_MAIN_SHA...$PR_HEAD_SHA" -- | python3 -c \
+      "$EXPECTED_CURRENT_MAIN_SHA...$PR_HEAD_SHA" -- | "$PYTHON_BIN" -I -S -c \
       'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
     printf '%s\n' "$PR_JSON" | jq -e --arg head "$PR_HEAD_SHA" \
       --arg base "$PR_BASE_SHA" --arg diff "$GH132_DIFF_SHA256" \
       '.body | contains($head) and contains($base) and contains($diff)' >/dev/null
+    GH132_REVIEW_MANIFEST=artifacts/review/GH132/manifest.json
+    "$PYTHON_BIN" -I -S - "$SPEC_RAIL_MIRROR" "$GH132_REVIEW_BUNDLE_REAL" \
+      "$GH132_REVIEW_BUNDLE_SHA256" "$SPEC_RAIL_GATE_REPO" \
+      "$GH132_IMPLEMENTATION_PR" "$PR_HEAD_SHA" "$GH132_REVIEW_MANIFEST" <<'PY'
+    import hashlib, json, sys
+    from pathlib import Path, PurePosixPath
+    mirror_root, source_root = Path(sys.argv[1]).resolve(strict=True), Path(sys.argv[2])
+    expected, destination_root = sys.argv[3], Path(sys.argv[4]).resolve(strict=True)
+    expected_pr, expected_head = int(sys.argv[5]), sys.argv[6]
+    prefix, manifest_rel = PurePosixPath("artifacts/review/GH132"), PurePosixPath(sys.argv[7])
+    mirror_nodes = [mirror_root / n for n in ("workflow.yaml", "states.yaml", "labels.yaml")]
+    mirror_nodes += [mirror_root / "schemas", *sorted((mirror_root / "schemas").rglob("*"))]
+    if not all(not p.is_symlink() and (p.is_file() or p.is_dir()) and
+               p.resolve(strict=True).is_relative_to(mirror_root) for p in mirror_nodes):
+        raise SystemExit("unsafe pinned SpecRail overlay source")
+    overlay = {p.relative_to(mirror_root).as_posix(): p.read_bytes()
+               for p in mirror_nodes if p.is_file()}
+    def read_safe(raw):
+        rel = PurePosixPath(raw)
+        if rel.is_absolute() or not rel.is_relative_to(prefix) or ".." in rel.parts:
+            raise SystemExit(f"unsafe review bundle path: {raw}")
+        candidate = source_root.joinpath(*rel.parts)
+        resolved = candidate.resolve(strict=True)
+        if candidate != resolved or not resolved.is_file() or resolved.suffix != ".json":
+            raise SystemExit(f"review bundle path must be a real JSON file: {raw}")
+        data = resolved.read_bytes()
+        if len(data) > 2_000_000:
+            raise SystemExit(f"review bundle file is too large: {raw}")
+        return rel.as_posix(), data
+    manifest_name, manifest_bytes = read_safe(manifest_rel)
+    manifest = json.loads(manifest_bytes)
+    if manifest.get("pr") != expected_pr or manifest.get("head_sha") != expected_head:
+        raise SystemExit("review manifest identity mismatch")
+    artifact_names = [item for lane in manifest.get("lanes", [])
+                      for item in lane.get("artifact_paths", [])]
+    if not artifact_names or len(artifact_names) != len(set(artifact_names)):
+        raise SystemExit("review manifest artifact paths are empty or duplicated")
+    review_files = {manifest_name: manifest_bytes}
+    for raw in artifact_names:
+        name, data = read_safe(raw)
+        review_files[name] = data
+        sidecar = json.loads(data).get("content_binding_evidence")
+        if isinstance(sidecar, str):
+            sidecar_name, sidecar_data = read_safe(sidecar)
+            review_files[sidecar_name] = sidecar_data
+    digest = hashlib.sha256()
+    for name in sorted(review_files):
+        digest.update(name.encode() + b"\0" + hashlib.sha256(review_files[name]).digest())
+    if digest.hexdigest() != expected or overlay.keys() & review_files.keys():
+        raise SystemExit("review bundle digest mismatch or overlay collision")
+    for name, data in (overlay | review_files).items():
+        relative, parent = PurePosixPath(name), destination_root
+        for part in relative.parts[:-1]:
+            parent /= part
+            if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
+                raise SystemExit(f"unsafe materialization parent: {name}")
+            parent.mkdir(exist_ok=True)
+            if parent.resolve(strict=True) != parent or not parent.is_relative_to(destination_root):
+                raise SystemExit(f"materialization escaped gate clone: {name}")
+        destination = destination_root.joinpath(*relative.parts)
+        if destination.exists() or destination.is_symlink():
+            raise SystemExit(f"materialization destination exists: {name}")
+        with destination.open("xb") as handle:
+            handle.write(data)
+    PY
     test "$(cargo llvm-cov --version)" = "cargo-llvm-cov 0.8.7"
     GH132_COVERAGE_RAW="$GH132_EVIDENCE_DIR/llvm-cov.json"
     GH132_COVERAGE_ARTIFACT="$GH132_EVIDENCE_DIR/gh132-coverage.json"
@@ -629,67 +686,11 @@ fresh gate全部通过。
     test "$(git rev-parse 'HEAD^{commit}')" = "$FINAL_PR_HEAD_SHA"
     FINAL_WORKTREE_STATUS="$(git status --porcelain=v1 --untracked-files=all)"
     test -z "$FINAL_WORKTREE_STATUS"
-    GH132_REVIEW_MANIFEST=artifacts/review/GH132/manifest.json
-    python3 - "$GH132_REVIEW_BUNDLE_REAL" "$GH132_REVIEW_BUNDLE_SHA256" \
-      "$SPEC_RAIL_GATE_REPO" "$GH132_IMPLEMENTATION_PR" "$FINAL_PR_HEAD_SHA" \
-      "$GH132_REVIEW_MANIFEST" <<'PY'
-    import hashlib, json, sys
-    from pathlib import Path, PurePosixPath
-    source_root, expected = Path(sys.argv[1]), sys.argv[2]
-    destination_root = Path(sys.argv[3]).resolve(strict=True)
-    expected_pr, expected_head = int(sys.argv[4]), sys.argv[5]
-    prefix, manifest_rel = PurePosixPath("artifacts/review/GH132"), PurePosixPath(sys.argv[6])
-    def read_safe(raw):
-        rel = PurePosixPath(raw)
-        if rel.is_absolute() or not rel.is_relative_to(prefix) or ".." in rel.parts:
-            raise SystemExit(f"unsafe review bundle path: {raw}")
-        candidate = source_root.joinpath(*rel.parts)
-        resolved = candidate.resolve(strict=True)
-        if candidate != resolved or not resolved.is_file() or resolved.suffix != ".json":
-            raise SystemExit(f"review bundle path must be a real JSON file: {raw}")
-        data = resolved.read_bytes()
-        if len(data) > 2_000_000:
-            raise SystemExit(f"review bundle file is too large: {raw}")
-        return rel.as_posix(), data
-    manifest_name, manifest_bytes = read_safe(manifest_rel)
-    manifest = json.loads(manifest_bytes)
-    if manifest.get("pr") != expected_pr or manifest.get("head_sha") != expected_head:
-        raise SystemExit("review manifest identity mismatch")
-    artifact_names = [item for lane in manifest.get("lanes", [])
-                      for item in lane.get("artifact_paths", [])]
-    if not artifact_names or len(artifact_names) != len(set(artifact_names)):
-        raise SystemExit("review manifest artifact paths are empty or duplicated")
-    materialized = {manifest_name: manifest_bytes}
-    for raw in artifact_names:
-        name, data = read_safe(raw)
-        materialized[name] = data
-        sidecar = json.loads(data).get("content_binding_evidence")
-        if isinstance(sidecar, str):
-            sidecar_name, sidecar_data = read_safe(sidecar)
-            materialized[sidecar_name] = sidecar_data
-    digest = hashlib.sha256()
-    for name in sorted(materialized):
-        digest.update(name.encode() + b"\0" + hashlib.sha256(materialized[name]).digest())
-    if digest.hexdigest() != expected:
-        raise SystemExit("review bundle canonical SHA-256 mismatch")
-    for name, data in materialized.items():
-        relative, parent = PurePosixPath(name), destination_root
-        for part in relative.parts[:-1]:
-            parent /= part
-            if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
-                raise SystemExit(f"unsafe review materialization parent: {name}")
-            parent.mkdir(exist_ok=True)
-        destination = destination_root.joinpath(*relative.parts)
-        if destination.exists() or destination.is_symlink():
-            raise SystemExit(f"review materialization destination exists: {name}")
-        with destination.open("xb") as handle:
-            handle.write(data)
-    PY
     GATE_CHANGED_PATHS="$(git -C "$SPEC_RAIL_GATE_REPO" diff --name-only \
       "$FINAL_CURRENT_MAIN_SHA...$FINAL_PR_HEAD_SHA" | LC_ALL=C sort)"
     test "$GATE_CHANGED_PATHS" = "$EXPECTED_CHANGED_PATHS"
     GH132_PR_EVIDENCE="$GH132_EVIDENCE_DIR/gh132-pr-evidence.json"
-    python3 "$SPEC_RAIL_MIRROR/checks/github_pr_evidence.py" \
+    run_specrail github_pr_evidence.py \
       --github-repo majiayu000/rnk --repo "$SPEC_RAIL_GATE_REPO" \
       --pr "$GH132_IMPLEMENTATION_PR" --issue 132 --content-binding-v1 \
       --review-manifest "$GH132_REVIEW_MANIFEST" \
@@ -710,7 +711,7 @@ fresh gate全部通过。
       ([.review_threads[] |
         select(.is_resolved != true and .is_outdated != true)] | length) == 0' \
       "$GH132_PR_EVIDENCE" >/dev/null
-    FINAL_CI_SHA256="$(jq -S '.checks' "$GH132_PR_EVIDENCE" | python3 -c \
+    FINAL_CI_SHA256="$(jq -S '.checks' "$GH132_PR_EVIDENCE" | "$PYTHON_BIN" -I -S -c \
       'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
     FINAL_CI_RUN_IDS="$(jq -r \
       '[.checks[].url? | capture("/actions/runs/(?<run>[0-9]+)(/|$)").run] |
@@ -729,7 +730,7 @@ fresh gate全部通过。
         jq -e --arg run_id "$run_id" '.body | contains($run_id)' >/dev/null
     done <<<"$FINAL_CI_RUN_IDS"
     GH132_PR_GATE_RESULT="$GH132_EVIDENCE_DIR/gh132-pr-gate.json"
-    python3 "$SPEC_RAIL_MIRROR/checks/pr_gate.py" --repo "$SPEC_RAIL_GATE_REPO" \
+    run_specrail pr_gate.py --repo "$SPEC_RAIL_GATE_REPO" \
       --evidence "$GH132_PR_EVIDENCE" --mode required --json \
       > "$GH132_PR_GATE_RESULT"
     test "$(jq -r '.decision' "$GH132_PR_GATE_RESULT")" = "allowed"
