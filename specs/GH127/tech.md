@@ -297,8 +297,11 @@ closure 不在可变 implementation checkout 上收集 coverage。它读取 exac
 recursive tree entries，只接受 `100644/100755 blob`，对每个 blob通过 `git cat-file`
 取 bytes并重算 Git OID。一个 fresh、worktree外、mode `0700` evidence root承载：
 
-- descriptor-relative 安全物化的 source tree；固定 root dirfd 后，每层 parent 用
-  `O_NOFOLLOW|O_DIRECTORY` 打开，目标以 `O_CREAT|O_EXCL|O_NOFOLLOW` 创建；
+- descriptor-relative 安全物化的 source tree；Phase 1 先遍历并缓存有总量/单blob上限的
+  全部bytes/metadata，验证全部source mode/OID以及destination root、每条已存在ancestor和
+  target absence，全程零target writes；只有完整Phase 1成功才进入Phase 2；
+- Phase 2固定root dirfd，每层parent用`O_NOFOLLOW|O_DIRECTORY`打开，目标以
+  `O_CREAT|O_EXCL|O_NOFOLLOW`创建；任一写失败立即停止且不得开始Cargo；
 - 包含 path/mode/OID/line-count 的 exact tree manifest，以及它的 SHA-256；
 - source tree 完成后改为只读；`CARGO_TARGET_DIR`、raw LCOV、test inventory/result、
   provenance与所有临时输出均在 source tree 外。
@@ -311,7 +314,14 @@ bytes，不重新打开可变 checkout source。它核对raw LCOV SHA-256、reco
 record的changed-executable交集、changed production line >=80%和critical private module
 可执行line/branch各100%。Cargo.toml raw diff、source/destination symlink、existing target、
 suffix/outside/duplicate `SF:`、empty/deleted/line 0/超EOF/negative `DA`、invalid `BRDA`、
-summary/hash和early-shell-failure fixtures均须证明 fail closed。
+summary/hash和early-shell-failure fixtures均须证明 fail closed。materializer negative
+matrix还必须把坏blob、ancestor symlink与existing target分别放在排序靠后的entry，证明
+Phase 1失败时排序第一的target仍不存在；Phase 2失败也不得产生Cargo sentinel。
+
+本closure reference依赖POSIX `dir_fd`、`O_NOFOLLOW`与`O_DIRECTORY` capability gate，
+规范runner为POSIX/Linux。Windows CI仍运行Rust fmt/check/clippy/test，但Git Bash/MSYS2
+不得直接作为closure evidence runner；只有另行实现并评审等强的reparse-point拒绝、
+descriptor-relative traversal与atomic exclusive create后才能替代，不得silent fallback。
 
 ### Tests、SpecRail 与 final rebind
 
