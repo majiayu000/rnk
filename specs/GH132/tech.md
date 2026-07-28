@@ -94,11 +94,14 @@ T1从只读pinned mirror复制受控adopted mirror，只给root、`specs/`及一
 进入任一closure。
 
 T5的PR gate还需要读取implementation git history中的approved spec revision，因此以exact
-PR head创建临时验证clone；在写入任何overlay前，先从raw diff精确验证12个canonical路径、
-`A/M`状态及regular `100644/100755`目标mode。随后只从已验证mirror读取配置/schema，并和
-review bundle一起以exclusive-create写入；任一source/parent/target symlink、non-directory
-parent、已有target或canonical escape都fail closed。`--repo`指向该clone，不能指向没有目标
-历史的SpecRail checkout。independent reviewer
+PR head创建临时验证clone；12-path allowlist只从fresh current-main的`100644` exact
+`specs/GH132/tech.md` Git blob读取，待审head不能修改manifest来自授权自身。在写入任何
+overlay前，先从raw diff精确验证12个canonical路径、`A/M`状态及regular
+`100644/100755`目标mode。随后只从已验证mirror读取配置/schema，并和review bundle一起
+通过固定root dirfd、descriptor-relative `openat`、`O_NOFOLLOW|O_DIRECTORY`与目标
+`O_CREAT|O_EXCL`写入；overlay字节还须重算并匹配pinned Git blob OID。任一source/parent/
+target symlink、non-directory parent、已有target或path escape都fail closed。`--repo`指向
+该clone，不能指向没有目标历史的SpecRail checkout。independent reviewer
 在worktree外生成的bundle必须由人工确认的SHA-256绑定；T5只接受安全、repo-relative、
 源端和临时clone目标端都无symlink/path traversal且位于
 `artifacts/review/GH132/`下的manifest、lane
