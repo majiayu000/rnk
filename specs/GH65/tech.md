@@ -570,10 +570,10 @@ anchor 与 authority。只有空列表或 anchor 删除且无 survivor 时两者
    不设置 new-content indicator；
 4. `Paused` 且 stored anchor ID 存在：恢复同 intra row；若消息缩短，clamp 到 `rows-1` 并在
    `MessageListUpdate.anchor_clamped=true`；
-4a. `Paused`、committed list 为空且 stored anchor=`None` 时，第一次成功 append 或
-   `try_replace_all` 得到非空 candidate：保持 `Paused { new_content_below: true }`，选择
-   candidate 首条消息 row 0、authority=`ViewportTop`、offset=0；viewport rows 为零或非零
-   都相同，禁止跳到 max offset 或隐式 Following；
+4a. `Paused` 的非空 candidate 无有效 surviving anchor 时——committed list 为空且 anchor
+   `None`，或 replace-all 删除 anchor 且没有任一旧 ID 存活——任何首次引入内容的 append、
+   prepend、insert、replace-all 都保持 `Paused { new_content_below: true }`，选择 candidate
+   首条消息 row 0、authority=`ViewportTop`、offset=0；零/非零 viewport 行为相同；
 5. stored anchor 被删除：按 mutation 前 order 选择下一 surviving ID 的 row 0；无下一项则选上一
    surviving ID 的 `rows-1`，replacement authority=`ViewportTop`；空列表为 None/offset 0；
 6. global offset 为 `prefix_sum(anchor_index)+intra_row`，再做 checked/max-offset clamp；
@@ -613,7 +613,7 @@ Follow transition table：
 | viewport rows `0 -> nonzero` | Following | 恢复到最新 max bottom，重算 anchor，indicator=false |
 | append/stream growth at nonzero rows | Following | Following，offset 跟随新 max |
 | append/stream growth below prior viewport | Paused | 保持 anchor，`new_content_below=true` |
-| first nonempty append/replace after Paused empty + None | Paused | 首条 row 0 / offset 0 / `ViewportTop`；保持 Paused，indicator=true |
+| first nonempty append/prepend/insert/replace with no surviving anchor | Paused | 首条 row 0 / offset 0 / `ViewportTop`；保持 Paused，indicator=true |
 | prepend/insert/update/resize/expand/collapse/delete | Paused | 保持/替代 anchor；不得自动 Following |
 | mutation removes all content | Paused | Paused + None anchor；flag 保留到显式 jump/scroll-bottom |
 
@@ -681,8 +681,8 @@ facade 在候选 frame 中构造全部 children，全部成功后才交给 layou
 | B-006 | prepend restore/max-offset clamp | `prepend_preserves_top_or_reports_short_content_viewport_clamp` |
 | B-007 | typed anchor navigation + update clamp | `typed_anchor_navigation_rejects_unknown_and_invalid_rows`；`typed_navigation_overrides_following_and_replaces_observed_anchor`；`viewport_clamped_navigation_anchor_survives_next_mutation`；`height_changes_preserve_or_report_anchor_clamp` |
 | B-008 | remove transition | `deleted_anchor_selects_next_then_previous_survivor` |
-| B-009 | follow transition + public observation | `follow_pause_and_explicit_resume_state_machine`；`typed_navigation_overrides_following_and_replaces_observed_anchor`；`paused_without_anchor_first_nonempty_append_and_replace_is_deterministic`；`public_observation_is_read_only_and_reports_new_content` |
-| B-010 | append/stream transition | `append_and_stream_growth_follow_or_mark_new_content`；`following_zero_viewport_append_and_restore_latest_bottom`；`paused_without_anchor_first_nonempty_append_and_replace_is_deterministic` |
+| B-009 | follow transition + public observation | `follow_pause_and_explicit_resume_state_machine`；`typed_navigation_overrides_following_and_replaces_observed_anchor`；`paused_without_surviving_anchor_structural_repopulation_is_deterministic`；`public_observation_is_read_only_and_reports_new_content` |
+| B-010 | append/stream transition | `append_and_stream_growth_follow_or_mark_new_content`；`following_zero_viewport_append_and_restore_latest_bottom`；`paused_without_surviving_anchor_structural_repopulation_is_deterministic` |
 | B-011 | isolated invalidation/cache/resize config | `each_textflow_and_shell_input_invalidates_only_affected_entry`；`resize_variant_expansion_and_structure_cache_contract`；`resize_rebuild_config_is_closed_ordered_and_atomic`；`active_measurement_handles_survive_reuse_cache_eviction` |
 | B-012 | closed callback outcome + staged commit | `constructor_failure_publishes_no_state`；`measured_missing_failed_and_cancelled_outcomes_are_closed`；`measurement_failure_and_cancellation_are_atomic`；`resize_rebuild_config_is_closed_ordered_and_atomic` |
 | B-013 | closed errors and structural boundaries | `message_rows_reject_zero_without_measurement_key`；`closed_error_categories_are_exhaustive_and_keep_sources`；`invalid_insert_index_precedes_clone_index_and_callbacks`；`state_revision_overflow_precedes_measurement_and_is_atomic_at_u64_max` |
@@ -696,7 +696,7 @@ facade 在候选 frame 中构造全部 children，全部成功后才交给 layou
 | B-021 | bench + allocation/counter | `cargo bench --bench message_list -- message_list_10k`; `visible_slice_key_handle_is_o1_shared_immutable_and_send_sync`; B-018 counter test |
 | B-022 | unchanged fixed API | `fixed_height_virtual_scroll_api_is_unchanged` |
 | B-023 | implementation preflight | `dependency_completion_records_require_closed_issues_and_complete_commit_sets`；fresh issue/PR/ancestry commands in task gate |
-| B-024 | GH57 child coverage + closure audit | ledger/raw all-target coverage/full all-target test 使用 `GH65_COVERAGE_MODE=fixture`，producer/validator 分别使用 `produce`/`validate`；missing/unknown/wrong-stage mode negative fixtures；exact/full tests, CI/review/PR-gate evidence at current head |
+| B-024 | GH57 child coverage + closure audit | ordinary no-mode all-target test asserts typed missing/zero-side-effect and passes；ledger/raw coverage 使用 `fixture`，producer/validator 使用 `produce`/`validate`；unknown/wrong-stage negative fixtures；current-head CI/review evidence |
 
 每个 bare test name 都对应 tasks 中的完整 `cargo test ... -- --exact` 命令。Property test 使用
 固定 32-byte ChaCha seed、至少 256 cases，并输出 seed/最小操作序列。Operation-count test 是
@@ -758,11 +758,12 @@ GH-62 ordered messages + viewport(width, rows)
       total identity/NaN/signed-zero、active handles surviving bounded-cache eviction、isolated invalidation、closed measurement/
       resize-config callback outcomes、invalid-insert pre-clone boundary、partial slices、typed
       navigation overriding Following、viewport-clamped explicit anchor surviving next mutation、
-      short-content、Paused+None first-nonempty 与 Following/Paused zero-viewport restore、
+      short-content、Paused no-survivor structural repopulation 与 Following/Paused zero-viewport restore、
       delete/follow transition、cache reuse、stale/state-revision-overflow/missing/zero/failure/
       cancellation atomicity、unkeyed zero-row value error、exact GH-57 aggregate symbol与
       operation count。
-- [ ] Property tests：固定 seed 随机 operation 序列逐步对比独立 naive row-vector oracle。
+- [ ] Property tests：固定 seed 的 public operation 序列对比 naive oracle；private revision
+      overflow 只由 T2 unit exact 在 `u64::MAX` 注入验证，不在 crate-outside property 伪造。
 - [ ] Integration tests：多 TextFlow + 全 structural rows composite measurement、exact
       entry/shared-key-handle/slice 与 revision-drift rejection、shared handle `O(1)` clone/
       `Send + Sync`、generic render closure（仅 closure-complete 时调 GH-63 view）、typed render failure、crate 外 read-only
@@ -770,16 +771,16 @@ GH-62 ordered messages + viewport(width, rows)
 - [ ] Benchmark：divan 10k mixed heights 的 lookup/slice/point update/prepend，保存 current
   head 命令和输出。
 - [ ] Full gates：`cargo fmt --all -- --check`、`cargo check --workspace --all-targets
-  --all-features --locked`、`GH65_COVERAGE_MODE=fixture cargo test --workspace --all-targets
-  --all-features --locked`、
+  --all-features --locked`、`cargo test --workspace --all-targets --all-features --locked`
+  （ordinary no-mode contract path须断言 typed missing且零副作用后通过）、
   `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -A clippy::collapsible_if -A clippy::manual_is_multiple_of`、
   `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --locked`。
 - [ ] Coverage：Tasks 中必须且只能有一个 `gh57-critical-paths-v1` block，version=1、
   issue=65、9 个 unique exact `file + name` 与逐项 nonempty `verification_command`。
-  第九条 ledger command 必须以 `GH65_COVERAGE_MODE=fixture` 原样调用 coverage contract；
-  唯一 raw all-target coverage command 与 full all-target test command 也必须显式使用
-  `fixture`，producer/validator 分别只允许 `produce`/`validate`。missing、unknown，以及把
-  任一受支持 mode 用于错误阶段的负例都必须失败。
+  第九条 ledger command 与唯一 raw all-target coverage command 必须显式使用 `fixture`；
+  producer/validator 分别只允许 `produce`/`validate`。ordinary no-mode test harness 必须
+  成功证明内部 action 的 missing 拒绝且零副作用；unknown top-level mode、wrong-stage action
+  与任何 missing artifact action 都必须失败。
   `gh65_current_head_coverage_contract` 从 raw llvm-cov、committed ledger 和
   merge-base..exact-head diff 确定性 produce/validate `gh57-child-coverage-v1`；artifact
   绑定 child/head/base/merge-base、head commit timestamp、raw absolute path/SHA256、非空

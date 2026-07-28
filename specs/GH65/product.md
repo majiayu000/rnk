@@ -88,9 +88,10 @@ prepend、resize 或 streaming 时产生可见跳动。
     growth 后，viewport 继续贴住新的最大 offset；viewport rows=0 时 offset 使用 logical
     bottom end、保留 anchor 且不产生 new-content indicator，恢复非零 rows 后贴住包含期间变化
     的最新 bottom。Paused 时这些变化保留 anchor；当变化在原 viewport 下方新增可见内容时
-    `new_content_below=true`，并持续到用户返回底部。Paused 空列表且 stored anchor 为
-    `None` 后第一次成功产生非空列表的 append/replace 必须保持 Paused，以首条新消息 row 0
-    作为 `ViewportTop` anchor、offset=0、indicator=true；只有显式 bottom 命令可恢复 Following。
+    `new_content_below=true`，并持续到用户返回底部。Paused candidate 没有 surviving anchor
+    时，首次产生非空列表的 append/prepend/insert/replace-all（含全新 IDs replacement）必须
+    保持 Paused，以 candidate 首条消息 row 0 作为 `ViewportTop` anchor、offset=0、
+    indicator=true；只有显式 bottom 命令可恢复 Following。
 11. **B-011 — Update and isolated invalidation semantics.** 同一 stable ID 的 content revision、
     variant、expansion，或 B-002 任一 textual/structural 配置输入改变时，只使受影响的 exact
     measurement 失效；width 改变为所有消息建立新宽度的测量视图。未改变 exact key 的
@@ -158,12 +159,12 @@ prepend、resize 或 streaming 时产生可见跳动。
     version，任何审阅者按该版本声明的完整验证集执行，都必须得到相同的 exact-test、
     property、10k workload、coverage 和 compatibility 通过结果。Coverage 必须由 committed
     `gh57-critical-paths-v1` ledger 确定性生成 `gh57-child-coverage-v1`，绑定 exact head/base/
-    raw provenance，changed executable 至少 80%、ledger critical paths 逐项 100%；coverage
-    contract 的每次调用都显式提供受支持且与阶段匹配的 `GH65_COVERAGE_MODE`。任何会发现并
-    执行该 contract 的强制 full `cargo llvm-cov --workspace --all-targets` 或
-    `cargo test --workspace --all-targets` 路径，以及 ledger fixture 命令，都必须使用
-    `GH65_COVERAGE_MODE=fixture`；producer/validator 分别只使用 `produce`/`validate`。
-    missing、unknown 或阶段错误的 mode 必须 fail closed。其他版本、零匹配、ignored test、
+    raw provenance，changed executable 至少 80%、ledger critical paths 逐项 100%。任何真实
+    coverage action 都必须显式提供与阶段匹配的 `GH65_COVERAGE_MODE`；missing、unknown 或
+    wrong-stage action typed fail closed 且零副作用。普通 required all-target CI 未设置 mode
+    时，contract test 只能断言内部 action 的 `MissingMode` 与零 artifact/command 副作用后
+    成功返回，不能把 missing 当默认 mode；raw llvm-cov 与 ledger fixture 显式使用 `fixture`，
+    producer/validator 分别只使用 `produce`/`validate`。其他版本、零匹配、ignored test、
     部分列表或无法绑定该版本的结果不能证明完成。
 
 ## 验收标准
@@ -178,8 +179,8 @@ prepend、resize 或 streaming 时产生可见跳动。
   append/stream/resize/expand/collapse/delete 规则均有确定 fixture。
 - [ ] Following/Paused/new-content 状态转换完整覆盖用户 scroll、jump-to-bottom、append、
   typed navigation、zero viewport、streaming、resize、collapse 与 delete；public immutable
-  observation 可读取 indicator/revision/anchor，Paused + None 的首个非空 append/replace
-  transition 逐字段确定。
+  observation 可读取 indicator/revision/anchor；Paused 无有效 surviving anchor 时，首个非空
+  append/prepend/insert/replace-all（包括全新 ID replacement）transition 逐字段确定。
 - [ ] Initial constructor 的 validation、ordered callbacks、revision=1 observation 与失败不发布
   partial state 均有 exact tests；reuse-cache capacity 小于 active count 时 active handles
   仍全部可见。

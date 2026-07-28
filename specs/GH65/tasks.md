@@ -43,16 +43,15 @@ ancestry 中，closure 才调用完整 typed view；否则使用 exact entry/key
 {"version":1,"issue":65,"critical_paths":[{"file":"src/components/chat/message_list/tests.rs","name":"following_zero_viewport_append_and_restore_latest_bottom","verification_command":"cargo test --workspace --lib --locked components::chat::message_list::tests::following_zero_viewport_append_and_restore_latest_bottom -- --exact"},{"file":"src/components/chat/message_list/tests.rs","name":"typed_navigation_overrides_following_and_replaces_observed_anchor","verification_command":"cargo test --workspace --lib --locked components::chat::message_list::tests::typed_navigation_overrides_following_and_replaces_observed_anchor -- --exact"},{"file":"src/components/chat/message_list/tests.rs","name":"invalid_insert_index_precedes_clone_index_and_callbacks","verification_command":"cargo test --workspace --lib --locked components::chat::message_list::tests::invalid_insert_index_precedes_clone_index_and_callbacks -- --exact"},{"file":"src/components/chat/message_list/tests.rs","name":"resize_rebuild_config_is_closed_ordered_and_atomic","verification_command":"cargo test --workspace --lib --locked components::chat::message_list::tests::resize_rebuild_config_is_closed_ordered_and_atomic -- --exact"},{"file":"src/components/chat/message_list/tests.rs","name":"state_revision_overflow_precedes_measurement_and_is_atomic_at_u64_max","verification_command":"cargo test --workspace --lib --locked components::chat::message_list::tests::state_revision_overflow_precedes_measurement_and_is_atomic_at_u64_max -- --exact"},{"file":"src/components/chat/message_list/tests.rs","name":"gh65_variable_height_anchor_contract","verification_command":"cargo test --workspace --lib --locked components::chat::message_list::tests::gh65_variable_height_anchor_contract -- --exact"},{"file":"tests/message_list_public_api.rs","name":"public_observation_is_read_only_and_reports_new_content","verification_command":"cargo test --test message_list_public_api --locked public_observation_is_read_only_and_reports_new_content -- --exact"},{"file":"tests/message_list_render.rs","name":"visible_slice_key_handle_is_o1_shared_immutable_and_send_sync","verification_command":"cargo test --test message_list_render --locked visible_slice_key_handle_is_o1_shared_immutable_and_send_sync -- --exact"},{"file":"tests/message_list_public_api.rs","name":"gh65_current_head_coverage_contract","verification_command":"GH65_COVERAGE_MODE=fixture cargo test --test message_list_public_api --locked gh65_current_head_coverage_contract -- --exact"}]}
 -->
 
-T3 实现 `gh65_current_head_coverage_contract` 的 `fixture`/`produce`/`validate` closed
-mode：`fixture` 只运行内嵌 canonical 正例与缺字段、旧 SHA、集合漂移、零 denominator、
-unknown/duplicate symbol、hash/threshold 不符负例，不写或接受 completion artifact；
-missing/unknown mode 失败。mode 与调用阶段的闭合集合固定为：ledger exact command、raw
-`cargo llvm-cov --workspace --all-targets` 和 full
-`cargo test --workspace --all-targets` 只能使用 `fixture`；artifact producer 只能使用
-`produce`；artifact validator 只能使用 `validate`。即使 mode 名本身受支持，只要用于错误
-阶段也必须 fail closed。T5 必须用 canonical 正例以及 missing、unknown、wrong-stage
-负例验证这张矩阵，不能只检查 ledger wrapper。随后在 implementation PR exact head 上先执行
-ledger 的全部命令，再建立 immutable window：
+T3 实现 test harness 与 `fixture`/`produce`/`validate` closed coverage action。ordinary
+all-target test 未设置 `GH65_COVERAGE_MODE` 时，harness 必须调用 missing-mode action，断言
+typed `MissingMode` 且在读取 raw/diff/ledger、运行命令或写 artifact 前退出，然后测试成功；
+这不是默认 mode或fallback。`fixture` 运行 canonical 正例与 missing/unknown/wrong-stage、
+缺字段、旧 SHA、集合漂移、零 denominator、duplicate symbol、hash/threshold 负例且不接受
+completion artifact；显式 unknown top-level mode 使测试失败。ledger exact与raw
+`cargo llvm-cov --workspace --all-targets` 使用 `fixture`；producer/validator 只能使用
+`produce`/`validate`。T5 必须验证该矩阵，不能只检查 ledger wrapper。随后在 implementation
+PR exact head 上先执行 ledger 全部命令，再建立 immutable window：
 
 ```sh
 set -euo pipefail
@@ -181,7 +180,7 @@ GH65_COVERAGE_ARTIFACT="$GH65_EVIDENCE_DIR/gh57-child-coverage-v1.json" \
   把 `state.rs`/`tests.rs` 串行交给 T2；`chat/mod.rs` 与 `message_list.rs` 冻结至 T3 接管，
   types/error/index 永久冻结。禁止 alias、`Any`、default row 或未声明 delayed API。
 
-- [ ] `SP65-T2` 实现 caller-owned state、同步 closed measurement/resize-config mutations、partial slices、typed anchor navigation、stored anchor 与 bottom-follow state machine。 Covers: B-003, B-004, B-005, B-006, B-007, B-008, B-009, B-010, B-011, B-012, B-013, B-014, B-018, B-019 | Owner: message-list-state | Done when: 每个 mutation 先 guard/index/overflow preflight，再 ordered config+measurement candidate，最后一次 commit；invalid insert、typed navigation overriding Following、Paused+None first-nonempty、Following/Paused zero viewport、prepend short-content、delete/resize/stream/expand/collapse/failure 的 observation/flags/anchor/follow/cache/revision 合同由 exact tests 锁定；GH-57 aggregate symbol 可精确执行 | Verify: T2 exact unit tests + checkpoint check
+- [ ] `SP65-T2` 实现 caller-owned state、同步 closed measurement/resize-config mutations、partial slices、typed anchor navigation、stored anchor 与 bottom-follow state machine。 Covers: B-003, B-004, B-005, B-006, B-007, B-008, B-009, B-010, B-011, B-012, B-013, B-014, B-018, B-019 | Owner: message-list-state | Done when: 每个 mutation 先 guard/index/overflow preflight，再 ordered config+measurement candidate，最后一次 commit；invalid insert、typed navigation overriding Following、Paused no-survivor append/prepend/insert/all-new replace、Following/Paused zero viewport、prepend short-content、delete/resize/stream/expand/collapse/failure 的 observation/flags/anchor/follow/cache/revision 合同由 exact tests 锁定；GH-57 aggregate symbol 可精确执行 | Verify: T2 exact unit tests + checkpoint check
   `File ownership:` 从 T1 串行接管且仅修改
   `src/components/chat/message_list/state.rs`、
   `src/components/chat/message_list/tests.rs`。
@@ -205,7 +204,7 @@ GH65_COVERAGE_ARTIFACT="$GH65_EVIDENCE_DIR/gh57-child-coverage-v1.json" \
   `cargo test --workspace --lib --locked components::chat::message_list::tests::deleted_anchor_selects_next_then_previous_survivor -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::follow_pause_and_explicit_resume_state_machine -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::append_and_stream_growth_follow_or_mark_new_content -- --exact`；
-  `cargo test --workspace --lib --locked components::chat::message_list::tests::paused_without_anchor_first_nonempty_append_and_replace_is_deterministic -- --exact`；
+  `cargo test --workspace --lib --locked components::chat::message_list::tests::paused_without_surviving_anchor_structural_repopulation_is_deterministic -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::each_textflow_and_shell_input_invalidates_only_affected_entry -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::resize_variant_expansion_and_structure_cache_contract -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::resize_rebuild_config_is_closed_ordered_and_atomic -- --exact`；
@@ -248,7 +247,7 @@ GH65_COVERAGE_ARTIFACT="$GH65_EVIDENCE_DIR/gh57-child-coverage-v1.json" \
   structural row sum、closure exact revision/handle identity/call order/error source、coverage
   checker 正负 fixture、fixed-height fixture 与 outputs；停止写全部 paths 后交给 T4。
 
-- [ ] `SP65-T4` 建立固定 seed naive property oracle、10k benchmark 与 Cargo bench registration。 Covers: B-002, B-005, B-006, B-007, B-008, B-009, B-010, B-011, B-012, B-013, B-014, B-016, B-018, B-019, B-020, B-021 | Owner: property-performance | Done when: 至少256个固定seed随机序列逐步比对独立oracle，含 invalid insert、short-content、Following/Paused zero viewport、anchor navigation、resize-config failure 与 revision overflow；10k mixed-height lookup/slice/stream/prepend benchmark实际运行并证明 slice key handle 无正文大小相关 clone，复杂度硬门禁仍通过 | Verify: property exact test、operation-count exact test、10k bench + checkpoint check
+- [ ] `SP65-T4` 建立固定 seed naive property oracle、10k benchmark 与 Cargo bench registration。 Covers: B-002, B-005, B-006, B-007, B-008, B-009, B-010, B-011, B-012, B-013, B-014, B-016, B-018, B-019, B-020, B-021 | Owner: property-performance | Done when: 至少256个固定seed public operation序列逐步比对独立oracle，含 invalid insert、short-content、Following/Paused zero viewport、anchor navigation与resize-config failure；private state revision overflow 保留在T2 unit exact，不由crate外property伪造；10k mixed-height lookup/slice/stream/prepend benchmark实际运行并证明 slice key handle 无正文大小相关 clone，复杂度硬门禁仍通过 | Verify: property exact test、operation-count exact test、10k bench + checkpoint check
   `File ownership:` 仅
   `tests/message_list_properties.rs`、
   `benches/message_list.rs`、
@@ -279,7 +278,7 @@ GH65_COVERAGE_ARTIFACT="$GH65_EVIDENCE_DIR/gh57-child-coverage-v1.json" \
   `gh65_current_head_coverage_contract` 的 produce、validate 命令；然后运行
   `cargo fmt --all -- --check`；
   `cargo check --workspace --all-targets --all-features --locked`；
-  `GH65_COVERAGE_MODE=fixture cargo test --workspace --all-targets --all-features --locked`；
+  `cargo test --workspace --all-targets --all-features --locked`；
   `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -A clippy::collapsible_if -A clippy::manual_is_multiple_of`；
   `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --locked`；
   `cargo bench --bench message_list -- message_list_10k`。
@@ -316,9 +315,9 @@ Implementation Gate -> SP65-T1 -> SP65-T2 -> SP65-T3 -> SP65-T4 -> SP65-T5
 - 10k benchmark 在 implementation current head 实际运行；operation counter 仍是复杂度
   correctness 硬门禁。
 - 运行 fmt/check/test/clippy/docs full gates；所有输出来自本次 current exact head。
-- 对 ledger、raw all-target coverage、full all-target test、produce 与 validate 运行 mode
-  matrix 正例；分别删除 mode、替换为 unknown，以及替换为另一个受支持但阶段错误的 mode，
-  每个 schema-valid negative fixture 都必须 nonzero fail closed。
+- 对 ledger、raw all-target coverage、produce 与 validate 运行显式 mode matrix；ordinary
+  no-mode full all-target test 必须通过且只证明内部 `MissingMode`/零副作用。对真实 action
+  删除 mode、替换 unknown 或使用 wrong-stage mode，negative fixture 必须 nonzero fail closed。
 - `git diff --name-only <implementation-merge-base>...HEAD` 只含 reviewed planned paths。
 - 核对新代码 line coverage ≥80%、anchor/cache/error critical paths 100%。
 - 静态解析唯一 `gh57-critical-paths-v1`，要求 version=1、issue=65、9 个 unique
@@ -339,7 +338,8 @@ Implementation Gate -> SP65-T1 -> SP65-T2 -> SP65-T3 -> SP65-T4 -> SP65-T5
 - Mutation 先 stage 全部测量和 index，成功后一次 commit；missing/failure/cancellation/stale/
   overflow 都 typed 且逐字段零 mutation。
 - Paused 只可由显式到达底部/jump 恢复 Following；resize/delete/collapse 不能暗中恢复；
-  Paused + None 后首个非空 append/replace 固定首条 row 0 / offset 0 / `ViewportTop` / indicator=true。
+  无 surviving anchor 的首个非空 append/prepend/insert/replace-all 固定首条 row 0 /
+  offset 0 / `ViewportTop` / indicator=true。
 - 删除 anchor 的 next-then-previous、typed anchor navigation、zero-viewport retention、
   short-content viewport clamp 与 height-shrink anchor clamp 规则不得由实现自由选择。
 - 首版 measurement callback 同步返回 closed measured/missing/failed/cancelled outcome，不发布
