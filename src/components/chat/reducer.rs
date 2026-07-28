@@ -1,0 +1,799 @@
+//! Atomic reducer implementation for ordered conversation events.
+
+#[path = "reducer/targeted.rs"]
+mod targeted;
+
+#[rustfmt::skip]
+mod compact {
+use super::super::*;
+use super::targeted;
+use super::super::state::{
+    message_active, message_terminal, nested_active, nested_terminal, same_block_identity,
+    static_complete_ready, valid_call_result, valid_call_transition, valid_message_transition,
+    valid_result_transition, valid_thinking_transition,
+};
+use super::super::rollback::IdentityBackup;
+use std::collections::{BTreeMap, BTreeSet};
+
+struct MutationBackup {
+    messages: Vec<(usize, ChatMessage)>, added: Option<MessageId>,
+    identities: Option<IdentityBackup>,
+}
+impl MutationBackup {
+    fn capture(state: &ConversationState, update: &ConversationUpdate,
+        affected: &BTreeSet<MessageId>) -> Self {
+        targeted::record_backup_capture();
+        let messages = state.messages.iter().enumerate()
+            .filter(|(_, message)| {
+                targeted::record_message_visits(1);
+                affected.contains(&message.id)
+            })
+            .map(|(index, message)| (index, message.clone())).collect();
+        let candidate = match update {
+            ConversationUpdate::Push(value) => Some(value.message.id),
+            ConversationUpdate::Resend(value) => Some(value.message.id),
+            _ => None,
+        };
+        let added = candidate.filter(|id| {
+            targeted::record_target_lookup();
+            state.message(*id).is_none()
+        });
+        let identities = matches!(update, ConversationUpdate::Push(_)
+            | ConversationUpdate::AppendMessageBlock(_) | ConversationUpdate::InsertMessageBlock(_)
+            | ConversationUpdate::EditMessage(_) | ConversationUpdate::DeleteMessage(_)
+            | ConversationUpdate::Resend(_))
+            .then(|| IdentityBackup::capture(state, update, affected,
+                || targeted::record_message_visits(1),
+                || targeted::record_block_visits(1)));
+        Self { messages, added, identities }
+    }
+    fn restore(self, state: &mut ConversationState) {
+        if let Some(index) = self.added.and_then(|added| state.messages.iter().position(|message| {
+            targeted::record_message_visits(1);
+            message.id == added
+        })) {
+            state.messages.remove(index);
+        }
+        for (index, original) in self.messages {
+            if let Some(found) = state.messages.iter().position(|message| {
+                targeted::record_message_visits(1);
+                message.id == original.id
+            }) {
+                state.messages[found] = original;
+            } else {
+                state.messages.insert(index.min(state.messages.len()), original);
+            }
+        }
+        state.rebuild_message_index(|| targeted::record_message_visits(1));
+        if let Some(identities) = self.identities { identities.restore(state); }
+    }
+}
+
+impl ConversationState {
+    /// Applies one ordered event atomically or returns a typed error without mutation.
+    pub fn apply_event(&mut self, event: ConversationEvent)
+        -> Result<ApplyOutcome, ConversationError> {
+        if let Some(record) = self.ledger.iter().find(|record|
+            record.event.event_id == event.event_id) {
+            return if targeted::replay_matches(&record.event, &event) { Ok(record.outcome.clone()) } else {
+                Err(ConversationError::EventIdConflict { event_id: event.event_id })
+            };
+        }
+        if event.sequence < self.expected_sequence {
+            return if self.evicted_through.is_some_and(|boundary| event.sequence <= boundary) {
+                Err(ConversationError::ReplayOutsideRetention {
+                    sequence: event.sequence, evicted_through: self.evicted_through.unwrap(),
+                })
+            } else {
+                Err(ConversationError::StaleSequence {
+                    expected: self.expected_sequence, actual: event.sequence,
+                })
+            };
+        }
+        if event.sequence > self.expected_sequence {
+            return Err(ConversationError::SequenceGap {
+                expected: self.expected_sequence, actual: event.sequence,
+            });
+        }
+        let next_sequence = self.expected_sequence.checked_add(1)
+            .ok_or(ConversationError::SequenceExhausted)?;
+        let next_revision = self.revision.checked_next()?;
+        let supplied_revision = event.update.conversation_guard().expected();
+        if supplied_revision != self.revision {
+            return Err(ConversationError::ConversationRevisionMismatch {
+                expected: self.revision, actual: supplied_revision,
+            });
+        }
+        let target_guard = targeted::target_guard(&event.update);
+        let target_position = if let Some(guard) = target_guard {
+            targeted::record_target_lookup();
+            let position = self.message_position(guard.message_id)
+                .ok_or(ConversationError::UnknownMessage { message_id: guard.message_id })?;
+            let message = &self.messages[position];
+            if guard.message_revision != message.revision {
+                return Err(ConversationError::MessageRevisionMismatch {
+                    message_id: guard.message_id, expected: message.revision,
+                    actual: guard.message_revision,
+                });
+            }
+            let no_op_edit = matches!(&event.update, ConversationUpdate::EditMessage(value)
+                if value.entries.len() == message.blocks.len()
+                    && value.entries.iter().zip(&message.blocks).all(|(candidate, existing)| {
+                        targeted::record_block_visits(2); candidate == existing
+                    }));
+            if no_op_edit {
+                return Err(ConversationError::NoOpEdit { message_id: guard.message_id });
+            }
+            Some(position)
+        } else {
+            None
+        };
+        if let Some((position, kind)) = target_position.and_then(|position|
+            targeted::classify(&event.update, &self.messages[position])
+                .map(|kind| (position, kind))) {
+            let affected = targeted::apply_targeted(self, position, &event.update, kind)?;
+            return Ok(targeted::commit_event(
+                self, event, next_sequence, next_revision, vec![affected],
+            ));
+        }
+        let affected_ids = targeted::affected_existing(self, &event.update);
+        let affected_order = self.messages.iter().filter(|message| {
+            targeted::record_message_visits(1);
+            affected_ids.contains(&message.id)
+        }).map(|message| message.id).collect::<Vec<_>>();
+        let mut revisions = BTreeMap::new();
+        for message in &self.messages {
+            targeted::record_message_visits(1);
+            if affected_ids.contains(&message.id) {
+                revisions.insert(message.id, (message.revision,
+                    message.revision.checked_next(message.id)?));
+            }
+        }
+        let global_validation = targeted::requires_global_validation(&event.update);
+        let backup = global_validation.then(|| MutationBackup::capture(
+            self, &event.update, &affected_ids));
+        let result = apply_update(self, &event.update).and_then(|()| {
+            if global_validation { validate_conversation(self) } else { Ok(()) }
+        });
+        if let Err(error) = result {
+            if let Some(backup) = backup { backup.restore(self); }
+            return Err(error);
+        }
+        for message in &mut self.messages {
+            targeted::record_message_visits(1);
+            if let Some((_, next)) = revisions.get(&message.id) { message.revision = *next; }
+        }
+        let mut affected_messages = affected_order.into_iter().filter_map(|message_id| {
+            revisions.get(&message_id).map(|(previous, applied)| AffectedMessage {
+                message_id, previous: Some(*previous), applied: *applied,
+                disposition: if matches!(event.update, ConversationUpdate::DeleteMessage(_))
+                    && target_guard.is_some_and(|guard| guard.message_id == message_id) {
+                    AffectedMessageDisposition::Deleted
+                } else { AffectedMessageDisposition::Present },
+            })
+        }).collect::<Vec<_>>();
+        match &event.update {
+            ConversationUpdate::Push(value) =>
+                affected_messages.push(targeted::new_affected(value.message.id)),
+            ConversationUpdate::Resend(value) =>
+                affected_messages.push(targeted::new_affected(value.message.id)),
+            _ => {}
+        }
+        Ok(targeted::commit_event(
+            self, event, next_sequence, next_revision, affected_messages,
+        ))
+    }
+}
+
+fn apply_update(state: &mut ConversationState, update: &ConversationUpdate)
+    -> Result<(), ConversationError> {
+    match update {
+        ConversationUpdate::Push(value) => push(state, &value.message, None),
+        ConversationUpdate::AppendText(value) =>
+            append_text(state, value.guard.message_id, value.block_id, &value.delta),
+        ConversationUpdate::AppendMessageBlock(value) =>
+            insert_block(state, value.guard.message_id, None, &value.entry),
+        ConversationUpdate::InsertMessageBlock(value) =>
+            insert_block(state, value.guard.message_id, Some(value.position), &value.entry),
+        ConversationUpdate::ReplaceBlock(value) =>
+            replace_block(state, value.guard.message_id, value.block_id, &value.replacement),
+        ConversationUpdate::Complete(value) => complete(state, value.guard.message_id),
+        ConversationUpdate::Cancel(value) => terminate(state, value.guard.message_id, None),
+        ConversationUpdate::Fail(value) =>
+            terminate(state, value.guard.message_id, Some(value.cause.clone())),
+        ConversationUpdate::EditMessage(value) =>
+            edit_message(state, value.guard.message_id, &value.entries),
+        ConversationUpdate::DeleteMessage(value) => delete_message(state, value.guard.message_id),
+        ConversationUpdate::Resend(value) => {
+            targeted::record_target_lookup();
+            let source = state.message(value.source_guard.message_id)
+                .ok_or(ConversationError::UnknownMessage {
+                    message_id: value.source_guard.message_id,
+                })?;
+            if !message_terminal(&source.status) {
+                return Err(ConversationError::ResendRequiresTerminal { message_id: source.id });
+            }
+            if source.role != value.message.role {
+                return Err(ConversationError::InvalidMessage {
+                    message_id: value.message.id, reason: "resend role must match source",
+                });
+            }
+            push(state, &value.message, Some(source.id))
+        }
+    }
+}
+
+fn push(state: &mut ConversationState, message: &ChatMessage, _resend_source: Option<MessageId>)
+    -> Result<(), ConversationError> {
+    if state.seen_messages.contains(&message.id) {
+        return Err(ConversationError::DuplicateMessageId { message_id: message.id });
+    }
+    if message.status != MessageStatus::Pending || message.revision != MessageRevision::INITIAL {
+        return Err(ConversationError::InvalidMessage {
+            message_id: message.id, reason: "new message must be pending at initial revision",
+        });
+    }
+    if message.blocks.is_empty() {
+        return Err(ConversationError::InvalidMessage {
+            message_id: message.id, reason: "message must contain at least one block",
+        });
+    }
+    let permitted_result_calls = live_call_ids(state);
+    state.seen_messages.insert(message.id);
+    state.thinking_seen.entry(message.id).or_default();
+    state.thinking_retired.entry(message.id).or_default();
+    for entry in &message.blocks {
+        targeted::record_block_visits(1);
+        register_new_entry(state, message.id, entry, false, &permitted_result_calls)?;
+    }
+    state.messages.push(message.clone());
+    state.rebuild_message_index(|| targeted::record_message_visits(1));
+    Ok(())
+}
+
+fn register_new_entry(state: &mut ConversationState, message_id: MessageId,
+    entry: &MessageBlockEntry, require_static_payload: bool,
+    permitted_result_calls: &BTreeSet<ToolCallId>) -> Result<(), ConversationError> {
+    if state.retired_blocks.contains(&entry.id) {
+        return Err(ConversationError::RetiredBlockId { block_id: entry.id });
+    }
+    if state.seen_blocks.contains(&entry.id) {
+        return Err(ConversationError::DuplicateBlockId { block_id: entry.id });
+    }
+    match &entry.block {
+        MessageBlock::Thinking(value) => {
+            if value.status != ThinkingStatus::Pending {
+                return invalid_transition("thinking", "new thinking block must be pending");
+            }
+            let retired = state.thinking_retired.entry(message_id).or_default();
+            if retired.contains(&value.id) {
+                return Err(ConversationError::RetiredThinkingId {
+                    message_id, thinking_id: value.id.as_str().to_owned(),
+                });
+            }
+            let seen = state.thinking_seen.entry(message_id).or_default();
+            if !seen.insert(value.id.clone()) {
+                return Err(ConversationError::DuplicateThinkingId {
+                    message_id, thinking_id: value.id.as_str().to_owned(),
+                });
+            }
+        }
+        MessageBlock::ToolCall(value) => {
+            if value.status != ToolCallStatus::Pending {
+                return invalid_transition("tool_call", "new tool call must be pending");
+            }
+            if state.seen_tool_calls.contains(&value.call_id) {
+                return Err(ConversationError::DuplicateToolCallId {
+                    call_id: value.call_id.as_str().to_owned(),
+                });
+            }
+            state.seen_tool_calls.insert(value.call_id.clone());
+            state.result_slots.insert(value.call_id.clone(), ToolResultSlot::Vacant);
+        }
+        MessageBlock::ToolResult(value) => {
+            if value.status != ToolResultStatus::Pending {
+                return invalid_transition("tool_result", "new tool result must be pending");
+            }
+            if !permitted_result_calls.contains(&value.call_id) {
+                return Err(ConversationError::OrphanToolResult {
+                    call_id: value.call_id.as_str().to_owned(),
+                });
+            }
+            match state.result_slots.get(&value.call_id) {
+                Some(ToolResultSlot::Vacant) => {}
+                Some(ToolResultSlot::Retired) => return Err(ConversationError::ResultSlotRetired {
+                    call_id: value.call_id.as_str().to_owned(),
+                }),
+                Some(ToolResultSlot::Occupied(_)) => return Err(ConversationError::InvalidCorrelation {
+                    call_id: value.call_id.as_str().to_owned(), reason: "tool result already exists",
+                }),
+                None => return Err(ConversationError::OrphanToolResult {
+                    call_id: value.call_id.as_str().to_owned(),
+                }),
+            }
+            state.result_slots.insert(value.call_id.clone(),
+                ToolResultSlot::Occupied(ToolResultLocation::new(message_id, entry.id)));
+        }
+        block if require_static_payload && !static_payload_nonempty(block) => {
+            return Err(ConversationError::InvalidMessage {
+                message_id, reason: "late-discovered static block must have non-empty payload",
+            });
+        }
+        _ => {}
+    }
+    state.seen_blocks.insert(entry.id);
+    Ok(())
+}
+
+fn static_payload_nonempty(block: &MessageBlock) -> bool {
+    match block {
+        MessageBlock::Text(value) | MessageBlock::Markdown(value) => !value.is_empty(),
+        MessageBlock::Code(value) => !value.content().is_empty(),
+        MessageBlock::Thinking(_) | MessageBlock::ToolCall(_) | MessageBlock::ToolResult(_) => true,
+        _ => true,
+    }
+}
+
+fn append_text(state: &mut ConversationState, message_id: MessageId, block_id: BlockId,
+    delta: &str) -> Result<(), ConversationError> {
+    if delta.is_empty() {
+        return Err(ConversationError::InvalidValue { field: "delta", reason: "must be non-empty" });
+    }
+    let message = message_mut(state, message_id)?;
+    require_active(message)?;
+    let entry = message.blocks.iter_mut().find(|entry| entry.id == block_id)
+        .ok_or(ConversationError::UnknownBlock { message_id, block_id })?;
+    match &mut entry.block {
+        MessageBlock::Text(value) | MessageBlock::Markdown(value) => value.push_str(delta),
+        MessageBlock::Code(value) => value.append_text(delta),
+        MessageBlock::Thinking(value) => match value.status {
+            ThinkingStatus::Pending => {
+                value.content.push_str(delta); value.status = ThinkingStatus::Streaming;
+            }
+            ThinkingStatus::Streaming => value.content.push_str(delta),
+            _ => return invalid_transition("thinking", "cannot append to terminal thinking"),
+        },
+        _ => return invalid_transition("block", "block is not appendable"),
+    }
+    if message.status == MessageStatus::Pending { message.status = MessageStatus::Streaming; }
+    Ok(())
+}
+
+fn insert_block(state: &mut ConversationState, message_id: MessageId, position: Option<usize>,
+    entry: &MessageBlockEntry) -> Result<(), ConversationError> {
+    targeted::record_target_lookup();
+    let message = state.message(message_id)
+        .ok_or(ConversationError::UnknownMessage { message_id })?;
+    require_active(message)?;
+    let actual_position = position.unwrap_or(message.blocks.len());
+    if actual_position > message.blocks.len() {
+        return Err(ConversationError::InvalidMessage {
+            message_id, reason: "insert position is out of bounds",
+        });
+    }
+    let permitted = live_call_ids(state);
+    register_new_entry(state, message_id, entry, true, &permitted)?;
+    let message = message_mut(state, message_id)?;
+    message.blocks.insert(actual_position, entry.clone());
+    if message.status == MessageStatus::Pending { message.status = MessageStatus::Streaming; }
+    Ok(())
+}
+
+fn replace_block(state: &mut ConversationState, message_id: MessageId, block_id: BlockId,
+    replacement: &MessageBlock) -> Result<(), ConversationError> {
+    let message = message_mut(state, message_id)?;
+    require_active(message)?;
+    let entry = message.blocks.iter_mut().find(|entry| {
+        targeted::record_block_visits(1); entry.id == block_id
+    })
+        .ok_or(ConversationError::UnknownBlock { message_id, block_id })?;
+    if !same_block_identity(&entry.block, replacement) {
+        return Err(ConversationError::InvalidReplacement {
+            block_id, reason: "replacement must preserve block kind and lifecycle identity",
+        });
+    }
+    validate_replacement(&entry.block, replacement, block_id)?;
+    let starts_nested = match (&entry.block, replacement) {
+        (MessageBlock::Thinking(old), MessageBlock::Thinking(new)) =>
+            old.status == ThinkingStatus::Pending && new.status == ThinkingStatus::Streaming,
+        (MessageBlock::ToolCall(old), MessageBlock::ToolCall(new)) =>
+            old.status == ToolCallStatus::Pending && new.status == ToolCallStatus::Running,
+        (MessageBlock::ToolResult(old), MessageBlock::ToolResult(new)) =>
+            old.status == ToolResultStatus::Pending && new.status == ToolResultStatus::Streaming,
+        _ => false,
+    };
+    entry.block = replacement.clone();
+    if starts_nested && message.status == MessageStatus::Pending {
+        message.status = MessageStatus::Streaming;
+    }
+    Ok(())
+}
+
+fn validate_replacement(old: &MessageBlock, new: &MessageBlock, block_id: BlockId)
+    -> Result<(), ConversationError> {
+    if matches!(old, MessageBlock::Thinking(_) | MessageBlock::ToolCall(_)
+        | MessageBlock::ToolResult(_)) && nested_terminal(old) {
+        return Err(ConversationError::InvalidReplacement {
+            block_id, reason: "terminal lifecycle blocks are immutable",
+        });
+    }
+    match (old, new) {
+        (MessageBlock::Thinking(old), MessageBlock::Thinking(new))
+            if old.status != new.status && !valid_thinking_transition(&old.status, &new.status) =>
+            invalid_transition("thinking", "invalid thinking status transition"),
+        (MessageBlock::ToolCall(old), MessageBlock::ToolCall(new))
+            if old.status != new.status && !valid_call_transition(&old.status, &new.status) =>
+            invalid_transition("tool_call", "invalid tool-call status transition"),
+        (MessageBlock::ToolResult(old), MessageBlock::ToolResult(new))
+            if old.status != new.status && !valid_result_transition(&old.status, &new.status) =>
+            invalid_transition("tool_result", "invalid tool-result status transition"),
+        _ if old == new => Err(ConversationError::InvalidReplacement {
+            block_id, reason: "replacement must change content or status",
+        }),
+        _ => Ok(()),
+    }
+}
+
+fn complete(state: &mut ConversationState, message_id: MessageId)
+    -> Result<(), ConversationError> {
+    targeted::record_target_lookup();
+    let message = state.message(message_id)
+        .ok_or(ConversationError::UnknownMessage { message_id })?;
+    require_active(message)?;
+    let ready = match message.status {
+        MessageStatus::Pending => {
+            static_complete_ready(message, || targeted::record_block_visits(1))
+        }
+        MessageStatus::Streaming => message.blocks.iter().all(|entry| {
+            targeted::record_block_visits(1);
+            nested_terminal(&entry.block)
+        }) && correlated_nested_terminal(state, message),
+        _ => false,
+    };
+    if !ready
+        || !valid_message_transition(&message.status, &MessageStatus::Complete, ready) {
+        return invalid_transition("message", "message content is not ready to complete");
+    }
+    message_mut(state, message_id)?.status = MessageStatus::Complete;
+    Ok(())
+}
+
+fn correlated_nested_terminal(state: &ConversationState, target: &ChatMessage) -> bool {
+    let ids = target.blocks.iter().filter_map(|entry| {
+        targeted::record_block_visits(1);
+        match &entry.block {
+            MessageBlock::ToolCall(value) => Some(&value.call_id),
+            MessageBlock::ToolResult(value) => Some(&value.call_id),
+            _ => None,
+        }
+    }).collect::<BTreeSet<_>>();
+    for message in &state.messages {
+        targeted::record_message_visits(1);
+        for entry in &message.blocks {
+            targeted::record_block_visits(1);
+            match &entry.block {
+                MessageBlock::ToolCall(value) if ids.contains(&value.call_id)
+                    && !nested_terminal(&entry.block) => return false,
+                MessageBlock::ToolResult(value) if ids.contains(&value.call_id)
+                    && !nested_terminal(&entry.block) => return false,
+                _ => {}
+            }
+        }
+    }
+    true
+}
+
+fn terminate(state: &mut ConversationState, target_id: MessageId,
+    cause: Option<FailureCause>) -> Result<(), ConversationError> {
+    targeted::record_target_lookup();
+    let target = state.message(target_id)
+        .ok_or(ConversationError::UnknownMessage { message_id: target_id })?;
+    require_active(target)?;
+    let correlations = target.blocks.iter().filter_map(|entry| {
+        targeted::record_block_visits(1);
+        match &entry.block {
+            MessageBlock::ToolCall(value) => Some(value.call_id.clone()),
+            MessageBlock::ToolResult(value) => Some(value.call_id.clone()),
+            _ => None,
+        }
+    }).collect::<BTreeSet<_>>();
+    for message in &mut state.messages {
+        targeted::record_message_visits(1);
+        let is_target = message.id == target_id;
+        for entry in &mut message.blocks {
+            targeted::record_block_visits(1);
+            let correlated = match &entry.block {
+                MessageBlock::ToolCall(value) => correlations.contains(&value.call_id),
+                MessageBlock::ToolResult(value) => correlations.contains(&value.call_id),
+                _ => false,
+            };
+            if nested_active(&entry.block) && (is_target || correlated) {
+                terminate_block(&mut entry.block, cause.as_ref());
+            }
+        }
+        if is_target {
+            message.status = cause.as_ref().map_or(MessageStatus::Cancelled,
+                |value| MessageStatus::Failed(value.clone()));
+        }
+    }
+    Ok(())
+}
+
+fn terminate_block(block: &mut MessageBlock, cause: Option<&FailureCause>) {
+    match block {
+        MessageBlock::Thinking(value) => value.status = cause.map_or(ThinkingStatus::Cancelled,
+            |cause| ThinkingStatus::Failed(cause.clone())),
+        MessageBlock::ToolCall(value) => value.status = cause.map_or(ToolCallStatus::Cancelled,
+            |cause| ToolCallStatus::Failed(cause.clone())),
+        MessageBlock::ToolResult(value) => value.status = cause.map_or(ToolResultStatus::Cancelled,
+            |cause| ToolResultStatus::Failed(cause.clone())),
+        _ => {}
+    }
+}
+
+fn edit_message(state: &mut ConversationState, message_id: MessageId,
+    entries: &[MessageBlockEntry]) -> Result<(), ConversationError> {
+    if entries.is_empty() {
+        return Err(ConversationError::InvalidMessage {
+            message_id, reason: "edited message must contain at least one block",
+        });
+    }
+    targeted::record_target_lookup();
+    let current = state.message(message_id)
+        .ok_or(ConversationError::UnknownMessage { message_id })?.clone();
+    let inspect = |entry: &MessageBlockEntry| {
+        targeted::record_block_visits(1); entry.id
+    };
+    let old = current.blocks.iter().map(|entry| (inspect(entry), entry))
+        .collect::<BTreeMap<_, _>>();
+    let candidate = entries.iter().map(|entry| (inspect(entry), entry))
+        .collect::<BTreeMap<_, _>>();
+    if candidate.len() != entries.len() {
+        return Err(ConversationError::DuplicateBlockId {
+            block_id: entries.iter().map(&inspect)
+                .find(|id| entries.iter().filter(|entry| inspect(entry) == *id).count() > 1).unwrap(),
+        });
+    }
+    for (id, replacement) in &candidate {
+        targeted::record_block_visits(1);
+        if let Some(previous) = old.get(id) {
+            if !same_block_identity(&previous.block, &replacement.block) {
+                return Err(ConversationError::InvalidReplacement {
+                    block_id: *id, reason: "edit must preserve retained block identity",
+                });
+            }
+            if lifecycle_status_changed(&previous.block, &replacement.block) {
+                return Err(ConversationError::InvalidReplacement {
+                    block_id: *id, reason: "edit cannot change retained lifecycle status",
+                });
+            }
+            if matches!(previous.block, MessageBlock::Thinking(_) | MessageBlock::ToolCall(_)
+                | MessageBlock::ToolResult(_))
+                && nested_terminal(&previous.block) && previous.block != replacement.block {
+                return Err(ConversationError::InvalidReplacement {
+                    block_id: *id, reason: "edit cannot rewrite terminal lifecycle payload",
+                });
+            }
+        } else if message_terminal(&current.status)
+            && matches!(replacement.block, MessageBlock::Thinking(_)
+                | MessageBlock::ToolCall(_) | MessageBlock::ToolResult(_)) {
+            return Err(ConversationError::InvalidMessage {
+                message_id, reason: "terminal message may only add static blocks",
+            });
+        }
+    }
+    for entry in current.blocks.iter().filter(|entry| !candidate.contains_key(&inspect(entry))) {
+        retire_entry(state, message_id, entry);
+    }
+    let permitted = live_call_ids(state);
+    for entry in entries.iter().filter(|entry| !old.contains_key(&inspect(entry))) {
+        register_new_entry(state, message_id, entry, true, &permitted)?;
+    }
+    message_mut(state, message_id)?.blocks = entries.to_vec();
+    Ok(())
+}
+
+fn lifecycle_status_changed(old: &MessageBlock, new: &MessageBlock) -> bool {
+    match (old, new) {
+        (MessageBlock::Thinking(a), MessageBlock::Thinking(b)) => a.status != b.status,
+        (MessageBlock::ToolCall(a), MessageBlock::ToolCall(b)) => a.status != b.status,
+        (MessageBlock::ToolResult(a), MessageBlock::ToolResult(b)) => a.status != b.status,
+        _ => false,
+    }
+}
+
+fn delete_message(state: &mut ConversationState, message_id: MessageId)
+    -> Result<(), ConversationError> {
+    targeted::record_target_lookup();
+    let position = state.message_position(message_id)
+        .ok_or(ConversationError::UnknownMessage { message_id })?;
+    let message = state.messages[position].clone();
+    for entry in &message.blocks {
+        targeted::record_block_visits(1); retire_entry(state, message_id, entry);
+    }
+    state.messages.remove(position);
+    state.rebuild_message_index(|| targeted::record_message_visits(1));
+    state.retired_messages.insert(message_id);
+    Ok(())
+}
+
+fn retire_entry(state: &mut ConversationState, message_id: MessageId,
+    entry: &MessageBlockEntry) {
+    state.retired_blocks.insert(entry.id);
+    match &entry.block {
+        MessageBlock::Thinking(value) => {
+            state.thinking_retired.entry(message_id).or_default().insert(value.id.clone());
+        }
+        MessageBlock::ToolCall(value) => {
+            state.retired_tool_calls.insert(value.call_id.clone());
+            state.result_slots.insert(value.call_id.clone(), ToolResultSlot::Retired);
+        }
+        MessageBlock::ToolResult(value) => {
+            state.result_slots.insert(value.call_id.clone(), ToolResultSlot::Retired);
+        }
+        _ => {}
+    }
+}
+
+fn live_call_ids(state: &ConversationState) -> BTreeSet<ToolCallId> {
+    let mut ids = BTreeSet::new();
+    for message in &state.messages {
+        targeted::record_message_visits(1);
+        for entry in &message.blocks {
+            targeted::record_block_visits(1);
+            if let MessageBlock::ToolCall(value) = &entry.block {
+                ids.insert(value.call_id.clone());
+            }
+        }
+    }
+    ids
+}
+
+fn validate_conversation(state: &ConversationState) -> Result<(), ConversationError> {
+    targeted::record_global_validation();
+    if let Some(message_id) = state.message_index.inconsistent_id(&state.messages,
+        &mut || targeted::record_message_visits(1)) {
+        return Err(ConversationError::InvalidMessage {
+            message_id,
+            reason: "message position index is inconsistent",
+        });
+    }
+    let mut calls = BTreeMap::<ToolCallId, &ToolCallStatus>::new();
+    let mut results = BTreeMap::<ToolCallId, (&ToolResultStatus, ToolResultLocation)>::new();
+    for message in &state.messages {
+        targeted::record_message_visits(1);
+        if message_terminal(&message.status)
+            && message.blocks.iter().any(|entry| {
+                targeted::record_block_visits(1);
+                nested_active(&entry.block)
+            }) {
+            return Err(ConversationError::InvalidMessage {
+                message_id: message.id, reason: "terminal message contains active nested block",
+            });
+        }
+        for entry in &message.blocks {
+            targeted::record_block_visits(1);
+            match &entry.block {
+                MessageBlock::ToolCall(value) => {
+                    if calls.insert(value.call_id.clone(), &value.status).is_some() {
+                        return Err(ConversationError::DuplicateToolCallId {
+                            call_id: value.call_id.as_str().to_owned(),
+                        });
+                    }
+                }
+                MessageBlock::ToolResult(value)
+                    if results.insert(value.call_id.clone(), (&value.status,
+                        ToolResultLocation::new(message.id, entry.id))).is_some() =>
+                    return Err(ConversationError::InvalidCorrelation {
+                        call_id: value.call_id.as_str().to_owned(),
+                        reason: "tool call has more than one result",
+                    }),
+                _ => {}
+            }
+        }
+    }
+    for (call_id, (result, location)) in &results {
+        let call = calls.get(call_id).ok_or_else(|| ConversationError::OrphanToolResult {
+            call_id: call_id.as_str().to_owned(),
+        })?;
+        if !valid_call_result(call, Some(result)) {
+            return Err(ConversationError::InvalidCorrelation {
+                call_id: call_id.as_str().to_owned(), reason: "call/result status matrix rejected",
+            });
+        }
+        if !matches!(state.result_slots.get(call_id),
+            Some(ToolResultSlot::Occupied(found)) if found == location) {
+            return Err(ConversationError::InvalidCorrelation {
+                call_id: call_id.as_str().to_owned(), reason: "result slot location is inconsistent",
+            });
+        }
+    }
+    for (call_id, call) in calls {
+        if !valid_call_result(call, results.get(&call_id).map(|(status, _)| *status)) {
+            return Err(ConversationError::InvalidCorrelation {
+                call_id: call_id.as_str().to_owned(), reason: "call/result status matrix rejected",
+            });
+        }
+    }
+    Ok(())
+}
+
+fn message_mut(state: &mut ConversationState, message_id: MessageId)
+    -> Result<&mut ChatMessage, ConversationError> {
+    targeted::record_target_lookup();
+    let position = state.message_position(message_id)
+        .ok_or(ConversationError::UnknownMessage { message_id })?;
+    Ok(&mut state.messages[position])
+}
+
+fn require_active(message: &ChatMessage) -> Result<(), ConversationError> {
+    if message_active(&message.status) { Ok(()) } else {
+        invalid_transition("message", "message is terminal")
+    }
+}
+
+fn invalid_transition<T>(kind: &'static str, reason: &'static str)
+    -> Result<T, ConversationError> {
+    Err(ConversationError::InvalidTransition { kind, reason })
+}
+
+impl PushUpdate {
+    /// Returns the expected conversation revision.
+    pub const fn guard(&self) -> ConversationGuard { self.guard }
+    /// Returns the new message.
+    pub const fn message(&self) -> &ChatMessage { &self.message }
+}
+impl AppendTextUpdate {
+    /// Returns the mutation guard.
+    pub const fn guard(&self) -> MessageMutationGuard { self.guard }
+    /// Returns the append target.
+    pub const fn block_id(&self) -> BlockId { self.block_id }
+    /// Returns the non-empty delta.
+    pub fn delta(&self) -> &str { &self.delta }
+}
+impl BlockUpdate {
+    /// Returns the mutation guard.
+    pub const fn guard(&self) -> MessageMutationGuard { self.guard }
+    /// Returns the new entry.
+    pub const fn entry(&self) -> &MessageBlockEntry { &self.entry }
+}
+impl InsertBlockUpdate {
+    /// Returns the mutation guard.
+    pub const fn guard(&self) -> MessageMutationGuard { self.guard }
+    /// Returns the checked insertion position.
+    pub const fn position(&self) -> usize { self.position }
+    /// Returns the new entry.
+    pub const fn entry(&self) -> &MessageBlockEntry { &self.entry }
+}
+impl ReplaceBlockUpdate {
+    /// Returns the mutation guard.
+    pub const fn guard(&self) -> MessageMutationGuard { self.guard }
+    /// Returns the replacement target.
+    pub const fn block_id(&self) -> BlockId { self.block_id }
+    /// Returns the same-kind replacement.
+    pub const fn replacement(&self) -> &MessageBlock { &self.replacement }
+}
+impl GuardedUpdate {
+    /// Returns the mutation guard.
+    pub const fn guard(&self) -> MessageMutationGuard { self.guard }
+}
+impl FailUpdate {
+    /// Returns the mutation guard.
+    pub const fn guard(&self) -> MessageMutationGuard { self.guard }
+    /// Returns the typed failure cause.
+    pub const fn cause(&self) -> &FailureCause { &self.cause }
+}
+impl EditMessageUpdate {
+    /// Returns the mutation guard.
+    pub const fn guard(&self) -> MessageMutationGuard { self.guard }
+    /// Returns the complete replacement entry list.
+    pub fn entries(&self) -> &[MessageBlockEntry] { &self.entries }
+}
+impl ResendUpdate {
+    /// Returns the terminal source guard.
+    pub const fn source_guard(&self) -> MessageMutationGuard { self.source_guard }
+    /// Returns the fresh message.
+    pub const fn message(&self) -> &ChatMessage { &self.message }
+}
+
+}
