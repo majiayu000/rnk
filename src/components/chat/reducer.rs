@@ -75,7 +75,7 @@ impl ConversationState {
         -> Result<ApplyOutcome, ConversationError> {
         if let Some(record) = self.ledger.iter().find(|record|
             record.event.event_id == event.event_id) {
-            return if record.event == event { Ok(record.outcome.clone()) } else {
+            return if targeted::replay_matches(&record.event, &event) { Ok(record.outcome.clone()) } else {
                 Err(ConversationError::EventIdConflict { event_id: event.event_id })
             };
         }
@@ -116,8 +116,12 @@ impl ConversationState {
                     actual: guard.message_revision,
                 });
             }
-            if matches!(&event.update, ConversationUpdate::EditMessage(value)
-                if value.entries.as_slice() == message.blocks.as_slice()) {
+            let no_op_edit = matches!(&event.update, ConversationUpdate::EditMessage(value)
+                if value.entries.len() == message.blocks.len()
+                    && value.entries.iter().zip(&message.blocks).all(|(candidate, existing)| {
+                        targeted::record_block_visits(2); candidate == existing
+                    }));
+            if no_op_edit {
                 return Err(ConversationError::NoOpEdit { message_id: guard.message_id });
             }
             Some(position)
@@ -239,6 +243,7 @@ fn push(state: &mut ConversationState, message: &ChatMessage, _resend_source: Op
     state.thinking_seen.entry(message.id).or_default();
     state.thinking_retired.entry(message.id).or_default();
     for entry in &message.blocks {
+        targeted::record_block_visits(1);
         register_new_entry(state, message.id, entry, false, &permitted_result_calls)?;
     }
     state.messages.push(message.clone());
@@ -378,7 +383,9 @@ fn replace_block(state: &mut ConversationState, message_id: MessageId, block_id:
     replacement: &MessageBlock) -> Result<(), ConversationError> {
     let message = message_mut(state, message_id)?;
     require_active(message)?;
-    let entry = message.blocks.iter_mut().find(|entry| entry.id == block_id)
+    let entry = message.blocks.iter_mut().find(|entry| {
+        targeted::record_block_visits(1); entry.id == block_id
+    })
         .ok_or(ConversationError::UnknownBlock { message_id, block_id })?;
     if !same_block_identity(&entry.block, replacement) {
         return Err(ConversationError::InvalidReplacement {
@@ -534,17 +541,21 @@ fn edit_message(state: &mut ConversationState, message_id: MessageId,
     targeted::record_target_lookup();
     let current = state.message(message_id)
         .ok_or(ConversationError::UnknownMessage { message_id })?.clone();
-    let old = current.blocks.iter().map(|entry| (entry.id, entry))
+    let inspect = |entry: &MessageBlockEntry| {
+        targeted::record_block_visits(1); entry.id
+    };
+    let old = current.blocks.iter().map(|entry| (inspect(entry), entry))
         .collect::<BTreeMap<_, _>>();
-    let candidate = entries.iter().map(|entry| (entry.id, entry))
+    let candidate = entries.iter().map(|entry| (inspect(entry), entry))
         .collect::<BTreeMap<_, _>>();
     if candidate.len() != entries.len() {
         return Err(ConversationError::DuplicateBlockId {
-            block_id: entries.iter().map(|entry| entry.id)
-                .find(|id| entries.iter().filter(|entry| entry.id == *id).count() > 1).unwrap(),
+            block_id: entries.iter().map(&inspect)
+                .find(|id| entries.iter().filter(|entry| inspect(entry) == *id).count() > 1).unwrap(),
         });
     }
     for (id, replacement) in &candidate {
+        targeted::record_block_visits(1);
         if let Some(previous) = old.get(id) {
             if !same_block_identity(&previous.block, &replacement.block) {
                 return Err(ConversationError::InvalidReplacement {
@@ -571,11 +582,11 @@ fn edit_message(state: &mut ConversationState, message_id: MessageId,
             });
         }
     }
-    for entry in current.blocks.iter().filter(|entry| !candidate.contains_key(&entry.id)) {
+    for entry in current.blocks.iter().filter(|entry| !candidate.contains_key(&inspect(entry))) {
         retire_entry(state, message_id, entry);
     }
     let permitted = live_call_ids(state);
-    for entry in entries.iter().filter(|entry| !old.contains_key(&entry.id)) {
+    for entry in entries.iter().filter(|entry| !old.contains_key(&inspect(entry))) {
         register_new_entry(state, message_id, entry, true, &permitted)?;
     }
     message_mut(state, message_id)?.blocks = entries.to_vec();
@@ -597,7 +608,9 @@ fn delete_message(state: &mut ConversationState, message_id: MessageId)
     let position = state.message_position(message_id)
         .ok_or(ConversationError::UnknownMessage { message_id })?;
     let message = state.messages[position].clone();
-    for entry in &message.blocks { retire_entry(state, message_id, entry); }
+    for entry in &message.blocks {
+        targeted::record_block_visits(1); retire_entry(state, message_id, entry);
+    }
     state.messages.remove(position);
     state.rebuild_message_index(|| targeted::record_message_visits(1));
     state.retired_messages.insert(message_id);

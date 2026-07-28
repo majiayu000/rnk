@@ -4,6 +4,12 @@ use super::super::state::{message_active, nested_active, nested_terminal, static
 use super::super::*;
 use std::collections::BTreeSet;
 
+#[path = "targeted/replay.rs"]
+mod replay;
+pub(super) fn replay_matches(left: &ConversationEvent, right: &ConversationEvent) -> bool {
+    replay::replay_matches(left, right)
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum TargetedUpdate {
     AppendText,

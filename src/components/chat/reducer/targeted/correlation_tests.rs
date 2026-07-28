@@ -23,8 +23,52 @@ fn message(id: u64, role: ChatRole, block: MessageBlock) -> ChatMessage {
     .unwrap()
 }
 
+fn text_blocks_message(id: u64, blocks: &[(u64, &str)]) -> ChatMessage {
+    ChatMessage::new(
+        MessageId::new(id),
+        ChatRole::User,
+        blocks
+            .iter()
+            .map(|(block_id, text)| {
+                MessageBlockEntry::new(BlockId::new(*block_id), MessageBlock::Text((*text).into()))
+            })
+            .collect(),
+    )
+    .unwrap()
+}
+
+fn three_block_state() -> ConversationState {
+    let mut state = ConversationState::new(0, NonZeroUsize::new(8).unwrap());
+    push(
+        &mut state,
+        "seed",
+        text_blocks_message(1, &[(1, "one"), (2, "two"), (3, "three")]),
+    );
+    state
+}
+
 fn apply(state: &mut ConversationState, id: &str, update: ConversationUpdate) -> ApplyOutcome {
     state.apply_event(event(state, id, update)).unwrap()
+}
+
+fn assert_replay_match(
+    left: ConversationUpdate,
+    right: ConversationUpdate,
+    expected: bool,
+    block_visits: usize,
+) {
+    let event_id = UpdateId::new("compare").unwrap();
+    let left = ConversationEvent::new(event_id.clone(), 0, left);
+    let right = ConversationEvent::new(event_id, 0, right);
+    reset_cost();
+    assert_eq!(replay_matches(&left, &right), expected);
+    assert_eq!(
+        cost(),
+        ReducerCost {
+            block_visits,
+            ..ReducerCost::default()
+        }
+    );
 }
 
 fn push(state: &mut ConversationState, id: &str, message: ChatMessage) {
@@ -226,18 +270,169 @@ fn push_counts_index_rebuild_validation_and_identity_backup_visits() {
     push(
         &mut state,
         "third",
-        message(3, ChatRole::User, MessageBlock::Text("third".into())),
+        text_blocks_message(3, &[(3, "third"), (4, "fourth"), (5, "fifth")]),
     );
     assert_eq!(
         cost(),
         ReducerCost {
             message_visits: 25,
             target_lookups: 1,
-            block_visits: 6,
+            block_visits: 13,
             global_validations: 1,
             backup_captures: 1,
         },
     );
+}
+
+#[test]
+fn generic_mutations_count_each_block_traversal() {
+    let mut replace_state = three_block_state();
+    let replace = ConversationUpdate::replace_block(
+        guard(&replace_state, MessageId::new(1)),
+        BlockId::new(3),
+        MessageBlock::Text("changed".into()),
+    );
+    reset_cost();
+    apply(&mut replace_state, "replace", replace);
+    assert_eq!(cost().block_visits, 6);
+
+    let mut edit_state = three_block_state();
+    let edit = ConversationUpdate::edit_message(
+        guard(&edit_state, MessageId::new(1)),
+        vec![
+            MessageBlockEntry::new(BlockId::new(1), MessageBlock::Text("changed".into())),
+            MessageBlockEntry::new(BlockId::new(2), MessageBlock::Text("two".into())),
+            MessageBlockEntry::new(BlockId::new(3), MessageBlock::Text("three".into())),
+        ],
+    );
+    reset_cost();
+    apply(&mut edit_state, "edit", edit);
+    assert_eq!(cost().block_visits, 29);
+
+    let mut delete_state = three_block_state();
+    let delete = ConversationUpdate::delete_message(guard(&delete_state, MessageId::new(1)));
+    reset_cost();
+    apply(&mut delete_state, "delete", delete);
+    assert_eq!(cost().block_visits, 6);
+}
+
+#[test]
+fn no_op_edit_counts_each_compared_block() {
+    let mut state = three_block_state();
+    let entries = state.messages[0].blocks.clone();
+    let edit = ConversationUpdate::edit_message(guard(&state, MessageId::new(1)), entries);
+    reset_cost();
+    assert!(matches!(
+        state.apply_event(event(&state, "no-op-edit", edit)),
+        Err(ConversationError::NoOpEdit { .. })
+    ));
+    assert_eq!(
+        cost(),
+        ReducerCost {
+            target_lookups: 1,
+            block_visits: 6,
+            ..ReducerCost::default()
+        }
+    );
+}
+
+#[test]
+fn replay_equality_counts_each_compared_block() {
+    let mut state = ConversationState::new(0, NonZeroUsize::new(8).unwrap());
+    let original = event(
+        &state,
+        "replay",
+        ConversationUpdate::push(
+            ConversationGuard::new(state.revision),
+            text_blocks_message(1, &[(1, "one"), (2, "two"), (3, "three")]),
+        ),
+    );
+    let exact = original.clone();
+    let conflict = event(
+        &state,
+        "replay",
+        ConversationUpdate::push(
+            ConversationGuard::new(state.revision),
+            text_blocks_message(1, &[(1, "one"), (2, "two"), (3, "changed")]),
+        ),
+    );
+    let outcome = state.apply_event(original).unwrap();
+
+    reset_cost();
+    assert_eq!(state.apply_event(exact).unwrap(), outcome);
+    assert_eq!(
+        cost(),
+        ReducerCost {
+            block_visits: 6,
+            ..ReducerCost::default()
+        }
+    );
+
+    reset_cost();
+    assert!(matches!(
+        state.apply_event(conflict),
+        Err(ConversationError::EventIdConflict { .. })
+    ));
+    assert_eq!(
+        cost(),
+        ReducerCost {
+            block_visits: 6,
+            ..ReducerCost::default()
+        }
+    );
+}
+
+#[test]
+fn replay_equality_covers_every_update_payload_shape() {
+    let conversation = ConversationGuard::new(ConversationRevision::INITIAL);
+    let guard =
+        MessageMutationGuard::new(conversation, MessageId::new(1), MessageRevision::INITIAL);
+    let entry = MessageBlockEntry::new(BlockId::new(4), MessageBlock::Text("four".into()));
+    let message = text_blocks_message(1, &[(1, "one"), (2, "two"), (3, "three")]);
+    let updates = vec![
+        (ConversationUpdate::push(conversation, message.clone()), 6),
+        (
+            ConversationUpdate::append_text(guard, BlockId::new(1), "x").unwrap(),
+            0,
+        ),
+        (
+            ConversationUpdate::append_message_block(guard, entry.clone()),
+            2,
+        ),
+        (
+            ConversationUpdate::insert_message_block(guard, 1, entry.clone()),
+            2,
+        ),
+        (
+            ConversationUpdate::replace_block(
+                guard,
+                BlockId::new(1),
+                MessageBlock::Text("changed".into()),
+            ),
+            2,
+        ),
+        (ConversationUpdate::complete(guard), 0),
+        (ConversationUpdate::cancel(guard), 0),
+        (
+            ConversationUpdate::fail(guard, FailureCause::new("failed").unwrap()),
+            0,
+        ),
+        (
+            ConversationUpdate::edit_message(guard, message.blocks.clone()),
+            6,
+        ),
+        (ConversationUpdate::delete_message(guard), 0),
+        (ConversationUpdate::resend(guard, message.clone()), 6),
+    ];
+    for (update, block_visits) in updates {
+        assert_replay_match(update.clone(), update.clone(), true, block_visits);
+        let mismatch = if matches!(&update, ConversationUpdate::Complete(_)) {
+            ConversationUpdate::cancel(guard)
+        } else {
+            ConversationUpdate::complete(guard)
+        };
+        assert_replay_match(update, mismatch, false, 0);
+    }
 }
 
 #[test]
