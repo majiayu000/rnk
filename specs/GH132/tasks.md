@@ -72,22 +72,19 @@ fresh gate全部通过。
     test "$(git -C "$SPEC_RAIL_ROOT" rev-parse 'HEAD^{commit}')" = "$SPEC_RAIL_REV"
     test "$(git -C "$SPEC_RAIL_ROOT" remote get-url origin)" = \
       https://github.com/majiayu000/specrail.git
-    test "$(python3 -c \
-      'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
-      "$SPEC_RAIL_ROOT/checks/route_gate.py")" = \
-      d77cad0763713ca589be1c4278edcec7c90c017bc383fd6a7976402be22a7433
-    test "$(python3 -c \
-      'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
-      "$SPEC_RAIL_ROOT/checks/check_workflow.py")" = \
-      c5bd73060037b0e8febace0e5ee8473e17973e1ca17257ea1517a94e05fa7549
-    test "$(python3 -c \
-      'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
-      "$SPEC_RAIL_ROOT/checks/github_duplicate_evidence.py")" = \
-      eab228a33d84a43cde1ba3587d5edde50993ae11c5c5a522ee8d01b64b284d55
-    test "$(python3 -c \
-      'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
-      "$SPEC_RAIL_ROOT/checks/duplicate_work_gate.py")" = \
-      c109124d511983b9579d11e0bf2378569435e73036a22f058ed377fb5232317c
+    SPEC_RAIL_PINNED_MIRROR="$(mktemp -d "${TMPDIR:-/tmp}/gh132-specrail-pinned.XXXXXX")"
+    git -C "$SPEC_RAIL_ROOT" ls-tree -rz --full-tree "$SPEC_RAIL_REV" |
+      python3 -c 'import sys; from pathlib import PurePosixPath as P; rows=[(m.split(),p.decode()) for m,p in (r.split(b"\t",1) for r in sys.stdin.buffer.read().split(b"\0") if r)]; rows and all(len(m)==3 and m[0] in {b"100644",b"100755"} and m[1]==b"blob" and p and not P(p).is_absolute() and ".." not in P(p).parts and P(p).as_posix()==p for m,p in rows) or sys.exit("unsafe SpecRail tree entry")'
+    git -C "$SPEC_RAIL_ROOT" archive "$SPEC_RAIL_REV" | tar -xf - -C "$SPEC_RAIL_PINNED_MIRROR"
+    git -C "$SPEC_RAIL_ROOT" ls-tree -rz --full-tree "$SPEC_RAIL_REV" | python3 -c 'import hashlib,sys; from pathlib import Path,PurePosixPath as P; root=Path(sys.argv[1]).resolve(strict=True); rows=[(m.split(),p.decode()) for m,p in (r.split(b"\t",1) for r in sys.stdin.buffer.read().split(b"\0") if r)]; expected={p:m[2].decode() for m,p in rows}; nodes=list(root.rglob("*")); actual={n.relative_to(root).as_posix() for n in nodes if n.is_file() and not n.is_symlink()}; expected.keys()==actual and all(not n.is_symlink() and (n.is_file() or n.is_dir()) for n in nodes) and all(hashlib.sha1(b"blob "+str(len(d)).encode()+b"\0"+d).hexdigest()==oid for p,oid in expected.items() for d in [root.joinpath(*P(p).parts).read_bytes()]) or sys.exit("SpecRail archive mirror mismatch")' "$SPEC_RAIL_PINNED_MIRROR"
+    unset SPEC_RAIL_ROOT
+    python3 -c 'import hashlib,sys; from pathlib import Path; r=Path(sys.argv[1]); e={"checks/route_gate.py":"d77cad0763713ca589be1c4278edcec7c90c017bc383fd6a7976402be22a7433","checks/check_workflow.py":"c5bd73060037b0e8febace0e5ee8473e17973e1ca17257ea1517a94e05fa7549","checks/github_duplicate_evidence.py":"eab228a33d84a43cde1ba3587d5edde50993ae11c5c5a522ee8d01b64b284d55","checks/duplicate_work_gate.py":"c109124d511983b9579d11e0bf2378569435e73036a22f058ed377fb5232317c"}; a={p:hashlib.sha256((r/p).read_bytes()).hexdigest() for p in e}; a==e or sys.exit("pinned SpecRail entry hash mismatch")' "$SPEC_RAIL_PINNED_MIRROR"
+    chmod -R a-w "$SPEC_RAIL_PINNED_MIRROR"
+    SPEC_RAIL_MIRROR="$(mktemp -d "${TMPDIR:-/tmp}/gh132-specrail-adopted.XXXXXX")"
+    cp -R "$SPEC_RAIL_PINNED_MIRROR/." "$SPEC_RAIL_MIRROR/"
+    chmod u+w "$SPEC_RAIL_MIRROR" "$SPEC_RAIL_MIRROR/specs" \
+      "$SPEC_RAIL_MIRROR/workflow.yaml"
+    export PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH="$SPEC_RAIL_MIRROR/checks"
     ISSUE_JSON="$(gh issue view 132 --repo majiayu000/rnk \
       --json number,state,labels)"
     test "$(printf '%s\n' "$ISSUE_JSON" | jq -r '.number')" = "132"
@@ -95,7 +92,7 @@ fresh gate全部通过。
     CANONICAL_READINESS_LABELS="$(awk '
       /^  readiness:/ { inside = 1; next }
       inside && /^    - / { sub(/^    - /, ""); print; next }
-      inside { exit }' "$SPEC_RAIL_ROOT/labels.yaml" | LC_ALL=C sort)"
+      inside { exit }' "$SPEC_RAIL_PINNED_MIRROR/labels.yaml" | LC_ALL=C sort)"
     ISSUE_LABELS="$(printf '%s\n' "$ISSUE_JSON" |
       jq -r '.labels[].name' | LC_ALL=C sort)"
     LIVE_READINESS_LABELS="$(comm -12 \
@@ -122,8 +119,6 @@ fresh gate全部通过。
     test -n "$EXPECTED_MAIN_SHA"
     test "$CURRENT_HEAD_SHA" = "$EXPECTED_MAIN_SHA"
     printf 'GH132_IMPLEMENTATION_BASE_SHA=%s\n' "$EXPECTED_MAIN_SHA"
-    SPEC_RAIL_MIRROR="$(mktemp -d "${TMPDIR:-/tmp}/gh132-specrail.XXXXXX")"
-    git -C "$SPEC_RAIL_ROOT" archive "$SPEC_RAIL_REV" | tar -x -C "$SPEC_RAIL_MIRROR"
     mkdir -p "$SPEC_RAIL_MIRROR/specs/GH132" "$SPEC_RAIL_MIRROR/evidence"
     cp specs/GH132/product.md specs/GH132/tech.md specs/GH132/tasks.md \
       "$SPEC_RAIL_MIRROR/specs/GH132/"
