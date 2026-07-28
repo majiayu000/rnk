@@ -79,14 +79,15 @@ T5另外校验负责 fresh reviews/reviewThreads 与 trusted review manifest 装
 `github_pr_evidence.py` SHA-256
 `95567e96d515e90f85687e3ad24a256419f7a6ef76fac54d6c5da346f3cd2173`。
 路径、revision或hash不符均fail closed，不从机器特定绝对路径或mutable branch运行。
-由于route gate会把artifact路径约束在`--repo`内，T1已从固定revision用`git archive`
-导出临时workflow mirror，再复制当前merged GH132 packet；T5复用同一概念，但独立设置
-`SPEC_RAIL_EXPECTED_SHA`；T1/T5都在首次Git读取前export `GIT_NO_REPLACE_OBJECTS=1`，使
-`refs/replace/**`对revision、tree、archive及后续验证全部无效，再从原始Git object tree拒绝
-symlink、非regular blob、absolute、non-canonical或`..`路径，并把该exact revision全量archive到worktree外的evidence mirror。
-archive完成即丢弃`SPEC_RAIL_ROOT`变量；之后入口脚本、全部SpecRail module import以及
-`workflow.yaml`、`states.yaml`、`labels.yaml`、`schemas/`的读取/复制只允许来自只读
-mirror，入口hash也在mirror上校验，dirty checkout内容不得进入closure。
+由于route gate会把artifact路径约束在`--repo`内，T1/T5都在首次Git读取前export
+`GIT_NO_REPLACE_OBJECTS=1`，使`refs/replace/**`对revision、tree、archive及后续验证无效；
+随后只从原始Git object tree拒绝symlink、非regular blob、absolute、non-canonical或`..`
+路径，并把exact revision全量archive到worktree外、逐blob复核的pinned mirror。
+archive完成即丢弃`SPEC_RAIL_ROOT`；入口hash、canonical readiness、全部SpecRail module
+import以及`workflow.yaml`、`states.yaml`、`labels.yaml`、`schemas/`都只从mirror读取。
+T1从只读pinned mirror复制受控adopted mirror，只给root、`specs/`及一个branch template
+最小写权限，以加入当前packet/evidence；T5直接使用只读mirror。dirty checkout内容不得
+进入任一closure。
 
 T5的PR gate还需要读取implementation git history中的approved spec revision，因此以exact
 PR head创建临时只读验证clone，只overlay上述mirror中的配置/schema；`--repo`指向该clone，
