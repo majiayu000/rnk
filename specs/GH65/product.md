@@ -42,7 +42,10 @@ prepend、resize 或 streaming 时产生可见跳动。
    width、content revision、variant、expansion 和完整测量配置命中。完整配置必须区分每个
    textual child 的 source/style、wrap、tab stop、ellipsis、横纵 overflow、Unicode width
    policy，以及 role/code header、status、block spacing、padding、border 等全部结构性高度
-   输入；任一输入改变都不能复用旧高度，hash collision 不能被视为相等。
+   输入；任一输入改变都不能复用旧高度，hash collision 不能被视为相等。Style 中的每个
+   `f32` 以 `to_bits()` 的 total snapshot 比较：同 bit pattern（包括同一 NaN payload/sign）
+   相等，不同 NaN payload/sign 不等，`+0.0` 与 `-0.0` 不等；不得把含 NaN 时非自反的
+   `PartialEq` 直接标记为 `Eq`。
 3. **B-003 — Deterministic independent instances.** 相同初始状态、输入序列和测量结果必须产生
    相同顺序、高度、anchor、visible slices、follow state 与 revision；两个调用方分别创建的
    message-list state 互不影响，一方的测量、淘汰、滚动或 mutation 不改变另一方的可观察结果。
@@ -85,7 +88,9 @@ prepend、resize 或 streaming 时产生可见跳动。
     growth 后，viewport 继续贴住新的最大 offset；viewport rows=0 时 offset 使用 logical
     bottom end、保留 anchor 且不产生 new-content indicator，恢复非零 rows 后贴住包含期间变化
     的最新 bottom。Paused 时这些变化保留 anchor；当变化在原 viewport 下方新增可见内容时
-    `new_content_below=true`，并持续到用户返回底部。
+    `new_content_below=true`，并持续到用户返回底部。Paused 空列表且 stored anchor 为
+    `None` 后第一次成功产生非空列表的 append/replace 必须保持 Paused，以首条新消息 row 0
+    作为 `ViewportTop` anchor、offset=0、indicator=true；只有显式 bottom 命令可恢复 Following。
 11. **B-011 — Update and isolated invalidation semantics.** 同一 stable ID 的 content revision、
     variant、expansion，或 B-002 任一 textual/structural 配置输入改变时，只使受影响的 exact
     measurement 失效；width 改变为所有消息建立新宽度的测量视图。未改变 exact key 的
@@ -166,13 +171,15 @@ prepend、resize 或 streaming 时产生可见跳动。
 - [ ] 公开 state/API 使用 GH-62 stable ID/revision，并以 row units 表达 viewport、offset、
   anchor 与 partial visible ranges。
 - [ ] Cache key 深度包含 message identity、全部 TextFlow 输入和完整 composite shell 配置，
-  每一项的 isolated invalidation、reuse 和 collision equality 均有 exact tests。
+  每一项的 isolated invalidation、reuse、collision equality、NaN 自反性/payload 与 signed-zero
+  total equality 均有 exact tests。
 - [ ] Prepend 的 exact-top 与 short-content viewport clamp、typed anchor navigation、
   typed insert-index boundary、Following/Paused 各自的 zero-row retention/restoration，以及
   append/stream/resize/expand/collapse/delete 规则均有确定 fixture。
 - [ ] Following/Paused/new-content 状态转换完整覆盖用户 scroll、jump-to-bottom、append、
   typed navigation、zero viewport、streaming、resize、collapse 与 delete；public immutable
-  observation 可读取 indicator/revision/anchor。
+  observation 可读取 indicator/revision/anchor，Paused + None 的首个非空 append/replace
+  transition 逐字段确定。
 - [ ] Initial constructor 的 validation、ordered callbacks、revision=1 observation 与失败不发布
   partial state 均有 exact tests；reuse-cache capacity 小于 active count 时 active handles
   仍全部可见。

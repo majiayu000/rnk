@@ -26,8 +26,12 @@ GH-65: https://github.com/majiayu000/rnk/issues/65
 每项依赖形成 Tech Spec 定义的 `DependencyCompletionRecord`。任一 issue OPEN、final evidence
 缺失/不完整、任一 required commit 未 merge/不在 ancestry、API/path 与 packet 冲突，必须停止
 并先更新/review packet。GH-58 OPEN 时，merged partial/root-cause PR #84 单独不能满足 gate。
-GH-63 不阻塞 index；若已 merge，只通过 closure 做 integration。不得从 spec branch、open
-dependency branch 或推测 API 开始实现。
+2026-07-28 snapshot 绑定 `origin/main`
+`27151646fa9b6713abfdec464d4877e17b3c9d7c`：GH-58/GH-60/GH-63 OPEN、GH-62 CLOSED；PR #145
+MERGED 但仅 GH-63 SP63-T1，message/block/cache 是未完成 skeleton。GH-63 不阻塞 index；
+只有 #63 CLOSED 且 final evidence 的完整 implementation set 全部在 implementation-base
+ancestry 中，closure 才调用完整 typed view；否则使用 exact entry/key/slice 通用 closure。
+不得从 spec branch、open dependency branch 或推测 API 开始实现。
 
 ## GH-57 Critical Coverage Contract
 
@@ -149,7 +153,7 @@ GH65_COVERAGE_ARTIFACT="$GH65_EVIDENCE_DIR/gh57-child-coverage-v1.json" \
 
 ## 实现任务
 
-- [ ] `SP65-T1` 建立可独立编译的 parent/test/state skeleton、validated public value/error/update/observation types、完整 composite measurement cache、shared immutable key handle 与 Fenwick row index。 Covers: B-001, B-002, B-003, B-004, B-011, B-012, B-013, B-014, B-016, B-018, B-019 | Owner: height-index | Done when: parent module 可发现全部 T1 tests，state skeleton 可编译，row/key/handle/config/outcome/update/observation/error/cache/index 合同完整，handle `Clone + Send + Sync + Eq`、deep equality、checked arithmetic、deterministic eviction 与 logarithmic operation counter 测试通过 | Verify: T1 exact tests + checkpoint check
+- [ ] `SP65-T1` 建立可独立编译的 parent/test/state skeleton、validated public value/error/update/observation types、完整 composite measurement cache、shared immutable key handle 与 Fenwick row index。 Covers: B-001, B-002, B-003, B-004, B-011, B-012, B-013, B-014, B-016, B-018, B-019 | Owner: height-index | Done when: parent module 可发现全部 T1 tests，state skeleton 可编译，row/key/handle/config/outcome/update/observation/error/cache/index 合同完整，handle `Clone + Send + Sync + Eq`、bitwise-total deep equality、checked arithmetic、deterministic eviction 与 logarithmic operation counter 测试通过 | Verify: T1 exact tests + checkpoint check
   `File ownership:` 创建并独占
   `src/components/chat/mod.rs`（只增加 message_list declaration/re-export）、
   `src/components/chat/message_list.rs`（parent/module/re-export skeleton）、
@@ -165,6 +169,8 @@ GH65_COVERAGE_ARTIFACT="$GH65_EVIDENCE_DIR/gh57-child-coverage-v1.json" \
   `Verify:`
   `cargo test --workspace --lib --locked components::chat::message_list::tests::measurement_config_covers_textflow_and_shell_inputs -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::measurement_key_uses_all_identity_fields_and_exact_equality -- --exact`；
+  `cargo test --workspace --lib --locked components::chat::message_list::tests::measurement_key_total_equality_is_reflexive_for_nan_payloads -- --exact`；
+  `cargo test --workspace --lib --locked components::chat::message_list::tests::measurement_key_total_snapshot_distinguishes_nan_payloads_and_signed_zero -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::measured_missing_failed_and_cancelled_outcomes_are_closed -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::message_rows_reject_zero_without_measurement_key -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::active_measurement_handles_survive_reuse_cache_eviction -- --exact`；
@@ -175,7 +181,7 @@ GH65_COVERAGE_ARTIFACT="$GH65_EVIDENCE_DIR/gh57-child-coverage-v1.json" \
   把 `state.rs`/`tests.rs` 串行交给 T2；`chat/mod.rs` 与 `message_list.rs` 冻结至 T3 接管，
   types/error/index 永久冻结。禁止 alias、`Any`、default row 或未声明 delayed API。
 
-- [ ] `SP65-T2` 实现 caller-owned state、同步 closed measurement/resize-config mutations、partial slices、typed anchor navigation、stored anchor 与 bottom-follow state machine。 Covers: B-003, B-004, B-005, B-006, B-007, B-008, B-009, B-010, B-011, B-012, B-013, B-014, B-018, B-019 | Owner: message-list-state | Done when: 每个 mutation 先 guard/index/overflow preflight，再 ordered config+measurement candidate，最后一次 commit；invalid insert、typed navigation overriding Following、Following/Paused zero viewport、prepend short-content、delete/resize/stream/expand/collapse/failure 的 observation/flags/anchor/follow/cache/revision 合同由 exact tests 锁定；GH-57 aggregate symbol 可精确执行 | Verify: T2 exact unit tests + checkpoint check
+- [ ] `SP65-T2` 实现 caller-owned state、同步 closed measurement/resize-config mutations、partial slices、typed anchor navigation、stored anchor 与 bottom-follow state machine。 Covers: B-003, B-004, B-005, B-006, B-007, B-008, B-009, B-010, B-011, B-012, B-013, B-014, B-018, B-019 | Owner: message-list-state | Done when: 每个 mutation 先 guard/index/overflow preflight，再 ordered config+measurement candidate，最后一次 commit；invalid insert、typed navigation overriding Following、Paused+None first-nonempty、Following/Paused zero viewport、prepend short-content、delete/resize/stream/expand/collapse/failure 的 observation/flags/anchor/follow/cache/revision 合同由 exact tests 锁定；GH-57 aggregate symbol 可精确执行 | Verify: T2 exact unit tests + checkpoint check
   `File ownership:` 从 T1 串行接管且仅修改
   `src/components/chat/message_list/state.rs`、
   `src/components/chat/message_list/tests.rs`。
@@ -199,6 +205,7 @@ GH65_COVERAGE_ARTIFACT="$GH65_EVIDENCE_DIR/gh57-child-coverage-v1.json" \
   `cargo test --workspace --lib --locked components::chat::message_list::tests::deleted_anchor_selects_next_then_previous_survivor -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::follow_pause_and_explicit_resume_state_machine -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::append_and_stream_growth_follow_or_mark_new_content -- --exact`；
+  `cargo test --workspace --lib --locked components::chat::message_list::tests::paused_without_anchor_first_nonempty_append_and_replace_is_deterministic -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::each_textflow_and_shell_input_invalidates_only_affected_entry -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::resize_variant_expansion_and_structure_cache_contract -- --exact`；
   `cargo test --workspace --lib --locked components::chat::message_list::tests::resize_rebuild_config_is_closed_ordered_and_atomic -- --exact`；
@@ -222,7 +229,8 @@ GH65_COVERAGE_ARTIFACT="$GH65_EVIDENCE_DIR/gh57-child-coverage-v1.json" \
   `tests/message_list_render.rs`、
   `tests/virtual_scroll_compat.rs`。
   `Dependencies:` SP65-T2。若 GH-62 merged 后 `chat/mod.rs` 已存在，只增加 declaration/export，
-  不重写其 types；若 GH-63 已 merge，只在测试 closure 内调用其 public view。
+  不重写其 types；GH-63 未 closure-complete 时测试通用 closure，只有 #63 CLOSED 且完整
+  implementation ancestry verified 后才在测试 closure 内调用完整 public typed view。
   `Verify:`
   `cargo test --test message_list_public_api --locked message_list_public_surface_is_typed -- --exact`；
   `cargo test --test message_list_public_api --locked closed_error_categories_are_exhaustive_and_keep_sources -- --exact`；
@@ -272,7 +280,7 @@ GH65_COVERAGE_ARTIFACT="$GH65_EVIDENCE_DIR/gh57-child-coverage-v1.json" \
   `cargo fmt --all -- --check`；
   `cargo check --workspace --all-targets --all-features --locked`；
   `GH65_COVERAGE_MODE=fixture cargo test --workspace --all-targets --all-features --locked`；
-  `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`；
+  `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -A clippy::collapsible_if -A clippy::manual_is_multiple_of`；
   `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --locked`；
   `cargo bench --bench message_list -- message_list_10k`。
   verifier 必须报告 schema/head/base/merge-base/raw SHA/ledger exact set 全匹配、changed
@@ -326,10 +334,12 @@ Implementation Gate -> SP65-T1 -> SP65-T2 -> SP65-T3 -> SP65-T4 -> SP65-T5
   `virtual_scroll_view`。
 - Cache key 必须完整包含 stable ID/revision/variant/expansion、每个 GH-58
   `TextFlowCacheIdentity` 与全部 shell structural segments，并做 deep equality；每项配置只使
-  affected entry 失效，结构变化只重建 index，不让 unchanged key 全量重测。
+  affected entry 失效，结构变化只重建 index，不让 unchanged key 全量重测。含 `f32` 的 Style
+  通过 exhaustive bitwise-total snapshot 比较，不能把浮点 `PartialEq` 直接声明为 `Eq`。
 - Mutation 先 stage 全部测量和 index，成功后一次 commit；missing/failure/cancellation/stale/
   overflow 都 typed 且逐字段零 mutation。
-- Paused 只可由显式到达底部/jump 恢复 Following；resize/delete/collapse 不能暗中恢复。
+- Paused 只可由显式到达底部/jump 恢复 Following；resize/delete/collapse 不能暗中恢复；
+  Paused + None 后首个非空 append/replace 固定首条 row 0 / offset 0 / `ViewportTop` / indicator=true。
 - 删除 anchor 的 next-then-previous、typed anchor navigation、zero-viewport retention、
   short-content viewport clamp 与 height-shrink anchor clamp 规则不得由实现自由选择。
 - 首版 measurement callback 同步返回 closed measured/missing/failed/cancelled outcome，不发布
@@ -342,7 +352,7 @@ Implementation Gate -> SP65-T1 -> SP65-T2 -> SP65-T3 -> SP65-T4 -> SP65-T5
 - GH-58 为每个 textual child 提供 TextFlow；完整 message height 还必须计入全部 shell
   structural rows。GH-63 只经 exact entry/key/slice render closure；GH-60 保持
   candidate frame error 原子性；GH-62 提供真实 ID/revision。
-- 当前 spec base 缺少 required implementation。Implementation Gate 与 source-drift audit
+- 当前 spec base 的 GH-58/GH-60 仍 OPEN、GH-63 仅 T1。Implementation Gate 与 source-drift audit
   是硬阻塞，不得把本文伪签名当作已声明 API。
 - 目标仓库不 vendor `workflow.yaml` 或 SpecRail checker。Spec 验证必须记录所用 SpecRail
   source checkout 的 exact commit，并以该 pack 为 `--repo`、本 packet 为 `--spec-dir` 运行
