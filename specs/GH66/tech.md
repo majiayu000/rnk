@@ -70,15 +70,16 @@ pub trait ScrollbackSink {
 
 理由：实际 `Terminal::println`、`Write`、flush、render loop 和 terminal enter/exit 均为同步
 `std::io::Result`；现有 tokio 只服务 command/background runtime，`AppContext::println`
-则是无 ack queue。同步调用仍可真实取消：coordinator每次attempt以checked counter创建
-`ScrollbackCancellationGeneration(NonZeroU64)`与新
-`ScrollbackCancellationToken(Arc<AttemptCancellationState>)`；request携带generation/token，
-session/event ingress或测试线程取得同generation的`InlineCancellationHandle`。attempt结束
-立即revoke；handle的`cancel()`原子比较generation并返回`Applied | StaleGeneration`，旧clone
-不能影响retry。shutdown只signal当前generation。request还携带
-`ScrollbackCommitControl`；outer call先取得其RAII permit，custom sink可调用
-`try_begin_nested_attempt()`并安全得到typed `ReentrantCommit`，不需要第二个`&mut shell`。
-generation/token/control均为concrete private-field值，不是任意callback。
+则是无 ack queue。native cancellation采用公开两阶段：阻塞前coordinator以checked counter
+登记`ScrollbackCancellationGeneration(NonZeroU64)`，返回不借用coordinator的non-clone
+`NativeAttemptTicket`与`InlineCancellationHandle: Clone + Send + Sync`；调用方保留/跨线程移动
+handle并把ticket交给阻塞commit/retry。ticket绑定coordinator、intent、generation与concrete
+`Arc<AttemptCancellationState>`；foreign/stale/wrong-intent ticket typed拒绝且零terminal mutation。
+handle的`cancel()`只signal exact generation并返回`Applied | StaleGeneration`。成功、失败、
+unwind与未消费ticket Drop均compare-generation revoke；Drop只清理registration，下一入口reap，
+不写terminal；retry必须fresh prepare，旧clone不能影响新generation。不存在global/current-handle endpoint。
+request携带generation/token与`ScrollbackCommitControl`；outer call取得RAII permit，custom sink可调用
+`try_begin_nested_attempt()`并得到typed `ReentrantCommit`，无需第二个`&mut shell`；全部是concrete private-field值而非任意callback。
 
 `ScrollbackSink` 不接受 `Any`、字符串 error、任意 callback 或 boxed future。生产
 `NativeScrollbackSink<'a>`是coordinator内部私有适配器，借用同一session的`Terminal`与ledger；
@@ -98,6 +99,7 @@ ScrollbackContentIdentity { sha256: [u8; 32] } // domain + exact bytes
 ScrollbackThemeIdentity { sha256: [u8; 32] } // canonical resolved terminal style tokens
 ScrollbackProjectionContext { width: NonZeroU16, theme_identity: ScrollbackThemeIdentity }
 NativeAttemptRecoveryRecord { recovery_id, commit_id, private_content, digest, projection }
+NativeAttemptTicket { coordinator_id, intent, generation, state }; InlineCancellationHandle { generation, state } // private
 ScrollbackCommitRequest<'a> {
   commit_id, content, projection, cancellation_generation, cancellation, control
 }
@@ -524,32 +526,33 @@ session owner。native session内部拥有`Terminal`、nonzero confirmed ledger�
 `InlineTerminalSnapshot`和逐阶段lifecycle：
 
 ```text
-InlineSessionCoordinator::try_enter(fresh_shell_config, namespace, session_config)
-  -> Result<InlineSessionCoordinator, InlineSessionEnterError>
-InlineSessionCoordinator::try_enter_restored(
-  shell_config, namespace, InlineSessionProvenance, &ConversationState, InlineRenderContext<'_>, session_config
-) -> Result<InlineSessionCoordinator, InlineSessionEnterError>
+InlineSessionCoordinator::try_enter(fresh_shell_config, namespace, session_config) -> Result<Self, InlineSessionEnterError>
+InlineSessionCoordinator::try_enter_restored(shell_config, namespace, provenance, &ConversationState, render, session_config)
+  -> Result<Self, InlineSessionEnterError>
 
 bootstrap(&mut self, &ConversationState, InlineRenderContext<'_>) -> Result<...>
 synchronize(&mut self, &ConversationState, &ApplyOutcome, InlineRenderContext<'_>) -> Result<...>
-try_commit_next_native(&mut self) -> Result<InlineCommitStep, ...>
-retry_not_committed_native(&mut self, &ScrollbackCommitId) -> Result<InlineCommitStep, ...>
+prepare_next_native_attempt(&mut self) -> Result<(NativeAttemptTicket, InlineCancellationHandle), ...>
+try_commit_next_native(&mut self, NativeAttemptTicket) -> Result<InlineCommitStep, ...>
+prepare_not_committed_retry_native(&mut self, &ScrollbackCommitId) -> Result<(NativeAttemptTicket, InlineCancellationHandle), ...>
+retry_not_committed_native(&mut self, &ScrollbackCommitId, NativeAttemptTicket) -> Result<InlineCommitStep, ...>
 try_commit_next_with<S: ScrollbackSink>(&mut self, &mut S) -> Result<...>; retry_not_committed_with<S: ScrollbackSink>(&mut self, id, &mut S) -> Result<...>
 reconcile_durable<S: DurableScrollbackSink>(&mut self, &mut S) -> Result<InlineRecoveryReport, ...>
 resolve_unknown<A: UnknownResolutionAuditSink>(&mut self, id, resolution, &mut A) -> Result<...>
-current_cancellation_handle(&self) -> Option<InlineCancellationHandle>
-try_suspend(&mut self) -> InlineSuspendOutcome
-try_resume(&mut self) -> InlineResumeOutcome
+try_suspend(&mut self) -> InlineSuspendOutcome; try_resume(&mut self) -> InlineResumeOutcome
 observe(&self) -> InlineShellObservation<'_>
 render_live(&mut self, &Element) -> Result<(), InlineSessionError>; poll_event(&mut self, Duration) -> Result<Option<Event>, InlineSessionError>
 try_shutdown(&mut self) -> InlineShutdownOutcome; try_recover_poisoned_lease(backend) -> Result<(), InlineLeaseRecoveryError>
 ```
 
-不公开shell/session/sink的可变borrow。每个wrapper先验证coordinator typestate，再在private实现中
-安全拆借disjoint `&mut shell`/`&mut session`，native commit只在该scope构造sink并在render前
-drop；durable wrapper同样持有single-in-flight guard。crate外exact test只经coordinator完成
-fresh bootstrap、delta、native/durable commit、retry、reconcile、两种resolution、per-attempt
-cancel、suspend/resume、render和shutdown，证明public surface实际可调用，而非仅能取得sink。
+prepare只登记一个generation-bound intent/state且不改变shell phase或terminal；已有live
+registration时第二次prepare返回typed `AttemptAlreadyPrepared`且零mutation。ticket消费时
+先对coordinator identity/intent/generation/state做compare-exchange，再安全拆借disjoint
+`&mut shell`/`&mut session`并构造private sink。所有出口scope guard compare-generation revoke；
+未消费ticket Drop后下一入口清除同一revoked registration。durable wrapper仍持有single-in-flight
+guard。crate外PTY exact经public coordinator在线程间保留handle、把ticket交给阻塞native call，
+以zero-byte与post-accept子case覆盖`NotCommitted`/`Unknown`、exact-generation cancel；zero-byte
+retry取得fresh generation，旧clone stale，未消费ticket Drop零terminal且不阻塞下一次prepare。
 
 `InlineShutdownOutcome`闭集为`Complete(report) | RetryRequired(report) | AlreadyShutdown`；
 `InlineSuspendOutcome`闭集为`Suspended(report) | RetryRequired(report) | AlreadySuspended`；
@@ -631,7 +634,7 @@ cursor/paste恢复prior值、无alt-screen/focus/mouse序列、style已reset。
 | B-004 | sink trait/outcome | crate-outside exact `closed_scrollback_outcomes_are_exhaustive` |
 | B-005 | stable receipt + per-attempt disposition | lib exact `native_confirmed_dedup_is_process_local` |
 | B-006 | primary classification + immediate repaint cleanup | lib exact `partial_write_flush_broken_pipe_outcomes_are_typed`; PTY exact |
-| B-007 | per-attempt cancellation generation/Unknown | lib exact `partial_write_flush_broken_pipe_outcomes_are_typed`; retry exact |
+| B-007 | two-stage ticket + exact-generation cancellation/Unknown | lib exact `partial_write_flush_broken_pipe_outcomes_are_typed`；non-GH57 crate-outside PTY exact `native_attempt_ticket_cancellation_is_public_and_generation_bound` |
 | B-008 | native bounded ledger | lib exact `native_confirmed_dedup_is_process_local` |
 | B-009 | O(n) bootstrap + disposition-first delta/delete phases | lib exact `duplicate_terminal_render_and_delta_are_single_effect` |
 | B-010 | committed/manual-resolved atomic live removal | lib exact `gh66_scrollback_lifecycle_contract` |
@@ -645,7 +648,7 @@ cursor/paste恢复prior值、无alt-screen/focus/mouse序列、style已reset。
 | B-018 | progressive-short/write-zero/CRLF/reset/delimiter matrix | lib exact `partial_write_flush_broken_pipe_outcomes_are_typed` |
 | B-019 | safe control reentry/concurrency | lib exact `revision_overflow_and_reentrancy_are_atomic`; durable integration exact |
 | B-020 | checked counters/illegal transition | lib exact `revision_overflow_and_reentrancy_are_atomic` |
-| B-021 | coordinator suspend/resume/cancel/shutdown | prelude exact `inline_chat_shell_public_surface_executes`; shutdown exact |
+| B-021 | coordinator prepare/consume/suspend/resume/shutdown | prelude exact `inline_chat_shell_public_surface_executes`；non-GH57 native-ticket PTY exact；shutdown exact |
 | B-022 | shared legacy lease + restoration DAG | PTY exact `inline_pty_restores_terminal_on_normal_cancel_failure_and_panic` |
 | B-023 | public suspend/retry-flush/contention PTY | same PTY exact |
 | B-024 | sanitizer + SHA-256 audit redaction | lib exact `sanitizer_rejects_terminal_control_injection` |
@@ -665,7 +668,8 @@ inline_chat_shell --locked <NAME> -- --exact`；PTY统一为`cargo test --test i
 ## GH-57 Coverage Contract
 
 `tasks.md`包含唯一`gh57-critical-paths-v1`：version=1、issue=66、22个unique
-`file+name+verification_command`，严格等于T2–T7创建的exact tests；集合和命令不得由环境传入。
+`file+name+verification_command`。ledger中每条命令须在T2–T7出现；显式标记non-GH57的额外
+contract exact必须另行执行且禁止混入这22项。集合和命令不得由环境传入。
 producer读取committed ledger、merge-base diff与真实raw，生成canonical
 `gh57-child-coverage-v1`。artifact固定包含schema/child、PR/head/base/merge-base、HEAD commit
 timestamp、repository/tool、normalized collect command、稳定
@@ -732,7 +736,7 @@ test -z "$(git status --porcelain)"
 3. product B-ID = tech mapping = tasks `Covers:` union。
 4. planned-changes唯一、issue=66、complete=true、paths/spec_refs为唯一repo-relative值。
 5. tasks ownership DAG无并行shared writer；每task有compile checkpoint。
-6. critical ledger set与tasks实际创建的exact tests相等。
+6. critical ledger set与tasks中未标记non-GH57的exact commands相等；额外contract exact另跑。
 7. 提取packet全部mandatory shell fence，逐个`bash -n`；正fixture exit 0，每个删env/命令失败/
    dirty/provenance drift/portable-temp失败的负fixture必须nonzero，且后续sentinel不得执行。
 8. 从`https://github.com/majiayu000/specrail.git` checkout
@@ -791,5 +795,4 @@ reviewThreads、independent review、merge state和SpecRail PR gate。spec-only 
 
 - 当前只完成spec planning；不授权production edit、approval或merge。
 - implementation owner必须先交dependency/preflight证据，再按tasks串行ownership执行。
-- verification owner必须与writers分离，绑定current exact head重跑全部commands；writer自报、
-  old artifact或visual demo不能替代。
+- verification owner必须与writers分离，绑定current exact head重跑全部commands；writer自报、old artifact或visual demo不能替代。

@@ -62,7 +62,8 @@ python3 "$GH66_SPECRAIL_CHECKOUT/checks/check_workflow.py" \
 静态ledger gate要求唯一marker、22项、row keys恰为
 `file/name/verification_command`、repo-relative file、unique pair/command、每条含
 `-- --exact`；lib/integration/PTY target必须与file/name机械一致，coverage项唯一带
-`GH66_COVERAGE_MODE=fixture`。解析T2–T7 literal exact tests后必须与ledger 22/22严格相等；
+`GH66_COVERAGE_MODE=fixture`。ledger的22条命令必须逐字出现在T2–T7；显式标记
+`non-GH57 contract exact`的额外命令另行运行且不得进入ledger，其他额外literal exact禁止；
 既有exact名字内的case matrix是合同的一部分：删除或跳过任一R2场景即使测试名仍通过也算失败。
 implementation时每项先用`--list --exact --include-ignored`证明matched=1，再执行原命令并要求
 `1 passed; 0 failed; 0 ignored`。
@@ -88,7 +89,7 @@ continue_once correction的十项正/反例闭环（每个existing exact test保
 | R3-F003 | B-021/B-023 public suspend/resume | public Running→Suspended→Running | wrong typestate或stage failure保持retryable、非Running |
 | R3-F004 | B-011/B-012 audit-first lookup | exact duplicate两choice返回same receipt | conflicting duplicate零mutation |
 | R3-F005 | B-010 TreatAsCommitted transition | audit后atomic live removal且replay无第二effect | audit failure保留live/blocker |
-| R3-F006 | B-007 cancellation generation | current handle取消当前attempt，retry token fresh | stale clone不能取消retry/shutdown后attempt |
+| R3-F006 | B-007 two-stage cancellation | retained handle取消ticket-bound attempt，retry fresh | stale/foreign/drop ticket零terminal且不能取消后续 |
 | R3-F007 | B-022/B-023 shutdown DAG | retried writer触发fresh flush再release | old Completed flush不得授权release |
 | R3-F008 | B-002/B-012/B-024 digest secrecy | domain SHA-256稳定验证 | observation/Debug/Display/audit不得含secret bytes |
 | R3-F009 | B-022/B-028 shared lease | coordinator与legacy串行正常 | legacy/controller/panic contention不能绕过 |
@@ -191,8 +192,8 @@ continue_once correction的十项正/反例闭环（每个existing exact test保
     frozen lookup顺序、manual audit与reentry evidence；
     将`state.rs`/`inline.rs`/integration和lib tests交T5。
 
-- [ ] `SP66-T5` 实现 durable recovery、single coordinator/retryable shutdown、observation和composer/focus。Covers: B-011, B-012, B-013, B-014, B-015, B-016, B-019, B-021, B-025, B-026 | Owner: `inline-recovery-interaction-owner` | Done when: recovery/coordinator/shutdown/interaction合同完整 | Verify: T5五个exact tests与公共checkpoint
-  - Covers: B-011, B-012, B-013, B-014, B-015, B-016, B-019, B-021, B-025, B-026。
+- [ ] `SP66-T5` 实现 durable recovery、single coordinator/retryable shutdown、observation和composer/focus。Covers: B-007, B-011, B-012, B-013, B-014, B-015, B-016, B-019, B-021, B-025, B-026 | Owner: `inline-recovery-interaction-owner` | Done when: recovery/coordinator/shutdown/interaction合同完整 | Verify: T5五个exact tests与公共checkpoint
+  - Covers: B-007, B-011, B-012, B-013, B-014, B-015, B-016, B-019, B-021, B-025, B-026。
   - Dependencies: SP66-T4 handoff与最终merged GH64 composer API。
   - File ownership: 从T4接管 `src/components/chat/inline/state.rs`、
     `src/components/chat/inline.rs`、`src/components/chat/inline/tests.rs`、
@@ -200,9 +201,11 @@ continue_once correction的十项正/反例闭环（每个existing exact test保
   - Done when: restored constructor消费validated GH62 Conversation+recovery render，按source order
     seed非空完整IDs；durable再ID-first lookup frozen record；unclean native有exact record才
     recoverable Unknown，否则UnrecoverableUnknown且禁TreatAsCommitted；
-    coordinator不公开内部mutable sink/shell borrow，wrapper可实际执行bootstrap/synchronize、
-    native/durable commit、retry/reconcile/resolve/per-attempt cancel/public suspend/resume/render/
-    shutdown并安全拆借字段；stale cancellation clone不能影响retry；restoration DAG中writer
+    coordinator不公开内部mutable sink/shell borrow；native commit/retry先返回不借用它的
+    non-clone generation-bound ticket与`Clone + Send + Sync`handle，再消费ticket执行阻塞write；
+    foreign/stale/wrong-intent typed拒绝，全部出口/未消费Drop compare-generation revoke且零意外
+    terminal mutation；stale clone不能影响fresh retry。其余wrapper可执行bootstrap/synchronize、
+    durable commit/reconcile/resolve/public suspend/resume/render/shutdown；restoration DAG中writer
     retry重置flush/release，fresh flush后才release；composer/focus typed且draft安全。
   - Verify:
     `cargo test --test inline_chat_shell --locked durable_sink_cross_retry_and_restart_reconstruction_is_exactly_once -- --exact`；
@@ -234,8 +237,8 @@ continue_once correction的十项正/反例闭环（每个existing exact test保
   - Handoff: 保存public inventory/docs/example semantic outputs与legacy compatibility；
     停止写所有paths后交T7。
 
-- [ ] `SP66-T7` 增加四路径PTY、current-head coverage producer/validator并执行完整本地验证。Covers: B-021, B-022, B-023, B-024, B-029, B-030, B-031 | Owner: `inline-quality-evidence-owner` | Done when: PTY四路径、deterministic coverage与全部current-head gates通过 | Verify: PTY、coverage produce/validate、full tests/check/docs
-  - Covers: B-021, B-022, B-023, B-024, B-029, B-030, B-031。
+- [ ] `SP66-T7` 增加四路径PTY、current-head coverage producer/validator并执行完整本地验证。Covers: B-007, B-021, B-022, B-023, B-024, B-029, B-030, B-031 | Owner: `inline-quality-evidence-owner` | Done when: PTY四路径、deterministic coverage与全部current-head gates通过 | Verify: PTY、coverage produce/validate、full tests/check/docs
+  - Covers: B-007, B-021, B-022, B-023, B-024, B-029, B-030, B-031。
   - Dependencies: SP66-T1–T6完成且所有writers停止。
   - File ownership: 独占新增 `tests/inline_chat_shell_pty.rs`；从T5接管
     `tests/inline_chat_shell.rs`只增加coverage producer/validator及负例；production/example/
@@ -246,7 +249,10 @@ continue_once correction的十项正/反例闭环（每个existing exact test保
     bytes验证raw/cursor/paste prior值、无altscreen/
     focus/mouse mode序列、SGR reset及first-write failure后立即repaint；repaint/restoration失败
     必须由typed cleanup/report使测试失败；模拟old flush已Completed后output stage retry，必须
-    捕获第二次flush发生在lease release之前；
+    捕获第二次flush发生在lease release之前；crate-outside PTY以zero-byte/post-accept两个barrier
+    证明native write已阻塞，另一线程用public handle取消exact generation并分别断言
+    NotCommitted/Unknown；zero-byte retry为fresh generation，旧clone只能Stale，未消费ticket
+    Drop不写terminal且不阻塞下一次prepare；
     `gh66_current_head_coverage_contract`从committed ledger+diff+raw生成确定性
     `gh57-child-coverage-v1`，validate重算全部sets/hash/percent；critical exact set逐项100%，
     changed executable>=80%；fixture含全部negative schema/provenance/threshold cases；collect/
@@ -255,6 +261,8 @@ continue_once correction的十项正/反例闭环（每个existing exact test保
     `bash -n`，failure/缺env/dirty/drift/路径负fixture必须nonzero且不运行sentinel。
   - Verify:
     `cargo test --test inline_chat_shell_pty --locked inline_pty_restores_terminal_on_normal_cancel_failure_and_panic -- --exact`；
+    non-GH57 contract exact：
+    `cargo test --test inline_chat_shell_pty --locked native_attempt_ticket_cancellation_is_public_and_generation_bound -- --exact`；
     `GH66_COVERAGE_MODE=fixture cargo test --test inline_chat_shell --locked gh66_current_head_coverage_contract -- --exact`；
     tech coverage collect/produce/validate invocations；
     `cargo test --workspace --all-targets --all-features --locked`；
