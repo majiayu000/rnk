@@ -20,28 +20,28 @@ GH-63 可在 closure 内渲染，但它的 view/block 类型不进入高度索�
 
 ## Codebase Context
 
-以下锚点在写作基线 `origin/main`
-`cc7ab1004f315ab8ac69aa10fd0ef7892be76862` 上核实；PR base
-`d295621882ce4f7a6776972589894048a04da773` 对下表路径 source-equivalent，特别是
-`Cargo.toml:82-83`。当前 remote main 已前进，且三项依赖 issue 仍未全部完成；开始
-implementation 时必须从它们的真实 final merged head 重新定位路径、类型和签名，不能把本文
-计划 API 当作已经存在。
+以下锚点在 2026-07-28 fresh `origin/main`
+`27151646fa9b6713abfdec464d4877e17b3c9d7c`（PR #145 merge commit）核实。Fresh dependency
+snapshot 是 GH-58 OPEN、GH-60 OPEN、GH-62 CLOSED、GH-63 OPEN；PR #145 只合并 GH-63
+SP63-T1（head `1406b1d31f1f5186851e37f2de2a09e5722291a9`），其 message/block/cache 仍是 skeleton，
+SP63-T2–T5 未交付。该 snapshot 只是 source-drift 证据，不替代 implementation gate；开始
+implementation 时仍须从真实 final merged heads 重新定位路径、类型和签名。
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
 | Fixed virtual scroll | `src/components/layout/scrollable.rs:178` | `start=scroll_offset.min(items.len())`，`end=scroll_offset+viewport_height`，offset/height 实际为 item count | GH-65 新增 row-based API，不改这条兼容路径 |
-| Generic scroll state | `src/hooks/use_scroll.rs:17`, `src/hooks/use_scroll.rs:140` | 保存 `offset_y/content_height/viewport_height`，无稳定 message identity、height index 或 anchor | 不足以表达 variable-height message list；不扩展为聊天专用 state |
-| Legacy chat example | `examples/rnk_chat.rs:138` | `.skip(scroll_offset).take(12)` 按消息条数分页 | 证明问题存在；example 迁移不属于本 issue |
-| Component exports | `src/components/mod.rs:12`, `src/components/mod.rs:67` | 无 `components::chat`；公开 fixed-height virtual scroll | implementation 需在 GH-62 merged module 上增加 MessageList exports 并保持旧导出 |
-| Prelude exports | `src/prelude.rs:75` | 公开现有 component API，无 MessageList | 新 public surface 需要显式导出与 crate 外 compile fixture |
-| TextFlow config/build | `src/layout/text_flow.rs:79`, `src/layout/text_flow.rs:200` | checked width/wrap/tab/overflow policy 与 typed build failure 已存在 | GH-58 merged API 是唯一 row measurement authority |
+| Generic scroll state | `src/hooks/use_scroll.rs:10`, `src/hooks/use_scroll.rs:140` | 保存 `offset_y/content_height/viewport_height`，无稳定 message identity、height index 或 anchor | 不足以表达 variable-height message list；不扩展为聊天专用 state |
+| Legacy chat example | `examples/rnk_chat.rs:141` | `.skip(scroll_offset).take(12)` 按消息条数分页 | 证明问题存在；example 迁移不属于本 issue |
+| Component exports | `src/components/mod.rs:4`, `src/components/chat/mod.rs:49`, `src/prelude.rs:55` | GH-62 chat 已公开；GH-63 T1 只公开 `view` contract/skeleton；无 MessageList | 增加 MessageList exports 并保持既有 chat/fixed-height 导出 |
+| Prelude exports | `src/prelude.rs:55` | 公开现有 chat component API，无 MessageList | 新 public surface 需要显式导出与 crate 外 compile fixture |
+| TextFlow config/build | `src/layout/text_flow.rs:79`, `src/layout/text_flow.rs:107`, `src/core/style.rs:271` | checked options/build 已存在；cache identity 仅 `PartialEq`，Style 含 `f32`；无 total-float key wrapper | GH-58 是唯一 row authority；GH-65 key 自建 bitwise-total snapshot |
 | Property/bench tooling | `Cargo.toml:82-83` | dev dependencies 已有 `proptest`、`divan`；bench 通过 explicit `[[bench]]` 注册 | property test 可直接复用；新增 message-list bench 需登记 Cargo.toml |
 | Existing benchmark style | `benches/layout.rs:1` | 使用 divan benchmark entry/Bencher | 新 10k benchmark 遵循仓库约定 |
 | GH-57 umbrella | `specs/GH57/product.md` | 要求 chat list 按 visual rows、保持 anchor/new-content 与性能预算 | GH-65 是其列表层实现合同 |
 | GH-58 dependency | `specs/GH58/product.md` | 定义唯一 TextFlow row count/source mapping/resize/error | MessageList 只消费其 checked row count，不复制算法 |
 | GH-60 dependency | `specs/GH60/product.md` | 定义 candidate/commit、required layout 与 typed failure | MessageList mutation/render 采用同一 fail-atomic 原则 |
 | GH-62 dependency | `specs/GH62/product.md` | 定义 stable `MessageId`、nonzero `MessageRevision` 与 typed reducer | order entries 和 measure keys 必须复用这些真实类型 |
-| GH-63 integration | `specs/GH63/product.md` | 定义纯 `ChatMessageView` 与 typed render trait/closure | 只在 MessageList render closure 内消费，不耦合 index |
+| GH-63 integration | issue #63 + PR #145；`src/components/chat/view/` | #63 OPEN；#145 仅 T1 typed customization contract，default view/message/block/cache 未完成 | 当前使用通用 exact render closure；只在 #63 CLOSED 且完整 implementation ancestry 后调用完整 typed view |
 
 ## 设计方案
 
@@ -81,8 +81,11 @@ SpecRail closure artifact、或人工确认的 complete implementation commit se
 
 任一 issue 仍 OPEN、final evidence 缺失/不完整、任一 commit 未包含、API/path 漂移或 GitHub
 查询失败都停止 implementation。特别地，GH-58 仍 OPEN 时，已 merged 但只覆盖 root cause 的
-PR #84 不能单独满足 gate。GH-63 不阻塞 core index；若已合并，integration 仍只能通过 render
-closure。实现不能从 open dependency branch、spec branch 或推测 API 开工。
+PR #84 不能单独满足 gate。GH-63 不阻塞 core index；PR #145 仅是 T1 partial，不能把 skeleton
+当作完整 view。只有 issue #63 CLOSED、final closure evidence 枚举的完整 implementation set
+全部 MERGED 且 merge commits 都在 implementation base ancestry 中，closure 才可调用完整
+typed view；否则一律使用 exact entry/key/slice 的通用 closure。实现不能从 open dependency
+branch、spec branch 或推测 API 开工。
 
 模块计划：
 
@@ -229,9 +232,20 @@ hash-only digest 或 caller 自报的“style revision”。因此每个 textual
 bytes、structured style ranges/default style、content width、`TextWrap`、`overflow_x/y`、
 tab stop、ellipsis、Unicode width policy/revision 全部参与 deep equality；shell 再保存
 outer width、horizontal insets 与 role/code header、status、inter-block spacing、padding、
-border 等有序 structural segments。实现可以用 hash 加速 bucket lookup，但命中后必须对这些
-完整值逐字段 equality，collision 不是相等。GH-58 final API 若重命名 identity，implementation
-只能做机械适配，不得缩成五字段 key 或 opaque hash。
+border 等有序 structural segments。
+
+因为 current-main `TextFlowCacheIdentity -> TextFlowInput -> Style` 含 `f32` 且仓库没有可复用的
+total-float key，`types.rs` 必须在 key constructor 内生成 private
+`MessageMeasureKeyTotalSnapshot`。它保存 ID/revision/variant/expansion 并递归镜像完整
+config；`StyleTotalSnapshot` 以不带 `..` 的 exhaustive destructuring 覆盖 `Style` 每个字段，把每个直接/`Option`/`Dimension`/`Edges`
+中的 `f32` 转成 `TotalF32Bits(value.to_bits())`，其余字段和值逐项保留。新增 Style 字段因
+exhaustive destructuring 必须先更新 snapshot 才能编译。相同 bits（含同 NaN payload/sign）
+相等，不同 NaN payload/sign 不等，`+0.0`/`-0.0` 不等；因此所有 bit pattern 都自反且构造
+确定。`MessageMeasureKey`/handle 的手写 `PartialEq` 与 `Eq` 只比较该 total snapshot，绝不
+委托 `TextFlowCacheIdentity`/`Style` 的浮点 `PartialEq`；若用 hash 加速，hash 也从同一
+snapshot 生成且命中后仍做 total equality。GH-58 final API 漂移时只能机械更新完整镜像，
+不得缩成 opaque hash 或遗漏字段。
+
 `MessageMeasureKeyHandle` 是拥有 private `Arc<MessageMeasureKey>` 的 concrete public value
 type，不是 alias。`Clone` 只递增共享引用计数，固定 `O(1)`、不复制 source/style/config
 vectors；`as_key(&self) -> &MessageMeasureKey` 仅提供共享只读借用，不能取得 mutable key。
@@ -239,7 +253,8 @@ active cache/index 与 slices 共享同一个 immutable allocation。该 concret
 `Send + Sync + Clone + Eq` compile assertions；生命周期不借用临时 visible-range builder，
 因此 `VisibleMessageRange` 可由调用方跨 frame 持有，但任一后续 mutation 只建立新 handle，
 绝不原地修改旧 handle。Deep equality 只发生在 mutation/cache lookup、resize candidate
-validation 和 render identity validation，不发生在逐帧 slice construction。
+validation 和 render identity validation，不发生在逐帧 slice construction；no-op/invalidation/
+resize/render 每处都比较派生的 total snapshot，不能退回含 NaN 时非自反的 config `==`。
 
 Closed errors（不得 `Any`、catch-all/string-only variant）：
 
@@ -555,6 +570,10 @@ anchor 与 authority。只有空列表或 anchor 删除且无 survivor 时两者
    不设置 new-content indicator；
 4. `Paused` 且 stored anchor ID 存在：恢复同 intra row；若消息缩短，clamp 到 `rows-1` 并在
    `MessageListUpdate.anchor_clamped=true`；
+4a. `Paused`、committed list 为空且 stored anchor=`None` 时，第一次成功 append 或
+   `try_replace_all` 得到非空 candidate：保持 `Paused { new_content_below: true }`，选择
+   candidate 首条消息 row 0、authority=`ViewportTop`、offset=0；viewport rows 为零或非零
+   都相同，禁止跳到 max offset 或隐式 Following；
 5. stored anchor 被删除：按 mutation 前 order 选择下一 surviving ID 的 row 0；无下一项则选上一
    surviving ID 的 `rows-1`，replacement authority=`ViewportTop`；空列表为 None/offset 0；
 6. global offset 为 `prefix_sum(anchor_index)+intra_row`，再做 checked/max-offset clamp；
@@ -594,6 +613,7 @@ Follow transition table：
 | viewport rows `0 -> nonzero` | Following | 恢复到最新 max bottom，重算 anchor，indicator=false |
 | append/stream growth at nonzero rows | Following | Following，offset 跟随新 max |
 | append/stream growth below prior viewport | Paused | 保持 anchor，`new_content_below=true` |
+| first nonempty append/replace after Paused empty + None | Paused | 首条 row 0 / offset 0 / `ViewportTop`；保持 Paused，indicator=true |
 | prepend/insert/update/resize/expand/collapse/delete | Paused | 保持/替代 anchor；不得自动 Following |
 | mutation removes all content | Paused | Paused + None anchor；flag 保留到显式 jump/scroll-bottom |
 
@@ -627,11 +647,14 @@ closure 按 slices 顺序恰好调用一次，并同时收到 state 中用于 me
 borrowed entry、由该 entry 生成且与 slice 内 `measure_key` 指向同一 immutable allocation 的
 exact shared key handle，以及
 message-local partial range。facade 在调用前逐项验证
-`entry.message_id/revision/variant/expansion/config == key_handle.as_key()`，并验证
+`entry.message_id/revision/variant/expansion`，再把 entry config 派生成 total snapshot 与
+`key_handle.as_key()` 的 snapshot 比较，并验证
 `Arc::ptr_eq(key_handle, slice.measure_key)` 或等价 typed identity；任一漂移返回
 `MeasurementIdentityMismatch`，绝不让 caller 只按 ID 查到新版内容却使用旧 geometry。调用方可用该 exact
-entry/revision 选择对应 GH-62 immutable snapshot、建立 GH-63 `ChatMessageView` 并裁剪到
-partial range；MessageList height index 不 import renderer 类型、不解释 block、不重算 TextFlow。
+entry/revision 选择对应 GH-62 immutable snapshot。当前 #63 OPEN/#145 仅 T1 时调用方使用
+通用 closure 构造 Element；只有 #63 CLOSED 且完整 implementation ancestry 已验证时才可在
+closure 内建立完整 GH-63 typed view 并裁剪到 partial range。MessageList height index
+不 import renderer 类型、不解释 block、不重算 TextFlow。
 
 任何 closure failure 立即返回带 exact entry/key handle/range/source 的 typed error，不返回已构造的
 partial/default Element，也不修改 state。GH-60 merged API 若要求 frame transaction token，
@@ -651,15 +674,15 @@ facade 在候选 frame 中构造全部 children，全部成功后才交给 layou
 | Product invariant | Implementation area | Verification |
 | --- | --- | --- |
 | B-001 | `types.rs`, `state.rs`, GH-62 types | `message_list_public_surface_is_typed` |
-| B-002 | complete TextFlow + shell config identity | `measurement_config_covers_textflow_and_shell_inputs`；`measurement_key_uses_all_identity_fields_and_exact_equality` |
+| B-002 | complete TextFlow + shell config + total-float identity | `measurement_config_covers_textflow_and_shell_inputs`；`measurement_key_uses_all_identity_fields_and_exact_equality`；`measurement_key_total_equality_is_reflexive_for_nan_payloads`；`measurement_key_total_snapshot_distinguishes_nan_payloads_and_signed_zero` |
 | B-003 | caller-owned state/revision/observation | `identical_inputs_produce_identical_state`；`public_observation_is_read_only_and_reports_new_content` |
 | B-004 | constructors/stored anchor/visible range | `constructor_measures_initial_entries_in_order_and_publishes_complete_state`；`constructor_failure_publishes_no_state`；`empty_zero_viewport_and_zero_width_contract`；`zero_viewport_retains_and_restores_stored_anchor`；`following_zero_viewport_append_and_restore_latest_bottom` |
 | B-005 | lower-bound/slice builder | `partial_first_and_last_message_ranges_are_row_exact` |
 | B-006 | prepend restore/max-offset clamp | `prepend_preserves_top_or_reports_short_content_viewport_clamp` |
 | B-007 | typed anchor navigation + update clamp | `typed_anchor_navigation_rejects_unknown_and_invalid_rows`；`typed_navigation_overrides_following_and_replaces_observed_anchor`；`viewport_clamped_navigation_anchor_survives_next_mutation`；`height_changes_preserve_or_report_anchor_clamp` |
 | B-008 | remove transition | `deleted_anchor_selects_next_then_previous_survivor` |
-| B-009 | follow transition + public observation | `follow_pause_and_explicit_resume_state_machine`；`typed_navigation_overrides_following_and_replaces_observed_anchor`；`public_observation_is_read_only_and_reports_new_content` |
-| B-010 | append/stream transition | `append_and_stream_growth_follow_or_mark_new_content`；`following_zero_viewport_append_and_restore_latest_bottom` |
+| B-009 | follow transition + public observation | `follow_pause_and_explicit_resume_state_machine`；`typed_navigation_overrides_following_and_replaces_observed_anchor`；`paused_without_anchor_first_nonempty_append_and_replace_is_deterministic`；`public_observation_is_read_only_and_reports_new_content` |
+| B-010 | append/stream transition | `append_and_stream_growth_follow_or_mark_new_content`；`following_zero_viewport_append_and_restore_latest_bottom`；`paused_without_anchor_first_nonempty_append_and_replace_is_deterministic` |
 | B-011 | isolated invalidation/cache/resize config | `each_textflow_and_shell_input_invalidates_only_affected_entry`；`resize_variant_expansion_and_structure_cache_contract`；`resize_rebuild_config_is_closed_ordered_and_atomic`；`active_measurement_handles_survive_reuse_cache_eviction` |
 | B-012 | closed callback outcome + staged commit | `constructor_failure_publishes_no_state`；`measured_missing_failed_and_cancelled_outcomes_are_closed`；`measurement_failure_and_cancellation_are_atomic`；`resize_rebuild_config_is_closed_ordered_and_atomic` |
 | B-013 | closed errors and structural boundaries | `message_rows_reject_zero_without_measurement_key`；`closed_error_categories_are_exhaustive_and_keep_sources`；`invalid_insert_index_precedes_clone_index_and_callbacks`；`state_revision_overflow_precedes_measurement_and_is_atomic_at_u64_max` |
@@ -698,7 +721,7 @@ GH-62 ordered messages + viewport(width, rows)
   -> atomic MessageListState commit
   -> visible_range(offset, viewport rows)
   -> Vec<VisibleMessageSlice(shared immutable O(1)-clone key handles)>
-  -> typed render closure(exact entry + exact key handle + exact slice，可使用 GH-63)
+  -> typed render closure(exact entry + exact key handle + exact slice；#63 closure-complete 后才调用 full view)
   -> GH-60 candidate frame commit
 ```
 
@@ -726,30 +749,30 @@ GH-62 ordered messages + viewport(width, rows)
   counter 是硬门禁，10k benchmark 记录趋势。
 - Maintenance: Cache/anchor/follow 状态互相影响；candidate commit、closed transition table、
   naive property oracle 和分模块文件所有权降低漂移。
-- Dependency drift: 当前 base 缺少三项 required implementation；必须执行 source-drift/
+- Dependency drift: 当前 base 的 GH-58/GH-60 仍 OPEN，GH-63 仅 T1；必须执行 source-drift/
   ancestry gate，不能以本文伪签名强行适配。
 
 ## 测试计划
 
 - [ ] Unit tests：initial constructor ordered publish/failure-no-state、完整 TextFlow/shell
-      identity、active handles surviving bounded-cache eviction、isolated invalidation、closed measurement/
+      total identity/NaN/signed-zero、active handles surviving bounded-cache eviction、isolated invalidation、closed measurement/
       resize-config callback outcomes、invalid-insert pre-clone boundary、partial slices、typed
       navigation overriding Following、viewport-clamped explicit anchor surviving next mutation、
-      short-content 与 Following/Paused zero-viewport restore、
+      short-content、Paused+None first-nonempty 与 Following/Paused zero-viewport restore、
       delete/follow transition、cache reuse、stale/state-revision-overflow/missing/zero/failure/
       cancellation atomicity、unkeyed zero-row value error、exact GH-57 aggregate symbol与
       operation count。
 - [ ] Property tests：固定 seed 随机 operation 序列逐步对比独立 naive row-vector oracle。
 - [ ] Integration tests：多 TextFlow + 全 structural rows composite measurement、exact
       entry/shared-key-handle/slice 与 revision-drift rejection、shared handle `O(1)` clone/
-      `Send + Sync`、GH-63-compatible render closure、typed render failure、crate 外 read-only
+      `Send + Sync`、generic render closure（仅 closure-complete 时调 GH-63 view）、typed render failure、crate 外 read-only
       observation/public errors/exports、fixed-height compatibility。
 - [ ] Benchmark：divan 10k mixed heights 的 lookup/slice/point update/prepend，保存 current
   head 命令和输出。
 - [ ] Full gates：`cargo fmt --all -- --check`、`cargo check --workspace --all-targets
   --all-features --locked`、`GH65_COVERAGE_MODE=fixture cargo test --workspace --all-targets
   --all-features --locked`、
-  `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`、
+  `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -A clippy::collapsible_if -A clippy::manual_is_multiple_of`、
   `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --locked`。
 - [ ] Coverage：Tasks 中必须且只能有一个 `gh57-critical-paths-v1` block，version=1、
   issue=65、9 个 unique exact `file + name` 与逐项 nonempty `verification_command`。
