@@ -85,13 +85,20 @@ T5另外校验负责 fresh reviews/reviewThreads 与 trusted review manifest 装
 路径，并把exact revision全量archive到worktree外、逐blob复核的pinned mirror。
 archive完成即丢弃`SPEC_RAIL_ROOT`；入口hash、canonical readiness、全部SpecRail module
 import以及`workflow.yaml`、`states.yaml`、`labels.yaml`、`schemas/`都只从mirror读取。
+T1/T5在首个Python调用前解析absolute interpreter、清除全部Python路径/启动注入变量，并对
+每个调用使用`-I -S`；执行已校验的SpecRail入口时只显式插入并断言pinned mirror的
+`checks/`路径。因此CWD中的同名stdlib、`sitecustomize`、ambient `PYTHONPATH`或user site
+均不在可信边界内。
 T1从只读pinned mirror复制受控adopted mirror，只给root、`specs/`及一个branch template
 最小写权限，以加入当前packet/evidence；T5直接使用只读mirror。dirty checkout内容不得
 进入任一closure。
 
 T5的PR gate还需要读取implementation git history中的approved spec revision，因此以exact
-PR head创建临时只读验证clone，只overlay上述mirror中的配置/schema；`--repo`指向该clone，
-不能指向没有目标历史的SpecRail checkout。independent reviewer
+PR head创建临时验证clone；在写入任何overlay前，先从raw diff精确验证12个canonical路径、
+`A/M`状态及regular `100644/100755`目标mode。随后只从已验证mirror读取配置/schema，并和
+review bundle一起以exclusive-create写入；任一source/parent/target symlink、non-directory
+parent、已有target或canonical escape都fail closed。`--repo`指向该clone，不能指向没有目标
+历史的SpecRail checkout。independent reviewer
 在worktree外生成的bundle必须由人工确认的SHA-256绑定；T5只接受安全、repo-relative、
 源端和临时clone目标端都无symlink/path traversal且位于
 `artifacts/review/GH132/`下的manifest、lane
