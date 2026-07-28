@@ -27,13 +27,18 @@ fresh gate全部通过。
        canonical readiness，并把该逐字值传给 implement route，不得硬编码；
     2. 上述 live readiness 必须是 `ready_to_implement`，且fresh SpecRail implement route
        对 merged product/tech返回 `allowed`；`ready_to_spec`或任何其他值都fail closed；
-    3. PR #137 已最终 merged、非 draft，其 merge commit是fresh expected main祖先，fresh
+    3. adopted mirror只把`artifacts.impl_branch`改成
+       `{agent}/impl_gh{issue_number}-{slug}`并保留`auth_mode: review`；raw evidence不改，
+       human decision把PR #139 exact ref分类为`merged_spec_packet`/
+       `retain_non_competing`，legacy matcher只见该ref、configured matcher为空且route
+       `allowed`；禁止删除分支、过滤evidence或忽略其他matching branch；
+    4. PR #137 已最终 merged、非 draft，其 merge commit是fresh expected main祖先，fresh
        6路径file set、newline SHA-256和与GH132 manifest精确两路径受控交集均匹配；两条
        zero-width focused tests各以`matched=1`重跑；
-    4. PR #142 已最终 merged、非 draft，其 merge commit是fresh expected main祖先，fresh
+    5. PR #142 已最终 merged、非 draft，其 merge commit是fresh expected main祖先，fresh
        6路径file set、newline SHA-256和与GH132 manifest精确三路径受控交集均匹配；在交集
        路径完成 source-drift refresh，确认GH132不重写 VirtualText/span-only contract；
-    5. 在首次 implementation edit 前，worktree porcelain精确为空，`HEAD`精确等于fresh
+    6. 在首次 implementation edit 前，worktree porcelain精确为空，`HEAD`精确等于fresh
        `origin/main` SHA，并记录该 SHA 为`GH132_IMPLEMENTATION_BASE_SHA`；implementation
        12路径manifest逐路径冻结。
   - Verify:
@@ -61,6 +66,8 @@ fresh gate全部通过。
       test "$GH132_COUNTS" = "1 0 0"
     }
     : "${SPEC_RAIL_ROOT:?set SPEC_RAIL_ROOT to the checked-out SpecRail workflow-pack root}"
+    : "${GH132_BRANCH_OWNERSHIP_DECISION:?set the external human branch decision JSON}"
+    case "$GH132_BRANCH_OWNERSHIP_DECISION" in /*) ;; *) exit 1 ;; esac
     SPEC_RAIL_REV=bfc60f26164af5df1ebd3b5cb79d07379fc416b7
     test "$(git -C "$SPEC_RAIL_ROOT" rev-parse 'HEAD^{commit}')" = "$SPEC_RAIL_REV"
     test "$(git -C "$SPEC_RAIL_ROOT" remote get-url origin)" = \
@@ -77,6 +84,10 @@ fresh gate全部通过。
       'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
       "$SPEC_RAIL_ROOT/checks/github_duplicate_evidence.py")" = \
       eab228a33d84a43cde1ba3587d5edde50993ae11c5c5a522ee8d01b64b284d55
+    test "$(python3 -c \
+      'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
+      "$SPEC_RAIL_ROOT/checks/duplicate_work_gate.py")" = \
+      c109124d511983b9579d11e0bf2378569435e73036a22f058ed377fb5232317c
     ISSUE_JSON="$(gh issue view 132 --repo majiayu000/rnk \
       --json number,state,labels)"
     test "$(printf '%s\n' "$ISSUE_JSON" | jq -r '.number')" = "132"
@@ -93,6 +104,16 @@ fresh gate全部通过。
     test "$(printf '%s\n' "$LIVE_READINESS_LABELS" |
       awk 'NF { count++ } END { print count + 0 }')" -eq 1
     LIVE_ROUTE_STATE="$LIVE_READINESS_LABELS"
+    WORKTREE_ROOT="$(git rev-parse --show-toplevel)"
+    WORKTREE_REAL="$(python3 -c \
+      'import os,sys; print(os.path.realpath(sys.argv[1]))' "$WORKTREE_ROOT")"
+    GH132_BRANCH_DECISION_REAL="$(python3 -c \
+      'import os,sys; print(os.path.realpath(sys.argv[1]))' \
+      "$GH132_BRANCH_OWNERSHIP_DECISION")"
+    test -f "$GH132_BRANCH_DECISION_REAL"
+    case "$GH132_BRANCH_DECISION_REAL" in
+      "$WORKTREE_REAL" | "$WORKTREE_REAL"/*) exit 1 ;;
+    esac
     WORKTREE_STATUS="$(git status --porcelain=v1 --untracked-files=all)"
     test -z "$WORKTREE_STATUS"
     git fetch --no-tags origin main
@@ -106,18 +127,62 @@ fresh gate全部通过。
     mkdir -p "$SPEC_RAIL_MIRROR/specs/GH132" "$SPEC_RAIL_MIRROR/evidence"
     cp specs/GH132/product.md specs/GH132/tech.md specs/GH132/tasks.md \
       "$SPEC_RAIL_MIRROR/specs/GH132/"
+    python3 -c 'from pathlib import Path; import sys; config=Path(sys.argv[1]); text=config.read_text(encoding="utf-8"); old="  impl_branch: \"{agent}/gh{issue_number}-{slug}\"\\n"; new="  impl_branch: \"{agent}/impl_gh{issue_number}-{slug}\"\\n"; text.count(old) == 1 or sys.exit("unexpected pinned impl_branch template"); config.write_text(text.replace(old,new),encoding="utf-8")' \
+      "$SPEC_RAIL_MIRROR/workflow.yaml"
     python3 "$SPEC_RAIL_MIRROR/checks/check_workflow.py" \
       --repo "$SPEC_RAIL_MIRROR" --spec-dir specs/GH132
+    test "$(awk '$1 == "auth_mode:" { print $2 }' \
+      "$SPEC_RAIL_MIRROR/workflow.yaml")" = "review"
+    test "$(awk '$1 == "impl_branch:" { print $2 }' \
+      "$SPEC_RAIL_MIRROR/workflow.yaml")" = \
+      '"{agent}/impl_gh{issue_number}-{slug}"'
+    GH132_DUPLICATE_RAW="$SPEC_RAIL_MIRROR/evidence/gh132-duplicate-raw.json"
     python3 "$SPEC_RAIL_MIRROR/checks/github_duplicate_evidence.py" \
       --github-repo majiayu000/rnk --issue 132 --remote origin --json \
-      > "$SPEC_RAIL_MIRROR/evidence/gh132-duplicate.json"
+      > "$GH132_DUPLICATE_RAW"
     test "$LIVE_ROUTE_STATE" = "ready_to_implement"
+    GH132_RETAINED_SPEC_BRANCH=spec/GH132-signed-coordinate-errors
+    GH132_BRANCH_CLASS_JSON="$(PYTHONPATH="$SPEC_RAIL_MIRROR/checks" \
+      python3 -c 'import json,sys; from pathlib import Path; from duplicate_work_gate import impl_branch_token,matching_contract_branches; from specrail_lib import load_pack; evidence=json.load(open(sys.argv[2],encoding="utf-8")); token=impl_branch_token(load_pack(Path(sys.argv[1])),132); print(json.dumps({"token":token,"configured":matching_contract_branches(evidence["remote_branches"],token),"legacy":matching_contract_branches(evidence["remote_branches"],"gh132")}))' \
+      "$SPEC_RAIL_MIRROR" "$GH132_DUPLICATE_RAW")"
+    test "$(printf '%s\n' "$GH132_BRANCH_CLASS_JSON" | jq -r '.token')" = \
+      "impl_gh132"
+    test "$(printf '%s\n' "$GH132_BRANCH_CLASS_JSON" |
+      jq -r '.configured | length')" -eq 0
+    test "$(printf '%s\n' "$GH132_BRANCH_CLASS_JSON" |
+      jq -c '.legacy')" = "[\"$GH132_RETAINED_SPEC_BRANCH\"]"
+    PR139_JSON="$(gh pr view 139 --repo majiayu000/rnk \
+      --json state,isDraft,headRefName,headRefOid,mergeCommit,files)"
+    test "$(printf '%s\n' "$PR139_JSON" | jq -r '.state')" = "MERGED"
+    test "$(printf '%s\n' "$PR139_JSON" | jq -r '.isDraft')" = "false"
+    test "$(printf '%s\n' "$PR139_JSON" | jq -r '.headRefName')" = \
+      "$GH132_RETAINED_SPEC_BRANCH"
+    PR139_HEAD_SHA="$(printf '%s\n' "$PR139_JSON" | jq -r '.headRefOid')"
+    PR139_MERGE_SHA="$(printf '%s\n' "$PR139_JSON" | jq -r '.mergeCommit.oid')"
+    REMOTE_SPEC_HEAD="$(git ls-remote --exit-code --heads origin \
+      "refs/heads/$GH132_RETAINED_SPEC_BRANCH" | awk 'NR == 1 { print $1 }')"
+    test "$PR139_HEAD_SHA" = "$REMOTE_SPEC_HEAD"
+    git merge-base --is-ancestor "$PR139_MERGE_SHA" "$EXPECTED_MAIN_SHA"
+    PR139_EXPECTED_FILES="$(printf '%s\n' \
+      specs/GH132/product.md specs/GH132/tasks.md specs/GH132/tech.md)"
+    PR139_ACTUAL_FILES="$(printf '%s\n' "$PR139_JSON" |
+      jq -r '.files[].path' | LC_ALL=C sort)"
+    test "$PR139_ACTUAL_FILES" = "$PR139_EXPECTED_FILES"
+    jq -e --arg branch "$GH132_RETAINED_SPEC_BRANCH" \
+      --arg head "$PR139_HEAD_SHA" '
+      .version == 1 and .issue == 132 and .branch == $branch and
+      .head_sha == $head and .branch_class == "merged_spec_packet" and
+      .decision == "retain_non_competing" and
+      (.actor | type == "string" and length > 0) and
+      (.source | type == "string" and length > 0) and
+      (.authorized_at | type == "string" and length > 0)' \
+      "$GH132_BRANCH_DECISION_REAL" >/dev/null
     python3 "$SPEC_RAIL_MIRROR/checks/route_gate.py" \
       --repo "$SPEC_RAIL_MIRROR" \
       --route implement --issue 132 --state "$LIVE_ROUTE_STATE" \
       --artifact product_spec=specs/GH132/product.md \
       --artifact tech_spec=specs/GH132/tech.md \
-      --duplicate-evidence "$SPEC_RAIL_MIRROR/evidence/gh132-duplicate.json" \
+      --duplicate-evidence "$GH132_DUPLICATE_RAW" \
       --mode required --json > "$SPEC_RAIL_MIRROR/evidence/gh132-route.json"
     test "$(jq -r '.decision' \
       "$SPEC_RAIL_MIRROR/evidence/gh132-route.json")" = "allowed"
@@ -213,8 +278,12 @@ fresh gate全部通过。
     checkout必须来自`https://github.com/majiayu000/specrail.git`的上述exact detached
     revision，未设置、路径/revision/hash错误时命令立即失败，不得跳过或降级为 warning。
     `SPEC_RAIL_MIRROR`必须保留到交付证据归档完成；route JSON还必须证明artifact路径均为
-    mirror内的`specs/GH132/{product,tech,tasks}.md`，duplicate evidence为fresh collector
-    输出，且没有open PR或remote branch占用GH132实现token。PR #137 sorted file set、
+    mirror内的`specs/GH132/{product,tech,tasks}.md`。adopted config只允许上述exact
+    `impl_branch`一字段变化，`auth_mode: review`保持；raw duplicate evidence必须是fresh
+    collector原文。外部human decision不能由实现agent生成，其actor/source和exact
+    branch/head/class/decision均机械校验；legacy matcher只允许retained PR #139 spec ref，
+    configured matcher不得已有implementation-class ref，最终raw-evidence route必须
+    `allowed`。该分支继续保留，不能以删除或过滤evidence代替ownership分类。PR #137 sorted file set、
     newline digest与两路径受控交集必须逐字匹配；PR #142 sorted file set、newline digest
     与三路径受控交集也必须逐字匹配。两个比较器都要用one-missing、one-unexpected和
     one-additional-overlap fixture证明均fail closed，任何变化都停止并重新冻结spec。两条
@@ -427,27 +496,28 @@ fresh gate全部通过。
         awk -F ': ' '$2 == "test" { count++ } END { print count + 0 }')"
       test "$GH132_MATCHED" -eq 1
       GH132_RESULT="$("$@" -- --exact 2>&1)" || {
-        printf '%s\n' "$GH132_RESULT" >&2
-        return 1
+        printf '%s\n' "$GH132_RESULT" >&2; return 1
       }
       printf '%s\n' "$GH132_RESULT"
       GH132_COUNTS="$(printf '%s\n' "$GH132_RESULT" | awk '
-        /^test result:/ {
-          for (i = 1; i <= NF; i++) {
-            if ($i == "passed;") passed += $(i - 1)
-            if ($i == "failed;") failed += $(i - 1)
-            if ($i == "ignored;") ignored += $(i - 1)
-          }
-        }
+        /^test result:/ { for (i = 1; i <= NF; i++) {
+          if ($i == "passed;") passed += $(i - 1)
+          if ($i == "failed;") failed += $(i - 1)
+          if ($i == "ignored;") ignored += $(i - 1) } }
         END { printf "%d %d %d\n", passed, failed, ignored }')"
       test "$GH132_COUNTS" = "1 0 0"
     }
-    : "${GH132_IMPLEMENTATION_PR:?set the GH132 implementation PR number}"
-    : "${GH132_IMPLEMENTATION_BASE_SHA:?set the exact starting main SHA recorded by SP132-T1}"
-    : "${GH132_EVIDENCE_DIR:?set an absolute directory outside the repository}"
-    : "${SPEC_RAIL_ROOT:?set the pinned SpecRail checkout root}"
-    : "${GH132_PR_EVIDENCE:?set the exact-head PR evidence JSON path}"
+    : "${GH132_IMPLEMENTATION_PR:?set implementation PR}" \
+      "${GH132_IMPLEMENTATION_BASE_SHA:?set SP132-T1 base}" \
+      "${GH132_EVIDENCE_DIR:?set external evidence dir}" \
+      "${SPEC_RAIL_ROOT:?set pinned SpecRail root}"
+    : "${GH132_REVIEW_BUNDLE_ROOT:?set external review bundle}" \
+      "${GH132_REVIEW_BUNDLE_SHA256:?set human-confirmed bundle SHA-256}"
+    : "${GH132_AUTHORIZATION_ACTOR:?set authorizer}" \
+      "${GH132_AUTHORIZATION_SOURCE:?set authorization source}" \
+      "${GH132_AUTHORIZATION_SUMMARY:?set authorization summary}"
     case "$GH132_EVIDENCE_DIR" in /*) ;; *) exit 1 ;; esac
+    case "$GH132_REVIEW_BUNDLE_ROOT" in /*) ;; *) exit 1 ;; esac
     WORKTREE_ROOT="$(git rev-parse --show-toplevel)"
     WORKTREE_REAL="$(python3 -c \
       'import os,sys; print(os.path.realpath(sys.argv[1]))' "$WORKTREE_ROOT")"
@@ -457,6 +527,13 @@ fresh gate全部通过。
       "$WORKTREE_REAL/"*) exit 1 ;;
     esac
     GH132_EVIDENCE_DIR="$GH132_EVIDENCE_REAL"
+    GH132_REVIEW_BUNDLE_REAL="$(python3 -c \
+      'import os,sys; print(os.path.realpath(sys.argv[1]))' \
+      "$GH132_REVIEW_BUNDLE_ROOT")"
+    test -d "$GH132_REVIEW_BUNDLE_REAL"
+    case "$GH132_REVIEW_BUNDLE_REAL/" in "$WORKTREE_REAL/"*) exit 1 ;; esac
+    printf '%s\n' "$GH132_REVIEW_BUNDLE_SHA256" |
+      grep -Eq '^[0-9a-f]{64}$'
     SPEC_RAIL_REV=bfc60f26164af5df1ebd3b5cb79d07379fc416b7
     test "$(git -C "$SPEC_RAIL_ROOT" rev-parse 'HEAD^{commit}')" = "$SPEC_RAIL_REV"
     test "$(git -C "$SPEC_RAIL_ROOT" remote get-url origin)" = \
@@ -465,20 +542,23 @@ fresh gate全部通过。
       'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
       "$SPEC_RAIL_ROOT/checks/pr_gate.py")" = \
       10cb7412ff504291d136a2c1486bc96e6b5e811c8040d1f61a8d222994e87873
-    test -f "$GH132_PR_EVIDENCE"
+    test "$(python3 -c \
+      'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
+      "$SPEC_RAIL_ROOT/checks/github_pr_evidence.py")" = \
+      95567e96d515e90f85687e3ad24a256419f7a6ef76fac54d6c5da346f3cd2173
     WORKTREE_STATUS="$(git status --porcelain=v1 --untracked-files=all)"
     test -z "$WORKTREE_STATUS"
     git fetch --no-tags origin main
     EXPECTED_CURRENT_MAIN_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
     PR_JSON="$(gh pr view "$GH132_IMPLEMENTATION_PR" --repo majiayu000/rnk \
-      --json baseRefOid,headRefOid,body,statusCheckRollup)"
+      --json baseRefOid,headRefOid,body)"
     PR_BASE_SHA="$(printf '%s\n' "$PR_JSON" | jq -r '.baseRefOid')"
     PR_HEAD_SHA="$(printf '%s\n' "$PR_JSON" | jq -r '.headRefOid')"
     test "$PR_BASE_SHA" = "$EXPECTED_CURRENT_MAIN_SHA"
     test "$(git rev-parse 'HEAD^{commit}')" = "$PR_HEAD_SHA"
     SPEC_RAIL_GATE_REPO="$(mktemp -d \
       "${TMPDIR:-/tmp}/gh132-specrail-pr-gate.XXXXXX")"
-    git clone --quiet --no-local --no-checkout "$PWD" "$SPEC_RAIL_GATE_REPO"
+    git clone --quiet --no-local --no-checkout "$WORKTREE_ROOT" "$SPEC_RAIL_GATE_REPO"
     git -C "$SPEC_RAIL_GATE_REPO" checkout --quiet --detach "$PR_HEAD_SHA"
     cp "$SPEC_RAIL_ROOT/workflow.yaml" "$SPEC_RAIL_ROOT/states.yaml" \
       "$SPEC_RAIL_ROOT/labels.yaml" "$SPEC_RAIL_GATE_REPO/"
@@ -524,8 +604,6 @@ fresh gate全部通过。
     export GH132_COVERAGE_MODE=validate
     run_exact cargo test --test text_flow_renderer_error_paths --locked \
       gh132_current_head_coverage_contract
-    python3 "$SPEC_RAIL_ROOT/checks/pr_gate.py" --repo "$SPEC_RAIL_GATE_REPO" \
-      --evidence "$GH132_PR_EVIDENCE" --mode required --json
     run_exact cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_signed_coordinates_axis_clips_and_nested_active_clips_are_exact
     run_exact cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::projection_failure_commits_neither_cells_nor_projection
     run_exact cargo test --workspace --lib --locked renderer::tree_renderer::projection::tests::zero_width::projection_zero_width_only_attaches_to_the_same_flow_sequence
@@ -539,12 +617,9 @@ fresh gate全部通过。
     git fetch --no-tags origin main
     FINAL_CURRENT_MAIN_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
     FINAL_PR_JSON="$(gh pr view "$GH132_IMPLEMENTATION_PR" \
-      --repo majiayu000/rnk \
-      --json baseRefOid,headRefOid,body,statusCheckRollup)"
-    FINAL_PR_BASE_SHA="$(printf '%s\n' "$FINAL_PR_JSON" |
-      jq -r '.baseRefOid')"
-    FINAL_PR_HEAD_SHA="$(printf '%s\n' "$FINAL_PR_JSON" |
-      jq -r '.headRefOid')"
+      --repo majiayu000/rnk --json baseRefOid,headRefOid,body)"
+    FINAL_PR_BASE_SHA="$(printf '%s\n' "$FINAL_PR_JSON" | jq -r '.baseRefOid')"
+    FINAL_PR_HEAD_SHA="$(printf '%s\n' "$FINAL_PR_JSON" | jq -r '.headRefOid')"
     FINAL_MERGE_BASE_SHA="$(git merge-base \
       "$FINAL_CURRENT_MAIN_SHA" "$FINAL_PR_HEAD_SHA")"
     test "$FINAL_CURRENT_MAIN_SHA" = "$EXPECTED_CURRENT_MAIN_SHA"
@@ -552,24 +627,94 @@ fresh gate全部通过。
     test "$FINAL_PR_HEAD_SHA" = "$PR_HEAD_SHA"
     test "$FINAL_MERGE_BASE_SHA" = "$GH132_MERGE_BASE_SHA"
     test "$(git rev-parse 'HEAD^{commit}')" = "$FINAL_PR_HEAD_SHA"
-    FINAL_CI_TOTAL="$(printf '%s\n' "$FINAL_PR_JSON" |
-      jq '[.statusCheckRollup[] | select(.__typename == "CheckRun")] | length')"
-    FINAL_CI_SUCCESS="$(printf '%s\n' "$FINAL_PR_JSON" |
-      jq '[.statusCheckRollup[] |
-           select(.__typename == "CheckRun" and
-                  .status == "COMPLETED" and .conclusion == "SUCCESS")] |
-          length')"
-    test "$FINAL_CI_TOTAL" -gt 0
-    test "$FINAL_CI_SUCCESS" -eq "$FINAL_CI_TOTAL"
-    FINAL_CI_SHA256="$(printf '%s\n' "$FINAL_PR_JSON" |
-      jq -S '.statusCheckRollup' | python3 -c \
+    FINAL_WORKTREE_STATUS="$(git status --porcelain=v1 --untracked-files=all)"
+    test -z "$FINAL_WORKTREE_STATUS"
+    GH132_REVIEW_MANIFEST=artifacts/review/GH132/manifest.json
+    python3 - "$GH132_REVIEW_BUNDLE_REAL" "$GH132_REVIEW_BUNDLE_SHA256" \
+      "$SPEC_RAIL_GATE_REPO" "$GH132_IMPLEMENTATION_PR" "$FINAL_PR_HEAD_SHA" \
+      "$GH132_REVIEW_MANIFEST" <<'PY'
+    import hashlib, json, sys
+    from pathlib import Path, PurePosixPath
+    source_root, expected = Path(sys.argv[1]), sys.argv[2]
+    destination_root = Path(sys.argv[3]).resolve(strict=True)
+    expected_pr, expected_head = int(sys.argv[4]), sys.argv[5]
+    prefix, manifest_rel = PurePosixPath("artifacts/review/GH132"), PurePosixPath(sys.argv[6])
+    def read_safe(raw):
+        rel = PurePosixPath(raw)
+        if rel.is_absolute() or not rel.is_relative_to(prefix) or ".." in rel.parts:
+            raise SystemExit(f"unsafe review bundle path: {raw}")
+        candidate = source_root.joinpath(*rel.parts)
+        resolved = candidate.resolve(strict=True)
+        if candidate != resolved or not resolved.is_file() or resolved.suffix != ".json":
+            raise SystemExit(f"review bundle path must be a real JSON file: {raw}")
+        data = resolved.read_bytes()
+        if len(data) > 2_000_000:
+            raise SystemExit(f"review bundle file is too large: {raw}")
+        return rel.as_posix(), data
+    manifest_name, manifest_bytes = read_safe(manifest_rel)
+    manifest = json.loads(manifest_bytes)
+    if manifest.get("pr") != expected_pr or manifest.get("head_sha") != expected_head:
+        raise SystemExit("review manifest identity mismatch")
+    artifact_names = [item for lane in manifest.get("lanes", [])
+                      for item in lane.get("artifact_paths", [])]
+    if not artifact_names or len(artifact_names) != len(set(artifact_names)):
+        raise SystemExit("review manifest artifact paths are empty or duplicated")
+    materialized = {manifest_name: manifest_bytes}
+    for raw in artifact_names:
+        name, data = read_safe(raw)
+        materialized[name] = data
+        sidecar = json.loads(data).get("content_binding_evidence")
+        if isinstance(sidecar, str):
+            sidecar_name, sidecar_data = read_safe(sidecar)
+            materialized[sidecar_name] = sidecar_data
+    digest = hashlib.sha256()
+    for name in sorted(materialized):
+        digest.update(name.encode() + b"\0" + hashlib.sha256(materialized[name]).digest())
+    if digest.hexdigest() != expected:
+        raise SystemExit("review bundle canonical SHA-256 mismatch")
+    for name, data in materialized.items():
+        relative, parent = PurePosixPath(name), destination_root
+        for part in relative.parts[:-1]:
+            parent /= part
+            if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
+                raise SystemExit(f"unsafe review materialization parent: {name}")
+            parent.mkdir(exist_ok=True)
+        destination = destination_root.joinpath(*relative.parts)
+        if destination.exists() or destination.is_symlink():
+            raise SystemExit(f"review materialization destination exists: {name}")
+        with destination.open("xb") as handle:
+            handle.write(data)
+    PY
+    GATE_CHANGED_PATHS="$(git -C "$SPEC_RAIL_GATE_REPO" diff --name-only \
+      "$FINAL_CURRENT_MAIN_SHA...$FINAL_PR_HEAD_SHA" | LC_ALL=C sort)"
+    test "$GATE_CHANGED_PATHS" = "$EXPECTED_CHANGED_PATHS"
+    GH132_PR_EVIDENCE="$GH132_EVIDENCE_DIR/gh132-pr-evidence.json"
+    python3 "$SPEC_RAIL_ROOT/checks/github_pr_evidence.py" \
+      --github-repo majiayu000/rnk --repo "$SPEC_RAIL_GATE_REPO" \
+      --pr "$GH132_IMPLEMENTATION_PR" --issue 132 --content-binding-v1 \
+      --review-manifest "$GH132_REVIEW_MANIFEST" \
+      --authorization-actor "$GH132_AUTHORIZATION_ACTOR" \
+      --authorization-source "$GH132_AUTHORIZATION_SOURCE" \
+      --authorization-summary "$GH132_AUTHORIZATION_SUMMARY" --json \
+      > "$GH132_PR_EVIDENCE"
+    jq -e --argjson pr "$GH132_IMPLEMENTATION_PR" \
+      --arg head "$FINAL_PR_HEAD_SHA" --arg manifest "$GH132_REVIEW_MANIFEST" '
+      .pr == $pr and .head_sha == $head and .gate_query_head_sha == $head and
+      .review_source == "independent_lane" and .review_execution == "local" and
+      .review_evidence.head_sha == $head and
+      .review_evidence.manifest_path == $manifest and
+      (.review_evidence.current_artifact_ids | length) > 0 and
+      (.checks | length) > 0 and
+      ([.checks[] | select(.status != "COMPLETED" or .conclusion != "SUCCESS")] |
+        length) == 0 and
+      ([.review_threads[] |
+        select(.is_resolved != true and .is_outdated != true)] | length) == 0' \
+      "$GH132_PR_EVIDENCE" >/dev/null
+    FINAL_CI_SHA256="$(jq -S '.checks' "$GH132_PR_EVIDENCE" | python3 -c \
       'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
-    FINAL_CI_RUN_IDS="$(printf '%s\n' "$FINAL_PR_JSON" | jq -r '
-      [.statusCheckRollup[] |
-       select(.__typename == "CheckRun") |
-       .detailsUrl |
-       capture("/actions/runs/(?<run>[0-9]+)(/|$)").run] |
-      unique | .[]')"
+    FINAL_CI_RUN_IDS="$(jq -r \
+      '[.checks[].url? | capture("/actions/runs/(?<run>[0-9]+)(/|$)").run] |
+       unique | .[]' "$GH132_PR_EVIDENCE")"
     test -n "$FINAL_CI_RUN_IDS"
     printf '%s\n' "$FINAL_PR_JSON" |
       jq -e --arg head "$FINAL_PR_HEAD_SHA" \
@@ -583,32 +728,26 @@ fresh gate全部通过。
       printf '%s\n' "$FINAL_PR_JSON" |
         jq -e --arg run_id "$run_id" '.body | contains($run_id)' >/dev/null
     done <<<"$FINAL_CI_RUN_IDS"
-    FINAL_WORKTREE_STATUS="$(git status --porcelain=v1 --untracked-files=all)"
-    test -z "$FINAL_WORKTREE_STATUS"
+    GH132_PR_GATE_RESULT="$GH132_EVIDENCE_DIR/gh132-pr-gate.json"
+    python3 "$SPEC_RAIL_ROOT/checks/pr_gate.py" --repo "$SPEC_RAIL_GATE_REPO" \
+      --evidence "$GH132_PR_EVIDENCE" --mode required --json \
+      > "$GH132_PR_GATE_RESULT"
+    test "$(jq -r '.decision' "$GH132_PR_GATE_RESULT")" = "allowed"
     printf 'FINAL_HEAD=%s\nFINAL_BASE=%s\nFINAL_MAIN=%s\nFINAL_MERGE_BASE=%s\nFINAL_CI_SHA256=%s\n' \
       "$FINAL_PR_HEAD_SHA" "$FINAL_PR_BASE_SHA" "$FINAL_CURRENT_MAIN_SHA" \
       "$FINAL_MERGE_BASE_SHA" "$FINAL_CI_SHA256"
     ```
-    `PR_BASE_SHA` 必须与fresh current main完全相等，且该 SHA 必须是PR head的exact
-    merge-base；仅证明PR137或旧main是ancestor不够。另逐条运行Tech mapping和ledger全部
-    命令并证明`matched=1`。coverage contract必须从raw llvm-cov JSON和exact diff重算：
-    changed production executable lines>=80%，`CheckedCoordinate`/scoped validation/
-    static identity filter/pipeline publish boundary的changed line与branch各100%；artifact
-    schema固定为`gh132-current-head-coverage-v1`并含repo、issue、base/head/merge-base、
-    diff SHA-256、raw SHA-256、`cargo-llvm-cov 0.8.7`与exact command。missing/zero
-    executable、stale SHA、非absolute artifact path、threshold或provenance不符全部失败。
-    `collect`模式在llvm-cov递归测试中必须无副作用通过；未设置mode的普通full-suite同样通过，
-    但不能produce/validate artifact。produce/validate成功后上述immutable coverage环境必须
-    保留到全部mapped/full tests结束。`SPEC_RAIL_GATE_REPO`必须保留到PR gate JSON归档；
-    它的`HEAD`必须等于`PR_HEAD_SHA`，overlay只允许来自已校验的固定SpecRail revision，
-    不得拿SpecRail自身git history代替implementation history。PR body必须包含同一exact
-    head、base、current main、merge-base、diff SHA-256与最终CI run ID。evidence目录
-    realpath必须在worktree之外；coverage创建前和
-    所有长门禁后worktree都必须clean。最后一次fresh fetch/query必须逐字证明head、base、
-    current main和merge-base与长门禁前记录值不变，并从该最终PR JSON验证全部CheckRun
-    success、计算CI evidence digest；之后才查询reviewThreads、coverage与SpecRail required
-    PR gate。evidence path gate还必须以relative、worktree自身、worktree child和经symlink
-    指回worktree的fixture证明均fail closed，并证明一个真实外部目录通过。
+    `PR_BASE_SHA`必须等于fresh current main并是head的exact merge-base；Tech全部
+    mapping/ledger仍逐条证明`matched=1`。coverage从raw JSON/exact diff重算：changed
+    production lines>=80%，四个critical区域line/branch=100%，v1 artifact包含完整
+    base/head/merge-base/diff/raw/tool/command provenance；missing、zero、stale或threshold
+    不符均失败，collect/普通suite无副作用，produce/validate环境保持到long gates结束。
+    gate clone的HEAD必须等于exact head；只overlay pinned pack，并从worktree外、人工确认
+    digest的bundle安全materialize repo-relative manifest/lane/sidecar，随后重证12-path
+    commit diff。PR body包含同一provenance与CI run ID。初始和long-gate后worktree均clean；
+    final fetch/query/collector必须重证head/base/main/merge-base、CI、reviews、GraphQL
+    threads与independent lane，最后才运行一次required `pr_gate`。evidence/bundle path的
+    relative、worktree、child、symlink/traversal fixtures均fail closed，真实外部路径通过。
   - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009,
     B-010, B-011, B-012, B-013, B-014, B-015, B-016, B-017, B-018, B-019,
     B-020, B-021
@@ -646,9 +785,8 @@ SP132-T1 -> SP132-T2 -> SP132-T3 -> SP132-T4 -> SP132-T5
 
 ## Handoff Notes
 
-- 本spec PR title固定为
-  `spec: define signed coordinate and element error preservation`，body使用`Refs #132`，
-  绝不使用Fixes/Closes。
+- 本spec PR title固定为`spec: define signed coordinate and element error preservation`，
+  body使用`Refs #132`，绝不使用Fixes/Closes。
 - 当前route artifact只授权`write_spec`。不得修改issue label来掩盖premature状态；human
   spec approval后再fresh运行implement gate。
 - PR #137的head SHA只记录起草时证据，不是implementation pin；真正依赖是其最终merge

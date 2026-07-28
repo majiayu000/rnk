@@ -35,8 +35,8 @@ labels、验证唯一 canonical readiness，再把该原值传入 implementation
 
 ## Codebase Context
 
-以下锚点已在包含 PR #137 与 PR #142 的
-`main@1404dbfc7d82bbe1f2214ea25b25b8104dd5242f` 通过 Read/grep 核实。实现开始前仍必须在
+以下锚点已在包含 PR #137、PR #142 与 PR #144 的
+`main@0621d181bccf6eeb181d31c2aa6e7d959be338ac` 通过 Read/grep 核实。实现开始前仍必须在
 fresh current main 上重新定位行号、签名和三条 PR #142 受控交集路径。
 
 | Area | Current anchor | Current behavior | GH-132 decision |
@@ -53,7 +53,7 @@ fresh current main 上重新定位行号、签名和三条 PR #142 受控交集�
 | String caller | `src/renderer/render_to_string.rs:42`, `src/renderer/render_to_string.rs:119`, `src/renderer/render_to_string.rs:195` | public `try_render_to_string*` 已返回 `TextRenderError`；Output仅在成功后转 String | 无生产改动；在既有 integration test 文件验证 nested child ID、typed cause与无 partial String |
 | TestRenderer caller | `src/testing/renderer.rs:48`, `src/testing/renderer.rs:59`, `src/testing/renderer.rs:89` | public fallible plain/ANSI APIs共享 tree renderer；compat wrappers fail loudly | 无生产改动；通过 public integration fixture验证 child NaN/overflow ID与clean retry |
 | Dynamic candidate | `src/renderer/pipeline.rs:37`, `src/renderer/pipeline.rs:71`, `src/renderer/pipeline.rs:98`, `src/renderer/pipeline.rs:105` | render/layout失败时重置 LayoutEngine；runtime evidence与 `previous_vnode` 只在 render成功后发布 | 增 nested child exact-ID、candidate state/cache、repeat/corrected retry tests；保持既有 commit顺序 |
-| App/static identity | `src/renderer/app.rs:248`, `src/renderer/app.rs:269`, `src/renderer/app.rs:281`, `src/renderer/static_content.rs:140`, `src/core/element.rs:266` | public `App::run` 保留 typed source，但 dynamic filter递归 `Element::clone`，而 Clone为每个保留节点生成 caller不可知的 fresh ID | `static_content.rs` 构造identity-preserving filtered tree：保留节点的 filtered ID逐字等于caller original ID；App exact test用过滤前child ID断言I/O source |
+| App/static identity | `src/renderer/app.rs:270`, `src/renderer/app.rs:281`, `src/renderer/app.rs:290`, `src/renderer/static_content.rs:140`, `src/core/element.rs:275` | public `App::run` 保留 typed source，但 dynamic filter递归 `Element::clone`，而 Clone为每个保留节点生成 caller不可知的 fresh ID | `static_content.rs` 构造identity-preserving filtered tree：保留节点的 filtered ID逐字等于caller original ID；App exact test用过滤前child ID断言I/O source |
 | Existing projection tests | `src/renderer/tree_renderer/projection/tests.rs:343`, `src/renderer/tree_renderer/projection/tests.rs:488` | 已覆盖整数 negative scroll、axis clips、nested active clip和 injected failure atomicity | 扩展 exact fractional x/y/scroll/ancestor/clip、range边界和 scoped failure fixtures |
 | Existing caller tests | `tests/text_flow_renderer_error_paths.rs:1`, `tests/text_flow_error_paths.rs:1` | string测试只覆盖 invalid tab stop；TestRenderer测试只检查 root padding NaN且未断言 exact ID | GH-132只修改前者并集中三类 public-facing fixture；后者保持 regression，不创建重复测试文件 |
 | Test file size | `src/renderer/tree_renderer/tests.rs:1`, `src/renderer/tree_renderer/projection/tests.rs:1` | 起草时分别为 664/774 行；继续内联全部 GH132 fixtures会触及 800 行 hard ceiling | 两个既有文件只增加 `mod coordinates;`，fixture分别放入新 `tests/coordinates.rs` 子模块；不得压缩旧测试或使用 rustfmt skip |
@@ -72,14 +72,40 @@ exact detached checkout；T1/T5分别校验 `route_gate.py` SHA-256
 T1另外校验 `check_workflow.py` SHA-256
 `c5bd73060037b0e8febace0e5ee8473e17973e1ca17257ea1517a94e05fa7549` 和
 `github_duplicate_evidence.py` SHA-256
-`eab228a33d84a43cde1ba3587d5edde50993ae11c5c5a522ee8d01b64b284d55`。
+`eab228a33d84a43cde1ba3587d5edde50993ae11c5c5a522ee8d01b64b284d55`，
+以及实际执行 branch-token matching 的 `duplicate_work_gate.py` SHA-256
+`c109124d511983b9579d11e0bf2378569435e73036a22f058ed377fb5232317c`。
+T5另外校验负责 fresh reviews/reviewThreads 与 trusted review manifest 装配的
+`github_pr_evidence.py` SHA-256
+`95567e96d515e90f85687e3ad24a256419f7a6ef76fac54d6c5da346f3cd2173`。
 路径、revision或hash不符均fail closed，不从机器特定绝对路径或mutable branch运行。
 由于route gate会把artifact路径约束在`--repo`内，T1从固定revision导出临时workflow
 mirror，再将当前merged GH132 packet复制到mirror的规范路径；不得把目标仓库绝对路径
 传给以SpecRail checkout为`--repo`的route gate。T5的PR gate还需要读取implementation
 git history中的approved spec revision，因此以exact PR head创建临时只读验证clone，并只
 overlay同一固定revision的`workflow.yaml`、`states.yaml`、`labels.yaml`和`schemas/`；
-`--repo`指向该clone，不能指向没有目标历史的SpecRail checkout。
+`--repo`指向该clone，不能指向没有目标历史的SpecRail checkout。independent reviewer
+在worktree外生成的bundle必须由人工确认的SHA-256绑定；T5只接受安全、repo-relative、
+源端和临时clone目标端都无symlink/path traversal且位于
+`artifacts/review/GH132/`下的manifest、lane
+artifact及其content-binding sidecar，并把它们materialize到上述临时clone的同名路径。
+这些文件保持untracked且必须再次证明implementation commit diff仍精确为12路径。
+
+pinned `duplicate_work_gate.py` 的真实branch-class扩展点是
+`workflow.yaml: artifacts.impl_branch`；evaluator从含`{issue_number}`的segment导出token，
+没有`--branch-class`或可臆造的ownership参数。默认模板导出`gh132`，会把retained
+`spec/GH132-signed-coordinate-errors`误判成implementation。T1因此从已校验的pinned
+workflow构造adopted mirror，只把该字段精确改为
+`{agent}/impl_gh{issue_number}-{slug}`，使token成为`impl_gh132`，并由
+`check_workflow.py`验证；`auth_mode: review`和其他配置逐字保留。
+
+raw collector evidence不得过滤或改写。显式human decision仍须把PR #139 exact remote ref
+分类为`merged_spec_packet`/`retain_non_competing`，并用fresh merged/head/files/current-main
+证据验证；legacy `gh132` matcher必须只看到这一条已批准spec ref。配置后的pinned evaluator
+对该raw evidence必须`allowed`，但任何`*/impl_gh132-*` branch、其他legacy `gh132` ref、
+open PR、分类不符或缺少human actor/source均停止。未来implementation branch必须遵守上述
+class template；禁止删除retained branch、过滤collector evidence或把human decision伪装成
+evaluator原生字段。
 
 开始任何实现 edit 前必须同时满足：
 
@@ -90,6 +116,8 @@ overlay同一固定revision的`workflow.yaml`、`states.yaml`、`labels.yaml`和
    route 输入。在首次 source/test edit前必须fetch `origin/main`，把解析出的 exact SHA记录为
    `GH132_IMPLEMENTATION_BASE_SHA`，并同时证明worktree porcelain为空且`HEAD`逐字等于该
    SHA；只证明某个旧SHA是ancestor不满足此 gate。
+   duplicate gate必须使用上述exact one-field adopted branch-class config和未修改的raw
+   collector evidence；human ownership decision保持显式，最终route仍须返回`allowed`。
 2. PR #137（GH-124）在本 packet 最初的 `b4f39ed...` anchor之后，于
    `2026-07-26T08:36:49Z` 合入 main；final head
    `4d135668943e06aaefb8ffffe7f8267337fc9d19`、merge commit
@@ -125,6 +153,9 @@ overlay同一固定revision的`workflow.yaml`、`states.yaml`、`labels.yaml`和
 PR #137 merge证据必须在实现时fresh查询并证明属于上述exact expected main，不能只复用
 本规格中的SHA文本。closure时再次fetch current main：PR `baseRefOid`必须与其逐字相等，
 该SHA必须是PR head的exact merge-base，implementation diff再与12路径manifest精确比较。
+初始snapshot、coverage provenance、long Rust gates后的final snapshot全部使用同一
+`EXPECTED_CURRENT_MAIN_SHA`、`PR_BASE_SHA`、`PR_HEAD_SHA`、merge-base和diff digest；
+任一fresh值漂移都必须重启整轮closure，不能把旧snapshot与新review evidence拼接。
 
 ### 2. Scoped floor conversion
 
@@ -374,8 +405,12 @@ owner attribution与transaction failure关键分支 100%。`cargo-llvm-cov` 固�
 `tests/text_flow_renderer_error_paths.rs::gh132_current_head_coverage_contract` 的
 fixture/produce/validate modes fail-closed验证。coverage目录必须解析到worktree之外，且
 验证前后的worktree都保持clean。长时间coverage/full gates结束后必须再次fetch main并
-fresh查询PR，逐字确认head、base、current main与merge-base仍等于开始时记录值；CI、
-review与 reviewThreads使用这次最终查询并绑定同一 head。
+fresh查询PR，逐字确认head、base、current main与merge-base仍等于开始时记录值；随后
+用该final snapshot和刚materialize的exact-head independent review bundle运行pinned
+`github_pr_evidence.py`，由它在一次fresh collection中重查reviews与GraphQL
+reviewThreads并校验manifest/lane evidence。只在该fresh evidence证明CI、independent
+review和zero current actionable threads全部绑定同一head后，才把pinned `pr_gate.py`
+作为本轮最后一个门禁重跑；pr_gate之后不得再复用旧query或执行会改变证据身份的步骤。
 
 ## 风险
 
