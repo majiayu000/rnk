@@ -141,9 +141,12 @@ identity 与 interruption 原子性。
     只接受其五路径非空子集、`A/M` status 和 `100644/100755` target mode，拒绝
     rename/copy/delete/type-change/unmerged、重复或 non-canonical path。
     coverage source 必须从 exact head tree 的 regular Git blobs/OID 安全物化到只读隔离树，
-    不从可变 checkout pathname 读取 source evidence；descriptor-relative
-    `O_NOFOLLOW|O_DIRECTORY` 读取父目录、`O_CREAT|O_EXCL|O_NOFOLLOW` 创建目标，所有
-    coverage/target/provenance 输出均位于源码树外。raw LCOV SHA-256 与 exact blob manifest
+    不从可变 checkout pathname 读取 source evidence。物化严格分为两阶段：Phase 1 验证
+    全部 source blob/mode/OID、全部 destination ancestors 与 targets并在内存上限内缓存bytes，
+    任一失败必须零 target writes；Phase 2 只有在 Phase 1 全成功后才以descriptor-relative
+    `O_NOFOLLOW|O_DIRECTORY` 读取父目录、`O_CREAT|O_EXCL|O_NOFOLLOW` 创建目标，写失败也不得
+    开始 Cargo。所有 coverage/target/provenance 输出均位于源码树外。raw LCOV SHA-256
+    与 exact blob manifest
     一起进入 provenance；`SF:` 必须精确映射物化 root 下的 tracked Rust blob，record 不重复、
     不靠 suffix 命中，每条 `DA/BRDA` line 必须在对应 blob 的 1-based `1..=EOF`，且
     `LF/LH` 与 `DA`、`BRF/BRH` 与 `BRDA` 一致。ledger selector 每项
@@ -168,8 +171,11 @@ identity 与 interruption 原子性。
       `50f6a203c1861814d288d4bdeae0e28d877af34c`；#126/#128/#129/#130 与 full
       workspace gates 未被弱化。
 - [ ] current exact head coverage raw artifact/provenance、CI、immutable SpecRail mirror、
-      独立 review 与 reviewThreads 证据完整；验证脚本在 Unix Bash 与 Windows
-      Git Bash/MSYS2 runner 使用 `${TMPDIR:-/tmp}` + `mktemp`，不得绑定机器专用路径。
+      独立 review 与 reviewThreads 证据完整。Rust fmt/check/clippy/test继续由Unix与Windows
+      CI执行；descriptor/`O_NOFOLLOW` closure evidence只能在通过`dir_fd` capability gate的
+      POSIX/Linux runner执行。Windows Git Bash/MSYS2不得直接冒充该证据；只有另行评审并
+      证明等强reparse-point/atomic-create实现后才能作为closure runner。临时路径使用
+      `${TMPDIR:-/tmp}` + `mktemp`，不得绑定机器专用路径。
 
 ## 边界情况清单
 

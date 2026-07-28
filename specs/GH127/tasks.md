@@ -163,7 +163,10 @@ packet 文本不得充当 live readiness 证据；此次 spec PR 与已有 `writ
     negative/invalid `BRDA` taken、empty/deleted DA、summary mismatch、bad hash与shell
     early-failure negative fixtures；
     所有 shell block 第一行 `set -euo pipefail`，临时路径统一
-    `${TMPDIR:-/tmp}` + `mktemp`，可由 Unix Bash 或 Windows Git Bash/MSYS2 执行；
+    `${TMPDIR:-/tmp}` + `mktemp`；Rust质量命令继续在Unix/Windows CI执行，exact-head
+    materialization/coverage closure只在通过`dir_fd`/`O_NOFOLLOW` capability gate的
+    POSIX/Linux runner执行。Git Bash/MSYS2若无另行评审的等强reparse-point实现不得冒充
+    closure evidence；
     absolute interpreter、清空Python startup/path注入、每次`-I -S`；fixed revision
     `23caa70e76904eaa82323208d645d5781a365649` external descriptor-materialized mirror
     中的checker SHA-256、base/head byte-identical GH127/GH58 exact blobs、
@@ -188,7 +191,11 @@ set -euo pipefail
   "${SPEC_RAIL_ROOT:?set external SpecRail object repository}"
 ABS_PYTHON="$(type -P python3)"
 GIT_BIN="$(type -P git)"
-case "$ABS_PYTHON:$GIT_BIN:$GH127_EVIDENCE_DIR" in /*:/*:/*) ;; *) exit 1 ;; esac
+BASH_BIN="$(type -P bash)"
+case "$ABS_PYTHON:$GIT_BIN:$BASH_BIN:$GH127_EVIDENCE_DIR" in
+  /*:/*:/*:/*) ;;
+  *) exit 1 ;;
+esac
 while IFS= read -r PYTHON_ENV_NAME
 do
   unset "$PYTHON_ENV_NAME"
@@ -203,8 +210,18 @@ EVIDENCE_REAL="$("$ABS_PYTHON" -I -S -c \
   'import os,sys; print(os.path.realpath(sys.argv[1]))' "$GH127_EVIDENCE_DIR")"
 test -d "$EVIDENCE_REAL"
 case "$EVIDENCE_REAL/" in "$WORKTREE_REAL/"*) exit 1 ;; esac
-test -z "$(find "$EVIDENCE_REAL" -mindepth 1 -print -quit)"
-test -z "$("$GIT_BIN" status --porcelain=v1 --untracked-files=all)"
+EVIDENCE_FIRST_ENTRY="$(find "$EVIDENCE_REAL" -mindepth 1 -print -quit)"
+test -z "$EVIDENCE_FIRST_ENTRY"
+INITIAL_WORKTREE_STATUS="$("$GIT_BIN" status --porcelain=v1 --untracked-files=all)"
+test -z "$INITIAL_WORKTREE_STATUS"
+SUBCOMMAND_FAILURE_SENTINEL="$EVIDENCE_REAL/subcommand-failure-sentinel"
+if "$BASH_BIN" -c 'set -euo pipefail; value="$(false)"; test -z "$value"; : > "$1"' \
+  _ "$SUBCOMMAND_FAILURE_SENTINEL"
+then
+  echo "failing assignment in command substitution was swallowed" >&2
+  exit 1
+fi
+test ! -e "$SUBCOMMAND_FAILURE_SENTINEL"
 BASE_SHA="$("$GIT_BIN" rev-parse "$BASE_SHA^{commit}")"
 HEAD_SHA="$("$GIT_BIN" rev-parse 'HEAD^{commit}')"
 "$GIT_BIN" fetch --no-tags origin main
@@ -222,8 +239,9 @@ test "$PR_HEAD_SHA" = "$HEAD_SHA"
 "$GIT_BIN" merge-base --is-ancestor \
   50f6a203c1861814d288d4bdeae0e28d877af34c "$HEAD_SHA"
 APPROVED_TECH_ENTRY="$("$GIT_BIN" ls-tree "$BASE_SHA" -- specs/GH127/tech.md)"
-test "$(printf '%s\n' "$APPROVED_TECH_ENTRY" | awk '{print $1" "$2}')" = \
-  "100644 blob"
+APPROVED_TECH_KIND="$(printf '%s\n' "$APPROVED_TECH_ENTRY" |
+  awk '{print $1" "$2}')"
+test "$APPROVED_TECH_KIND" = "100644 blob"
 APPROVED_TECH_OID="$(printf '%s\n' "$APPROVED_TECH_ENTRY" | awk '{print $3}')"
 IMPLEMENTATION_MANIFEST_JSON="$("$GIT_BIN" cat-file blob "$APPROVED_TECH_OID" |
   "$ABS_PYTHON" -I -S -c 'import sys; marker="<!-- specrail-planned-changes"; rows=sys.stdin.read().splitlines(); hits=[i for i,row in enumerate(rows) if row.startswith(marker)]; len(hits)==1 and hits[0]+1<len(rows) or sys.exit("trusted manifest missing/duplicated"); print(rows[hits[0]+1])')"
@@ -259,8 +277,9 @@ if not all(valid(meta,path) for meta,path in rows):
 ' "$IMPLEMENTATION_MANIFEST_JSON"
 }
 verify_raw_diff
-test "$("$GIT_BIN" show "$HEAD_SHA:src/layout/text_flow/tests.rs" | wc -l |
-  tr -d ' ')" -le 800
+TESTS_RS_LINES="$("$GIT_BIN" show "$HEAD_SHA:src/layout/text_flow/tests.rs" |
+  wc -l | tr -d ' ')"
+test "$TESTS_RS_LINES" -le 800
 DIFF_SHA256="$("$GIT_BIN" diff --no-ext-diff --binary \
   "$BASE_SHA...$HEAD_SHA" -- |
   "$ABS_PYTHON" -I -S -c \
@@ -295,8 +314,40 @@ for row in raw:
     if not path or rel.is_absolute() or ".." in rel.parts or rel.as_posix()!=path or path in seen:
         raise SystemExit(f"unsafe/duplicate tree path: {path}")
     seen.add(path); entries.append((rel,mode.decode(),oid.decode()))
+if not entries: raise SystemExit("empty source tree")
 flags=os.O_RDONLY|nofollow; dir_flags=flags|directory
 root=os.open(destination,dir_flags); evidence_fd=os.open(evidence,dir_flags)
+# Phase 1: validate and cache every source before the first destination write.
+max_blob_bytes,max_total_bytes=16_000_000,128_000_000
+payloads=[]; manifest={}; total_bytes=0
+for rel,mode,oid in entries:
+    data=run("cat-file","blob",oid)
+    if len(data)>max_blob_bytes or total_bytes+len(data)>max_total_bytes:
+        raise SystemExit(f"source materialization byte limit exceeded: {rel}")
+    actual=hashlib.sha1(b"blob "+str(len(data)).encode()+b"\0"+data).hexdigest()
+    if actual!=oid: raise SystemExit(f"blob OID mismatch: {rel}")
+    total_bytes+=len(data); payloads.append((rel,mode,data))
+    manifest[rel.as_posix()]={"mode":mode,"oid":oid,"lines":len(data.splitlines())}
+expected_dirs={rel.parts[:depth] for rel,_,_ in entries
+               for depth in range(1,len(rel.parts))}
+def validate_existing_tree(parent,prefix=()):
+    for name in sorted(os.listdir(parent)):
+        parts=(*prefix,name)
+        if parts not in expected_dirs:
+            raise SystemExit(f"pre-existing materialization target: {'/'.join(parts)}")
+        child=os.open(name,dir_flags,dir_fd=parent)
+        validate_existing_tree(child,parts); os.close(child)
+validate_existing_tree(root)
+try:
+    existing_manifest=os.open(manifest_name,flags,dir_fd=evidence_fd)
+except FileNotFoundError:
+    pass
+else:
+    os.close(existing_manifest)
+    raise SystemExit("pre-existing materialization manifest")
+manifest_payload=(json.dumps({"revision":rev,"tree":tree,"entries":manifest},
+                             sort_keys=True,separators=(",",":"))+"\n").encode()
+# Phase 2: and only now, create targets descriptor-relatively and exclusively.
 created=set()
 def parent_fd(rel):
     current=os.dup(root)
@@ -306,11 +357,7 @@ def parent_fd(rel):
         child=os.open(part,dir_flags,dir_fd=current); os.close(current); current=child
         created.add(rel.parts[:depth])
     return current
-manifest={}
-for rel,mode,oid in entries:
-    data=run("cat-file","blob",oid)
-    actual=hashlib.sha1(b"blob "+str(len(data)).encode()+b"\0"+data).hexdigest()
-    if actual!=oid: raise SystemExit(f"blob OID mismatch: {rel}")
+for rel,mode,data in payloads:
     parent=parent_fd(rel)
     leaf=os.open(rel.name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|nofollow,0o600,dir_fd=parent)
     if not stat.S_ISREG(os.fstat(leaf).st_mode): raise SystemExit(f"non-regular target: {rel}")
@@ -318,7 +365,6 @@ for rel,mode,oid in entries:
         handle.write(data); handle.flush()
         os.fchmod(handle.fileno(),0o555 if mode=="100755" else 0o444)
     os.close(parent)
-    manifest[rel.as_posix()]={"mode":mode,"oid":oid,"lines":len(data.splitlines())}
 def open_dir(parts):
     current=os.dup(root)
     for part in parts:
@@ -327,10 +373,8 @@ def open_dir(parts):
 for parts in sorted(created,key=len,reverse=True):
     descriptor=open_dir(parts); os.fchmod(descriptor,0o555); os.close(descriptor)
 os.fchmod(root,0o555)
-payload=(json.dumps({"revision":rev,"tree":tree,"entries":manifest},
-                    sort_keys=True,separators=(",",":"))+"\n").encode()
 out=os.open(manifest_name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|nofollow,0o400,dir_fd=evidence_fd)
-with os.fdopen(out,"wb") as handle: handle.write(payload)
+with os.fdopen(out,"wb") as handle: handle.write(manifest_payload)
 os.close(root); os.close(evidence_fd)
 PY
 }
@@ -340,8 +384,9 @@ SOURCE_MANIFEST_NAME=source-blobs.json
 materialize_tree "$WORKTREE_ROOT" "$HEAD_SHA" "$SOURCE_ROOT" "$SOURCE_MANIFEST_NAME"
 SOURCE_MANIFEST="$EVIDENCE_REAL/$SOURCE_MANIFEST_NAME"
 SOURCE_MANIFEST_SHA256="$(shasum -a 256 "$SOURCE_MANIFEST" | awk '{print $1}')"
-test "$("$GIT_BIN" ls-tree -r "$BASE_SHA" -- specs/GH127 specs/GH58)" = \
-  "$("$GIT_BIN" ls-tree -r "$HEAD_SHA" -- specs/GH127 specs/GH58)"
+BASE_SPEC_TREE="$("$GIT_BIN" ls-tree -r "$BASE_SHA" -- specs/GH127 specs/GH58)"
+HEAD_SPEC_TREE="$("$GIT_BIN" ls-tree -r "$HEAD_SHA" -- specs/GH127 specs/GH58)"
+test "$BASE_SPEC_TREE" = "$HEAD_SPEC_TREE"
 export CARGO_TARGET_DIR="$EVIDENCE_REAL/cargo-target"
 mkdir "$CARGO_TARGET_DIR"
 (
@@ -464,14 +509,19 @@ with os.fdopen(fd,"w",encoding="utf-8") as handle: json.dump(payload,handle,sort
 PY
 
 SPEC_RAIL_REV=23caa70e76904eaa82323208d645d5781a365649
-test "$("$GIT_BIN" -C "$SPEC_RAIL_ROOT" rev-parse "$SPEC_RAIL_REV^{commit}")" = \
-  "$SPEC_RAIL_REV"
+SPEC_RAIL_RESOLVED_REV="$("$GIT_BIN" -C "$SPEC_RAIL_ROOT" \
+  rev-parse "$SPEC_RAIL_REV^{commit}")"
+test "$SPEC_RAIL_RESOLVED_REV" = "$SPEC_RAIL_REV"
 SPEC_RAIL_MIRROR="$(mktemp -d "$EVIDENCE_REAL/specrail.XXXXXX")"
 materialize_tree "$SPEC_RAIL_ROOT" "$SPEC_RAIL_REV" "$SPEC_RAIL_MIRROR" \
   specrail-blobs.json
-test "$(shasum -a 256 "$SPEC_RAIL_MIRROR/checks/check_workflow.py" | awk '{print $1}')" = \
+CHECK_WORKFLOW_SHA256="$(shasum -a 256 \
+  "$SPEC_RAIL_MIRROR/checks/check_workflow.py" | awk '{print $1}')"
+test "$CHECK_WORKFLOW_SHA256" = \
   8c791545f78d93649385ef0f9780454a7d4552f8da06da1fdee0de9cb8030a7e
-test "$(shasum -a 256 "$SPEC_RAIL_MIRROR/checks/route_gate.py" | awk '{print $1}')" = \
+ROUTE_GATE_SHA256="$(shasum -a 256 \
+  "$SPEC_RAIL_MIRROR/checks/route_gate.py" | awk '{print $1}')"
+test "$ROUTE_GATE_SHA256" = \
   56954390bc5f9733601d94b5d18f78a7d5179c07fc47cd6dd8e8135685c8ac4a
 run_specrail() {
   "$ABS_PYTHON" -I -S -c 'import runpy,sys; from pathlib import Path; checks=Path(sys.argv[1]); entry=(checks/sys.argv[2]); entry.is_file() and entry.parent==checks or sys.exit("unsafe SpecRail entry"); sys.path.insert(0,str(checks)); sys.argv=[str(entry),*sys.argv[3:]]; runpy.run_path(str(entry),run_name="__main__")' \
@@ -512,22 +562,27 @@ test "$FINAL_CURRENT_MAIN_SHA" = "$EXPECTED_CURRENT_MAIN_SHA"
 test "$FINAL_PR_BASE_SHA" = "$BASE_SHA"
 test "$FINAL_PR_HEAD_SHA" = "$HEAD_SHA"
 test "$FINAL_MERGE_BASE_SHA" = "$BASE_SHA"
-test "$("$GIT_BIN" -C "$WORKTREE_ROOT" rev-parse 'HEAD^{commit}')" = "$HEAD_SHA"
-test "$("$GIT_BIN" -C "$WORKTREE_ROOT" diff --no-ext-diff --binary \
+FINAL_LOCAL_HEAD="$("$GIT_BIN" -C "$WORKTREE_ROOT" rev-parse 'HEAD^{commit}')"
+test "$FINAL_LOCAL_HEAD" = "$HEAD_SHA"
+FINAL_DIFF_SHA256="$("$GIT_BIN" -C "$WORKTREE_ROOT" diff --no-ext-diff --binary \
   "$BASE_SHA...$HEAD_SHA" -- |
   "$ABS_PYTHON" -I -S -c \
-  'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')" = \
-  "$DIFF_SHA256"
+  'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+test "$FINAL_DIFF_SHA256" = "$DIFF_SHA256"
 verify_raw_diff
-test "$(shasum -a 256 "$SOURCE_MANIFEST" | awk '{print $1}')" = \
-  "$SOURCE_MANIFEST_SHA256"
-test -z "$("$GIT_BIN" -C "$WORKTREE_ROOT" status \
+FINAL_SOURCE_MANIFEST_SHA256="$(shasum -a 256 "$SOURCE_MANIFEST" |
+  awk '{print $1}')"
+test "$FINAL_SOURCE_MANIFEST_SHA256" = "$SOURCE_MANIFEST_SHA256"
+FINAL_WORKTREE_STATUS="$("$GIT_BIN" -C "$WORKTREE_ROOT" status \
   --porcelain=v1 --untracked-files=all)"
+test -z "$FINAL_WORKTREE_STATUS"
 ```
 
 coverage parser的negative matrix必须对同一 parser入口逐项注入并断言nonzero；descriptor
-materializer也必须以source ancestor symlink、destination ancestor symlink、existing target、
-tampered blob bytes和non-regular tree-entry fixtures证明在首个target写入前失败。SpecRail
+materializer也必须以source ancestor symlink，以及排序靠后的destination ancestor symlink、
+existing target、tampered blob bytes和non-regular tree-entry fixtures证明Phase 1失败时
+排序第一的target仍不存在。另以Phase 2 write-race/permission失败证明Cargo sentinel不存在；
+前述真实Bash sentinel还必须证明失败的assignment command substitution不能被`test`吞掉。SpecRail
 route gate紧邻执行前fresh读取issue state/labels，从verified mirror的`labels.yaml`求唯一
 canonical readiness；packet不把live maintainer授权值当成静态证据。
 
