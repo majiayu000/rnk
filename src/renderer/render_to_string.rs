@@ -3,7 +3,7 @@
 //! This module provides utilities for rendering elements to strings
 //! outside of the main application runtime.
 
-use crate::core::Element;
+use crate::core::{Element, ElementType};
 use crate::layout::LayoutEngine;
 use crate::renderer::tree_renderer::try_render_element_tree;
 use crate::renderer::{Output, Terminal, TextRenderError};
@@ -223,6 +223,10 @@ impl RenderHelper {
         width: u16,
         engine: &mut LayoutEngine,
     ) -> Result<u16, TextRenderError> {
+        if element.element_type == ElementType::VirtualText {
+            return Ok(1);
+        }
+
         let initial_guess = self.calculate_element_height(element, width, engine).max(1);
         let mut probe_height = initial_guess.max(64);
         let mut measured_height = initial_guess;
