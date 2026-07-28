@@ -20,18 +20,21 @@ GH-127: https://github.com/majiayu000/rnk/issues/127
 
 ## 当前实现门
 
-live issue 当前带 `ready_to_implement`，但本 packet 在此次 spec PR 前不存在。现有
-dry-run route artifact 只允许 `write_spec`，不授权 implementation。开始 `SP127-T1` 前，
-coordinator 必须 fresh 证明：
+packet 文本不得充当 live readiness 证据；此次 spec PR 与已有 `write_spec` route artifact
+都不授权 implementation。开始 `SP127-T1` 前，coordinator 必须 fresh 证明：
 
 1. 本三文件 spec-only PR 已 merged，并有绑定 exact spec head/scope 的 human approval。
-2. issue 处于单一 canonical `ready_to_implement`，无 `parked`/冲突 readiness。
-3. #126 merge `50f6a203c1861814d288d4bdeae0e28d877af34c` 是 implementation
+2. 仅在第 1 项满足后由 maintainer 将唯一 readiness 从 `ready_to_spec` 替换为
+   `ready_to_implement`；agent 不改 label。
+3. 紧邻 implementation route gate fresh 查询 live issue，按 pinned `labels.yaml` 要求
+   恰好一个 canonical readiness，并把查询所得 state 传给 gate；非
+   `ready_to_implement`、closed 或冲突状态均 fail closed。
+4. #126 merge `50f6a203c1861814d288d4bdeae0e28d877af34c` 是 implementation
    head ancestor。
-4. duplicate search 未发现 GH-127 implementation PR、remote/local branch、worktree owner；
+5. duplicate search 未发现 GH-127 implementation PR、remote/local branch、worktree owner；
    创建恰好一个 implementation branch/PR。
-5. base 包含 #128 PR #134、#129 PR #135、#130 PR #138 的 merge commits。
-6. manifest 五路径和 GH-58 spec refs 仍存在；current API/error/diagnostic/cache shape 与本
+6. base 包含 #128 PR #134、#129 PR #135、#130 PR #138 的 merge commits。
+7. manifest 五路径和 GH-58 spec refs 仍存在；current API/error/diagnostic/cache shape 与本
    packet 一致。任一失败保持 blocked，不改 label、不创建 implementation commit。
 
 ## 实现任务
@@ -156,8 +159,9 @@ coordinator 必须 fresh 证明：
     `BRF/BRH`/`BRDA` summary一致，两个 planned production record 的
     changed-executable 交集均非空；
     每条 `DA/BRDA` line 在对应 canonical source 的 `1..=EOF`；五路径 allowlist 非空 gate
-    与 Cargo.toml、selector ignored、line 0/超 EOF `DA/BRDA`、empty/deleted DA、summary
-    mismatch、bad hash、shell early-failure negative fixtures；
+    与 Cargo.toml、selector ignored、line 0/超 EOF `DA/BRDA`、negative `DA` hits、
+    negative/invalid `BRDA` taken、empty/deleted DA、summary mismatch、bad hash 与 shell
+    early-failure negative fixtures；
     所有 shell block 第一行 `set -euo pipefail`，临时路径统一
     `${TMPDIR:-/tmp}` + `mktemp`，可由 Unix Bash 或 Windows Git Bash/MSYS2 执行；
     fixed revision `23caa70e76904eaa82323208d645d5781a365649` external mirror 中的
