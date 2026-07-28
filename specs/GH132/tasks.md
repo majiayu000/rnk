@@ -68,7 +68,7 @@ fresh gate全部通过。
     : "${SPEC_RAIL_ROOT:?set SPEC_RAIL_ROOT to the checked-out SpecRail workflow-pack root}"
     : "${GH132_BRANCH_OWNERSHIP_DECISION:?set the external human branch decision JSON}"
     case "$GH132_BRANCH_OWNERSHIP_DECISION" in /*) ;; *) exit 1 ;; esac
-    SPEC_RAIL_REV=bfc60f26164af5df1ebd3b5cb79d07379fc416b7
+    export GIT_NO_REPLACE_OBJECTS=1 SPEC_RAIL_REV=bfc60f26164af5df1ebd3b5cb79d07379fc416b7
     test "$(git -C "$SPEC_RAIL_ROOT" rev-parse 'HEAD^{commit}')" = "$SPEC_RAIL_REV"
     test "$(git -C "$SPEC_RAIL_ROOT" remote get-url origin)" = \
       https://github.com/majiayu000/specrail.git
@@ -534,7 +534,7 @@ fresh gate全部通过。
     case "$GH132_REVIEW_BUNDLE_REAL/" in "$WORKTREE_REAL/"*) exit 1 ;; esac
     printf '%s\n' "$GH132_REVIEW_BUNDLE_SHA256" |
       grep -Eq '^[0-9a-f]{64}$'
-    SPEC_RAIL_EXPECTED_SHA=bfc60f26164af5df1ebd3b5cb79d07379fc416b7
+    export GIT_NO_REPLACE_OBJECTS=1 SPEC_RAIL_EXPECTED_SHA=bfc60f26164af5df1ebd3b5cb79d07379fc416b7
     test "$(git -C "$SPEC_RAIL_ROOT" rev-parse 'HEAD^{commit}')" = "$SPEC_RAIL_EXPECTED_SHA"
     test "$(git -C "$SPEC_RAIL_ROOT" remote get-url origin)" = https://github.com/majiayu000/specrail.git
     mkdir -p "$GH132_EVIDENCE_DIR"
