@@ -88,10 +88,12 @@ pub(super) struct IdentityBackup {
 }
 impl IdentityBackup {
     pub(super) fn capture(state: &ConversationState, update: &ConversationUpdate,
-        affected: &BTreeSet<MessageId>) -> Self {
+        affected: &BTreeSet<MessageId>, mut message_visit: impl FnMut(),
+        mut block_visit: impl FnMut()) -> Self {
         let mut message_ids = affected.clone(); let mut block_ids = BTreeSet::new();
         let mut thinking_ids = BTreeSet::new(); let mut call_ids = BTreeSet::new();
         let mut capture_entry = |message_id: MessageId, entry: &MessageBlockEntry| {
+            block_visit();
             block_ids.insert(entry.id);
             match &entry.block {
                 MessageBlock::Thinking(value) => {
@@ -102,7 +104,9 @@ impl IdentityBackup {
                 _ => {}
             }
         };
-        for message in state.messages.iter().filter(|message| affected.contains(&message.id)) {
+        for message in &state.messages {
+            message_visit();
+            if !affected.contains(&message.id) { continue; }
             message_ids.insert(message.id);
             for entry in &message.blocks { capture_entry(message.id, entry); }
         }
