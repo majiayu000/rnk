@@ -270,516 +270,73 @@ tech ledger 与 tasks Covers，不允许只在 final catch-all 中补名字。
 
 ## Verification Plan
 
-### Dependency 与 scope
+### Closure trust boundary
 
-```sh
-set -euo pipefail
-BASE_SHA="$(git rev-parse "${BASE_SHA:?set BASE_SHA to the implementation PR base}^{commit}")"
-HEAD_SHA="$(git rev-parse HEAD^{commit})"
-test "$(git merge-base "$BASE_SHA" "$HEAD_SHA")" = "$BASE_SHA"
-git merge-base --is-ancestor 50f6a203c1861814d288d4bdeae0e28d877af34c HEAD
-ALLOWLIST_PATH="$(mktemp "${TMPDIR:-/tmp}/gh127-allowlist.XXXXXX")"
-CHANGED_PATHS="$(mktemp "${TMPDIR:-/tmp}/gh127-changed.XXXXXX")"
-UNEXPECTED_PATHS="$(mktemp "${TMPDIR:-/tmp}/gh127-unexpected.XXXXXX")"
-NEGATIVE_PATHS="$(mktemp "${TMPDIR:-/tmp}/gh127-negative.XXXXXX")"
-trap 'rm -f "$ALLOWLIST_PATH" "$CHANGED_PATHS" "$UNEXPECTED_PATHS" "$NEGATIVE_PATHS"' \
-  EXIT HUP INT TERM
-printf '%s\n' \
-  src/layout/text_flow.rs \
-  src/layout/text_flow/style_normalization.rs \
-  src/layout/text_flow/tests.rs \
-  src/layout/text_flow/tests/style_normalization.rs \
-  tests/text_flow_style_normalization.rs |
-  LC_ALL=C sort > "$ALLOWLIST_PATH"
-git diff --name-only "$BASE_SHA...$HEAD_SHA" | LC_ALL=C sort > "$CHANGED_PATHS"
-verify_changed_paths() {
-  local candidate="$1"
-  test -s "$candidate"
-  comm -23 "$candidate" "$ALLOWLIST_PATH" > "$UNEXPECTED_PATHS"
-  test ! -s "$UNEXPECTED_PATHS"
-}
-verify_changed_paths "$CHANGED_PATHS"
-test -z "$(git diff --name-only --diff-filter=D "$BASE_SHA...$HEAD_SHA")"
-for required in \
-  src/layout/text_flow/style_normalization.rs \
-  src/layout/text_flow/tests/style_normalization.rs \
-  tests/text_flow_style_normalization.rs
-do
-  test -f "$required"
-  grep -Fx "$required" "$CHANGED_PATHS"
-done
-cp "$CHANGED_PATHS" "$NEGATIVE_PATHS"
-printf '%s\n' Cargo.toml >> "$NEGATIVE_PATHS"
-LC_ALL=C sort -u -o "$NEGATIVE_PATHS" "$NEGATIVE_PATHS"
-if verify_changed_paths "$NEGATIVE_PATHS"; then
-  echo "negative allowlist fixture unexpectedly accepted Cargo.toml" >&2
-  exit 1
-fi
-git diff --exit-code "$BASE_SHA...$HEAD_SHA" -- \
-  src/layout/text_flow/wrap.rs \
-  src/layout/text_flow/truncate.rs \
-  src/layout/engine.rs \
-  src/layout/engine \
-  tests/property_tests.rs \
-  tests/text_flow_truncate_regressions.rs
-test "$(wc -l < src/layout/text_flow/tests.rs | tr -d ' ')" -le 800
-```
+完整可执行 closure 位于 `tasks.md` 的 `SP127-T4 exact-head closure reference`。该命令块是
+本节的规范性实现；不得用手工抽样或 `--name-only` 替代。它先解析 absolute Python
+interpreter、清除全部 Python startup/path 注入并统一使用 `-I -S`，同时设置
+`GIT_NO_REPLACE_OBJECTS=1`。
 
-`git diff --name-only` 的实现 diff 必须是 manifest 五路径的非空子集，且两个新私有
-submodule 与 public integration file 必须存在。`text_flow.rs` 只承担 private module
-wiring/build integration；`tests.rs` 只承担 module declaration、必要的 stable wrapper 与
-自然拆分，禁止用压缩断言规避 800 行门。
+每次 closure 开始必须：
 
-### Exact-test discovery
+1. 要求 caller `BASE_SHA` 与 local clean `HEAD`，fresh `git fetch --no-tags origin main`，
+   读取 implementation PR 的 `baseRefOid/headRefOid`；
+2. 证明 `BASE_SHA == FETCH_HEAD == baseRefOid ==
+   merge-base(baseRefOid, headRefOid)`，且 `HEAD == headRefOid`；
+3. 从 `BASE_SHA:specs/GH127/tech.md` 的 exact `100644 blob`读取唯一 planned manifest，
+   使待审 head不能通过改自己 allowlist 来授权额外路径；
+4. 用 `git diff --raw -z --no-renames` 逐 record验证 path、status、old/new mode；actual
+   必须是五路径 manifest 的非空子集，status只允许 `A/M`，target mode只允许
+   `100644/100755`，`M` 的 source mode也必须 regular。rename/copy会在禁用 rename
+   detection 后含 `D`，和 delete/typechange/unmerged、duplicate/non-canonical/path escape
+   一样 fail closed。三个 planned new files仍必须出现，父 unit file不得超过800行。
 
-先列出真实 harness inventory，再执行 ledger；任何 selector 为零或多于一个都 fail closed：
+### Immutable source、coverage 与 provenance
 
-```sh
-set -euo pipefail
-LIB_INVENTORY="$(mktemp "${TMPDIR:-/tmp}/gh127-lib-inventory.XXXXXX")"
-INTEGRATION_INVENTORY="$(mktemp "${TMPDIR:-/tmp}/gh127-integration-inventory.XXXXXX")"
-RESULT_PATH="$(mktemp "${TMPDIR:-/tmp}/gh127-test-result.XXXXXX")"
-IGNORED_INVENTORY="$(mktemp "${TMPDIR:-/tmp}/gh127-ignored-inventory.XXXXXX")"
-IGNORED_RESULT="$(mktemp "${TMPDIR:-/tmp}/gh127-ignored-result.XXXXXX")"
-trap 'rm -f "$LIB_INVENTORY" "$INTEGRATION_INVENTORY" "$RESULT_PATH" \
-  "$IGNORED_INVENTORY" "$IGNORED_RESULT"' EXIT HUP INT TERM
-cargo test --workspace --lib --locked -- --list > "$LIB_INVENTORY"
-cargo test --test text_flow_style_normalization --locked -- --list \
-  > "$INTEGRATION_INVENTORY"
-verify_test_result() {
-  local inventory="$1"
-  local selector="$2"
-  local result="$3"
-  local matched passed ignored
-  matched="$(awk -v expected="$selector: test" \
-    '$0 == expected { n += 1 } END { print n + 0 }' "$inventory")"
-  passed="$(sed -nE \
-    's/^test result:.* ([0-9]+) passed; [0-9]+ failed; [0-9]+ ignored;.*/\1/p' \
-    "$result" | awk '{ n += $1 } END { print n + 0 }')"
-  ignored="$(sed -nE \
-    's/^test result:.* [0-9]+ passed; [0-9]+ failed; ([0-9]+) ignored;.*/\1/p' \
-    "$result" | awk '{ n += $1 } END { print n + 0 }')"
-  test "$matched" -eq 1 || return 1
-  test "$passed" -eq 1 || return 1
-  test "$ignored" -eq 0 || return 1
-}
-for selector in \
-  layout::text_flow::tests::style_normalization::styled_boundary_normalization_operation_count_is_linear \
-  layout::text_flow::tests::style_normalization::styled_boundary_operation_bound_failure_reports_complete_diagnostics \
-  layout::text_flow::tests::style_normalization::style_boundary_event_order_and_multiplicity_are_stable \
-  layout::text_flow::tests::style_normalization::styled_range_extremes_preserve_typed_errors \
-  layout::text_flow::tests::style_normalization::styled_normalization_polling_and_cache_count_are_atomic
-do
-  cargo test --workspace --lib --locked "$selector" -- --exact > "$RESULT_PATH" 2>&1
-  verify_test_result "$LIB_INVENTORY" "$selector" "$RESULT_PATH"
-done
-for selector in \
-  public_styled_flow_preserves_first_source_style_and_diagnostics \
-  public_styled_flow_preserves_adjacent_empty_and_unsorted_ranges \
-  public_styled_flow_preserves_typed_failures \
-  public_styled_flow_preserves_complete_flow_identity \
-  public_styled_flow_preserves_exact_cache_identity \
-  public_styled_flow_failure_precedence_is_stable \
-  public_styled_flow_failures_and_interruption_are_atomic \
-  public_styled_flow_retry_matches_cold_build
-do
-  cargo test --test text_flow_style_normalization --locked "$selector" -- --exact \
-    > "$RESULT_PATH" 2>&1
-  verify_test_result "$INTEGRATION_INVENTORY" "$selector" "$RESULT_PATH"
-done
-printf '%s\n' 'ignored_fixture: test' > "$IGNORED_INVENTORY"
-printf '%s\n' \
-  'test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out' \
-  > "$IGNORED_RESULT"
-if verify_test_result "$IGNORED_INVENTORY" ignored_fixture "$IGNORED_RESULT"; then
-  echo "negative ignored-test fixture unexpectedly passed" >&2
-  exit 1
-fi
-```
+closure 不在可变 implementation checkout 上收集 coverage。它读取 exact `headRefOid` 的
+recursive tree entries，只接受 `100644/100755 blob`，对每个 blob通过 `git cat-file`
+取 bytes并重算 Git OID。一个 fresh、worktree外、mode `0700` evidence root承载：
 
-### Focused 与 regression
+- descriptor-relative 安全物化的 source tree；固定 root dirfd 后，每层 parent 用
+  `O_NOFOLLOW|O_DIRECTORY` 打开，目标以 `O_CREAT|O_EXCL|O_NOFOLLOW` 创建；
+- 包含 path/mode/OID/line-count 的 exact tree manifest，以及它的 SHA-256；
+- source tree 完成后改为只读；`CARGO_TARGET_DIR`、raw LCOV、test inventory/result、
+  provenance与所有临时输出均在 source tree 外。
 
-```sh
-set -euo pipefail
-cargo test --workspace --lib --locked layout::text_flow::tests::style_normalization::styled_boundary_normalization_operation_count_is_linear -- --exact
-cargo test --release --workspace --lib --locked layout::text_flow::tests::style_normalization::styled_boundary_normalization_operation_count_is_linear -- --exact
-cargo test --workspace --lib --locked layout::text_flow::tests::style_normalization::styled_boundary_operation_bound_failure_reports_complete_diagnostics -- --exact
-cargo test --workspace --lib --locked layout::text_flow::tests::style_normalization::style_boundary_event_order_and_multiplicity_are_stable -- --exact
-cargo test --workspace --lib --locked layout::text_flow::tests::style_normalization::styled_range_extremes_preserve_typed_errors -- --exact
-cargo test --workspace --lib --locked layout::text_flow::tests::style_normalization::styled_normalization_polling_and_cache_count_are_atomic -- --exact
-cargo test --test text_flow_style_normalization --locked
-cargo test --workspace --lib --locked layout::text_flow::tests::split_combining_and_zwj_style_boundary_normalizes -- --exact
-cargo test --workspace --lib --locked layout::text_flow::tests::text_flow_cache_invalidation -- --exact
-cargo test --workspace --lib --locked layout::text_flow::tests::text_flow_cache_reuse -- --exact
-cargo test --workspace --lib --locked layout::engine::text_flow_bridge::tests::split_combining_span_boundary_preserves_first_source_style -- --exact
-cargo test --workspace --lib --locked layout::engine::text_flow_bridge::tests::split_zwj_span_boundary_preserves_first_source_style -- --exact
-PROPTEST_CASES=4096 cargo test --test property_tests --locked text_flow_logical_source_round_trip -- --exact
-cargo test --test text_flow_truncate_regressions --locked
-cargo test --workspace --lib --locked layout::engine::text_flow_bridge::tests::replace_and_reorder_preserve_only_live_flows -- --exact
-cargo test --workspace --lib --locked layout::engine::context_sync::tests::identical_context_sync_keeps_text_leaf_and_root_clean_and_reuses_flow -- --exact
-cargo test --workspace --lib --locked layout::engine::context_sync::tests::source_style_wrap_and_overflow_changes_dirty_only_the_affected_text_path -- --exact
-cargo test --test text_flow_wrap_interruption --locked
-```
+任一 symlink、non-directory parent、existing target、non-regular entry、OID mismatch、
+absolute/`..`/non-canonical/duplicate path 均须在任何 Cargo 执行前失败。coverage verifier
+只把 `SF:` 精确映射到物化 root + manifest tracked Rust path；EOF来自 exact Git blob
+bytes，不重新打开可变 checkout source。它核对raw LCOV SHA-256、record uniqueness、
+`DA/BRDA` 1-based范围、hits类型与非负性、`LF/LH/BRF/BRH` summaries、两个 production
+record的changed-executable交集、changed production line >=80%和critical private module
+可执行line/branch各100%。Cargo.toml raw diff、source/destination symlink、existing target、
+suffix/outside/duplicate `SF:`、empty/deleted/line 0/超EOF/negative `DA`、invalid `BRDA`、
+summary/hash和early-shell-failure fixtures均须证明 fail closed。
 
-### Full quality 与 coverage
+### Tests、SpecRail 与 final rebind
 
-```sh
-set -euo pipefail
-cargo fmt --all -- --check
-cargo check --workspace --all-targets --all-features --locked
-cargo clippy --workspace --all-targets --all-features --locked -- \
-  -D warnings -A clippy::collapsible_if -A clippy::manual_is_multiple_of
-cargo test --workspace --all-targets --all-features --locked
-: "${IMPLEMENTATION_PR:?set IMPLEMENTATION_PR to the implementation PR number}"
-BASE_SHA="$(git rev-parse "${BASE_SHA:?set BASE_SHA to the implementation PR base}^{commit}")"
-HEAD_SHA="$(git rev-parse HEAD^{commit})"
-PR_EVIDENCE_BEFORE="$(mktemp "${TMPDIR:-/tmp}/gh127-pr-before.XXXXXX")"
-PR_EVIDENCE_AFTER="$(mktemp "${TMPDIR:-/tmp}/gh127-pr-after.XXXXXX")"
-verify_pr_binding() {
-  local destination="$1"
-  gh pr view "$IMPLEMENTATION_PR" --repo majiayu000/rnk \
-    --json baseRefOid,headRefOid > "$destination"
-  python3 - "$destination" "$BASE_SHA" "$HEAD_SHA" <<'PY'
-import json, sys
-payload = json.load(open(sys.argv[1], encoding="utf-8"))
-if payload["baseRefOid"] != sys.argv[2] or payload["headRefOid"] != sys.argv[3]:
-    raise SystemExit("local base/head do not equal fresh implementation PR baseRefOid/headRefOid")
-PY
-  test "$(git rev-parse HEAD)" = "$HEAD_SHA"
-  test "$(git merge-base "$BASE_SHA" "$HEAD_SHA")" = "$BASE_SHA"
-}
-verify_pr_binding "$PR_EVIDENCE_BEFORE"
-test -z "$(git status --porcelain --untracked-files=all)"
-LCOV_PATH="$(mktemp "${TMPDIR:-/tmp}/gh127-${HEAD_SHA}.lcov.XXXXXX")"
-PROVENANCE_PATH="$(mktemp "${TMPDIR:-/tmp}/gh127-${HEAD_SHA}.coverage.XXXXXX")"
-EARLY_FAILURE_SENTINEL="$(mktemp "${TMPDIR:-/tmp}/gh127-early-failure.XXXXXX")"
-rm -f "$EARLY_FAILURE_SENTINEL"
-trap 'rm -f "$EARLY_FAILURE_SENTINEL"' EXIT HUP INT TERM
-cargo llvm-cov clean --workspace
-cargo llvm-cov --branch --workspace --lib --all-features --lcov \
-  --output-path "$LCOV_PATH" --locked
-test -s "$LCOV_PATH"
-LCOV_SHA256="$(shasum -a 256 "$LCOV_PATH" | awk '{print $1}')"
-python3 - "$BASE_SHA" "$HEAD_SHA" "$LCOV_PATH" "$LCOV_SHA256" \
-  "$PROVENANCE_PATH" <<'PY'
-import hashlib
-import json
-import re
-import subprocess
-import sys
-from pathlib import Path
+GH127-L1..L13先从真实 harness inventory证明各 selector恰好一个，再运行并解析为
+`matched=1/passed=1/ignored=0`；debug/release counter、4096 property、#126/#128/#129/#130
+regressions和full fmt/check/clippy/all-target/all-feature tests均从同一只读 exact source
+执行。
 
-base, head, lcov_path, expected_lcov_sha256, provenance_path = sys.argv[1:]
-production = (
-    "src/layout/text_flow.rs",
-    "src/layout/text_flow/style_normalization.rs",
-)
-root = Path(
-    subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-).resolve(strict=True)
+target repo没有 `checks/route_gate.py`。fixed SpecRail revision
+`23caa70e76904eaa82323208d645d5781a365649` 同样只能从exact regular blobs/OID通过上述
+descriptor materializer建立只读external mirror；验证
+`check_workflow.py=8c791545f78d93649385ef0f9780454a7d4552f8da06da1fdee0de9cb8030a7e`
+和
+`route_gate.py=56954390bc5f9733601d94b5d18f78a7d5179c07fc47cd6dd8e8135685c8ac4a`。
+GH127/GH58 inputs来自 trusted `BASE_SHA` exact blobs，并证明implementation head对应
+tree entries相同；不得 `cp` mutable checkout。执行checker时只显式把已验证mirror
+`checks/`插入`sys.path`，入口也来自该mirror，ambient CWD、`PYTHONPATH`、user site和
+`sitecustomize`均不在信任边界内。
 
-
-def resolve(*args):
-    return subprocess.run(
-        ["git", *args], check=True, capture_output=True, text=True
-    ).stdout.strip()
-
-
-def checksum(payload, expected):
-    actual = hashlib.sha256(payload).hexdigest()
-    if actual != expected:
-        raise ValueError("raw LCOV checksum mismatch")
-    return actual
-
-
-def parse_lcov(text, expected_paths):
-    records = {}
-    record = None
-    for line in text.splitlines():
-        if line.startswith("SF:"):
-            if record is not None:
-                raise ValueError("nested SF record")
-            raw = line[3:]
-            source = Path(raw)
-            if not source.is_absolute():
-                raise ValueError(f"non-absolute/suffix SF path: {raw}")
-            try:
-                canonical = source.resolve(strict=True)
-                relative = canonical.relative_to(root).as_posix()
-            except (FileNotFoundError, ValueError) as error:
-                raise ValueError(f"outside or nonexistent SF path: {raw}") from error
-            if raw != str(canonical):
-                raise ValueError(f"non-canonical SF path: {raw}")
-            if canonical not in expected_paths:
-                raise ValueError(f"unexpected SF record: {relative}")
-            if relative in records:
-                raise ValueError(f"duplicate SF record: {relative}")
-            record = {
-                "path": relative,
-                "source_lines": sum(1 for _ in canonical.open("rb")),
-                "lines": {},
-                "branches": {},
-                "lf": None,
-                "lh": None,
-                "brf": None,
-                "brh": None,
-            }
-        elif line == "end_of_record":
-            if record is None:
-                raise ValueError("end_of_record without SF")
-            lines = record["lines"]
-            branches = record["branches"]
-            if not lines:
-                raise ValueError(f"empty/deleted DA data: {record['path']}")
-            if record["lf"] != len(lines):
-                raise ValueError(f"LF/DA mismatch: {record['path']}")
-            if record["lh"] != sum(value > 0 for value in lines.values()):
-                raise ValueError(f"LH/DA mismatch: {record['path']}")
-            if record["brf"] != len(branches):
-                raise ValueError(f"BRF/BRDA mismatch: {record['path']}")
-            branch_hits = sum(value is not None and value > 0 for value in branches.values())
-            if record["brh"] != branch_hits:
-                raise ValueError(f"BRH/BRDA mismatch: {record['path']}")
-            records[record["path"]] = record
-            record = None
-        elif record is not None and line.startswith("DA:"):
-            number, hits, *_ = line[3:].split(",")
-            number = int(number)
-            if not 1 <= number <= record["source_lines"]:
-                raise ValueError(f"out-of-range DA line: {record['path']}:{number}")
-            if number in record["lines"]:
-                raise ValueError(f"duplicate DA line: {record['path']}:{number}")
-            record["lines"][number] = int(hits)
-            if record["lines"][number] < 0:
-                raise ValueError(f"negative DA hits: {record['path']}:{number}")
-        elif record is not None and line.startswith("BRDA:"):
-            number, block, branch, taken = line[5:].split(",")
-            number = int(number)
-            if not 1 <= number <= record["source_lines"]:
-                raise ValueError(f"out-of-range BRDA line: {record['path']}:{number}")
-            key = (number, block, branch)
-            if key in record["branches"]:
-                raise ValueError(f"duplicate BRDA entry: {record['path']}:{key}")
-            record["branches"][key] = None if taken == "-" else int(taken)
-            if record["branches"][key] is not None and record["branches"][key] < 0:
-                raise ValueError(f"negative BRDA taken: {record['path']}:{key}")
-        elif record is not None and line.startswith(("LF:", "LH:", "BRF:", "BRH:")):
-            key, value = line.split(":", 1)
-            field = key.lower()
-            if record[field] is not None:
-                raise ValueError(f"duplicate {key} summary: {record['path']}")
-            record[field] = int(value)
-    if record is not None:
-        raise ValueError("unterminated SF record")
-    return records
-
-
-def expect_failure(name, action):
-    try:
-        action()
-    except (ValueError, OSError):
-        return
-    raise SystemExit(f"negative verifier fixture unexpectedly passed: {name}")
-
-
-tracked = subprocess.run(
-    ["git", "ls-files", "-z", "--", "*.rs"],
-    check=True,
-    capture_output=True,
-).stdout.split(b"\0")
-expected_paths = {
-    (root / raw.decode()).resolve(strict=True)
-    for raw in tracked
-    if raw
-}
-fixture_source = (root / production[0]).resolve(strict=True)
-fixture = (
-    f"SF:{fixture_source}\n"
-    "DA:1,1\nLF:1\nLH:1\n"
-    "BRDA:1,0,0,1\nBRF:1\nBRH:1\nend_of_record\n"
-)
-parse_lcov(fixture, expected_paths)
-fixture_eof = sum(1 for _ in fixture_source.open("rb"))
-for name, payload in (
-    ("DA line 0", fixture.replace("DA:1,1", "DA:0,1")),
-    ("DA beyond EOF", fixture.replace("DA:1,1", f"DA:{fixture_eof + 1},1")),
-    ("DA negative hits", fixture.replace("DA:1,1\nLF:1\nLH:1", "DA:1,-1\nLF:1\nLH:0")),
-    ("BRDA line 0", fixture.replace("BRDA:1,0,0,1", "BRDA:0,0,0,1")),
-    ("BRDA beyond EOF", fixture.replace(
-        "BRDA:1,0,0,1", f"BRDA:{fixture_eof + 1},0,0,1"
-    )),
-    ("BRDA negative taken", fixture.replace("BRDA:1,0,0,1", "BRDA:1,0,0,-2")),
-    ("BRDA invalid taken", fixture.replace("BRDA:1,0,0,1", "BRDA:1,0,0,invalid")),
-):
-    expect_failure(name, lambda payload=payload: parse_lcov(payload, expected_paths))
-expect_failure("empty DA", lambda: parse_lcov(
-    fixture.replace("DA:1,1\nLF:1\nLH:1\n", "LF:0\nLH:0\n"), expected_paths))
-expect_failure("deleted DA", lambda: parse_lcov(fixture.replace("DA:1,1\n", ""), expected_paths))
-expect_failure("inconsistent LF/LH summary", lambda: parse_lcov(fixture.replace("LF:1", "LF:2"), expected_paths))
-expect_failure("inconsistent BRF/BRH summary", lambda: parse_lcov(fixture.replace("BRH:1", "BRH:0"), expected_paths))
-expect_failure("suffix SF", lambda: parse_lcov(fixture.replace(str(fixture_source), production[0]), expected_paths))
-expect_failure("outside SF", lambda: parse_lcov(
-    fixture.replace(str(fixture_source), str(Path(lcov_path).resolve())), expected_paths))
-expect_failure("unexpected SF", lambda: parse_lcov(
-    fixture.replace(str(fixture_source), str((root / "Cargo.toml").resolve(strict=True))), expected_paths))
-expect_failure("duplicate SF", lambda: parse_lcov(fixture + fixture, expected_paths))
-expect_failure("bad raw hash", lambda: checksum(b"negative hash fixture", "0" * 64))
-if resolve("rev-parse", "HEAD") != head:
-    raise SystemExit("stale coverage: current HEAD changed")
-if resolve("merge-base", base, head) != base:
-    raise SystemExit("coverage base is not the exact merge-base ancestor")
-lcov_bytes = Path(lcov_path).read_bytes()
-if not lcov_bytes:
-    raise SystemExit("empty raw LCOV artifact")
-actual_lcov_sha256 = checksum(lcov_bytes, expected_lcov_sha256)
-diff = subprocess.run(
-    ["git", "diff", "--unified=0", f"{base}...{head}", "--", *production],
-    check=True,
-    capture_output=True,
-    text=True,
-).stdout
-changed = {path: set() for path in production}
-current = None
-for line in diff.splitlines():
-    if line.startswith("+++ b/"):
-        current = line[6:]
-    elif current in changed and line.startswith("@@"):
-        match = re.search(r"\+(\d+)(?:,(\d+))?", line)
-        if not match:
-            raise SystemExit("missing diff hunk coordinates")
-        start, count = int(match.group(1)), int(match.group(2) or 1)
-        changed[current].update(range(start, start + count))
-
-records = parse_lcov(lcov_bytes.decode(), expected_paths)
-
-missing_records = sorted(set(production) - set(records))
-if missing_records:
-    raise SystemExit(f"missing planned production LCOV records: {missing_records}")
-critical = "src/layout/text_flow/style_normalization.rs"
-critical_lines = records[critical]["lines"]
-critical_branches = records[critical]["branches"].values()
-if any(hits <= 0 for hits in critical_lines.values()):
-    raise SystemExit("critical normalization executable line coverage is not 100%")
-if not records[critical]["branches"] or any(
-    taken is None or taken <= 0 for taken in critical_branches):
-    raise SystemExit("critical normalization executable branch coverage is not 100%")
-
-changed_executable = []
-for path in production:
-    intersection = changed[path] & set(records[path]["lines"])
-    if not intersection:
-        raise SystemExit(f"zero changed executable lines in planned record: {path}")
-    changed_executable.extend(records[path]["lines"][line] for line in intersection)
-covered = sum(hits > 0 for hits in changed_executable)
-if covered * 100 < len(changed_executable) * 80:
-    raise SystemExit(
-        f"changed production line coverage below 80%: "
-        f"{covered}/{len(changed_executable)}"
-    )
-provenance = {
-    "schema_version": 1,
-    "base_sha": base,
-    "head_sha": head,
-    "merge_base_sha": base,
-    "lcov_path": str(Path(lcov_path).resolve()),
-    "lcov_sha256": actual_lcov_sha256,
-    "production_records": list(production),
-    "changed_executable_lines": len(changed_executable),
-    "covered_changed_executable_lines": covered,
-    "critical_executable_lines": len(critical_lines),
-    "covered_critical_executable_lines": len(critical_lines),
-    "critical_executable_branches": len(records[critical]["branches"]),
-    "covered_critical_executable_branches": len(records[critical]["branches"]),
-}
-Path(provenance_path).write_text(
-    json.dumps(provenance, indent=2, sort_keys=True) + "\n",
-    encoding="utf-8",
-)
-print(json.dumps(provenance, sort_keys=True))
-PY
-verify_pr_binding "$PR_EVIDENCE_AFTER"
-test "$(shasum -a 256 "$LCOV_PATH" | awk '{print $1}')" = "$LCOV_SHA256"
-test -s "$PROVENANCE_PATH"
-test -z "$(git status --porcelain --untracked-files=all)"
-if bash -c 'set -euo pipefail; false; touch "$1"' _ "$EARLY_FAILURE_SENTINEL"; then
-  echo "negative early-failure fixture unexpectedly returned zero" >&2
-  exit 1
-fi
-test ! -e "$EARLY_FAILURE_SENTINEL"
-```
-
-coverage evidence 必须在生成前后 fresh 绑定 implementation PR 的
-`baseRefOid/headRefOid`、local `BASE_SHA/HEAD` 与 exact merge-base。所有 GH-127 changed
-production lines 合计 >=80%，private module 可执行 line/branch 各 100%。verifier 只接受
-repo-root canonical tracked Rust `SF:`，且每条 `DA/BRDA` line 均在对应 source 的
-`1..=EOF`；拒绝 suffix/outside/unexpected/duplicate record 并核对四项 summary。任一
-missing/empty/deleted/out-of-range/negative/invalid record、零 changed intersection/critical branch、
-stale/dirty head、错误 merge-base/hash 或 swallowed shell failure 均失败。review bundle
-保留两份 raw PR evidence、`LCOV_PATH` 与 `PROVENANCE_PATH`。
-
-### SpecRail 与 review
-
-- target repo 明确不存在 `checks/route_gate.py`；不得伪装成本地 route gate。以下命令从
-  target clean checkout 执行，只从 immutable
-  `23caa70e76904eaa82323208d645d5781a365649` archive 建 mirror，验证两个 checker
-  SHA-256 与 GH127/GH58 byte-identical inputs，并 fail closed：
-
-```sh
-set -euo pipefail
-: "${SPEC_RAIL_ROOT:?set SPEC_RAIL_ROOT to the external SpecRail checkout}"
-SPEC_RAIL_REV=23caa70e76904eaa82323208d645d5781a365649
-CHECK_WORKFLOW_SHA256=8c791545f78d93649385ef0f9780454a7d4552f8da06da1fdee0de9cb8030a7e
-ROUTE_GATE_SHA256=56954390bc5f9733601d94b5d18f78a7d5179c07fc47cd6dd8e8135685c8ac4a
-git -C "$SPEC_RAIL_ROOT" rev-parse --is-inside-work-tree
-git -C "$SPEC_RAIL_ROOT" cat-file -e "$SPEC_RAIL_REV^{commit}"
-test "$(git -C "$SPEC_RAIL_ROOT" rev-parse "$SPEC_RAIL_REV^{commit}")" = "$SPEC_RAIL_REV"
-test -z "$(git status --porcelain --untracked-files=all -- specs/GH127 specs/GH58)"
-test ! -e "$PWD/checks/route_gate.py"
-SPEC_RAIL_MIRROR="$(mktemp -d "${TMPDIR:-/tmp}/gh127-specrail.XXXXXX")"
-trap 'rm -rf "$SPEC_RAIL_MIRROR"' EXIT HUP INT TERM
-git -C "$SPEC_RAIL_ROOT" archive "$SPEC_RAIL_REV" | tar -x -C "$SPEC_RAIL_MIRROR"
-mkdir -p "$SPEC_RAIL_MIRROR/specs"
-cp -R specs/GH127 "$SPEC_RAIL_MIRROR/specs/GH127"
-cp -R specs/GH58 "$SPEC_RAIL_MIRROR/specs/GH58"
-ISSUE_JSON="$SPEC_RAIL_MIRROR/gh127-live-issue.json"
-gh issue view 127 --repo majiayu000/rnk --json state,labels > "$ISSUE_JSON"
-test -f "$SPEC_RAIL_MIRROR/checks/check_workflow.py"
-test -f "$SPEC_RAIL_MIRROR/checks/route_gate.py"
-test "$(shasum -a 256 "$SPEC_RAIL_MIRROR/checks/check_workflow.py" | awk '{print $1}')" \
-  = "$CHECK_WORKFLOW_SHA256"
-test "$(shasum -a 256 "$SPEC_RAIL_MIRROR/checks/route_gate.py" | awk '{print $1}')" \
-  = "$ROUTE_GATE_SHA256"
-diff -qr specs/GH127 "$SPEC_RAIL_MIRROR/specs/GH127"
-diff -qr specs/GH58 "$SPEC_RAIL_MIRROR/specs/GH58"
-READINESS="$(
-python3 - "$SPEC_RAIL_MIRROR" "$ISSUE_JSON" <<'PY'
-import json, sys
-from pathlib import Path
-sys.path.insert(0, str(Path(sys.argv[1]) / "checks")); from specrail_lib import load_yaml_file
-issue = json.loads(Path(sys.argv[2]).read_text()); labels = {item["name"] for item in issue["labels"]}
-canonical = set(load_yaml_file(Path(sys.argv[1]) / "labels.yaml")["labels"]["readiness"])
-matches = sorted(labels & canonical)
-if issue["state"] != "OPEN" or len(matches) != 1:
-    raise SystemExit(f"expected OPEN issue with exactly one canonical readiness; got {issue['state']} {matches}")
-print(matches[0])
-PY
-)"
-python3 "$SPEC_RAIL_MIRROR/checks/check_workflow.py" \
-  --repo "$SPEC_RAIL_MIRROR" --spec-dir "$SPEC_RAIL_MIRROR/specs/GH127"
-python3 "$SPEC_RAIL_MIRROR/checks/route_gate.py" \
-  --repo "$SPEC_RAIL_MIRROR" --route implement --issue 127 \
-  --state "$READINESS" --mode required --json
-```
-
-- GitHub checks 必须绑定 PR exact `headRefOid`，不是 merge-ref/stale run。
-- independent reviewer 与 implementer 分离；human final review/merge gate保留。
-- fresh GraphQL `reviewThreads` 覆盖 GH-127 PR，且 PR #109
-  `discussion_r3651392332` 仅在实现证据通过后由 human 处理。
+所有测试和evidence完成后再次 fresh fetch remote main、再次读取PR base/head并重算
+merge-base、raw diff digest和source manifest hash；它们必须逐项等于开始snapshot，
+worktree仍clean，hosted checks/reviewThreads也必须绑定该exact head。任一main/PR/head/
+tree/blob/diff漂移使全部证据失效并从头执行。GitHub checks不得使用merge-ref或stale run；
+independent reviewer与implementer分离，human final review/merge gate保留；PR #109
+`discussion_r3651392332`仅在实现证据通过后由human处理。
 
 ## 回滚方案
 
