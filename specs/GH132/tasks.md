@@ -534,6 +534,8 @@ fresh gate全部通过。
       "$PYTHON_BIN" -I -S -c 'import sys; from pathlib import PurePosixPath as P; rows=[(m.split(),p.decode()) for m,p in (r.split(b"\t",1) for r in sys.stdin.buffer.read().split(b"\0") if r)]; rows and all(len(m)==3 and m[0] in {b"100644",b"100755"} and m[1]==b"blob" and p and not P(p).is_absolute() and ".." not in P(p).parts and P(p).as_posix()==p for m,p in rows) or sys.exit("unsafe SpecRail tree entry")'
     git -C "$SPEC_RAIL_ROOT" archive "$SPEC_RAIL_EXPECTED_SHA" | tar -xf - -C "$SPEC_RAIL_MIRROR"
     git -C "$SPEC_RAIL_ROOT" ls-tree -rz --full-tree "$SPEC_RAIL_EXPECTED_SHA" | "$PYTHON_BIN" -I -S -c 'import hashlib,sys; from pathlib import Path,PurePosixPath as P; root=Path(sys.argv[1]).resolve(strict=True); rows=[(m.split(),p.decode()) for m,p in (r.split(b"\t",1) for r in sys.stdin.buffer.read().split(b"\0") if r)]; expected={p:m[2].decode() for m,p in rows}; nodes=list(root.rglob("*")); actual={n.relative_to(root).as_posix() for n in nodes if n.is_file() and not n.is_symlink()}; expected.keys()==actual and all(not n.is_symlink() and (n.is_file() or n.is_dir()) for n in nodes) and all(hashlib.sha1(b"blob "+str(len(d)).encode()+b"\0"+d).hexdigest()==oid for p,oid in expected.items() for d in [root.joinpath(*P(p).parts).read_bytes()]) or sys.exit("SpecRail archive mirror mismatch")' "$SPEC_RAIL_MIRROR"
+    SPEC_RAIL_OVERLAY_BLOBS="$(git -C "$SPEC_RAIL_ROOT" ls-tree -rz --full-tree "$SPEC_RAIL_EXPECTED_SHA" -- workflow.yaml states.yaml labels.yaml schemas |
+      "$PYTHON_BIN" -I -S -c 'import json,sys; rows=[(m.split(),p.decode()) for m,p in (r.split(b"\t",1) for r in sys.stdin.buffer.read().split(b"\0") if r)]; print(json.dumps({p:m[2].decode() for m,p in rows},sort_keys=True,separators=(",",":")))')"
     chmod -R a-w "$SPEC_RAIL_MIRROR"
     unset SPEC_RAIL_ROOT
     run_specrail() { "$PYTHON_BIN" -I -S -c 'import runpy,sys; from pathlib import Path; c=Path(sys.argv[1]).resolve(strict=True); s=(c/sys.argv[2]).resolve(strict=True); s.parent==c and s.is_file() or sys.exit("unsafe SpecRail entry"); sys.path.insert(0,str(c)); sys.path[0]==str(c) or sys.exit("SpecRail path isolation failed"); sys.argv=[str(s),*sys.argv[3:]]; runpy.run_path(str(s),run_name="__main__")' "$SPEC_RAIL_MIRROR/checks" "$@"; }
@@ -561,8 +563,10 @@ fresh gate全部通过。
       "$EXPECTED_CURRENT_MAIN_SHA"
     git merge-base --is-ancestor "$GH132_IMPLEMENTATION_BASE_SHA" \
       "$EXPECTED_CURRENT_MAIN_SHA"
-    IMPLEMENTATION_MANIFEST_JSON="$(sed -n \
-      '/<!-- specrail-planned-changes/{n;p;}' specs/GH132/tech.md)"
+    APPROVED_TECH_ENTRY="$(git ls-tree "$EXPECTED_CURRENT_MAIN_SHA" -- specs/GH132/tech.md)"
+    test "$(printf '%s\n' "$APPROVED_TECH_ENTRY" | awk '{print $1" "$2}')" = "100644 blob"
+    APPROVED_TECH_BLOB_SHA="$(printf '%s\n' "$APPROVED_TECH_ENTRY" | awk '{print $3}')"
+    IMPLEMENTATION_MANIFEST_JSON="$(git cat-file blob "$APPROVED_TECH_BLOB_SHA" | "$PYTHON_BIN" -I -S -c 'import sys; marker="<!-- specrail-planned-changes"; lines=sys.stdin.read().splitlines(); hits=[i for i,s in enumerate(lines) if s.startswith(marker)]; len(hits)==1 and hits[0]+1<len(lines) or sys.exit("approved implementation manifest missing or duplicated"); print(lines[hits[0]+1])')"
     test "$(printf '%s\n' "$IMPLEMENTATION_MANIFEST_JSON" | jq -r '.paths | length')" -eq 12
     EXPECTED_CHANGED_PATHS="$(printf '%s\n' "$IMPLEMENTATION_MANIFEST_JSON" |
       jq -r '.paths[]' | LC_ALL=C sort)"
@@ -579,67 +583,81 @@ fresh gate全部通过。
     GH132_REVIEW_MANIFEST=artifacts/review/GH132/manifest.json
     "$PYTHON_BIN" -I -S - "$SPEC_RAIL_MIRROR" "$GH132_REVIEW_BUNDLE_REAL" \
       "$GH132_REVIEW_BUNDLE_SHA256" "$SPEC_RAIL_GATE_REPO" \
-      "$GH132_IMPLEMENTATION_PR" "$PR_HEAD_SHA" "$GH132_REVIEW_MANIFEST" <<'PY'
-    import hashlib, json, sys
-    from pathlib import Path, PurePosixPath
-    mirror_root, source_root = Path(sys.argv[1]).resolve(strict=True), Path(sys.argv[2])
-    expected, destination_root = sys.argv[3], Path(sys.argv[4]).resolve(strict=True)
+      "$GH132_IMPLEMENTATION_PR" "$PR_HEAD_SHA" "$GH132_REVIEW_MANIFEST" \
+      "$SPEC_RAIL_OVERLAY_BLOBS" <<'PY'
+    import hashlib, json, os, stat, sys
+    from pathlib import PurePosixPath as P
+    nofollow, directory = getattr(os, "O_NOFOLLOW", None), getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None or os.open not in os.supports_dir_fd or os.mkdir not in os.supports_dir_fd:
+        raise SystemExit("secure descriptor-relative materialization is unavailable")
+    read_flags, dir_flags = os.O_RDONLY | nofollow, os.O_RDONLY | nofollow | directory
+    def open_root(raw):
+        if not os.path.isabs(raw): raise SystemExit("materialization root must be absolute")
+        return os.open(raw, dir_flags)
+    def relative(raw, prefix=None):
+        if not isinstance(raw, str) or not raw: raise SystemExit("materialization path must be a nonempty string")
+        rel = P(raw)
+        if rel.is_absolute() or ".." in rel.parts or rel.as_posix() != raw or (prefix and not rel.is_relative_to(prefix)): raise SystemExit(f"unsafe materialization path: {raw}")
+        return rel
+    def read_at(root, rel):
+        parent = os.dup(root)
+        for part in rel.parts[:-1]:
+            child = os.open(part, dir_flags, dir_fd=parent)
+            os.close(parent); parent = child
+        leaf = os.open(rel.name, read_flags, dir_fd=parent)
+        if not stat.S_ISREG(os.fstat(leaf).st_mode): raise SystemExit(f"materialization source is not regular: {rel}")
+        with os.fdopen(leaf, "rb") as handle: data = handle.read(2_000_001)
+        os.close(parent)
+        if len(data) > 2_000_000: raise SystemExit(f"materialization source is too large: {rel}")
+        return data
+    def write_at(root, rel, data):
+        parent = os.dup(root)
+        for part in rel.parts[:-1]:
+            try: os.mkdir(part, 0o700, dir_fd=parent)
+            except FileExistsError: pass
+            child = os.open(part, dir_flags, dir_fd=parent)
+            os.close(parent); parent = child
+        leaf = os.open(rel.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow, 0o600, dir_fd=parent)
+        with os.fdopen(leaf, "wb") as handle: handle.write(data)
+        os.close(parent)
+    mirror_fd, source_fd, destination_fd = (open_root(raw) for raw in (sys.argv[1], sys.argv[2], sys.argv[4]))
+    expected, expected_overlay = sys.argv[3], json.loads(sys.argv[8])
     expected_pr, expected_head = int(sys.argv[5]), sys.argv[6]
-    prefix, manifest_rel = PurePosixPath("artifacts/review/GH132"), PurePosixPath(sys.argv[7])
-    mirror_nodes = [mirror_root / n for n in ("workflow.yaml", "states.yaml", "labels.yaml")]
-    mirror_nodes += [mirror_root / "schemas", *sorted((mirror_root / "schemas").rglob("*"))]
-    if not all(not p.is_symlink() and (p.is_file() or p.is_dir()) and
-               p.resolve(strict=True).is_relative_to(mirror_root) for p in mirror_nodes):
-        raise SystemExit("unsafe pinned SpecRail overlay source")
-    overlay = {p.relative_to(mirror_root).as_posix(): p.read_bytes()
-               for p in mirror_nodes if p.is_file()}
+    prefix = P("artifacts/review/GH132")
+    roots, overlay = {"workflow.yaml", "states.yaml", "labels.yaml"}, {}
+    if not isinstance(expected_overlay, dict): raise SystemExit("pinned overlay manifest must be an object")
+    for name, oid in expected_overlay.items():
+        rel, data = relative(name), read_at(mirror_fd, relative(name))
+        if name not in roots and not rel.is_relative_to(P("schemas")): raise SystemExit(f"unexpected pinned overlay path: {name}")
+        actual = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+        if actual != oid: raise SystemExit(f"pinned overlay blob mismatch: {name}")
+        overlay[name] = data
+    if not roots <= overlay.keys() or not any(P(name).is_relative_to(P("schemas")) for name in overlay): raise SystemExit("pinned overlay manifest is incomplete")
     def read_safe(raw):
-        rel = PurePosixPath(raw)
-        if rel.is_absolute() or not rel.is_relative_to(prefix) or ".." in rel.parts:
-            raise SystemExit(f"unsafe review bundle path: {raw}")
-        candidate = source_root.joinpath(*rel.parts)
-        resolved = candidate.resolve(strict=True)
-        if candidate != resolved or not resolved.is_file() or resolved.suffix != ".json":
-            raise SystemExit(f"review bundle path must be a real JSON file: {raw}")
-        data = resolved.read_bytes()
-        if len(data) > 2_000_000:
-            raise SystemExit(f"review bundle file is too large: {raw}")
-        return rel.as_posix(), data
-    manifest_name, manifest_bytes = read_safe(manifest_rel)
+        rel = relative(raw, prefix)
+        if rel.suffix != ".json": raise SystemExit(f"review bundle path must be JSON: {raw}")
+        return rel.as_posix(), read_at(source_fd, rel)
+    manifest_name, manifest_bytes = read_safe(sys.argv[7])
     manifest = json.loads(manifest_bytes)
-    if manifest.get("pr") != expected_pr or manifest.get("head_sha") != expected_head:
-        raise SystemExit("review manifest identity mismatch")
-    artifact_names = [item for lane in manifest.get("lanes", [])
-                      for item in lane.get("artifact_paths", [])]
-    if not artifact_names or len(artifact_names) != len(set(artifact_names)):
-        raise SystemExit("review manifest artifact paths are empty or duplicated")
+    if manifest.get("pr") != expected_pr or manifest.get("head_sha") != expected_head: raise SystemExit("review manifest identity mismatch")
+    artifact_names = [item for lane in manifest.get("lanes", []) for item in lane.get("artifact_paths", [])]
+    if not artifact_names or len(artifact_names) != len(set(artifact_names)): raise SystemExit("review manifest artifact paths are empty or duplicated")
     review_files = {manifest_name: manifest_bytes}
     for raw in artifact_names:
         name, data = read_safe(raw)
+        if name in review_files: raise SystemExit(f"duplicated review artifact path: {name}")
         review_files[name] = data
         sidecar = json.loads(data).get("content_binding_evidence")
         if isinstance(sidecar, str):
             sidecar_name, sidecar_data = read_safe(sidecar)
+            if sidecar_name in review_files and review_files[sidecar_name] != sidecar_data: raise SystemExit(f"conflicting review sidecar path: {sidecar_name}")
             review_files[sidecar_name] = sidecar_data
     digest = hashlib.sha256()
-    for name in sorted(review_files):
-        digest.update(name.encode() + b"\0" + hashlib.sha256(review_files[name]).digest())
-    if digest.hexdigest() != expected or overlay.keys() & review_files.keys():
-        raise SystemExit("review bundle digest mismatch or overlay collision")
-    for name, data in (overlay | review_files).items():
-        relative, parent = PurePosixPath(name), destination_root
-        for part in relative.parts[:-1]:
-            parent /= part
-            if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
-                raise SystemExit(f"unsafe materialization parent: {name}")
-            parent.mkdir(exist_ok=True)
-            if parent.resolve(strict=True) != parent or not parent.is_relative_to(destination_root):
-                raise SystemExit(f"materialization escaped gate clone: {name}")
-        destination = destination_root.joinpath(*relative.parts)
-        if destination.exists() or destination.is_symlink():
-            raise SystemExit(f"materialization destination exists: {name}")
-        with destination.open("xb") as handle:
-            handle.write(data)
+    for name in sorted(review_files): digest.update(name.encode() + b"\0" + hashlib.sha256(review_files[name]).digest())
+    if digest.hexdigest() != expected or overlay.keys() & review_files.keys(): raise SystemExit("review bundle digest mismatch or overlay collision")
+    materialized = overlay | review_files
+    for name in sorted(materialized): write_at(destination_fd, relative(name), materialized[name])
+    for descriptor in (mirror_fd, source_fd, destination_fd): os.close(descriptor)
     PY
     test "$(cargo llvm-cov --version)" = "cargo-llvm-cov 0.8.7"
     GH132_COVERAGE_RAW="$GH132_EVIDENCE_DIR/llvm-cov.json"
@@ -738,47 +756,29 @@ fresh gate全部通过。
       "$FINAL_PR_HEAD_SHA" "$FINAL_PR_BASE_SHA" "$FINAL_CURRENT_MAIN_SHA" \
       "$FINAL_MERGE_BASE_SHA" "$FINAL_CI_SHA256"
     ```
-    `PR_BASE_SHA`必须等于fresh current main并是head的exact merge-base；Tech全部
-    mapping/ledger仍逐条证明`matched=1`。coverage从raw JSON/exact diff重算：changed
-    production lines>=80%，四个critical区域line/branch=100%，v1 artifact包含完整
-    base/head/merge-base/diff/raw/tool/command provenance；missing、zero、stale或threshold
-    不符均失败，collect/普通suite无副作用，produce/validate环境保持到long gates结束。
-    gate clone的HEAD必须等于exact head；只overlay外部只读archive mirror，并从worktree外、
-    人工确认digest的bundle安全materialize manifest/lane/sidecar，再重证12-path diff。
-    PR body含同一provenance/CI run ID；初始与long-gate后worktree均clean。final collector重证
-    head/base/main/merge-base、CI、reviews、GraphQL threads与independent lane，最后运行required `pr_gate`；evidence/bundle/archive path负向fixtures均fail closed。
-  - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009,
-    B-010, B-011, B-012, B-013, B-014, B-015, B-016, B-017, B-018, B-019, B-020, B-021
+    `PR_BASE_SHA`须等于fresh current main和exact merge-base；全部mapping/ledger逐条
+    `matched=1`。coverage从raw/exact diff重算changed line>=80%、四个critical区域
+    line/branch=100%，完整provenance且fail closed。gate clone须为exact head，只接受pinned
+    overlay与人工digest bundle；final collector重证head/base/main/CI/reviews/threads后最后运行`pr_gate`。
+  - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009, B-010, B-011, B-012, B-013, B-014, B-015, B-016, B-017, B-018, B-019, B-020, B-021
 
 ## 并行拆分
 
-生产任务按以下顺序执行，禁止并发写共享调用链：
+生产任务严格按`SP132-T1 -> SP132-T2 -> SP132-T3 -> SP132-T4 -> SP132-T5`执行：
 
-```text
-SP132-T1 -> SP132-T2 -> SP132-T3 -> SP132-T4 -> SP132-T5
-```
-
-- T2独占tree/projection/staged和两个coordinate test子模块。
-- T3独占public error与public-facing integration fixture。
-- T4独占static filter/dynamic pipeline/App source-module tests。
-- T5只读。即使T3/T4文件集合不相交，T4也必须等待T3 typed contract稳定，避免对同一错误
-  flow并发做不兼容假设。
+- T2独占tree/projection/staged与coordinate tests；T3独占public error/integration；T4独占static/pipeline/App tests。
+- T5只读；T4须等待T3 typed contract稳定，禁止对同一error flow并发假设。
 - PR #137/#142 merge commits均必须属于fresh implementation base；T2开始前对两者各自
-  changed-file set、digest、manifest overlap与交集路径完成source-drift refresh，不做共享
-  writer或用旧PR元数据替代。
+  changed-file set、digest、manifest overlap与交集路径完成source-drift refresh，不复用旧元数据。
 
 ## 验证
 
-- Product invariant set:
-  `B-001..B-021`
-- Tech mapping set:
-  `B-001..B-021`
-- Task Covers union:
-  `B-001..B-021`
+- Product invariant set: `B-001..B-021`
+- Tech mapping set: `B-001..B-021`
+- Task Covers union: `B-001..B-021`
 - `specrail-spec-packet-changes`精确包含三份packet；本 spec PR只按该三路径验证。
 - `specrail-planned-changes`精确包含十个既有Rust/test文件和两个因800行上限新增的
-  `coordinates.rs` test子模块，共12路径；future implementation PR只按该manifest与fresh
-  current main做changed-path diff，三份已合入spec不得出现。
+  `coordinates.rs` test子模块；future implementation只接受fresh base blob中的这12路径。
 - implementation命令是后续human-gated handoff，不在本 spec PR中实现或伪造通过。
 
 ## Handoff Notes
