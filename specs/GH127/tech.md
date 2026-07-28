@@ -50,14 +50,17 @@ implementation。
 
 implementation owner 开始前必须 fresh 完成：
 
-1. GH-127 三文件 spec PR 已 merged，且有 human approval；issue 无 `parked` 或冲突 readiness。
-2. search GitHub open/merged PR、remote/local branches 与 worktrees，确认只有一个 GH-127
+1. GH-127 三文件 spec PR 已 merged，且有 human approval。只有此条件满足后，maintainer
+   才可把唯一 readiness 从 `ready_to_spec` 替换为 `ready_to_implement`；agent 不改 label。
+2. 紧邻 route gate fresh 查询 live issue，把 labels 与 pinned `labels.yaml` 的 readiness
+   取交集且要求恰好一项，并把该查询值传给 route gate；任何其他/冲突状态都保持 blocked。
+3. search GitHub open/merged PR、remote/local branches 与 worktrees，确认只有一个 GH-127
    implementation owner。
-3. implementation head 必须验证
+4. implementation head 必须验证
    `50f6a203c1861814d288d4bdeae0e28d877af34c` 是 ancestor。
-4. implementation base 必须包含 current main 的 #128 PR #134、#129 PR #135、#130
+5. implementation base 必须包含 current main 的 #128 PR #134、#129 PR #135、#130
    PR #138 merge commits。
-5. planned diff 必须是 manifest 五路径的非空子集；任何需要 `wrap.rs`、`truncate.rs`、engine、
+6. planned diff 必须是 manifest 五路径的非空子集；任何需要 `wrap.rs`、`truncate.rs`、engine、
    renderer、public exports、Cargo 或 workflow 的发现都停止并修订 specs。
 
 ### 2. Validation 产出 private normalized plan
@@ -539,7 +542,7 @@ def parse_lcov(text, expected_paths):
                 raise ValueError(f"LH/DA mismatch: {record['path']}")
             if record["brf"] != len(branches):
                 raise ValueError(f"BRF/BRDA mismatch: {record['path']}")
-            branch_hits = sum(value not in (None, 0) for value in branches.values())
+            branch_hits = sum(value is not None and value > 0 for value in branches.values())
             if record["brh"] != branch_hits:
                 raise ValueError(f"BRH/BRDA mismatch: {record['path']}")
             records[record["path"]] = record
@@ -552,6 +555,8 @@ def parse_lcov(text, expected_paths):
             if number in record["lines"]:
                 raise ValueError(f"duplicate DA line: {record['path']}:{number}")
             record["lines"][number] = int(hits)
+            if record["lines"][number] < 0:
+                raise ValueError(f"negative DA hits: {record['path']}:{number}")
         elif record is not None and line.startswith("BRDA:"):
             number, block, branch, taken = line[5:].split(",")
             number = int(number)
@@ -561,6 +566,8 @@ def parse_lcov(text, expected_paths):
             if key in record["branches"]:
                 raise ValueError(f"duplicate BRDA entry: {record['path']}:{key}")
             record["branches"][key] = None if taken == "-" else int(taken)
+            if record["branches"][key] is not None and record["branches"][key] < 0:
+                raise ValueError(f"negative BRDA taken: {record['path']}:{key}")
         elif record is not None and line.startswith(("LF:", "LH:", "BRF:", "BRH:")):
             key, value = line.split(":", 1)
             field = key.lower()
@@ -601,51 +608,27 @@ fixture_eof = sum(1 for _ in fixture_source.open("rb"))
 for name, payload in (
     ("DA line 0", fixture.replace("DA:1,1", "DA:0,1")),
     ("DA beyond EOF", fixture.replace("DA:1,1", f"DA:{fixture_eof + 1},1")),
+    ("DA negative hits", fixture.replace("DA:1,1\nLF:1\nLH:1", "DA:1,-1\nLF:1\nLH:0")),
     ("BRDA line 0", fixture.replace("BRDA:1,0,0,1", "BRDA:0,0,0,1")),
     ("BRDA beyond EOF", fixture.replace(
         "BRDA:1,0,0,1", f"BRDA:{fixture_eof + 1},0,0,1"
     )),
+    ("BRDA negative taken", fixture.replace("BRDA:1,0,0,1", "BRDA:1,0,0,-2")),
+    ("BRDA invalid taken", fixture.replace("BRDA:1,0,0,1", "BRDA:1,0,0,invalid")),
 ):
     expect_failure(name, lambda payload=payload: parse_lcov(payload, expected_paths))
-expect_failure(
-    "empty DA",
-    lambda: parse_lcov(
-        fixture.replace("DA:1,1\nLF:1\nLH:1\n", "LF:0\nLH:0\n"),
-        expected_paths,
-    ),
-)
-expect_failure(
-    "deleted DA",
-    lambda: parse_lcov(fixture.replace("DA:1,1\n", ""), expected_paths),
-)
-expect_failure(
-    "inconsistent LF/LH summary",
-    lambda: parse_lcov(fixture.replace("LF:1", "LF:2"), expected_paths),
-)
-expect_failure(
-    "inconsistent BRF/BRH summary",
-    lambda: parse_lcov(fixture.replace("BRH:1", "BRH:0"), expected_paths),
-)
-expect_failure(
-    "suffix SF",
-    lambda: parse_lcov(fixture.replace(str(fixture_source), production[0]), expected_paths),
-)
-expect_failure(
-    "outside SF",
-    lambda: parse_lcov(fixture.replace(str(fixture_source), str(Path(lcov_path).resolve())), expected_paths),
-)
-expect_failure(
-    "unexpected SF",
-    lambda: parse_lcov(fixture.replace(str(fixture_source), str((root / "Cargo.toml").resolve(strict=True))), expected_paths),
-)
-expect_failure(
-    "duplicate SF",
-    lambda: parse_lcov(fixture + fixture, expected_paths),
-)
-expect_failure(
-    "bad raw hash",
-    lambda: checksum(b"negative hash fixture", "0" * 64),
-)
+expect_failure("empty DA", lambda: parse_lcov(
+    fixture.replace("DA:1,1\nLF:1\nLH:1\n", "LF:0\nLH:0\n"), expected_paths))
+expect_failure("deleted DA", lambda: parse_lcov(fixture.replace("DA:1,1\n", ""), expected_paths))
+expect_failure("inconsistent LF/LH summary", lambda: parse_lcov(fixture.replace("LF:1", "LF:2"), expected_paths))
+expect_failure("inconsistent BRF/BRH summary", lambda: parse_lcov(fixture.replace("BRH:1", "BRH:0"), expected_paths))
+expect_failure("suffix SF", lambda: parse_lcov(fixture.replace(str(fixture_source), production[0]), expected_paths))
+expect_failure("outside SF", lambda: parse_lcov(
+    fixture.replace(str(fixture_source), str(Path(lcov_path).resolve())), expected_paths))
+expect_failure("unexpected SF", lambda: parse_lcov(
+    fixture.replace(str(fixture_source), str((root / "Cargo.toml").resolve(strict=True))), expected_paths))
+expect_failure("duplicate SF", lambda: parse_lcov(fixture + fixture, expected_paths))
+expect_failure("bad raw hash", lambda: checksum(b"negative hash fixture", "0" * 64))
 if resolve("rev-parse", "HEAD") != head:
     raise SystemExit("stale coverage: current HEAD changed")
 if resolve("merge-base", base, head) != base:
@@ -680,11 +663,10 @@ if missing_records:
 critical = "src/layout/text_flow/style_normalization.rs"
 critical_lines = records[critical]["lines"]
 critical_branches = records[critical]["branches"].values()
-if any(hits == 0 for hits in critical_lines.values()):
+if any(hits <= 0 for hits in critical_lines.values()):
     raise SystemExit("critical normalization executable line coverage is not 100%")
 if not records[critical]["branches"] or any(
-    taken in (None, 0) for taken in critical_branches
-):
+    taken is None or taken <= 0 for taken in critical_branches):
     raise SystemExit("critical normalization executable branch coverage is not 100%")
 
 changed_executable = []
@@ -736,7 +718,7 @@ coverage evidence 必须在生成前后 fresh 绑定 implementation PR 的
 production lines 合计 >=80%，private module 可执行 line/branch 各 100%。verifier 只接受
 repo-root canonical tracked Rust `SF:`，且每条 `DA/BRDA` line 均在对应 source 的
 `1..=EOF`；拒绝 suffix/outside/unexpected/duplicate record 并核对四项 summary。任一
-missing/empty/deleted/out-of-range record、零 changed intersection/critical branch、
+missing/empty/deleted/out-of-range/negative/invalid record、零 changed intersection/critical branch、
 stale/dirty head、错误 merge-base/hash 或 swallowed shell failure 均失败。review bundle
 保留两份 raw PR evidence、`LCOV_PATH` 与 `PROVENANCE_PATH`。
 
@@ -764,6 +746,8 @@ git -C "$SPEC_RAIL_ROOT" archive "$SPEC_RAIL_REV" | tar -x -C "$SPEC_RAIL_MIRROR
 mkdir -p "$SPEC_RAIL_MIRROR/specs"
 cp -R specs/GH127 "$SPEC_RAIL_MIRROR/specs/GH127"
 cp -R specs/GH58 "$SPEC_RAIL_MIRROR/specs/GH58"
+ISSUE_JSON="$SPEC_RAIL_MIRROR/gh127-live-issue.json"
+gh issue view 127 --repo majiayu000/rnk --json state,labels > "$ISSUE_JSON"
 test -f "$SPEC_RAIL_MIRROR/checks/check_workflow.py"
 test -f "$SPEC_RAIL_MIRROR/checks/route_gate.py"
 test "$(shasum -a 256 "$SPEC_RAIL_MIRROR/checks/check_workflow.py" | awk '{print $1}')" \
@@ -772,11 +756,24 @@ test "$(shasum -a 256 "$SPEC_RAIL_MIRROR/checks/route_gate.py" | awk '{print $1}
   = "$ROUTE_GATE_SHA256"
 diff -qr specs/GH127 "$SPEC_RAIL_MIRROR/specs/GH127"
 diff -qr specs/GH58 "$SPEC_RAIL_MIRROR/specs/GH58"
+READINESS="$(
+python3 - "$SPEC_RAIL_MIRROR" "$ISSUE_JSON" <<'PY'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]) / "checks")); from specrail_lib import load_yaml_file
+issue = json.loads(Path(sys.argv[2]).read_text()); labels = {item["name"] for item in issue["labels"]}
+canonical = set(load_yaml_file(Path(sys.argv[1]) / "labels.yaml")["labels"]["readiness"])
+matches = sorted(labels & canonical)
+if issue["state"] != "OPEN" or len(matches) != 1:
+    raise SystemExit(f"expected OPEN issue with exactly one canonical readiness; got {issue['state']} {matches}")
+print(matches[0])
+PY
+)"
 python3 "$SPEC_RAIL_MIRROR/checks/check_workflow.py" \
   --repo "$SPEC_RAIL_MIRROR" --spec-dir "$SPEC_RAIL_MIRROR/specs/GH127"
 python3 "$SPEC_RAIL_MIRROR/checks/route_gate.py" \
   --repo "$SPEC_RAIL_MIRROR" --route implement --issue 127 \
-  --state ready_to_implement --mode required --json
+  --state "$READINESS" --mode required --json
 ```
 
 - GitHub checks 必须绑定 PR exact `headRefOid`，不是 merge-ref/stale run。
