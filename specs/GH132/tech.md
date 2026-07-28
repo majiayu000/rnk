@@ -64,8 +64,8 @@ fresh current main 上重新定位行号、签名和三条 PR #142 受控交集�
 
 所有 SpecRail 命令固定到 upstream
 `https://github.com/majiayu000/specrail.git` revision
-`bfc60f26164af5df1ebd3b5cb79d07379fc416b7`。执行环境提供的 `SPEC_RAIL_ROOT` 必须是该
-exact detached checkout；T1/T5分别校验 `route_gate.py` SHA-256
+`bfc60f26164af5df1ebd3b5cb79d07379fc416b7`。执行环境提供的 `SPEC_RAIL_ROOT` 必须解析到
+该exact checkout；它的mutable worktree不属于可信边界。T1/T5分别校验 `route_gate.py` SHA-256
 `d77cad0763713ca589be1c4278edcec7c90c017bc383fd6a7976402be22a7433` 和
 `pr_gate.py` SHA-256
 `10cb7412ff504291d136a2c1486bc96e6b5e811c8040d1f61a8d222994e87873`；
@@ -79,12 +79,17 @@ T5另外校验负责 fresh reviews/reviewThreads 与 trusted review manifest 装
 `github_pr_evidence.py` SHA-256
 `95567e96d515e90f85687e3ad24a256419f7a6ef76fac54d6c5da346f3cd2173`。
 路径、revision或hash不符均fail closed，不从机器特定绝对路径或mutable branch运行。
-由于route gate会把artifact路径约束在`--repo`内，T1从固定revision导出临时workflow
-mirror，再将当前merged GH132 packet复制到mirror的规范路径；不得把目标仓库绝对路径
-传给以SpecRail checkout为`--repo`的route gate。T5的PR gate还需要读取implementation
-git history中的approved spec revision，因此以exact PR head创建临时只读验证clone，并只
-overlay同一固定revision的`workflow.yaml`、`states.yaml`、`labels.yaml`和`schemas/`；
-`--repo`指向该clone，不能指向没有目标历史的SpecRail checkout。independent reviewer
+由于route gate会把artifact路径约束在`--repo`内，T1已从固定revision用`git archive`
+导出临时workflow mirror，再复制当前merged GH132 packet；T5复用同一概念，但独立设置
+`SPEC_RAIL_EXPECTED_SHA`，先从Git object tree拒绝symlink、非regular blob、absolute、
+non-canonical或`..`路径，再把该exact revision全量archive到worktree外的evidence mirror。
+archive完成即丢弃`SPEC_RAIL_ROOT`变量；之后入口脚本、全部SpecRail module import以及
+`workflow.yaml`、`states.yaml`、`labels.yaml`、`schemas/`的读取/复制只允许来自只读
+mirror，入口hash也在mirror上校验，dirty checkout内容不得进入closure。
+
+T5的PR gate还需要读取implementation git history中的approved spec revision，因此以exact
+PR head创建临时只读验证clone，只overlay上述mirror中的配置/schema；`--repo`指向该clone，
+不能指向没有目标历史的SpecRail checkout。independent reviewer
 在worktree外生成的bundle必须由人工确认的SHA-256绑定；T5只接受安全、repo-relative、
 源端和临时clone目标端都无symlink/path traversal且位于
 `artifacts/review/GH132/`下的manifest、lane
