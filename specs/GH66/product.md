@@ -79,8 +79,9 @@ confirmed commit 去重；跨重试 exactly-once 只属于明确实现持久、�
    ID/digest/context 去重：重复调用返回原 confirmed receipt且不执行第二次terminal write。
    ledger 容量非零、有显式上限；容量耗尽必须 typed blocked，禁止逐出 confirmed ID 后静默
    重写。
-9. **B-009** shell 只允许一次显式 O(n) bootstrap；此后每次 synchronize必须消费 GH-62
-   `ApplyOutcome` 的 affected-message IDs，并只查找/投影受影响或新 terminal message，复杂度为
+9. **B-009** shell 只允许一次显式 O(n) bootstrap；此后每次 synchronize必须按 GH-62
+   `ApplyOutcome::affected_messages()` 返回的确定顺序消费 `AffectedMessage::message_id()` 与
+   `AffectedMessage::disposition()`，并只查找/投影受影响或新 terminal message，复杂度为
    O(affected × lookup/projection)，不得每个 delta重扫完整 history。重复 terminal event、
    render或projection只产生一个 in-flight candidate与至多一个 confirmed commit。每个 affected
    entry 必须先按 `AffectedMessageDisposition::{Present, Deleted}` 分支；`Deleted` 不得再查
@@ -247,6 +248,9 @@ confirmed commit 去重；跨重试 exactly-once 只属于明确实现持久、�
 
 - 本 packet 只授权 `write_spec`。人工 spec approval 与 canonical `ready_to_implement`
   之前不得实现。
-- 当前（2026-07-26）#62/#63/#64 均为 OPEN；#62 PR #117 为 OPEN、未合并，#63/#64
-  只有 spec PR #75/#79 已合并。因此 production implementation gate 明确 blocked。
+- 当前（2026-07-28）#62 已 CLOSED，最终 implementation PR #117 已 MERGED 为
+  `381e281771c7fc6c3a4ac2b6811ef13376bf6501`；#63 仍 OPEN，只有 partial T1 PR #145
+  MERGED 为 `27151646fa9b6713abfdec464d4877e17b3c9d7c`；#64 仍 OPEN。#66 仍是
+  canonical `ready_to_spec`，不是 `ready_to_implement`，因此 production implementation gate
+  继续明确 blocked。
 - 最终 implementation PR 的独立 review、approval、merge、release 与 GH-57 closure 仍由人类决定。
