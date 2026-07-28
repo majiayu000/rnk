@@ -130,22 +130,28 @@ identity 与 interruption 原子性。
 22. **B-022** 完成证据必须绑定同一 implementation PR exact head：B-002/B-003 counter、
     B-004 至 B-021 exact tests、4096-case property、#126/#128/#129/#130 regression、
     fmt/check/clippy/all-target tests、至少 80% changed production line coverage、私有
-    styled-normalization module executable branch/line 各 100%、绑定 exact base/head/
-    merge-base 与 raw LCOV SHA-256 的 provenance、固定 revision/checker SHA-256 且输入
-    byte-identical 的外部 SpecRail mirror、独立 review、零 unresolved non-outdated
-    actionable threads 与 required CI 全部 fresh 通过后，才能宣称完成。新增 unit tests
-    必须进入自然拆分文件，并让被触碰的 `src/layout/text_flow/tests.rs` 回到 800 行以内。
-    exact-head gate 还必须强制实际 diff 为五路径 manifest 的非空子集、三个新文件存在；
-    ledger selector 每项 `matched=1/passed=1/ignored=0`；coverage 前后 tracked/untracked
-    worktree 为空；fresh GitHub implementation PR 的 `baseRefOid/headRefOid` 必须在 coverage
-    前后分别读取，并分别等于 caller `BASE_SHA`/local `HEAD`，同时单独证明
-    `merge-base(baseRefOid, headRefOid) == baseRefOid`。LCOV `SF:` 必须是 repo-root
-    canonical tracked Rust path，record 不重复、不靠 suffix 命中；每条 `DA/BRDA` line
-    必须在该 canonical source 的 1-based `1..=EOF` 范围内，且 `LF/LH` 与 `DA`、
-    `BRF/BRH` 与 `BRDA` 一致。两个 planned production record 都有非空
-    changed-executable 交集。Cargo.toml allowlist、ignored selector、line 0/超 EOF
-    `DA/BRDA`、empty/deleted DA、summary mismatch、bad hash 与 shell early-failure
-    negative fixtures 必须全部 fail closed。
+    styled-normalization module executable branch/line 各 100%、固定 revision/checker
+    SHA-256 的外部 SpecRail mirror、独立 review、零 unresolved non-outdated actionable
+    threads 与 required CI 全部 fresh 通过后，才能宣称完成。新增 unit tests必须进入自然
+    拆分文件，并让被触碰的 `src/layout/text_flow/tests.rs` 回到 800 行以内。
+    closure 开始和结束都必须 fresh fetch remote `main`，并证明 caller `BASE_SHA`、
+    fetched main、PR `baseRefOid` 与 `merge-base(baseRefOid, headRefOid)` 四者相同，
+    PR `headRefOid` 等于 local exact `HEAD`；任一 ref 漂移使整份证据失效。实现 manifest
+    只从该 trusted base 的 exact regular `tech.md` Git blob读取；NUL-delimited raw diff
+    只接受其五路径非空子集、`A/M` status 和 `100644/100755` target mode，拒绝
+    rename/copy/delete/type-change/unmerged、重复或 non-canonical path。
+    coverage source 必须从 exact head tree 的 regular Git blobs/OID 安全物化到只读隔离树，
+    不从可变 checkout pathname 读取 source evidence；descriptor-relative
+    `O_NOFOLLOW|O_DIRECTORY` 读取父目录、`O_CREAT|O_EXCL|O_NOFOLLOW` 创建目标，所有
+    coverage/target/provenance 输出均位于源码树外。raw LCOV SHA-256 与 exact blob manifest
+    一起进入 provenance；`SF:` 必须精确映射物化 root 下的 tracked Rust blob，record 不重复、
+    不靠 suffix 命中，每条 `DA/BRDA` line 必须在对应 blob 的 1-based `1..=EOF`，且
+    `LF/LH` 与 `DA`、`BRF/BRH` 与 `BRDA` 一致。ledger selector 每项
+    `matched=1/passed=1/ignored=0`；Cargo.toml raw-diff、ignored selector、line 0/超 EOF
+    `DA/BRDA`、empty/deleted DA、summary mismatch、bad hash、symlink/existing-target 与
+    shell early-failure negative fixtures必须全部 fail closed。所有 Python 从预先解析的
+    absolute interpreter、清空启动注入环境并以 `-I -S` 执行；SpecRail 只显式导入已按
+    exact tree/OID 验证的只读 mirror path。
 
 ## 验收标准
 
