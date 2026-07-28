@@ -192,8 +192,9 @@ prepend、resize 或 streaming 时产生可见跳动。
 - [ ] GH-63 只经 render closure 消费；render failure typed 传播且不输出 partial/default frame。
 - [ ] 既有 `virtual_scroll_view` 兼容 fixture 与 crate 外 public API fixture 通过。
 - [ ] Implementation 开始前验证 GH-58/GH-60/GH-62 merged ancestry；最终 exact-head evidence
-  含可复算的 GH57 child coverage artifact；ledger、full all-target coverage/test 与
-  produce/validate 的每次 contract invocation 都显式提供阶段正确的 mode，并满足 B-024。
+  含可复算的 GH57 child coverage artifact；ledger/raw coverage/produce/validate action 显式
+  提供阶段正确的 mode，ordinary no-mode full all-target test 断言 `MissingMode`/零副作用后
+  通过，并满足 B-024。
 
 ## 边界情况清单
 
