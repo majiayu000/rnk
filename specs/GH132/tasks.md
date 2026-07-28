@@ -534,17 +534,23 @@ fresh gate全部通过。
     case "$GH132_REVIEW_BUNDLE_REAL/" in "$WORKTREE_REAL/"*) exit 1 ;; esac
     printf '%s\n' "$GH132_REVIEW_BUNDLE_SHA256" |
       grep -Eq '^[0-9a-f]{64}$'
-    SPEC_RAIL_REV=bfc60f26164af5df1ebd3b5cb79d07379fc416b7
-    test "$(git -C "$SPEC_RAIL_ROOT" rev-parse 'HEAD^{commit}')" = "$SPEC_RAIL_REV"
-    test "$(git -C "$SPEC_RAIL_ROOT" remote get-url origin)" = \
-      https://github.com/majiayu000/specrail.git
-    test "$(python3 -c \
-      'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
-      "$SPEC_RAIL_ROOT/checks/pr_gate.py")" = \
+    SPEC_RAIL_EXPECTED_SHA=bfc60f26164af5df1ebd3b5cb79d07379fc416b7
+    test "$(git -C "$SPEC_RAIL_ROOT" rev-parse 'HEAD^{commit}')" = "$SPEC_RAIL_EXPECTED_SHA"
+    test "$(git -C "$SPEC_RAIL_ROOT" remote get-url origin)" = https://github.com/majiayu000/specrail.git
+    mkdir -p "$GH132_EVIDENCE_DIR"
+    SPEC_RAIL_MIRROR="$(mktemp -d "$GH132_EVIDENCE_DIR/specrail-pinned.XXXXXX")"
+    git -C "$SPEC_RAIL_ROOT" ls-tree -rz --full-tree "$SPEC_RAIL_EXPECTED_SHA" |
+      python3 -c 'import sys; from pathlib import PurePosixPath as P; rows=[(m.split(),p.decode()) for m,p in (r.split(b"\t",1) for r in sys.stdin.buffer.read().split(b"\0") if r)]; rows and all(len(m)==3 and m[0] in {b"100644",b"100755"} and m[1]==b"blob" and p and not P(p).is_absolute() and ".." not in P(p).parts and P(p).as_posix()==p for m,p in rows) or sys.exit("unsafe SpecRail tree entry")'
+    git -C "$SPEC_RAIL_ROOT" archive "$SPEC_RAIL_EXPECTED_SHA" | tar -xf - -C "$SPEC_RAIL_MIRROR"
+    git -C "$SPEC_RAIL_ROOT" ls-tree -rz --full-tree "$SPEC_RAIL_EXPECTED_SHA" | python3 -c 'import hashlib,sys; from pathlib import Path,PurePosixPath as P; root=Path(sys.argv[1]).resolve(strict=True); rows=[(m.split(),p.decode()) for m,p in (r.split(b"\t",1) for r in sys.stdin.buffer.read().split(b"\0") if r)]; expected={p:m[2].decode() for m,p in rows}; nodes=list(root.rglob("*")); actual={n.relative_to(root).as_posix() for n in nodes if n.is_file() and not n.is_symlink()}; expected.keys()==actual and all(not n.is_symlink() and (n.is_file() or n.is_dir()) for n in nodes) and all(hashlib.sha1(b"blob "+str(len(d)).encode()+b"\0"+d).hexdigest()==oid for p,oid in expected.items() for d in [root.joinpath(*P(p).parts).read_bytes()]) or sys.exit("SpecRail archive mirror mismatch")' "$SPEC_RAIL_MIRROR"
+    chmod -R a-w "$SPEC_RAIL_MIRROR"
+    unset SPEC_RAIL_ROOT
+    export PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH="$SPEC_RAIL_MIRROR/checks"
+    test "$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
+      "$SPEC_RAIL_MIRROR/checks/pr_gate.py")" = \
       10cb7412ff504291d136a2c1486bc96e6b5e811c8040d1f61a8d222994e87873
-    test "$(python3 -c \
-      'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
-      "$SPEC_RAIL_ROOT/checks/github_pr_evidence.py")" = \
+    test "$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' \
+      "$SPEC_RAIL_MIRROR/checks/github_pr_evidence.py")" = \
       95567e96d515e90f85687e3ad24a256419f7a6ef76fac54d6c5da346f3cd2173
     WORKTREE_STATUS="$(git status --porcelain=v1 --untracked-files=all)"
     test -z "$WORKTREE_STATUS"
@@ -560,9 +566,9 @@ fresh gate全部通过。
       "${TMPDIR:-/tmp}/gh132-specrail-pr-gate.XXXXXX")"
     git clone --quiet --no-local --no-checkout "$WORKTREE_ROOT" "$SPEC_RAIL_GATE_REPO"
     git -C "$SPEC_RAIL_GATE_REPO" checkout --quiet --detach "$PR_HEAD_SHA"
-    cp "$SPEC_RAIL_ROOT/workflow.yaml" "$SPEC_RAIL_ROOT/states.yaml" \
-      "$SPEC_RAIL_ROOT/labels.yaml" "$SPEC_RAIL_GATE_REPO/"
-    cp -R "$SPEC_RAIL_ROOT/schemas" "$SPEC_RAIL_GATE_REPO/"
+    cp "$SPEC_RAIL_MIRROR/workflow.yaml" "$SPEC_RAIL_MIRROR/states.yaml" \
+      "$SPEC_RAIL_MIRROR/labels.yaml" "$SPEC_RAIL_GATE_REPO/"
+    cp -R "$SPEC_RAIL_MIRROR/schemas" "$SPEC_RAIL_GATE_REPO/"
     test "$(git merge-base "$PR_HEAD_SHA" "$EXPECTED_CURRENT_MAIN_SHA")" = \
       "$EXPECTED_CURRENT_MAIN_SHA"
     git merge-base --is-ancestor "$GH132_IMPLEMENTATION_BASE_SHA" \
@@ -584,7 +590,6 @@ fresh gate全部通过。
       --arg base "$PR_BASE_SHA" --arg diff "$GH132_DIFF_SHA256" \
       '.body | contains($head) and contains($base) and contains($diff)' >/dev/null
     test "$(cargo llvm-cov --version)" = "cargo-llvm-cov 0.8.7"
-    mkdir -p "$GH132_EVIDENCE_DIR"
     GH132_COVERAGE_RAW="$GH132_EVIDENCE_DIR/llvm-cov.json"
     GH132_COVERAGE_ARTIFACT="$GH132_EVIDENCE_DIR/gh132-coverage.json"
     export GH132_COVERAGE_MODE=fixture
@@ -689,7 +694,7 @@ fresh gate全部通过。
       "$FINAL_CURRENT_MAIN_SHA...$FINAL_PR_HEAD_SHA" | LC_ALL=C sort)"
     test "$GATE_CHANGED_PATHS" = "$EXPECTED_CHANGED_PATHS"
     GH132_PR_EVIDENCE="$GH132_EVIDENCE_DIR/gh132-pr-evidence.json"
-    python3 "$SPEC_RAIL_ROOT/checks/github_pr_evidence.py" \
+    python3 "$SPEC_RAIL_MIRROR/checks/github_pr_evidence.py" \
       --github-repo majiayu000/rnk --repo "$SPEC_RAIL_GATE_REPO" \
       --pr "$GH132_IMPLEMENTATION_PR" --issue 132 --content-binding-v1 \
       --review-manifest "$GH132_REVIEW_MANIFEST" \
@@ -729,7 +734,7 @@ fresh gate全部通过。
         jq -e --arg run_id "$run_id" '.body | contains($run_id)' >/dev/null
     done <<<"$FINAL_CI_RUN_IDS"
     GH132_PR_GATE_RESULT="$GH132_EVIDENCE_DIR/gh132-pr-gate.json"
-    python3 "$SPEC_RAIL_ROOT/checks/pr_gate.py" --repo "$SPEC_RAIL_GATE_REPO" \
+    python3 "$SPEC_RAIL_MIRROR/checks/pr_gate.py" --repo "$SPEC_RAIL_GATE_REPO" \
       --evidence "$GH132_PR_EVIDENCE" --mode required --json \
       > "$GH132_PR_GATE_RESULT"
     test "$(jq -r '.decision' "$GH132_PR_GATE_RESULT")" = "allowed"
@@ -742,15 +747,12 @@ fresh gate全部通过。
     production lines>=80%，四个critical区域line/branch=100%，v1 artifact包含完整
     base/head/merge-base/diff/raw/tool/command provenance；missing、zero、stale或threshold
     不符均失败，collect/普通suite无副作用，produce/validate环境保持到long gates结束。
-    gate clone的HEAD必须等于exact head；只overlay pinned pack，并从worktree外、人工确认
-    digest的bundle安全materialize repo-relative manifest/lane/sidecar，随后重证12-path
-    commit diff。PR body包含同一provenance与CI run ID。初始和long-gate后worktree均clean；
-    final fetch/query/collector必须重证head/base/main/merge-base、CI、reviews、GraphQL
-    threads与independent lane，最后才运行一次required `pr_gate`。evidence/bundle path的
-    relative、worktree、child、symlink/traversal fixtures均fail closed，真实外部路径通过。
+    gate clone的HEAD必须等于exact head；只overlay外部只读archive mirror，并从worktree外、
+    人工确认digest的bundle安全materialize manifest/lane/sidecar，再重证12-path diff。
+    PR body含同一provenance/CI run ID；初始与long-gate后worktree均clean。final collector重证
+    head/base/main/merge-base、CI、reviews、GraphQL threads与independent lane，最后运行required `pr_gate`；evidence/bundle/archive path负向fixtures均fail closed。
   - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009,
-    B-010, B-011, B-012, B-013, B-014, B-015, B-016, B-017, B-018, B-019,
-    B-020, B-021
+    B-010, B-011, B-012, B-013, B-014, B-015, B-016, B-017, B-018, B-019, B-020, B-021
 
 ## 并行拆分
 
