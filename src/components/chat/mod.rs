@@ -46,6 +46,7 @@ mod error;
 mod model;
 mod reducer;
 mod state;
+pub mod view;
 
 /// Opaque evidence binding a retained event to its accepted history.
 #[derive(Debug, Clone, PartialEq, Eq)]
