@@ -81,8 +81,9 @@ T5另外校验负责 fresh reviews/reviewThreads 与 trusted review manifest 装
 路径、revision或hash不符均fail closed，不从机器特定绝对路径或mutable branch运行。
 由于route gate会把artifact路径约束在`--repo`内，T1已从固定revision用`git archive`
 导出临时workflow mirror，再复制当前merged GH132 packet；T5复用同一概念，但独立设置
-`SPEC_RAIL_EXPECTED_SHA`，先从Git object tree拒绝symlink、非regular blob、absolute、
-non-canonical或`..`路径，再把该exact revision全量archive到worktree外的evidence mirror。
+`SPEC_RAIL_EXPECTED_SHA`；T1/T5都在首次Git读取前export `GIT_NO_REPLACE_OBJECTS=1`，使
+`refs/replace/**`对revision、tree、archive及后续验证全部无效，再从原始Git object tree拒绝
+symlink、非regular blob、absolute、non-canonical或`..`路径，并把该exact revision全量archive到worktree外的evidence mirror。
 archive完成即丢弃`SPEC_RAIL_ROOT`变量；之后入口脚本、全部SpecRail module import以及
 `workflow.yaml`、`states.yaml`、`labels.yaml`、`schemas/`的读取/复制只允许来自只读
 mirror，入口hash也在mirror上校验，dirty checkout内容不得进入closure。
