@@ -69,9 +69,14 @@ confirmed commit 去重；跨重试 exactly-once 只属于明确实现持久、�
    返回前立即 repaint；repaint failure 以 typed ordered cleanup aggregate 附在原三态结果上，
    不得覆盖或升级原 primary classification。
 7. **B-007** partial write、写入后 cancellation、flush failure、无法判定 accepted byte
-   count 的 broken pipe 或中断必须为 `Unknown`。每次 commit/retry 都必须创建 checked
-   monotonic cancellation generation 与新 token/handle；完成后撤销该 generation，旧 handle
-   clone 只能返回 `StaleGeneration`，不得取消后续 attempt。shutdown 只取消当前 generation。
+   count 的 broken pipe 或中断必须为 `Unknown`。每次 native commit/retry 都必须在阻塞写之前
+   由 coordinator 公开 prepare：登记 checked monotonic generation，并返回不借用 coordinator
+   的 non-clone concrete ticket 与 `Clone + Send + Sync` cancellation handle；调用方保留 handle、
+   把 ticket 交给阻塞调用，因此另一线程/event入口可取消 exact generation。成功、失败、unwind、
+   未消费 ticket 的 Drop 与 retry 都须 compare-generation revoke；旧 handle clone只能返回
+   `StaleGeneration`，不得取消后续 attempt。未消费 ticket cleanup不得产生terminal mutation；
+   禁止任意 callback、`Any` 或 process-global/current-handle endpoint。shutdown只取消已登记的
+   当前 generation。
    native sink 在 begin、每次 write 返回、每个编码换行/reset/delimiter、flush 前后和 ledger
    insert 前采样，使 mid-commit cancellation 真实可达。`Unknown` 不是 success，不写 confirmed
    ledger、不移除 live message、不自动重试。
@@ -154,8 +159,9 @@ confirmed commit 去重；跨重试 exactly-once 只属于明确实现持久、�
 21. **B-021** shell 与 native session 必须由单一 public coordinator/typestate共同拥有。
     coordinator 必须提供可实际调用的bootstrap、synchronize、native/durable commit、
     NotCommitted retry、durable reconcile、Unknown resolution、render、typed `try_suspend`/
-    `try_resume`、current-attempt cancellation handle与shutdown操作，并在
-    内部安全拆借 shell/session；不得要求调用方同时持有 coordinator 内部 sink 与 shell borrow。
+    `try_resume`、两阶段 native attempt preparation/ticket consumption与shutdown操作，并在
+    内部安全拆借 shell/session；不得要求调用方同时持有 coordinator 内部 sink 与 shell borrow，
+    也不得在阻塞的`&mut coordinator`调用期间再借用它才能取得cancellation handle。
     suspend仅从Running进入Suspended并保留lease/shell；resume仅从Suspended进入Running，任一
     stage失败保持typed可重试状态且不得伪报Running。
     shutdown 按“停止新事件 → 暴露未决 outcome → 清 live region → restore paste/cursor/raw/
