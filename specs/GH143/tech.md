@@ -6,7 +6,7 @@ GH-143
 
 <!-- specrail-requires-planned-changes-v1 -->
 <!-- specrail-planned-changes
-{"version":1,"issue":143,"complete":true,"paths":["specs/GH143/product.md","specs/GH143/tech.md","specs/GH143/tasks.md","src/components/chat/mod.rs","src/components/chat/state.rs","src/components/chat/state/message_index.rs","src/components/chat/state/tests.rs","src/components/chat/reducer.rs","src/components/chat/reducer/targeted.rs","src/components/chat/reducer/targeted/correlation_tests.rs","tests/chat_targeted_updates.rs"],"spec_refs":["specs/GH62/product.md","specs/GH62/tech.md","specs/GH62/tasks.md","specs/GH143/product.md","specs/GH143/tech.md","specs/GH143/tasks.md"]}
+{"version":1,"issue":143,"complete":true,"paths":["specs/GH143/product.md","specs/GH143/tech.md","specs/GH143/tasks.md","src/components/chat/mod.rs","src/components/chat/state.rs","src/components/chat/state/message_index.rs","src/components/chat/state/tests.rs","src/components/chat/reducer.rs","src/components/chat/reducer/targeted.rs","src/components/chat/reducer/targeted/replay.rs","src/components/chat/reducer/targeted/correlation_tests.rs","tests/chat_targeted_updates.rs"],"spec_refs":["specs/GH62/product.md","specs/GH62/tech.md","specs/GH62/tasks.md","specs/GH143/product.md","specs/GH143/tech.md","specs/GH143/tasks.md"]}
 -->
 
 ## Product Spec
