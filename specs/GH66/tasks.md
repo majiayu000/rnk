@@ -16,10 +16,12 @@ GH-66: https://github.com/majiayu000/rnk/issues/66
 evidence 完整、merge commits 均为 fresh implementation base 祖先之前，`SP66-T1` 不得写
 任何 production/test path。
 
-2026-07-26 当前状态为 blocked：#62/#63/#64 都是 OPEN；#62 PR #117 仍 OPEN 且未合并；
-#63/#64 只有 spec PR #75/#79 已合并。spec/draft/parked/open PR 不构成 dependency完成。
-实现 owner 必须 fresh 重读三个 merged packets/code；任何 API/path drift 先更新并重新批准本
-packet，不得用 alias/private field/sidecar 绕过。
+2026-07-28 当前状态仍为 blocked：#62 已 CLOSED，最终 implementation PR #117 已 MERGED为
+`381e281771c7fc6c3a4ac2b6811ef13376bf6501`；#63 仍 OPEN，只有partial T1 PR #145
+MERGED为`27151646fa9b6713abfdec464d4877e17b3c9d7c`；#64 仍 OPEN；#66 仍是canonical
+`ready_to_spec`。partial/spec/draft/parked/open PR不构成 dependency完成。实现 owner 必须
+fresh重读三个最终merged packets/code；任何 API/path drift先更新并重新批准本packet，不得用
+alias/private field/sidecar绕过。
 
 所有 filtered tests 必须用 `-- --exact` 实际运行且非 `#[ignore]`。每个 writer task完成后均
 运行：

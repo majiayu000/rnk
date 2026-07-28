@@ -20,35 +20,37 @@ merged public API 为准。
 
 ## Implementation Gate
 
-spec-only 工作可继续；production implementation blocked：2026-07-26 fresh evidence中
-#62/#63/#64均OPEN，#62 PR #117 OPEN，#63/#64仅有merged spec PR #75/#79。`SP66-T1`前须
-fresh分页收集dependency issue、closing PR files/labels/reviews/checks/tasks。三个issue必须
-CLOSED；最终closing PR必须MERGED、非draft/parked、含executable Rust，且merge commits均为
-implementation base祖先；spec PR/green CI/open branch/手填SHA均不满足。另需GH-66人工spec
-approval与canonical `ready_to_implement`；API/path drift先更新并重批packet。
+spec-only 工作可继续；production implementation blocked：2026-07-28 fresh evidence中，
+#62 已 CLOSED且最终 PR #117 MERGED为`381e281771c7fc6c3a4ac2b6811ef13376bf6501`；
+#63 仍 OPEN，只有partial T1 PR #145 MERGED为`27151646fa9b6713abfdec464d4877e17b3c9d7c`；
+#64 仍 OPEN，#66仍为canonical `ready_to_spec`。`SP66-T1`前须fresh分页收集dependency issue、
+closing PR files/labels/reviews/checks/tasks。三个issue必须CLOSED；最终closing PR必须MERGED、
+非draft/parked、含executable Rust，且merge commits均为implementation base祖先；partial/spec
+PR、green CI、open branch或手填SHA均不满足。另需GH-66人工spec approval与canonical
+`ready_to_implement`；API/path drift先更新并重批packet。
 
 ## Codebase Context
 
-锚点基于 spec branch base
-`58b13e32d2e23aa44d777d60c204979ea3a2f9b7`，均已用 Read/grep 核实。
+锚点基于2026-07-28 current `origin/main`
+`27151646fa9b6713abfdec464d4877e17b3c9d7c`，均已用 Read/grep 核实。
 
 | Area | Current anchor | Current behavior | GH-66 decision |
 | --- | --- | --- | --- |
-| Inline example state | `examples/claude_input_box.rs:34`, `:132`, `:249`, `:407`, `:474` | 私有 `Vec<char>`、cursor、input handler、wrap 与 live viewport | 手工迁移为 public shell composition，删除全部私有生命周期 |
-| Example commit | `examples/claude_input_box.rs:147`, `:157`, `:164` | submit 后连续 `app.println` 并立即 clear draft；无 write ack | 只能经 typed sink/receipt，ack 后再改变 shell state |
-| Shared interaction | `src/components/interaction.rs:7`, `:37` | closed `InteractionMode` 与 `InteractionOutcome<T>` | 直接复用，不增 alias/catch-all，不扩展既有 exhaustive enum |
-| Runtime paste | `src/renderer/runtime.rs:122`, `:165`, `:170` | Key/Mouse/Resize 分支；Paste 被 wildcard 丢弃 | GH-64 最终 merged path负责 paste；GH-66 只消费 composer outcome |
-| Public println | `src/hooks/use_app.rs:93`, `:113`; `src/runtime/context.rs:332` | `println` 返回 `()`，只委托 handle | 保持兼容，不作为 confirmed commit |
-| Runtime queue | `src/renderer/registry.rs:123`, `:147`, `:198`, `:257` | `AppSink::println` 无返回；queue 在 terminal write 前被 `take` | typed commit 不复用该 ack-less queue |
+| Inline example state | `examples/claude_input_box.rs:35`, `:148`, `:407`, `:474` | 私有 `Vec<char>`、cursor、input handler、wrap 与 live viewport | 手工迁移为 public shell composition，删除全部私有生命周期 |
+| Example commit | `examples/claude_input_box.rs:148`, `:157`, `:164` | submit 后连续 `app.println` 并立即 clear draft；无 write ack | 只能经 typed sink/receipt，ack 后再改变 shell state |
+| Shared interaction | `src/components/interaction.rs:9`, `:39` | closed `InteractionMode` 与 `InteractionOutcome<T>` | 直接复用，不增 alias/catch-all，不扩展既有 exhaustive enum |
+| Runtime paste | `src/renderer/runtime.rs:125`, `:155`, `:165`, `:170` | Key/Mouse/Resize 分支；Paste 被 wildcard 丢弃 | GH-64 最终 merged path负责 paste；GH-66 只消费 composer outcome |
+| Public println | `src/hooks/use_app.rs:113`; `src/runtime/context.rs:333` | `println` 返回 `()`，只委托 handle | 保持兼容，不作为 confirmed commit |
+| Runtime queue | `src/renderer/registry.rs:125`, `:257` | `AppSink::println` 无返回；queue 在 terminal write 前被 `take` | typed commit 不复用该 ack-less queue |
 | Queue bridge | `src/renderer/runtime_bridge.rs:62`, `:67` | 先 drain 全 queue，再调用 controller；失败后无 per-message outcome | 保持 legacy path；新 sink 直接同步调用 terminal transaction |
-| Terminal println | `src/renderer/terminal.rs:311`, `:348`, `:354`, `:365`, `:370` | 清 live UI、逐行 `write!`、flush，返回一个 `io::Result` | 提取 staged write helper，记录 first accepted byte/partial/flush stage |
-| Inline terminal lifecycle | `src/renderer/terminal.rs:196`, `:211`, `:697` | enter/exit 返回 `io::Result`；Drop 吞 exit error | 新 session提供显式 typed shutdown；Drop只 best effort |
+| Terminal println | `src/renderer/terminal.rs:354`, `:363`, `:367`, `:370` | 清 live UI、逐行 `write!`、flush，返回一个 `io::Result` | 提取 staged write helper，记录 first accepted byte/partial/flush stage |
+| Inline terminal lifecycle | `src/renderer/terminal.rs:168`, `:178`, `:197`, `:212`, `:697` | enter/exit 返回 `io::Result`；Drop 吞 exit error | 新 session提供显式 typed shutdown；Drop只 best effort |
 | Panic recovery | `src/runtime/panic_handler.rs:16`, `:23`, `:27`, `:30`, `:40` | restore直接mutate且吞error，却打印“restored” | 通过共享lease/recovery stage；legacy wrapper不作成功声明 |
 | Bracketed paste | `src/hooks/paste.rs:26`, `:35`, `:56`, `:71` | enable/disable 有 Result，guard Drop吞 error | session显式拥有并恢复 prior state，Drop不作成功证据 |
-| Current exports | `src/components/mod.rs:12`, `:57`; `src/prelude.rs:75`, `:136` | 没有 `components::chat`；interaction/textarea/renderer已导出 | 在上游最终 chat module 上增加 `inline` concrete exports |
+| Current exports | `src/components/mod.rs:4`, `:23`; `src/prelude.rs:55` | GH-62 chat types已导出；GH-63 partial view只在`components::chat::view`，尚无inline/composer导出 | 在上游最终 chat module 上增加 `inline` concrete exports |
 | Terminal mutation owners | `src/renderer/terminal.rs`, `src/renderer/terminal_controller.rs`, `src/runtime/panic_handler.rs` | lifecycle/controller/panic均可直接写terminal | 全部通过`terminal/lease.rs` registry；contention与poison typed |
 | Terminal file size | `src/renderer/terminal.rs:1` | 当前 791 行，接近 800 hard ceiling | 拆出lease/inline child并路由现有lifecycle，root保持<800 |
-| Dependency code | `src/components/mod.rs:1` and `rg ChatComposer/Conversation` | 当前 base 没有 GH-62/63/64 production types | implementation gate后在 merged base重新定位，禁止按 spec 猜字段 |
+| Dependency code | `src/components/chat/model.rs:705`, `:735`; `src/components/chat/view/mod.rs:1`; `rg ChatComposer` | GH-62 public Conversation/ApplyOutcome已在PR #117合入；GH-63仅PR #145 T1 typed view contract；GH-64 composer仍缺失 | 等#63/#64最终closing implementation合入后重新定位，禁止按 partial API或spec猜字段 |
 
 ## 设计方案
 
@@ -369,12 +371,13 @@ terminal message seed完整namespace/message/revision ID与source-order slot。d
 project，等待ID-first lookup；unclean native只从validated recovery record冻结原bytes/digest/
 context并进入Unknown，缺record进入UnrecoverableUnknown。
 非空history为空结果、ID缺失或projection失败均typed fail atomic。此后`synchronize`只消费
-最终GH-62 `ApplyOutcome`的唯一
-`affected_message_ids()`和当前immutable snapshot，不能遍历未受影响history：
+最终GH-62 `ApplyOutcome::affected_messages()`返回的borrowed slice和当前immutable snapshot，
+不能遍历未受影响history：
 
-1. 验证outcome revision与affected entries唯一；逐项先读disposition，只有`Present`才从
-   post-apply snapshot lookup并按既有frozen-first规则project/insert；
-2. `Deleted`绝不snapshot lookup，只用affected ID/revisions定位index：Live、Staged和
+1. 验证outcome revision与affected entries唯一；严格保持accessor返回的deterministic order，
+   每项通过`AffectedMessage::message_id()`取ID并先读`AffectedMessage::disposition()`；
+   只有`Present`才从post-apply snapshot lookup并按既有frozen-first规则project/insert；
+2. `Deleted`绝不snapshot lookup，只用该affected ID/revisions定位index：Live、Staged和
    NotCommitted（均无accepted effect）删除并留typed tombstone；Unknown/UnrecoverableUnknown保留frozen
    bytes/evidence、标`source_deleted`且继续block；ResolvedCommitted/Abandoned保留append-only
    resolution audit并归档；Confirmed只移除live/source index，terminal scrollback与ledger不变；
