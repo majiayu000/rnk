@@ -11,7 +11,7 @@ Audit baseline:
 - Repository: `majiayu000/rnk`
 - Latest inspected `origin/main`: `a7c05a6`
 - Inspection date: 2026-07-23
-- SpecRail tracking issue: `GH-57` with child issues `GH-58` through `GH-68`
+- GitHub tracking epic: #57 with child issues #58 through #68
 - Target environment: terminal-first Rust applications
 - Target product shape: a backend-independent AI chat component library with
   an experience comparable in scope to an Element-style AI component suite
