@@ -2,7 +2,7 @@
 name: Spec or Implementation Request
 about: Propose a scoped issue for API, component, release, workflow, or docs work
 title: ''
-labels: spec,ready-to-spec
+labels: ''
 assignees: ''
 ---
 
