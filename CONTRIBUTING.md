@@ -40,18 +40,18 @@ For public API, component behavior, release automation, workflow, or positioning
 changes, use the repository's issue-first and spec-first flow:
 
 1. Open or find one GitHub issue for the work.
-2. Use `ready-to-spec` when the problem is understood well enough to write the
-   product and technical design.
+2. A maintainer explicitly confirms when the problem is understood well enough
+   to enter the specification stage.
 3. Write `specs/GH<number>/product.md`, `specs/GH<number>/tech.md`, and
    `specs/GH<number>/tasks.md` for non-trivial changes.
-4. Use `ready-to-implement` when maintainers agree that the design is settled
-   enough for code or documentation work.
+4. A maintainer explicitly confirms when the design is settled enough to enter
+   the implementation stage.
 5. Keep one issue to one PR unless a maintainer explicitly asks for a split or
    combined change.
 
-Human review remains required for readiness, final approval, merge, release, and
-security decisions. Labels describe queue state; they do not grant automatic
-approval.
+Human review remains required before implementation, final approval, merge,
+release, and security decisions. Labels describe queue state; they do not grant
+automatic approval.
 
 The `specs/` tree is durable design history and review context; it is not an
 installation or runtime dependency. This workflow does not require or restore a
