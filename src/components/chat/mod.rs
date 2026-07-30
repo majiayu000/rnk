@@ -48,6 +48,12 @@ mod reducer;
 mod state;
 pub mod view;
 
+pub use view::{
+    ChatBlockRef, ChatBlockRenderer, ChatMessageView, ChatMessageViewOptions, ChatMessageViewStyle,
+    ChatRenderContext, ChatRenderOverride, MessageViewVariant, StreamingIndicatorFrame,
+    ThinkingDisclosure,
+};
+
 /// Opaque evidence binding a retained event to its accepted history.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetentionProof {
