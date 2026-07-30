@@ -35,7 +35,7 @@ impl LayoutEngine {
         inputs: &HashMap<crate::core::NodeKey, TextFlowInput>,
     ) {
         for (key, input) in inputs {
-            let Some(node_id) = self.vnode_map.get(key).copied() else {
+            let Some(node_id) = self.vnode_map.get(&key.identity()).copied() else {
                 continue;
             };
             if self

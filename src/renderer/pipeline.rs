@@ -4,8 +4,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::core::{Element, NodeKey, VNode};
+use crate::core::{Element, VNode};
 use crate::layout::LayoutEngine;
+use crate::reconciler::SiblingIdentity;
 use crate::renderer::element_renderer::try_render_element;
 use crate::renderer::{Output, TextRenderError};
 use crate::runtime::RuntimeContext;
@@ -112,12 +113,12 @@ impl RenderPipeline {
     fn collect_key_aliases(
         element: &Element,
         layout_engine: &LayoutEngine,
-        out: &mut HashMap<String, NodeKey>,
+        out: &mut HashMap<String, SiblingIdentity>,
     ) {
         if let Some(key) = &element.key
             && let Some(node_key) = layout_engine.node_key_for_element(element.id)
         {
-            out.insert(key.clone(), node_key);
+            out.insert(key.clone(), node_key.identity());
         }
 
         for child in &element.children {

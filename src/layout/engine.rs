@@ -4,7 +4,7 @@ use crate::core::{
     Dimension, Element, ElementId, ElementType, NodeKey, Props, Style, VNode, VNodeType,
 };
 use crate::layout::{TextFlow, TextFlowError, TextFlowInput};
-use crate::reconciler::{Patch, diff};
+use crate::reconciler::{Patch, SiblingIdentity, diff};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -36,8 +36,12 @@ pub struct LayoutEngine {
     taffy: TaffyTree<NodeContext>,
     node_map: HashMap<ElementId, NodeId>,
     element_keys: HashMap<ElementId, NodeKey>,
-    /// Map from NodeKey to Taffy NodeId (for VNode-based layout)
-    vnode_map: HashMap<NodeKey, NodeId>,
+    /// Map from a node's cross-frame identity to its Taffy NodeId.
+    ///
+    /// Keyed by `SiblingIdentity`, not by `NodeKey`: `NodeKey`'s derived `Eq`
+    /// includes the current index, so a keyed child that moved would no longer
+    /// find its own node here.
+    vnode_map: HashMap<SiblingIdentity, NodeId>,
     /// Root node ID for incremental updates
     root_node: Option<NodeId>,
     /// Last computed width
@@ -47,7 +51,7 @@ pub struct LayoutEngine {
     flow_cache: FlowCache,
     text_flow_policy: TextFlowPolicy,
     current_text_flows: HashMap<ElementId, Arc<TextFlow>>,
-    current_vnode_flows: HashMap<NodeKey, Arc<TextFlow>>,
+    current_vnode_flows: HashMap<SiblingIdentity, Arc<TextFlow>>,
 }
 
 impl LayoutEngine {
@@ -255,7 +259,7 @@ impl LayoutEngine {
             node
         };
 
-        self.vnode_map.insert(vnode.key, node_id);
+        self.vnode_map.insert(vnode.key.identity(), node_id);
         Some(node_id)
     }
 
@@ -302,7 +306,13 @@ impl LayoutEngine {
             text_inputs.insert(vnode.key, input);
         }
 
-        let node_path = format!("{parent_path}/{index}");
+        // A keyed node contributes its key, not its position, so that moving
+        // it among its siblings does not change the synthetic identity of
+        // everything beneath it.
+        let node_path = match &element.key {
+            Some(user_key) => format!("{parent_path}/key:{user_key}"),
+            None => format!("{parent_path}/{index}"),
+        };
         vnode.children = element
             .children
             .iter()
@@ -320,7 +330,7 @@ impl LayoutEngine {
         self.element_keys.clear();
         for (element_id, key) in element_key_map {
             self.element_keys.insert(*element_id, *key);
-            if let Some(node_id) = self.vnode_map.get(key).copied() {
+            if let Some(node_id) = self.vnode_map.get(&key.identity()).copied() {
                 self.node_map.insert(*element_id, node_id);
             }
         }
@@ -394,8 +404,8 @@ impl LayoutEngine {
                         needs_recompute = true;
                     }
                 }
-                Patch::Reorder { parent, moves } => {
-                    if self.reorder_children(*parent, moves) {
+                Patch::Reorder { parent, order } => {
+                    if self.reorder_children(*parent, order) {
                         needs_recompute = true;
                     }
                 }
@@ -408,7 +418,7 @@ impl LayoutEngine {
     /// Create a new node and add it to a parent
     fn create_vnode(&mut self, vnode: &VNode, parent_key: NodeKey) -> Option<NodeId> {
         // Get parent node ID first (copy it to avoid borrow issues)
-        let parent_node = *self.vnode_map.get(&parent_key)?;
+        let parent_node = *self.vnode_map.get(&parent_key.identity())?;
 
         // Build the new subtree
         let new_node_id = self.build_vnode(vnode)?;
@@ -421,7 +431,7 @@ impl LayoutEngine {
 
     /// Update a node's props/style
     fn update_node_props(&mut self, key: NodeKey, props: &Props) -> bool {
-        if let Some(&node_id) = self.vnode_map.get(&key) {
+        if let Some(&node_id) = self.vnode_map.get(&key.identity()) {
             let is_text = self
                 .taffy
                 .get_node_context(node_id)
@@ -459,7 +469,7 @@ impl LayoutEngine {
 
     /// Remove a node from the tree
     fn remove_node(&mut self, key: NodeKey) -> bool {
-        let Some(&node_id) = self.vnode_map.get(&key) else {
+        let Some(&node_id) = self.vnode_map.get(&key.identity()) else {
             return false;
         };
         let subtree = self.vnode_subtree_nodes(node_id);
@@ -472,7 +482,7 @@ impl LayoutEngine {
 
     /// Replace a node with a new one
     fn replace_node(&mut self, old_key: NodeKey, new_node: &VNode) -> bool {
-        if let Some(&old_node_id) = self.vnode_map.get(&old_key) {
+        if let Some(&old_node_id) = self.vnode_map.get(&old_key.identity()) {
             // Get parent before removing
             if let Some(parent_id) = self.taffy.parent(old_node_id) {
                 // Find the index of the old node in parent's children
@@ -530,30 +540,29 @@ impl LayoutEngine {
     }
 
     /// Reorder children of a node
-    fn reorder_children(&mut self, parent_key: NodeKey, moves: &[(usize, usize)]) -> bool {
-        if moves.is_empty() {
+    /// Set a parent's Taffy children to exactly `order`.
+    ///
+    /// The patch names every child the parent should end up with, so the result
+    /// is established rather than inferred. The previous version copied nodes
+    /// between slots of the old child vector according to a move list, which
+    /// could leave a node in two slots or drop one entirely, and said nothing
+    /// about where a newly created sibling belonged.
+    fn reorder_children(&mut self, parent_key: NodeKey, order: &[NodeKey]) -> bool {
+        let Some(&parent_id) = self.vnode_map.get(&parent_key.identity()) else {
             return false;
+        };
+
+        let mut children = Vec::with_capacity(order.len());
+        for key in order {
+            // A key with no node means the plan disagrees with the tree. Setting
+            // a partial order would silently drop children, so change nothing.
+            let Some(&node_id) = self.vnode_map.get(&key.identity()) else {
+                return false;
+            };
+            children.push(node_id);
         }
 
-        if let Some(&parent_id) = self.vnode_map.get(&parent_key) {
-            let old_children: Vec<_> = self.taffy.children(parent_id).unwrap_or_default();
-
-            // Build the new order by placing each old child at its target position.
-            // `moves` contains (from, to) pairs where `from` is the index in the
-            // old array and `to` is the desired index in the new array.
-            let mut new_children = old_children.clone();
-            for &(from, to) in moves {
-                if from < old_children.len() && to < new_children.len() {
-                    new_children[to] = old_children[from];
-                }
-            }
-
-            // Set new children order
-            if self.taffy.set_children(parent_id, &new_children).is_ok() {
-                return true;
-            }
-        }
-        false
+        self.taffy.set_children(parent_id, &children).is_ok()
     }
 
     /// Get computed layout for an element
@@ -571,7 +580,7 @@ impl LayoutEngine {
 
     /// Get computed layout for a VNode by key
     pub fn get_vnode_layout(&self, key: NodeKey) -> Option<Layout> {
-        let node_id = self.vnode_map.get(&key)?;
+        let node_id = self.vnode_map.get(&key.identity())?;
         let layout = self.taffy.layout(*node_id).ok()?;
 
         Some(Layout {
@@ -601,8 +610,8 @@ impl LayoutEngine {
             .collect()
     }
 
-    /// Get all VNode layouts
-    pub fn get_all_vnode_layouts(&self) -> HashMap<NodeKey, Layout> {
+    /// Get all VNode layouts, addressed by cross-frame identity
+    pub fn get_all_vnode_layouts(&self) -> HashMap<SiblingIdentity, Layout> {
         self.vnode_map
             .iter()
             .filter_map(|(key, node_id)| {
@@ -632,7 +641,7 @@ impl LayoutEngine {
 
     #[allow(dead_code)] // Consumed by the renderer integration lane.
     pub(crate) fn current_vnode_text_flow(&self, key: NodeKey) -> Option<Arc<TextFlow>> {
-        self.current_vnode_flows.get(&key).cloned()
+        self.current_vnode_flows.get(&key.identity()).cloned()
     }
 
     #[cfg_attr(not(test), allow(dead_code))]

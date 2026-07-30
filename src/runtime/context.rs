@@ -27,12 +27,12 @@ use std::time::{Duration, Instant};
 
 use crate::cmd::Cmd;
 use crate::components::Theme;
-use crate::core::NodeKey;
 use crate::hooks::context::{HookContext, HookStorage};
 use crate::hooks::paste::PasteEvent;
 use crate::hooks::use_focus::FocusManager;
 use crate::hooks::use_input::Key;
 use crate::hooks::use_mouse::Mouse;
+use crate::reconciler::SiblingIdentity;
 use crate::renderer::{IntoPrintable, RenderHandle, SharedFrameRateStats};
 
 /// Input handler function type
@@ -84,11 +84,11 @@ pub struct RuntimeContext {
     /// Measured element dimensions (element_id -> (width, height))
     measurements: std::collections::HashMap<crate::core::ElementId, (u16, u16)>,
     /// Measured element dimensions by stable node identity.
-    measurements_by_node_key: std::collections::HashMap<NodeKey, (u16, u16)>,
+    measurements_by_node_key: std::collections::HashMap<SiblingIdentity, (u16, u16)>,
     /// Compatibility fallback for older string-keyed measurement call paths.
     measurements_by_key: std::collections::HashMap<String, (u16, u16)>,
     /// Alias map from user-provided string keys to stable node identities.
-    measurement_key_aliases: std::collections::HashMap<String, NodeKey>,
+    measurement_key_aliases: std::collections::HashMap<String, SiblingIdentity>,
 
     /// Shared frame rate statistics
     frame_rate_stats: Option<Arc<SharedFrameRateStats>>,
@@ -429,8 +429,8 @@ impl RuntimeContext {
     pub fn set_measure_layouts_with_node_keys(
         &mut self,
         layouts: std::collections::HashMap<crate::core::ElementId, crate::layout::Layout>,
-        node_keyed_layouts: std::collections::HashMap<NodeKey, crate::layout::Layout>,
-        key_aliases: std::collections::HashMap<String, NodeKey>,
+        node_keyed_layouts: std::collections::HashMap<SiblingIdentity, crate::layout::Layout>,
+        key_aliases: std::collections::HashMap<String, SiblingIdentity>,
     ) {
         self.measurements.clear();
         self.measurements_by_node_key.clear();
@@ -458,14 +458,17 @@ impl RuntimeContext {
     }
 
     /// Get measurement by stable node key as Dimensions (width, height as f32)
-    pub fn get_measurement_by_node_key_dims(&self, node_key: NodeKey) -> Option<(f32, f32)> {
+    pub fn get_measurement_by_node_key_dims(
+        &self,
+        node_key: SiblingIdentity,
+    ) -> Option<(f32, f32)> {
         self.measurements_by_node_key
             .get(&node_key)
             .map(|&(w, h)| (w as f32, h as f32))
     }
 
     /// Resolve a user-facing string alias to a stable node key.
-    pub fn resolve_measurement_key_alias(&self, key: &str) -> Option<NodeKey> {
+    pub fn resolve_measurement_key_alias(&self, key: &str) -> Option<SiblingIdentity> {
         self.measurement_key_aliases.get(key).copied()
     }
 

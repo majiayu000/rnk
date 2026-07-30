@@ -739,14 +739,17 @@ mod tests {
         let sibling_key = root.children[1].key;
         let mut engine = LayoutEngine::new();
         engine.compute_vnode(&root, 20, 4);
-        let old_branch_node = engine.vnode_map[&old_branch_key];
-        let sibling_node = engine.vnode_map[&sibling_key];
+        let old_branch_node = engine.vnode_map[&old_branch_key.identity()];
+        let sibling_node = engine.vnode_map[&sibling_key.identity()];
         let sibling_flow = engine.current_vnode_text_flow(sibling_key).unwrap();
         let new_leaf = VNode::text("new").with_key("new-leaf");
         let new_leaf_key = new_leaf.key;
         let replacement = VNode::box_node().with_key("branch").child(new_leaf);
         assert!(engine.apply_patches(&[Patch::replace(old_branch_key, replacement)]));
-        assert_ne!(engine.vnode_map[&old_branch_key], old_branch_node);
+        assert_ne!(
+            engine.vnode_map[&old_branch_key.identity()],
+            old_branch_node
+        );
         assert!(engine.get_vnode_layout(old_leaf_key).is_none());
         assert!(engine.current_vnode_text_flow(old_leaf_key).is_none());
         assert_eq!(
@@ -758,13 +761,15 @@ mod tests {
                 .source,
             "new"
         );
-        assert_eq!(engine.vnode_map[&sibling_key], sibling_node);
+        assert_eq!(engine.vnode_map[&sibling_key.identity()], sibling_node);
         assert!(Arc::ptr_eq(
             &sibling_flow,
             &engine.current_vnode_text_flow(sibling_key).unwrap()
         ));
-        assert!(engine.apply_patches(&[Patch::reorder(root.key, vec![(0, 1), (1, 0)])]));
-        assert_eq!(engine.vnode_map[&sibling_key], sibling_node);
+        assert!(
+            engine.apply_patches(&[Patch::reorder(root.key, vec![sibling_key, old_branch_key])])
+        );
+        assert_eq!(engine.vnode_map[&sibling_key.identity()], sibling_node);
         assert!(engine.get_vnode_layout(sibling_key).is_some());
         assert!(Arc::ptr_eq(
             &sibling_flow,

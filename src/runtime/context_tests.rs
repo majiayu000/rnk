@@ -106,7 +106,7 @@ fn test_runtime_context_measurements_by_node_key_and_alias() {
 
     let mut by_node_key = HashMap::new();
     by_node_key.insert(
-        node_key,
+        node_key.identity(),
         Layout {
             x: 0.0,
             y: 0.0,
@@ -116,16 +116,16 @@ fn test_runtime_context_measurements_by_node_key_and_alias() {
     );
 
     let mut aliases = HashMap::new();
-    aliases.insert("main-panel".to_string(), node_key);
+    aliases.insert("main-panel".to_string(), node_key.identity());
 
     ctx.set_measure_layouts_with_node_keys(by_id, by_node_key, aliases);
     assert_eq!(
-        ctx.get_measurement_by_node_key_dims(node_key),
+        ctx.get_measurement_by_node_key_dims(node_key.identity()),
         Some((42.0, 9.0))
     );
     assert_eq!(
         ctx.resolve_measurement_key_alias("main-panel"),
-        Some(node_key)
+        Some(node_key.identity())
     );
     assert_eq!(
         ctx.get_measurement_by_key_dims("main-panel"),

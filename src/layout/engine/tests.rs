@@ -323,7 +323,7 @@ fn non_text_style_updates_keep_automatic_min_width() {
 
     let node_id = *engine
         .vnode_map
-        .get(&root_key)
+        .get(&root_key.identity())
         .expect("box node should be present");
     assert_eq!(
         engine.taffy.style(node_id).unwrap().min_size.width,
@@ -358,7 +358,7 @@ fn element_min_width(engine: &LayoutEngine, element_id: ElementId) -> ::taffy::D
         .expect("element should have a node key");
     let node_id = *engine
         .vnode_map
-        .get(&key)
+        .get(&key.identity())
         .expect("element key should map to a Taffy node");
     engine
         .taffy
@@ -458,7 +458,7 @@ fn replacement_rebuilds_text_and_non_text_with_their_own_normalization() {
     let box_key = box_child.key;
     let root = VNode::box_node().child(box_child);
     engine.compute_vnode(&root, 4, 10);
-    let original_box_id = *engine.vnode_map.get(&box_key).unwrap();
+    let original_box_id = *engine.vnode_map.get(&box_key.identity()).unwrap();
     assert_eq!(
         engine.taffy.style(original_box_id).unwrap().min_size.width,
         ::taffy::Dimension::Auto
@@ -467,7 +467,7 @@ fn replacement_rebuilds_text_and_non_text_with_their_own_normalization() {
     let text_child = VNode::text("abcdefgh").with_key("switch");
     let text_key = text_child.key;
     assert!(engine.apply_patches(&[Patch::replace(box_key, text_child)]));
-    let text_id = *engine.vnode_map.get(&text_key).unwrap();
+    let text_id = *engine.vnode_map.get(&text_key.identity()).unwrap();
     assert_ne!(text_id, original_box_id);
     assert_eq!(
         engine.taffy.style(text_id).unwrap().min_size.width,
@@ -477,7 +477,10 @@ fn replacement_rebuilds_text_and_non_text_with_their_own_normalization() {
     let replacement_box = VNode::box_node().with_key("switch");
     let replacement_box_key = replacement_box.key;
     assert!(engine.apply_patches(&[Patch::replace(text_key, replacement_box)]));
-    let replacement_box_id = *engine.vnode_map.get(&replacement_box_key).unwrap();
+    let replacement_box_id = *engine
+        .vnode_map
+        .get(&replacement_box_key.identity())
+        .unwrap();
     assert_ne!(replacement_box_id, text_id);
     assert_eq!(
         engine
