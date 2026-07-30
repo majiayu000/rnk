@@ -4,11 +4,8 @@ use crate::core::{
     Dimension, Element, ElementId, ElementType, NodeKey, Props, Style, VNode, VNodeType,
 };
 use crate::layout::{TextFlow, TextFlowError, TextFlowInput};
-use crate::reconciler::{Patch, SiblingIdentity, diff};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use crate::reconciler::{SiblingIdentity, diff};
+use std::{collections::HashMap, sync::Arc};
 use taffy::{NodeId, TaffyTree};
 
 /// Computed layout for an element
@@ -29,6 +26,12 @@ pub struct IncrementalLayoutOutcome {
     pub patch_count: usize,
     /// Whether incremental path failed and full rebuild was used.
     pub fallback_full_rebuild: bool,
+    /// Why the patch batch was rejected, when one was.
+    ///
+    /// A fallback rebuild produces the right layout either way, so without
+    /// this the rejection is invisible and a persistent patching fault looks
+    /// like normal operation.
+    pub patch_error: Option<PatchError>,
 }
 
 /// Layout engine that computes element positions
@@ -200,12 +203,23 @@ impl LayoutEngine {
                 return Ok((current_vnode, outcome));
             }
 
-            if candidate.apply_patches_only(&patches) {
-                candidate.sync_text_contexts(&text_inputs);
-                candidate.sync_element_node_map(&element_key_map);
-                candidate.run_layout_and_publish(&mut || false)?;
-                *self = candidate;
-                return Ok((current_vnode, outcome));
+            match candidate
+                .apply_patches_only(&patches)
+                .and_then(|()| candidate.check_batch_postconditions(&patches))
+            {
+                Ok(()) => {
+                    candidate.sync_text_contexts(&text_inputs);
+                    candidate.sync_element_node_map(&element_key_map);
+                    candidate.run_layout_and_publish(&mut || false)?;
+                    *self = candidate;
+                    return Ok((current_vnode, outcome));
+                }
+                Err(error) => {
+                    // The batch is rejected whole. `candidate` may be partly
+                    // patched, but the rebuild below clears it first, so what
+                    // is committed comes only from `current_vnode`.
+                    outcome.patch_error = Some(error);
+                }
             }
         }
 
@@ -356,213 +370,6 @@ impl LayoutEngine {
         }
         *self = candidate;
         Ok(())
-    }
-
-    /// Apply patches incrementally instead of rebuilding the entire tree
-    ///
-    /// This is the key optimization for the reconciliation system.
-    /// Instead of rebuilding the entire Taffy tree on every render,
-    /// we apply only the changes detected by the diff algorithm.
-    pub fn apply_patches(&mut self, patches: &[Patch]) -> bool {
-        if patches.is_empty() {
-            return false;
-        }
-
-        let mut candidate = self.staged_clone();
-        let changed = candidate.apply_patches_only(patches);
-        if changed {
-            candidate
-                .run_layout_and_publish(&mut || false)
-                .unwrap_or_else(|error| panic!("patched text flow layout failed: {error}"));
-            *self = candidate;
-        }
-        changed
-    }
-
-    fn apply_patches_only(&mut self, patches: &[Patch]) -> bool {
-        let mut needs_recompute = false;
-
-        for patch in patches {
-            match patch {
-                Patch::Create { node, parent, .. } => {
-                    if self.create_vnode(node, *parent).is_some() {
-                        needs_recompute = true;
-                    }
-                }
-                Patch::Update { key, new_props, .. } => {
-                    if self.update_node_props(*key, new_props) {
-                        needs_recompute = true;
-                    }
-                }
-                Patch::Remove { key } => {
-                    if self.remove_node(*key) {
-                        needs_recompute = true;
-                    }
-                }
-                Patch::Replace { key, node, .. } => {
-                    if self.replace_node(*key, node) {
-                        needs_recompute = true;
-                    }
-                }
-                Patch::Reorder { parent, order } => {
-                    if self.reorder_children(*parent, order) {
-                        needs_recompute = true;
-                    }
-                }
-            }
-        }
-
-        needs_recompute
-    }
-
-    /// Create a new node and add it to a parent
-    fn create_vnode(&mut self, vnode: &VNode, parent_key: NodeKey) -> Option<NodeId> {
-        // Get parent node ID first (copy it to avoid borrow issues)
-        let parent_node = *self.vnode_map.get(&parent_key.identity())?;
-
-        // Build the new subtree
-        let new_node_id = self.build_vnode(vnode)?;
-
-        // Add to parent
-        let _ = self.taffy.add_child(parent_node, new_node_id);
-
-        Some(new_node_id)
-    }
-
-    /// Update a node's props/style
-    fn update_node_props(&mut self, key: NodeKey, props: &Props) -> bool {
-        if let Some(&node_id) = self.vnode_map.get(&key.identity()) {
-            let is_text = self
-                .taffy
-                .get_node_context(node_id)
-                .is_some_and(NodeContext::is_text);
-            let new_style = normalized_taffy_style(&props.style, is_text);
-            if self.taffy.set_style(node_id, new_style).is_ok() {
-                if is_text {
-                    let source = self
-                        .taffy
-                        .get_node_context(node_id)
-                        .and_then(NodeContext::input)
-                        .map(|input| input.source.clone())
-                        .unwrap_or_default();
-                    let input = TextFlowInput::plain(
-                        source,
-                        crate::layout::TextFlowSourceKind::Exact,
-                        props.style.clone(),
-                    );
-                    if self
-                        .taffy
-                        .set_node_context(
-                            node_id,
-                            Some(NodeContext::new(Some(input), &self.text_flow_policy)),
-                        )
-                        .is_err()
-                    {
-                        return false;
-                    }
-                }
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Remove a node from the tree
-    fn remove_node(&mut self, key: NodeKey) -> bool {
-        let Some(&node_id) = self.vnode_map.get(&key.identity()) else {
-            return false;
-        };
-        let subtree = self.vnode_subtree_nodes(node_id);
-        if self.taffy.remove(node_id).is_err() {
-            return false;
-        }
-        self.purge_vnode_subtree(&subtree);
-        true
-    }
-
-    /// Replace a node with a new one
-    fn replace_node(&mut self, old_key: NodeKey, new_node: &VNode) -> bool {
-        if let Some(&old_node_id) = self.vnode_map.get(&old_key.identity()) {
-            // Get parent before removing
-            if let Some(parent_id) = self.taffy.parent(old_node_id) {
-                // Find the index of the old node in parent's children
-                let children: Vec<_> = self.taffy.children(parent_id).unwrap_or_default();
-                let index = children.iter().position(|&id| id == old_node_id);
-
-                // Remove old node
-                let subtree = self.vnode_subtree_nodes(old_node_id);
-                if self.taffy.remove(old_node_id).is_err() {
-                    return false;
-                }
-                self.purge_vnode_subtree(&subtree);
-
-                // Build new subtree
-                if let Some(new_node_id) = self.build_vnode(new_node) {
-                    // Insert at same position if possible
-                    if let Some(idx) = index {
-                        let _ = self
-                            .taffy
-                            .insert_child_at_index(parent_id, idx, new_node_id);
-                    } else {
-                        let _ = self.taffy.add_child(parent_id, new_node_id);
-                    }
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    fn vnode_subtree_nodes(&self, root: NodeId) -> HashSet<NodeId> {
-        let mut nodes = HashSet::new();
-        let mut pending = vec![root];
-        while let Some(node) = pending.pop() {
-            if nodes.insert(node) {
-                pending.extend(
-                    self.taffy
-                        .children(node)
-                        .expect("mapped VNode subtree must remain in the Taffy tree"),
-                );
-            }
-        }
-        nodes
-    }
-
-    fn purge_vnode_subtree(&mut self, subtree: &HashSet<NodeId>) {
-        self.vnode_map.retain(|_, node| !subtree.contains(node));
-        self.node_map.retain(|_, node| !subtree.contains(node));
-        self.element_keys
-            .retain(|element_id, _| self.node_map.contains_key(element_id));
-        self.current_vnode_flows
-            .retain(|key, _| self.vnode_map.contains_key(key));
-        self.current_text_flows
-            .retain(|element_id, _| self.node_map.contains_key(element_id));
-    }
-
-    /// Reorder children of a node
-    /// Set a parent's Taffy children to exactly `order`.
-    ///
-    /// The patch names every child the parent should end up with, so the result
-    /// is established rather than inferred. The previous version copied nodes
-    /// between slots of the old child vector according to a move list, which
-    /// could leave a node in two slots or drop one entirely, and said nothing
-    /// about where a newly created sibling belonged.
-    fn reorder_children(&mut self, parent_key: NodeKey, order: &[NodeKey]) -> bool {
-        let Some(&parent_id) = self.vnode_map.get(&parent_key.identity()) else {
-            return false;
-        };
-
-        let mut children = Vec::with_capacity(order.len());
-        for key in order {
-            // A key with no node means the plan disagrees with the tree. Setting
-            // a partial order would silently drop children, so change nothing.
-            let Some(&node_id) = self.vnode_map.get(&key.identity()) else {
-                return false;
-            };
-            children.push(node_id);
-        }
-
-        self.taffy.set_children(parent_id, &children).is_ok()
     }
 
     /// Get computed layout for an element
@@ -784,6 +591,9 @@ mod frame_flow_tests {
 }
 
 mod context_sync;
+mod patch_error;
+pub use patch_error::{PatchError, PatchFailure, PatchKind};
+mod patching;
 mod text_flow_bridge;
 
 use text_flow_bridge::{
