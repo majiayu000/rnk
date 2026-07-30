@@ -4,6 +4,8 @@
 
 use std::cmp;
 
+use unicode_segmentation::UnicodeSegmentation;
+
 /// Position in the text (row, column)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Position {
@@ -288,15 +290,15 @@ impl TextAreaState {
             }
         } else {
             let line = &self.lines[self.cursor.row];
-            let chars: Vec<char> = line.chars().collect();
+            let clusters: Vec<&str> = line.graphemes(true).collect();
             let mut col = self.cursor.col;
 
             // Skip whitespace
-            while col > 0 && chars.get(col - 1).is_some_and(|c| c.is_whitespace()) {
+            while col > 0 && clusters.get(col - 1).is_some_and(|c| is_whitespace(c)) {
                 col -= 1;
             }
             // Skip word characters
-            while col > 0 && chars.get(col - 1).is_some_and(|c| !c.is_whitespace()) {
+            while col > 0 && clusters.get(col - 1).is_some_and(|c| !is_whitespace(c)) {
                 col -= 1;
             }
 
@@ -316,15 +318,15 @@ impl TextAreaState {
             }
         } else {
             let line = &self.lines[self.cursor.row];
-            let chars: Vec<char> = line.chars().collect();
+            let clusters: Vec<&str> = line.graphemes(true).collect();
             let mut col = self.cursor.col;
 
             // Skip word characters
-            while col < chars.len() && !chars[col].is_whitespace() {
+            while col < clusters.len() && !is_whitespace(clusters[col]) {
                 col += 1;
             }
             // Skip whitespace
-            while col < chars.len() && chars[col].is_whitespace() {
+            while col < clusters.len() && is_whitespace(clusters[col]) {
                 col += 1;
             }
 
@@ -365,9 +367,12 @@ impl TextAreaState {
             }
 
             let line = &mut self.lines[self.cursor.row];
-            let byte_pos = char_to_byte_pos(line, self.cursor.col);
+            let byte_pos = grapheme_to_byte_pos(line, self.cursor.col);
             line.insert(byte_pos, ch);
-            self.cursor.col += 1;
+            // Recomputed, not incremented: a combining mark joins the cluster
+            // before it rather than forming one of its own, so the column must
+            // stay where it was.
+            self.cursor.col = byte_pos_to_grapheme(line, byte_pos + ch.len_utf8());
         }
 
         self.ensure_cursor_visible();
@@ -406,9 +411,9 @@ impl TextAreaState {
                 }
 
                 let line = &mut self.lines[self.cursor.row];
-                let byte_pos = char_to_byte_pos(line, self.cursor.col);
+                let byte_pos = grapheme_to_byte_pos(line, self.cursor.col);
                 line.insert(byte_pos, ch);
-                self.cursor.col += 1;
+                self.cursor.col = byte_pos_to_grapheme(line, byte_pos + ch.len_utf8());
             }
         }
 
@@ -424,7 +429,7 @@ impl TextAreaState {
         }
 
         let line = &self.lines[self.cursor.row];
-        let byte_pos = char_to_byte_pos(line, self.cursor.col);
+        let byte_pos = grapheme_to_byte_pos(line, self.cursor.col);
         let rest = line[byte_pos..].to_string();
         self.lines[self.cursor.row].truncate(byte_pos);
         self.cursor.row += 1;
@@ -441,9 +446,9 @@ impl TextAreaState {
             }
         } else {
             let line = &mut self.lines[self.cursor.row];
-            let byte_pos = char_to_byte_pos(line, self.cursor.col);
+            let byte_pos = grapheme_to_byte_pos(line, self.cursor.col);
             line.insert(byte_pos, '\t');
-            self.cursor.col += 1;
+            self.cursor.col = byte_pos_to_grapheme(line, byte_pos + 1);
         }
     }
 
@@ -459,15 +464,15 @@ impl TextAreaState {
 
         if self.cursor.col > 0 {
             let line = &mut self.lines[self.cursor.row];
-            let byte_pos = char_to_byte_pos(line, self.cursor.col - 1);
-            let end_pos = char_to_byte_pos(line, self.cursor.col);
+            let byte_pos = grapheme_to_byte_pos(line, self.cursor.col - 1);
+            let end_pos = grapheme_to_byte_pos(line, self.cursor.col);
             line.replace_range(byte_pos..end_pos, "");
             self.cursor.col -= 1;
         } else if self.cursor.row > 0 {
             // Merge with previous line
             let current_line = self.lines.remove(self.cursor.row);
             self.cursor.row -= 1;
-            self.cursor.col = self.lines[self.cursor.row].chars().count();
+            self.cursor.col = grapheme_count(&self.lines[self.cursor.row]);
             self.lines[self.cursor.row].push_str(&current_line);
         }
 
@@ -487,8 +492,8 @@ impl TextAreaState {
         let line_len = self.current_line_len();
         if self.cursor.col < line_len {
             let line = &mut self.lines[self.cursor.row];
-            let byte_pos = char_to_byte_pos(line, self.cursor.col);
-            let end_pos = char_to_byte_pos(line, self.cursor.col + 1);
+            let byte_pos = grapheme_to_byte_pos(line, self.cursor.col);
+            let end_pos = grapheme_to_byte_pos(line, self.cursor.col + 1);
             line.replace_range(byte_pos..end_pos, "");
         } else if self.cursor.row < self.lines.len() - 1 {
             // Merge with next line
@@ -513,8 +518,8 @@ impl TextAreaState {
 
         if start_col > end_col {
             let line = &mut self.lines[self.cursor.row];
-            let start_byte = char_to_byte_pos(line, end_col);
-            let end_byte = char_to_byte_pos(line, start_col);
+            let start_byte = grapheme_to_byte_pos(line, end_col);
+            let end_byte = grapheme_to_byte_pos(line, start_col);
             line.replace_range(start_byte..end_byte, "");
         }
     }
@@ -531,22 +536,22 @@ impl TextAreaState {
 
         let start_col = self.cursor.col;
         let line = &self.lines[self.cursor.row];
-        let chars: Vec<char> = line.chars().collect();
+        let clusters: Vec<&str> = line.graphemes(true).collect();
         let mut end_col = start_col;
 
         // Skip word characters
-        while end_col < chars.len() && !chars[end_col].is_whitespace() {
+        while end_col < clusters.len() && !is_whitespace(clusters[end_col]) {
             end_col += 1;
         }
         // Skip whitespace
-        while end_col < chars.len() && chars[end_col].is_whitespace() {
+        while end_col < clusters.len() && is_whitespace(clusters[end_col]) {
             end_col += 1;
         }
 
         if end_col > start_col {
             let line = &mut self.lines[self.cursor.row];
-            let start_byte = char_to_byte_pos(line, start_col);
-            let end_byte = char_to_byte_pos(line, end_col);
+            let start_byte = grapheme_to_byte_pos(line, start_col);
+            let end_byte = grapheme_to_byte_pos(line, end_col);
             line.replace_range(start_byte..end_byte, "");
         }
     }
@@ -596,7 +601,7 @@ impl TextAreaState {
     pub fn select_all(&mut self) {
         let end = Position::new(
             self.lines.len() - 1,
-            self.lines.last().map_or(0, |l| l.chars().count()),
+            self.lines.last().map_or(0, |l| grapheme_count(l)),
         );
         self.selection = Some(Selection::new(Position::default(), end));
         self.cursor = end;
@@ -630,11 +635,11 @@ impl TextAreaState {
             let end_col = if row == sel.end.row {
                 sel.end.col
             } else {
-                line.chars().count()
+                grapheme_count(line)
             };
 
-            let start_byte = char_to_byte_pos(line, start_col);
-            let end_byte = char_to_byte_pos(line, end_col);
+            let start_byte = grapheme_to_byte_pos(line, start_col);
+            let end_byte = grapheme_to_byte_pos(line, end_col);
 
             if start_byte < line.len() {
                 result.push_str(&line[start_byte..end_byte.min(line.len())]);
@@ -657,11 +662,11 @@ impl TextAreaState {
 
         // Get text after selection on the end line
         let end_line = &self.lines[sel.end.row];
-        let end_byte = char_to_byte_pos(end_line, sel.end.col);
+        let end_byte = grapheme_to_byte_pos(end_line, sel.end.col);
         let after_selection = end_line[end_byte..].to_string();
 
         // Truncate start line at selection start
-        let start_byte = char_to_byte_pos(&self.lines[sel.start.row], sel.start.col);
+        let start_byte = grapheme_to_byte_pos(&self.lines[sel.start.row], sel.start.col);
         self.lines[sel.start.row].truncate(start_byte);
 
         // Append text after selection
@@ -779,7 +784,7 @@ impl TextAreaState {
     fn current_line_len(&self) -> usize {
         self.lines
             .get(self.cursor.row)
-            .map_or(0, |l| l.chars().count())
+            .map_or(0, |l| grapheme_count(l))
     }
 
     /// Clamp cursor to valid position
@@ -794,9 +799,38 @@ impl TextAreaState {
     }
 }
 
-/// Convert character position to byte position in a string
-fn char_to_byte_pos(s: &str, char_pos: usize) -> usize {
-    s.char_indices().nth(char_pos).map_or(s.len(), |(i, _)| i)
+/// Byte offset of the `index`-th grapheme cluster, or the end of the string.
+///
+/// Columns count grapheme clusters, not `char`s. Indexing by `char` lets an
+/// edit land inside a cluster: backspace over `e` + combining acute removed
+/// only the accent, and over a ZWJ emoji or a flag it left a dangling joiner or
+/// a lone regional indicator — text the user never typed and cannot repair.
+fn grapheme_to_byte_pos(s: &str, index: usize) -> usize {
+    s.grapheme_indices(true)
+        .nth(index)
+        .map_or(s.len(), |(offset, _)| offset)
+}
+
+/// Whether a grapheme cluster is whitespace.
+///
+/// A cluster leads with its base character, so word scanning asks about that
+/// one; trailing marks never turn a word into a space.
+fn is_whitespace(cluster: &str) -> bool {
+    cluster.chars().next().is_some_and(char::is_whitespace)
+}
+
+/// Number of grapheme clusters in `s`; the width of one line in columns.
+fn grapheme_count(s: &str) -> usize {
+    s.graphemes(true).count()
+}
+
+/// Column of the grapheme boundary at `byte_pos`.
+///
+/// Used after an edit: recomputing the column from the byte offset is what
+/// makes a combining mark merge into the grapheme before it instead of
+/// advancing the cursor past a cluster that grew rather than moved.
+fn byte_pos_to_grapheme(s: &str, byte_pos: usize) -> usize {
+    grapheme_count(&s[..byte_pos.min(s.len())])
 }
 
 #[cfg(test)]
