@@ -109,10 +109,7 @@ impl LayoutEngine {
                     PatchFailure::PostconditionViolated,
                 )
             };
-            let &parent_id = self
-                .vnode_map
-                .get(&parent.identity())
-                .ok_or_else(|| fail())?;
+            let &parent_id = self.vnode_map.get(&parent.identity()).ok_or_else(fail)?;
             let actual = self.taffy.children(parent_id).map_err(|_| fail())?;
             let expected: Option<Vec<NodeId>> = order
                 .iter()
