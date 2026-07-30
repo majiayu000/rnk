@@ -3,7 +3,10 @@
 //! Compares old and new VNode trees to produce minimal patches.
 //! Uses a simplified algorithm optimized for typical UI patterns.
 
+use std::collections::HashMap;
+
 use crate::core::{NodeKey, Props, VNode, VNodeType};
+use crate::reconciler::SiblingIdentity;
 
 /// A patch representing a change to apply to the tree
 #[derive(Debug, Clone)]
@@ -29,10 +32,16 @@ pub enum Patch {
         new_props: Props,
         node: VNode,
     },
-    /// Reorder children of a parent node
+    /// Set a parent's children to exactly this order.
+    ///
+    /// The full target order, not a set of moves. A move list only describes
+    /// where surviving nodes went, so it cannot say where a newly created
+    /// sibling belongs, and applying it position by position can duplicate or
+    /// drop a child. Carrying the whole order makes "Taffy order equals VNode
+    /// order" something the apply step can simply establish and assert.
     Reorder {
         parent: NodeKey,
-        moves: Vec<(usize, usize)>,
+        order: Vec<NodeKey>,
     },
 }
 
@@ -70,9 +79,9 @@ impl Patch {
         }
     }
 
-    /// Create a "reorder children" patch
-    pub fn reorder(parent: NodeKey, moves: Vec<(usize, usize)>) -> Self {
-        Patch::Reorder { parent, moves }
+    /// Create a "set children order" patch
+    pub fn reorder(parent: NodeKey, order: Vec<NodeKey>) -> Self {
+        Patch::Reorder { parent, order }
     }
 }
 
@@ -119,80 +128,76 @@ fn diff_node(old: &VNode, new: &VNode, patches: &mut Vec<Patch>) {
     diff_children(&old.children, &new.children, old.key, patches);
 }
 
-/// Diff children lists using a keyed algorithm
+/// Diff children lists, matching by [`SiblingIdentity`].
 ///
-/// This uses a simplified LCS-like approach optimized for common cases:
-/// 1. Additions at the end (most common)
-/// 2. Removals from anywhere
-/// 3. Reordering (less common)
+/// Surviving children are diffed in place, absent ones removed, unrecognised
+/// ones created, and the parent's final child order stated outright whenever it
+/// differs from the order the old children were in.
 pub fn diff_children(
     old_children: &[VNode],
     new_children: &[VNode],
     parent_key: NodeKey,
     patches: &mut Vec<Patch>,
 ) {
-    // Build key map for efficient lookup
-    let old_key_map: std::collections::HashMap<_, _> = old_children
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (key_identity(&c.key), i))
-        .collect();
+    // First occurrence wins. A duplicate identity must never rebind the map
+    // entry of an existing node, or which node a key refers to would depend on
+    // sibling order.
+    let mut old_by_identity: HashMap<SiblingIdentity, usize> = HashMap::new();
+    for (old_idx, child) in old_children.iter().enumerate() {
+        old_by_identity
+            .entry(child.key.identity())
+            .or_insert(old_idx);
+    }
 
-    // Track which old nodes have been matched
-    let mut matched_old: Vec<bool> = vec![false; old_children.len()];
-    let mut moves: Vec<(usize, usize)> = Vec::new();
+    let mut matched_old = vec![false; old_children.len()];
+    // The keys the parent must end up holding, in order, as of the new tree.
+    // A survivor's new key carries a fresh `index` but the same identity, which
+    // is what the apply step resolves against.
+    let mut final_order = Vec::with_capacity(new_children.len());
 
-    // First pass: match new children to old children
-    for (new_idx, new_child) in new_children.iter().enumerate() {
-        let key_id = key_identity(&new_child.key);
+    // Creating a node appends it, so the order is already right only when the
+    // survivors are an unbroken run from the front of the old list and every
+    // create lands after all of them. Anything else has to be stated.
+    let mut already_in_order = true;
+    let mut next_untouched_old = 0usize;
+    let mut seen_create = false;
 
-        if let Some(&old_idx) = old_key_map.get(&key_id) {
-            // Found matching old node
-            matched_old[old_idx] = true;
+    for new_child in new_children {
+        let identity = new_child.key.identity();
+        // An old node can be claimed once. Two new children sharing an identity
+        // are not the same node, so the second is a create, not a second match.
+        let survivor = old_by_identity
+            .get(&identity)
+            .copied()
+            .filter(|&old_idx| !matched_old[old_idx]);
 
-            // Recursively diff the matched nodes
-            diff_node(&old_children[old_idx], new_child, patches);
-
-            // Track if position changed
-            if old_idx != new_idx {
-                moves.push((old_idx, new_idx));
+        match survivor {
+            Some(old_idx) => {
+                if seen_create || old_idx != next_untouched_old {
+                    already_in_order = false;
+                }
+                next_untouched_old = old_idx + 1;
+                matched_old[old_idx] = true;
+                diff_node(&old_children[old_idx], new_child, patches);
+                final_order.push(new_child.key);
             }
-        } else {
-            // New node - create it
-            patches.push(Patch::create(new_child.clone(), parent_key));
+            None => {
+                seen_create = true;
+                patches.push(Patch::create(new_child.clone(), parent_key));
+                final_order.push(new_child.key);
+            }
         }
     }
 
-    // Second pass: remove unmatched old children
     for (old_idx, matched) in matched_old.iter().enumerate() {
         if !matched {
             patches.push(Patch::remove(old_children[old_idx].key));
         }
     }
 
-    // Add reorder patch if needed
-    if !moves.is_empty() && needs_reorder(&moves) {
-        patches.push(Patch::reorder(parent_key, moves));
+    if !already_in_order {
+        patches.push(Patch::reorder(parent_key, final_order));
     }
-}
-
-/// Generate a unique identity for a key (for HashMap lookup)
-fn key_identity(key: &NodeKey) -> (Option<u64>, std::any::TypeId, usize) {
-    (key.user_key, key.type_id, key.index)
-}
-
-/// Check if moves actually require reordering
-///
-/// If all moves are just index shifts due to insertions/deletions,
-/// we don't need an explicit reorder operation.
-fn needs_reorder(moves: &[(usize, usize)]) -> bool {
-    // Simple heuristic: if any move goes backwards, we need reorder
-    for &(from, to) in moves {
-        if to < from {
-            return true;
-        }
-    }
-    false
 }
 
 #[cfg(test)]
@@ -319,11 +324,147 @@ mod tests {
             .child(VNode::text("B").with_key("b"));
 
         let patches = diff(&old, &new);
-        // Should detect reordering
-        let has_reorder = patches.iter().any(|p| matches!(p, Patch::Reorder { .. }));
-        let has_creates = patches.iter().any(|p| matches!(p, Patch::Create { .. }));
-        // Either reorder or create patches should exist
-        assert!(has_reorder || has_creates);
+
+        // The previous assertion was `has_reorder || has_creates`, which held
+        // even when every keyed child was destroyed and rebuilt — which is what
+        // was happening.
+        assert_eq!(
+            final_order(&patches),
+            Some(keys(&new)),
+            "reorder must state the whole target order: {patches:?}"
+        );
+        assert!(
+            !patches
+                .iter()
+                .any(|p| matches!(p, Patch::Create { .. } | Patch::Remove { .. })),
+            "moving keyed children must preserve them, not rebuild them: {patches:?}"
+        );
+    }
+
+    /// Keys of a node's children, in order.
+    fn keys(parent: &VNode) -> Vec<NodeKey> {
+        parent.children.iter().map(|child| child.key).collect()
+    }
+
+    /// The order stated by the single `Reorder` patch, if there is one.
+    fn final_order(patches: &[Patch]) -> Option<Vec<NodeKey>> {
+        let mut found = patches.iter().filter_map(|p| match p {
+            Patch::Reorder { order, .. } => Some(order.clone()),
+            _ => None,
+        });
+        let first = found.next();
+        assert!(found.next().is_none(), "one Reorder per parent per frame");
+        first
+    }
+
+    /// Build a parent whose children carry the given keys, reusing one parent
+    /// key so the two frames describe the same node.
+    fn parent_with(parent_key: NodeKey, child_keys: &[&str]) -> VNode {
+        let mut parent = VNode::box_node();
+        parent.key = parent_key;
+        for key in child_keys {
+            parent = parent.child(VNode::text("x").with_key(key));
+        }
+        parent
+    }
+
+    /// Identities in the order the patches leave them, given a starting order.
+    fn apply_order(before: &[&str], after: &[&str]) -> Vec<Patch> {
+        let parent_key = VNode::box_node().key;
+        diff(
+            &parent_with(parent_key, before),
+            &parent_with(parent_key, after),
+        )
+    }
+
+    #[test]
+    fn keyed_children_keep_their_identity_through_every_edit() {
+        // Front, middle and tail insert; delete; swap; and a multi-position
+        // move. In each case the surviving keys must not be rebuilt.
+        let cases: &[(&[&str], &[&str])] = &[
+            (&["b", "c"], &["a", "b", "c"]),
+            (&["a", "c"], &["a", "b", "c"]),
+            (&["a", "b"], &["a", "b", "c"]),
+            (&["a", "b", "c"], &["a", "c"]),
+            (&["a", "b"], &["b", "a"]),
+            (&["a", "b", "c", "d"], &["d", "b", "c", "a"]),
+            (&["a", "b", "c"], &["c", "b", "a"]),
+        ];
+
+        for (before, after) in cases {
+            let patches = apply_order(before, after);
+            let survivors: Vec<&&str> = after.iter().filter(|k| before.contains(k)).collect();
+
+            let rebuilt: Vec<_> = patches
+                .iter()
+                .filter(|p| matches!(p, Patch::Create { .. }))
+                .collect();
+            assert_eq!(
+                rebuilt.len(),
+                after.len() - survivors.len(),
+                "{before:?} -> {after:?} created a node it should have kept: {patches:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pure_append_needs_no_reorder() {
+        // Creating a node appends it, so this order is already correct and
+        // restating it would be pointless work every frame.
+        let patches = apply_order(&["a", "b"], &["a", "b", "c"]);
+        assert_eq!(final_order(&patches), None, "{patches:?}");
+    }
+
+    #[test]
+    fn a_front_insert_states_the_order_because_appending_is_wrong() {
+        let patches = apply_order(&["b", "c"], &["a", "b", "c"]);
+        assert!(
+            final_order(&patches).is_some(),
+            "a create landing at the front must be positioned: {patches:?}"
+        );
+    }
+
+    #[test]
+    fn a_trailing_removal_needs_no_reorder() {
+        let patches = apply_order(&["a", "b", "c"], &["a", "b"]);
+        assert_eq!(final_order(&patches), None, "{patches:?}");
+    }
+
+    #[test]
+    fn a_duplicate_key_does_not_rebind_an_existing_node() {
+        // Two siblings sharing a key are not the same node. The first claims
+        // the existing node; the second must be created, never silently
+        // remapped onto it.
+        let parent_key = VNode::box_node().key;
+        let patches = diff(
+            &parent_with(parent_key, &["a"]),
+            &parent_with(parent_key, &["a", "a"]),
+        );
+
+        let creates = patches
+            .iter()
+            .filter(|p| matches!(p, Patch::Create { .. }))
+            .count();
+        assert_eq!(creates, 1, "{patches:?}");
+        assert!(
+            !patches.iter().any(|p| matches!(p, Patch::Remove { .. })),
+            "the first occurrence must keep the existing node: {patches:?}"
+        );
+    }
+
+    #[test]
+    fn an_unkeyed_child_is_still_matched_by_position() {
+        // Unchanged public semantics: without a key, position is identity.
+        let parent_key = VNode::box_node().key;
+        let mut before = VNode::box_node();
+        before.key = parent_key;
+        let before = before.child(VNode::text("x")).child(VNode::text("y"));
+
+        let mut after = VNode::box_node();
+        after.key = parent_key;
+        let after = after.child(VNode::text("x")).child(VNode::text("y"));
+
+        assert!(diff(&before, &after).is_empty());
     }
 
     #[test]
@@ -348,17 +489,5 @@ mod tests {
         let a: Vec<i32> = vec![];
         let b = vec![1, 2, 3];
         assert_eq!(lcs_length(&a, &b), 0);
-    }
-
-    #[test]
-    fn test_needs_reorder() {
-        // Forward moves don't need reorder
-        assert!(!needs_reorder(&[(0, 1), (1, 2)]));
-
-        // Backward moves need reorder
-        assert!(needs_reorder(&[(2, 0), (1, 1)]));
-
-        // Empty moves don't need reorder
-        assert!(!needs_reorder(&[]));
     }
 }

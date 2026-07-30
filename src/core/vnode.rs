@@ -8,6 +8,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use super::Style;
+use crate::reconciler::SiblingIdentity;
 
 /// Stable node identifier that doesn't change on clone
 ///
@@ -53,17 +54,30 @@ impl NodeKey {
         }
     }
 
-    /// Check if this key matches another for reconciliation
+    /// This key's cross-frame identity among its siblings.
     ///
-    /// Keys match if:
-    /// - Both have user keys and they're equal, OR
-    /// - Neither has user key and type_id + index match
-    pub fn matches(&self, other: &NodeKey) -> bool {
-        match (self.user_key, other.user_key) {
-            (Some(a), Some(b)) => a == b && self.type_id == other.type_id,
-            (None, None) => self.type_id == other.type_id && self.index == other.index,
-            _ => false,
+    /// `index` records where the node sits right now, which is not the same
+    /// question as which node it is. A keyed node stays itself when it moves,
+    /// so its identity omits position; an unkeyed node is only ever identified
+    /// by position. Reconciliation must use this rather than the derived
+    /// fieldwise `Eq`, which would make a moved keyed node look like a
+    /// different node.
+    pub fn identity(&self) -> SiblingIdentity {
+        match self.user_key {
+            Some(user_key) => SiblingIdentity::Keyed {
+                user_key,
+                type_id: self.type_id,
+            },
+            None => SiblingIdentity::Positional {
+                type_id: self.type_id,
+                index: self.index,
+            },
         }
+    }
+
+    /// Check if this key matches another for reconciliation
+    pub fn matches(&self, other: &NodeKey) -> bool {
+        self.identity() == other.identity()
     }
 }
 

@@ -211,7 +211,7 @@ mod tests {
         let node_key = NodeKey::with_key("sidebar", TypeId::of::<i32>(), 0);
         let mut keyed = HashMap::new();
         keyed.insert(
-            node_key,
+            node_key.identity(),
             Layout {
                 x: 0.0,
                 y: 0.0,
@@ -220,7 +220,7 @@ mod tests {
             },
         );
         let mut aliases = HashMap::new();
-        aliases.insert("sidebar".to_string(), node_key);
+        aliases.insert("sidebar".to_string(), node_key.identity());
 
         ctx.borrow_mut()
             .set_measure_layouts_with_node_keys(HashMap::new(), keyed, aliases);

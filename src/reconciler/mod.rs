@@ -7,8 +7,10 @@
 //! hooks-first application API.
 
 mod diff;
+mod identity;
 mod registry;
 
 pub use diff::{Patch, diff, diff_children};
+pub use identity::SiblingIdentity;
 #[doc(hidden)]
 pub use registry::{ComponentInstance, ComponentRegistry};
