@@ -42,12 +42,17 @@
 
 #![forbid(missing_docs)]
 
+pub mod composer;
 mod error;
 mod model;
 mod reducer;
 mod state;
 pub mod view;
 
+pub use composer::{
+    ChatComposerKeyMap, ChatComposerState, ComposerAction, ComposerError, ComposerProjection,
+    ComposerRevision, PendingSubmission, SubmissionToken, handle_key,
+};
 pub use view::{
     ChatBlockRef, ChatBlockRenderer, ChatMessageView, ChatMessageViewOptions, ChatMessageViewStyle,
     ChatRenderContext, ChatRenderOverride, MessageViewVariant, StreamingIndicatorFrame,
