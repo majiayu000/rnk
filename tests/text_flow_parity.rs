@@ -86,3 +86,38 @@ fn reserved_and_painted_rows_agree_across_widths() {
         );
     }
 }
+
+#[test]
+fn source_controls_are_not_terminal_sequences() {
+    // A terminal executes whatever escape sequence reaches it. Rendered text is
+    // untrusted content, so a message body carrying `ESC [ 2 J` would otherwise
+    // clear the user's screen mid-frame.
+    let element = Box::new()
+        .width(40.0)
+        .child(Text::new("before\u{1b}[2J\u{7}after"))
+        .into_element();
+
+    let painted = render_to_string_raw(&element, 40);
+
+    assert!(
+        !painted.contains('\u{1b}'),
+        "raw ESC reached the terminal stream: {painted:?}"
+    );
+    assert!(
+        !painted.contains('\u{7}'),
+        "raw BEL reached the terminal stream: {painted:?}"
+    );
+    assert!(
+        painted.contains("before␛[2J␇after"),
+        "control stand-ins missing or content lost: {painted:?}"
+    );
+}
+
+#[test]
+fn tabs_reserve_and_paint_the_same_columns() {
+    // The expanded run is what occupies cells; measuring the single tab scalar
+    // instead would under-reserve the row.
+    let (reserved, painted) = measure_and_render("a\tb", 40, TextWrap::Wrap);
+    assert_eq!(reserved, 1);
+    assert_eq!(painted, vec!["a       b"]);
+}

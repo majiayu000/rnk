@@ -5,8 +5,7 @@
 use taffy::AvailableSpace;
 
 use crate::core::TextWrap;
-use crate::layout::measure::measure_text_width;
-use crate::layout::text_flow::flow_text;
+use crate::layout::text_flow::{flow_text, intrinsic_width};
 
 /// Per-node data Taffy hands back to the measure callback.
 pub(super) struct NodeContext {
@@ -92,7 +91,7 @@ pub(super) fn measure_text_node(
     let text_wrap = context.text_wrap;
     let text = context.text_content.as_deref().unwrap_or_default();
 
-    let text_width = measure_text_width(text) as f32;
+    let text_width = intrinsic_width(text) as f32;
 
     let definite_width = match available_space.width {
         AvailableSpace::Definite(width) => Some(width as usize),
@@ -189,6 +188,23 @@ mod tests {
             Some(&mut ctx),
         );
         assert_eq!(size.width, 14.0);
+    }
+
+    #[test]
+    fn intrinsic_width_accounts_for_tab_expansion() {
+        // The raw string is three scalars but nine columns once flowed. Sizing
+        // from the raw width made the node 3 wide, so layout wrapped into two
+        // rows while the renderer painted one.
+        let mut ctx = NodeContext::new(Some("a\tb".into()), TextWrap::Wrap);
+        let size = measure_text_node(unknown(), definite(40.0), Some(&mut ctx));
+        assert_eq!((size.width, size.height), (9.0, 1.0));
+    }
+
+    #[test]
+    fn intrinsic_width_counts_a_control_as_its_single_stand_in_cell() {
+        let mut ctx = NodeContext::new(Some("ab\u{1b}cd".into()), TextWrap::Wrap);
+        let size = measure_text_node(unknown(), definite(40.0), Some(&mut ctx));
+        assert_eq!(size.width, 5.0);
     }
 
     #[test]

@@ -8,11 +8,17 @@
 //!
 //! Both sides now call [`flow_text`] and consume the same rows.
 
+use std::borrow::Cow;
+
 use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthChar;
 
 use crate::core::TextWrap;
 
 use super::measure::grapheme_width;
+
+/// Columns between tab stops, matching the terminal default.
+const TAB_STOP: usize = 8;
 
 /// The rows a text block occupies at a given content width.
 ///
@@ -35,7 +41,6 @@ impl TextFlow {
     }
 
     /// Width in cells of the widest row.
-    #[cfg(test)]
     pub(crate) fn max_row_width(&self) -> usize {
         self.rows
             .iter()
@@ -89,12 +94,75 @@ fn logical_lines(text: &str) -> Vec<&str> {
     lines
 }
 
+/// Map a control scalar to a terminal-safe stand-in, or `None` if it is text.
+///
+/// Source text is untrusted. A terminal executes any escape sequence it
+/// receives, so an `ESC [ 2 J` embedded in a rendered message would clear the
+/// user's screen, and other C0/C1 bytes can move the cursor or start an OSC
+/// command. Each control becomes exactly one printable cell so that the
+/// substitution cannot shift anything else on the row.
+///
+/// C0 (which includes ESC) has a dedicated Unicode control picture per scalar;
+/// DEL has `␡`. C1 has no picture block, so it falls back to the replacement
+/// character.
+pub(crate) fn sanitize_control(ch: char) -> Option<char> {
+    match ch {
+        '\u{0}'..='\u{1f}' => char::from_u32(0x2400 + ch as u32),
+        '\u{7f}' => Some('\u{2421}'),
+        '\u{80}'..='\u{9f}' => Some('\u{fffd}'),
+        _ => None,
+    }
+}
+
+/// Expand tabs and neutralise controls in one already-hard-break-free line.
+///
+/// Borrows unchanged when the line is plain, which is the common case.
+fn sanitize_line(line: &str) -> Cow<'_, str> {
+    if !line.chars().any(|ch| sanitize_control(ch).is_some()) {
+        return Cow::Borrowed(line);
+    }
+
+    let mut out = String::with_capacity(line.len());
+    let mut width = 0usize;
+
+    for ch in line.chars() {
+        if ch == '\t' {
+            // Advance to the next tab stop, never zero columns.
+            let advance = TAB_STOP - (width % TAB_STOP);
+            for _ in 0..advance {
+                out.push(' ');
+            }
+            width += advance;
+        } else if let Some(safe) = sanitize_control(ch) {
+            out.push(safe);
+            width += 1;
+        } else {
+            width += ch.width().unwrap_or(0);
+            out.push(ch);
+        }
+    }
+
+    Cow::Owned(out)
+}
+
+/// Widest row `text` occupies when nothing forces a break: its max-content width.
+///
+/// This must come from the same flow the renderer draws. Measuring the raw
+/// string instead sizes the node from characters that never reach a cell — a
+/// tab is one scalar but up to eight columns, so the node came out too narrow
+/// and layout then wrapped text the renderer drew on a single row.
+pub(crate) fn intrinsic_width(text: &str) -> usize {
+    flow_text(text, usize::MAX, TextWrap::Wrap).max_row_width()
+}
+
 /// Lay `text` out into rows at `max_width` cells under `wrap`.
 ///
 /// `max_width == 0` yields one empty row per logical line: there is nowhere to
 /// place a cell, but the row count stays determinate.
 pub(crate) fn flow_text(text: &str, max_width: usize, wrap: TextWrap) -> TextFlow {
-    let lines = logical_lines(text);
+    // Hard breaks are consumed first, then tabs and controls, so that only
+    // printable graphemes reach the wrapper and the renderer.
+    let lines: Vec<Cow<'_, str>> = logical_lines(text).into_iter().map(sanitize_line).collect();
 
     if max_width == 0 {
         return TextFlow {
@@ -103,7 +171,7 @@ pub(crate) fn flow_text(text: &str, max_width: usize, wrap: TextWrap) -> TextFlo
     }
 
     let mut rows = Vec::with_capacity(lines.len());
-    for line in lines {
+    for line in &lines {
         match wrap {
             TextWrap::Wrap => wrap_line(line, max_width, &mut rows),
             _ => rows.push(fit_single_row(line, max_width)),
@@ -344,6 +412,71 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn control_scalars_never_survive_the_flow() {
+        // An ESC reaching the terminal is executed, so this exact input would
+        // otherwise clear the user's screen mid-render.
+        let flow = flow_text("hi\u{1b}[2Jgone", 40, TextWrap::Wrap);
+        let out = flow.rows().concat();
+        assert!(!out.contains('\u{1b}'), "ESC survived in {out:?}");
+        assert_eq!(out, "hi␛[2Jgone");
+    }
+
+    #[test]
+    fn each_control_class_gets_its_own_safe_stand_in() {
+        assert_eq!(sanitize_control('\u{1b}'), Some('␛'));
+        assert_eq!(sanitize_control('\u{0}'), Some('␀'));
+        assert_eq!(sanitize_control('\u{7}'), Some('␇'));
+        assert_eq!(sanitize_control('\u{7f}'), Some('␡'));
+        assert_eq!(sanitize_control('\u{9b}'), Some('\u{fffd}'));
+        // Ordinary text, including wide and combining scalars, is untouched.
+        assert_eq!(sanitize_control('a'), None);
+        assert_eq!(sanitize_control('世'), None);
+        assert_eq!(sanitize_control('\u{301}'), None);
+    }
+
+    #[test]
+    fn a_control_occupies_exactly_one_cell_so_the_row_does_not_shift() {
+        // Substitution must be width-preserving, or every later column on the
+        // row would be off by the difference.
+        let flow = flow_text("ab\u{7}cd", 40, TextWrap::Wrap);
+        assert_eq!(flow.max_row_width(), 5);
+    }
+
+    #[test]
+    fn tabs_expand_to_the_next_tab_stop() {
+        assert_eq!(rows("a\tb", 40, TextWrap::Wrap), vec!["a       b"]);
+        // Already on a stop: a full run, not zero columns.
+        assert_eq!(
+            rows("12345678\tx", 40, TextWrap::Wrap),
+            vec!["12345678        x"]
+        );
+        // Stops are measured in cells, so a wide grapheme counts as two.
+        assert_eq!(rows("世界\tx", 40, TextWrap::Wrap), vec!["世界    x"]);
+    }
+
+    #[test]
+    fn tab_expansion_happens_before_wrapping() {
+        // The expanded spaces are what has to fit, not the single tab scalar.
+        assert_eq!(rows("a\tb", 8, TextWrap::Wrap), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn plain_text_is_not_reallocated() {
+        assert!(matches!(sanitize_line("plain 世界 text"), Cow::Borrowed(_)));
+        assert!(matches!(sanitize_line("has\ttab"), Cow::Owned(_)));
+    }
+
+    #[test]
+    fn hard_breaks_are_consumed_before_sanitizing() {
+        // LF and CR are C0, but they are structure, not payload: they must
+        // still split rows rather than turn into ␊ / ␍ pictures.
+        assert_eq!(
+            rows("a\r\nb\nc\rd", 10, TextWrap::Wrap),
+            vec!["a", "b", "c", "d"]
+        );
     }
 
     #[test]
