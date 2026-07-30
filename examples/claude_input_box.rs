@@ -7,13 +7,19 @@
 //!
 //! Run with: cargo run --example claude_input_box
 
+use rnk::components::InteractionOutcome;
+use rnk::components::chat::{
+    ChatComposerKeyMap, ChatComposerState, ComposerProjection, handle_key,
+};
 use rnk::hooks::use_interval_when;
 use rnk::prelude::*;
+use std::num::NonZeroUsize;
 use std::time::Duration;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const PROMPT: &str = "❯ ";
-const MAX_VISIBLE_INPUT_LINES: usize = 4;
+const MAX_VISIBLE_INPUT_LINES: NonZeroUsize = NonZeroUsize::new(4).expect("four is non-zero");
 const OPENING_FRAME_MS: u64 = 70;
 const OPENING_FRAME_COUNT: usize = 18;
 const ASCII_LOGO: [&str; 5] = [
@@ -31,68 +37,14 @@ const HEADER_LINES: [&str; 5] = [
     "",
 ];
 
-#[derive(Clone, Debug, Default)]
-struct InlineInputState {
-    chars: Vec<char>,
-    cursor_pos: usize,
-}
-
-impl InlineInputState {
-    fn insert_str(&mut self, input: &str) {
-        for ch in input.chars().filter(|ch| !ch.is_control()) {
-            self.chars.insert(self.cursor_pos, ch);
-            self.cursor_pos += 1;
-        }
-    }
-
-    fn move_left(&mut self) {
-        self.cursor_pos = self.cursor_pos.saturating_sub(1);
-    }
-
-    fn move_right(&mut self) {
-        if self.cursor_pos < self.chars.len() {
-            self.cursor_pos += 1;
-        }
-    }
-
-    fn move_home(&mut self) {
-        self.cursor_pos = 0;
-    }
-
-    fn move_end(&mut self) {
-        self.cursor_pos = self.chars.len();
-    }
-
-    fn backspace(&mut self) {
-        if self.cursor_pos > 0 {
-            self.cursor_pos -= 1;
-            self.chars.remove(self.cursor_pos);
-        }
-    }
-
-    fn delete(&mut self) {
-        if self.cursor_pos < self.chars.len() {
-            self.chars.remove(self.cursor_pos);
-        }
-    }
-
-    fn clear(&mut self) {
-        self.chars.clear();
-        self.cursor_pos = 0;
-    }
-
-    fn submitted_text(&self) -> String {
-        self.chars.iter().collect()
-    }
-}
-
 fn main() -> std::io::Result<()> {
     render(app).run()
 }
 
 fn app() -> Element {
     let app = use_app();
-    let input_state = use_signal(InlineInputState::default);
+    let input_state =
+        use_signal(|| ChatComposerState::new().with_max_visible_lines(MAX_VISIBLE_INPUT_LINES));
     let submitted_count = use_signal(|| 0u32);
     let opening_frame = use_signal(|| 0usize);
     let intro_printed = use_signal(|| false);
@@ -129,6 +81,8 @@ fn app() -> Element {
     let app_for_handler = app.clone();
     let input_ready = intro_printed.get();
 
+    let keymap = ChatComposerKeyMap::new();
+
     use_input(move |input, key| {
         if key.escape || (key.ctrl && input.eq_ignore_ascii_case("c")) {
             app_for_handler.exit();
@@ -139,17 +93,13 @@ fn app() -> Element {
             return;
         }
 
-        if key.ctrl && input.eq_ignore_ascii_case("u") {
-            input_for_handler.update(|state| state.clear());
-            return;
-        }
+        // One call covers editing, movement, newline and submission. Escape is
+        // handled above because this example exits on it rather than treating
+        // it as a cancel.
+        let mut state = input_for_handler.get();
+        let outcome = handle_key(&mut state, &keymap, input, key);
 
-        if key.return_key {
-            let submitted = input_for_handler.get().submitted_text();
-            if submitted.trim().is_empty() {
-                return;
-            }
-
+        if let InteractionOutcome::Submitted(submitted) = outcome {
             let message_number = count_for_handler.get() + 1;
             count_for_handler.set(message_number);
             let width = terminal_content_width();
@@ -162,27 +112,16 @@ fn app() -> Element {
                 width,
             ));
             app_for_handler.println("");
-            input_for_handler.update(|state| state.clear());
-            return;
+
+            // The composer keeps the draft until the send is confirmed, so it
+            // is cleared here rather than by Enter itself. A failed send would
+            // instead call `acknowledge_failure` and leave the text in place.
+            if let Some(token) = state.pending_submission().map(|pending| pending.token()) {
+                let _ = state.acknowledge_success(token);
+            }
         }
 
-        input_for_handler.update(|state| {
-            if key.left_arrow {
-                state.move_left();
-            } else if key.right_arrow {
-                state.move_right();
-            } else if key.home {
-                state.move_home();
-            } else if key.end {
-                state.move_end();
-            } else if key.backspace {
-                state.backspace();
-            } else if key.delete {
-                state.delete();
-            } else if !key.ctrl && !key.alt && !input.is_empty() {
-                state.insert_str(input);
-            }
-        });
+        input_for_handler.set(state);
     });
 
     if input_ready {
@@ -246,19 +185,26 @@ fn reveal_ascii_line(line: &str, visible_cols: usize) -> String {
         .collect()
 }
 
-fn render_input_box(state: &InlineInputState, width: usize) -> Element {
+fn render_input_box(state: &ChatComposerState, width: usize) -> Element {
     let width = safe_terminal_width(width);
     let border = "─".repeat(width);
     let input_width = input_viewport_width(width);
-    let lines = visible_input_lines(state, input_width, MAX_VISIBLE_INPUT_LINES);
+
+    // Wrapping, the visible window and the cursor position all come from the
+    // library projection. The example used to compute each of them itself.
+    let projection = ComposerProjection::build(state, input_width as u16);
+    let first_row = projection.scroll_offset();
 
     let mut container = Box::new()
         .flex_direction(FlexDirection::Column)
         .width(width as i32)
         .child(render_border_line(&border, width));
 
-    for (index, line) in lines.iter().enumerate() {
-        container = container.child(render_input_line(line, index == 0, width));
+    for (offset, row) in projection.visible_slice().iter().enumerate() {
+        let absolute_row = first_row + offset;
+        let cursor_column =
+            (absolute_row == projection.cursor_row()).then(|| projection.cursor_column());
+        container = container.child(render_input_line(row, cursor_column, offset == 0, width));
     }
 
     container
@@ -280,8 +226,13 @@ fn render_border_line(border: &str, width: usize) -> Element {
         .into_element()
 }
 
-fn render_input_line(line: &InputLine, show_prompt: bool, width: usize) -> Element {
-    let mut row = Box::new()
+fn render_input_line(
+    row: &str,
+    cursor_column: Option<usize>,
+    show_prompt: bool,
+    width: usize,
+) -> Element {
+    let mut line = Box::new()
         .flex_direction(FlexDirection::Row)
         .width(width as i32)
         .height(1)
@@ -289,27 +240,46 @@ fn render_input_line(line: &InputLine, show_prompt: bool, width: usize) -> Eleme
         .flex_shrink(0.0);
 
     if show_prompt {
-        row = row.child(
+        line = line.child(
             Text::new(PROMPT)
                 .color(Color::BrightCyan)
                 .bold()
                 .into_element(),
         );
     } else {
-        row = row.child(Text::new(" ".repeat(UnicodeWidthStr::width(PROMPT))).into_element());
+        line = line.child(Text::new(" ".repeat(UnicodeWidthStr::width(PROMPT))).into_element());
     }
 
-    for cell in &line.cells {
-        row = row.child(match cell {
-            InputCell::Text(ch) => Text::new(ch.to_string()).into_element(),
-            InputCell::Cursor(ch) => Text::new(ch.to_string())
-                .color(Color::Black)
-                .background(Color::BrightCyan)
-                .into_element(),
-        });
+    let mut column = 0usize;
+    let mut painted_cursor = false;
+    for cluster in row.graphemes(true) {
+        let at_cursor = cursor_column == Some(column);
+        painted_cursor |= at_cursor;
+        line = line.child(styled_cell(cluster, at_cursor));
+        column += UnicodeWidthStr::width(cluster).max(1);
     }
 
-    row.into_element()
+    // A cursor at the end of the row has no character to sit on, so it gets a
+    // space of its own rather than disappearing.
+    if let Some(target) = cursor_column
+        && !painted_cursor
+        && target >= column
+    {
+        line = line.child(styled_cell(" ", true));
+    }
+
+    line.into_element()
+}
+
+fn styled_cell(cluster: &str, at_cursor: bool) -> Element {
+    let text = Text::new(cluster.to_string());
+    if at_cursor {
+        text.color(Color::Black)
+            .background(Color::BrightCyan)
+            .into_element()
+    } else {
+        text.into_element()
+    }
 }
 
 fn print_intro(app: &AppContext) {
@@ -433,163 +403,4 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     }
 
     lines
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum InputCell {
-    Text(char),
-    Cursor(char),
-}
-
-impl InputCell {
-    fn width(&self) -> usize {
-        match self {
-            Self::Text(ch) | Self::Cursor(ch) => ch.width().unwrap_or(1).max(1),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct InputLine {
-    cells: Vec<InputCell>,
-    has_cursor: bool,
-}
-
-fn visible_input_lines(
-    state: &InlineInputState,
-    viewport_width: usize,
-    max_visible_lines: usize,
-) -> Vec<InputLine> {
-    let wrapped = wrap_input_cells(state, viewport_width);
-    let line_count = max_visible_lines.max(1).min(wrapped.len());
-    let cursor_line = wrapped
-        .iter()
-        .position(|line| line.has_cursor)
-        .unwrap_or_else(|| wrapped.len().saturating_sub(1));
-    let start = cursor_line.saturating_add(1).saturating_sub(line_count);
-
-    wrapped[start..(start + line_count).min(wrapped.len())].to_vec()
-}
-
-fn wrap_input_cells(state: &InlineInputState, viewport_width: usize) -> Vec<InputLine> {
-    let viewport_width = viewport_width.max(1);
-    let mut lines = vec![InputLine::default()];
-    let mut col = 0usize;
-    let mut index = 0usize;
-    let mut cursor_inserted = false;
-
-    while index < state.chars.len() || !cursor_inserted {
-        let cell = if !cursor_inserted && index == state.cursor_pos {
-            let cursor_char = state.chars.get(index).copied().unwrap_or(' ');
-            cursor_inserted = true;
-            let cell = InputCell::Cursor(cursor_char);
-            if index < state.chars.len() {
-                index += 1;
-            }
-            cell
-        } else if let Some(ch) = state.chars.get(index).copied() {
-            index += 1;
-            InputCell::Text(ch)
-        } else {
-            break;
-        };
-
-        let cell_width = cell.width();
-        if col > 0 && col + cell_width > viewport_width {
-            lines.push(InputLine::default());
-            col = 0;
-        }
-
-        if let Some(line) = lines.last_mut() {
-            line.has_cursor |= matches!(cell, InputCell::Cursor(_));
-            line.cells.push(cell);
-        }
-
-        col += cell_width;
-    }
-
-    if lines.is_empty() {
-        lines.push(InputLine {
-            cells: vec![InputCell::Cursor(' ')],
-            has_cursor: true,
-        });
-    }
-
-    lines
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cursor_replaces_current_character() {
-        let mut state = InlineInputState::default();
-
-        state.insert_str("abcd");
-        state.move_left();
-        state.move_left();
-
-        let lines = wrap_input_cells(&state, 20);
-
-        assert_eq!(line_for_test(&lines[0]), "ab█d");
-    }
-
-    #[test]
-    fn wraps_wide_characters_inside_width() {
-        let mut state = InlineInputState::default();
-
-        state.insert_str("a你b");
-        let lines = wrap_input_cells(&state, 3);
-
-        assert_eq!(line_for_test(&lines[0]), "a你");
-        assert_eq!(line_for_test(&lines[1]), "b█");
-    }
-
-    #[test]
-    fn visible_lines_are_capped_around_cursor() {
-        let mut state = InlineInputState::default();
-
-        state.insert_str("abcdefghi");
-        let lines = visible_input_lines(&state, 3, 2);
-
-        assert_eq!(lines.len(), 2);
-        assert_eq!(line_for_test(&lines[0]), "ghi");
-        assert_eq!(line_for_test(&lines[1]), "█");
-    }
-
-    #[test]
-    fn wraps_printed_messages_to_terminal_width() {
-        assert_eq!(wrap_text("abcdef", 3), vec!["abc", "def"]);
-    }
-
-    #[test]
-    fn opening_reveal_preserves_line_width() {
-        let line = ASCII_LOGO[0];
-
-        assert_eq!(reveal_ascii_line(line, 0).len(), line.len());
-        assert_eq!(reveal_ascii_line(line, usize::MAX), line);
-    }
-
-    #[test]
-    fn opening_visible_columns_are_capped() {
-        let max_width = ASCII_LOGO
-            .iter()
-            .map(|line| UnicodeWidthStr::width(*line))
-            .max()
-            .unwrap();
-
-        assert!(opening_visible_cols(0) > 0);
-        assert_eq!(opening_visible_cols(usize::MAX), max_width);
-    }
-
-    fn line_for_test(line: &InputLine) -> String {
-        line.cells
-            .iter()
-            .map(|cell| match cell {
-                InputCell::Text(ch) => *ch,
-                InputCell::Cursor(_) => '█',
-            })
-            .collect()
-    }
 }
