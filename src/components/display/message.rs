@@ -1,6 +1,41 @@
 //! Message component for chat-style interfaces
 //!
 //! Provides styled message components for different roles (user, assistant, system, tool).
+//!
+//! # Choosing between `Message` and `ChatMessageView`
+//!
+//! [`Message`] takes a role and a string. It stays supported and unchanged, and
+//! is the right choice when a message really is one piece of text.
+//!
+//! [`ChatMessageView`](crate::components::chat::ChatMessageView) renders a
+//! typed [`ChatMessage`](crate::components::chat::ChatMessage): several blocks
+//! per message, each with its own kind and lifecycle — markdown, code,
+//! thinking, tool calls and their results, errors — plus streaming state and
+//! stable per-block reconciliation keys. Reach for it once a message is more
+//! than a string, since `Message` has nowhere to put that structure.
+//!
+//! Migrating means building the typed message rather than formatting a string:
+//!
+//! ```rust
+//! use rnk::components::chat::{
+//!     BlockId, ChatMessage, ChatMessageView, ChatRole, MessageBlock, MessageBlockEntry,
+//!     MessageId,
+//! };
+//! use rnk::components::{Message, MessageRole};
+//!
+//! // Before: one role, one string.
+//! let legacy = Message::new(MessageRole::Assistant, "Hello").into_element();
+//!
+//! // After: the same content as a typed block, ready to gain more.
+//! let message = ChatMessage::new(
+//!     MessageId::new(1),
+//!     ChatRole::Assistant,
+//!     vec![MessageBlockEntry::new(BlockId::new(1), MessageBlock::Text("Hello".into()))],
+//! )?;
+//! let typed = ChatMessageView::new(&message).into_element();
+//! # let _ = (legacy, typed);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 use crate::components::{Box, Text};
 use crate::core::{Color, Element, FlexDirection};

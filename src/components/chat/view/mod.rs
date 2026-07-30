@@ -12,6 +12,7 @@ mod custom;
 mod message;
 
 pub use custom::{ChatBlockRef, ChatBlockRenderer, ChatRenderContext, ChatRenderOverride};
+pub use message::ChatMessageView;
 
 const DEFAULT_THINKING_PREVIEW_LINES: NonZeroUsize =
     NonZeroUsize::new(5).expect("five is non-zero");
