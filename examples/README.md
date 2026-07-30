@@ -27,12 +27,30 @@ These are app-shaped examples that demonstrate larger workflows:
 - `rnk_git.rs`: Git status interface.
 - `rnk_chat.rs`: chat-style terminal application.
 - `chat.rs`: compact chat interface.
-- `glm_chat.rs` and `glm_chat/`: chat prompt surface.
-- `claude_input_box.rs`: Claude-style input box.
-- `claude_inline_input_box.rs`: inline Claude-style input box.
+- `glm_chat.rs` and `glm_chat/`: chat prompt surface driving a real model, with
+  the input box outside the renderer so submitted turns land in native
+  scrollback.
+- `claude_input_box.rs`: Claude-style input box; the same inline-input shape
+  rendered entirely by the component tree.
 - `interactive_demo.rs`: mixed interaction demo.
 - `textarea_demo.rs`: text editing surface.
 - `viewport_demo.rs`: scrollable viewport surface.
+
+### Chat example review
+
+Each chat example was reviewed against GH-68's convergence criteria:
+
+| Example | Outcome |
+|---|---|
+| `claude_input_box.rs` | Migrated to `ChatComposerState` / `ComposerProjection`; its own input state, cursor arithmetic and wrapping are gone. |
+| `claude_inline_input_box.rs` | Removed. It was byte-identical to `claude_input_box.rs` apart from its own name, so it had no independent purpose. |
+| `glm_chat.rs`, `glm_chat/prompt_box.rs` | Migrated to `ChatComposerState`. Kept as the one example that drives a real model and writes its input box outside the renderer — a shape the component tree does not cover. |
+| `chat.rs` | Kept. Smallest complete chat surface, useful as a starting point. |
+| `rnk_chat.rs` | Kept. Full application shape with sidebar, status and history. |
+
+`chat.rs` and `rnk_chat.rs` still compose their own transcript layout. Converging
+those onto shared containers needs `InlineChatShell` (#66) and
+`FullscreenChatShell` (#67), which are not implemented yet.
 
 ## Component Demos
 
