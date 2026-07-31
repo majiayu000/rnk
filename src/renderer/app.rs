@@ -268,7 +268,7 @@ where
         // Extract and commit static content
         let (new_static_lines, rendered) = self
             .try_prepare_frame(&root, width, height)
-            .map_err(crate::renderer::TextRenderError::into_io)?;
+            .map_err(crate::renderer::DynamicFrameError::into_io)?;
 
         if !new_static_lines.is_empty() {
             self.static_renderer
@@ -283,12 +283,12 @@ where
         root: &Element,
         width: u16,
         height: u16,
-    ) -> Result<(Vec<String>, String), crate::renderer::TextRenderError> {
+    ) -> Result<(Vec<String>, String), crate::renderer::DynamicFrameError> {
         let new_static_lines = self
             .static_renderer
             .try_extract_static_content(root, width)?;
         let dynamic_root = self.static_renderer.filter_static_elements(root);
-        let rendered = RenderPipeline::try_render_dynamic_frame(
+        let rendered = RenderPipeline::try_render_dynamic_frame_checked(
             &dynamic_root,
             width,
             height,
@@ -358,21 +358,68 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             failure,
-            crate::renderer::TextRenderError::Flow {
-                source: TextFlowError::InvalidTabStop,
-                ..
-            }
+            crate::renderer::DynamicFrameError::Incremental(
+                crate::layout::IncrementalLayoutError::TextFlow(TextFlowError::InvalidTabStop)
+            )
         ));
         let io_error = failure.into_io();
-        let text_error = io_error
+        let dynamic_error = io_error
             .get_ref()
-            .and_then(|source| source.downcast_ref::<crate::renderer::TextRenderError>())
-            .expect("io error must retain TextRenderError");
+            .and_then(|source| source.downcast_ref::<crate::renderer::DynamicFrameError>())
+            .expect("io error must retain DynamicFrameError");
         assert!(matches!(
-            text_error
+            dynamic_error
                 .source()
-                .and_then(|source| { source.downcast_ref::<TextFlowError>() }),
-            Some(TextFlowError::InvalidTabStop)
+                .and_then(|source| {
+                    source.downcast_ref::<crate::layout::IncrementalLayoutError>()
+                })
+                .and_then(std::error::Error::source)
+                .and_then(|source| source.downcast_ref::<TextFlowError>()),
+            Some(TextFlowError::InvalidTabStop),
+        ));
+    }
+
+    #[test]
+    fn duplicate_key_reaches_app_io_error_without_frame_commit() {
+        let mut app = App::new(|| Element::text("app"));
+        let mut invalid = Element::root();
+        invalid.add_child(Element::text("first").with_key("duplicate"));
+        invalid.add_child(Element::text("second").with_key("duplicate"));
+
+        let failure = app
+            .try_prepare_frame(&invalid, 20, 4)
+            .expect_err("duplicate sibling key must reach the App boundary");
+        assert!(matches!(
+            &failure,
+            crate::renderer::DynamicFrameError::Incremental(
+                crate::layout::IncrementalLayoutError::Identity(
+                    crate::reconciler::ReconcilePlanError::DuplicateSiblingKey { .. }
+                )
+            )
+        ));
+        assert!(app.previous_vnode.is_none());
+        assert!(!app.layout_engine.has_tree());
+        assert!(
+            app.runtime_context
+                .borrow()
+                .get_measurement_by_key_dims("duplicate")
+                .is_none()
+        );
+
+        let io_error = failure.into_io();
+        let dynamic_error = io_error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<crate::renderer::DynamicFrameError>())
+            .expect("io error must retain DynamicFrameError");
+        let incremental_error = dynamic_error
+            .source()
+            .and_then(|source| source.downcast_ref::<crate::layout::IncrementalLayoutError>())
+            .expect("dynamic error must retain IncrementalLayoutError");
+        assert!(matches!(
+            incremental_error.source().and_then(|source| {
+                source.downcast_ref::<crate::reconciler::ReconcilePlanError>()
+            }),
+            Some(crate::reconciler::ReconcilePlanError::DuplicateSiblingKey { .. })
         ));
     }
 }
