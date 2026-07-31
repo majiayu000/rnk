@@ -27,7 +27,7 @@ CRITICAL = (
 FAKE_CARGO = r'''#!/usr/bin/env python3
 import os, shutil, subprocess, sys
 args = sys.argv[1:]
-if any(key in os.environ for key in ("CARGO_LLVM_COV_TARGET_DIR", "__CARGO_LLVM_COV_RUSTC_WRAPPER", "LLVM_COV_FLAGS")):
+if any(key in os.environ for key in ("CARGO_LLVM_COV_TARGET_DIR", "CARGO_LLVM_PROFDATA_FLAGS", "__CARGO_LLVM_COV_RUSTC_WRAPPER", "LLVM_COV_FLAGS")):
     raise SystemExit(18)
 if args == ["+nightly", "llvm-cov", "--version"]:
     print(os.environ.get("GH59_FAKE_TOOL_VERSION", "cargo-llvm-cov 0.8.7")); raise SystemExit(0)
@@ -57,7 +57,7 @@ if "--cobertura" in args:
         subprocess.run(["git", "-C", repo, "commit", "-q", "-m", "drift"], check=True)
 '''
 FAKE_RUSTC = '''#!/usr/bin/env python3
-print("rustc 1.95.0-nightly (fixture)\\nrelease: 1.95.0-nightly\\ncommit-date: 2026-02-11\\nhost: fixture-target\\nLLVM version: 22.1.0")
+print("rustc 1.95.0-nightly (fixture)\\nrelease: 1.95.0-nightly\\ncommit-date: 2026-02-10\\nhost: fixture-target\\nLLVM version: 22.1.0")
 '''
 
 
@@ -365,7 +365,7 @@ class Fixture:
             "GH59_FAKE_POST_ACTION": action,
             "GH59_FAKE_SYMLINK": "1" if symlink else "0",
             "GH59_FAKE_TOOL_VERSION": "cargo-llvm-cov 0.8.6" if wrong_binary else "cargo-llvm-cov 0.8.7",
-            "CARGO_LLVM_COV_TARGET_DIR": "/forbidden", "__CARGO_LLVM_COV_RUSTC_WRAPPER": "bad",
+            "CARGO_LLVM_COV_TARGET_DIR": "/forbidden", "CARGO_LLVM_PROFDATA_FLAGS": "external.profdata", "__CARGO_LLVM_COV_RUSTC_WRAPPER": "bad",
             "LLVM_COV_FLAGS": "--bad",
         })
         return environment
@@ -400,8 +400,8 @@ class Fixture:
 
 class CoverageCheckerTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory(dir="/private/tmp")
-        self.fixture = Fixture(Path(self.temporary.name))
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = Fixture(Path(self.temporary.name).resolve())
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -522,10 +522,8 @@ class CoverageCheckerTests(unittest.TestCase):
         self.fixture.git("add", "tracked-target.txt", "tracked-link")
         self.fixture.git("commit", "-q", "-m", "tracked symlink")
         self.fixture.refresh_head()
-        checker.repository_snapshot(
-            str(self.fixture.repo), self.fixture.head, self.fixture.base,
-            self.fixture.merge_base, "origin/main",
-        )
+        with self.assertRaisesRegex(checker.CheckError, "unsupported file type"):
+            checker.repository_snapshot(str(self.fixture.repo), self.fixture.head, self.fixture.base, self.fixture.merge_base, "origin/main")
         link.unlink()
         link.write_text(target.name, encoding="utf-8")
         self.fixture.git("config", "core.symlinks", "false")
@@ -731,13 +729,13 @@ class CoverageCheckerTests(unittest.TestCase):
 
     def test_exact_79_99_fails_and_80_percent_passes_integer_math(self) -> None:
         self.tearDown()
-        self.temporary = tempfile.TemporaryDirectory(dir="/private/tmp")
-        self.fixture = Fixture(Path(self.temporary.name), 10_000)
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = Fixture(Path(self.temporary.name).resolve(), 10_000)
         result, _output = self.fixture.collect(changed_covered=7_999)
         self.assert_fails(result, "below 80%")
         self.tearDown()
-        self.temporary = tempfile.TemporaryDirectory(dir="/private/tmp")
-        self.fixture = Fixture(Path(self.temporary.name), 10)
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = Fixture(Path(self.temporary.name).resolve(), 10)
         result, _output = self.fixture.collect(changed_covered=8)
         self.assertEqual(result.returncode, 0, result.stderr)
 

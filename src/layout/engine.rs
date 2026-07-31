@@ -524,7 +524,8 @@ mod incremental;
 mod incremental_order;
 mod patch_error;
 pub use patch_error::{
-    IncrementalLayoutError, LayoutLookupError, PatchError, PatchFailure, PatchKind,
+    DirectPatchError, IncrementalLayoutError, LayoutLookupError, PatchError, PatchFailure,
+    PatchKind,
 };
 mod patching;
 mod text_flow_bridge;

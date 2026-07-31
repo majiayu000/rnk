@@ -62,8 +62,8 @@ GH-59: https://github.com/majiayu000/rnk/issues/59
 
 - [ ] `SP59-T3`（lane alias: `GH59-T3`）把 LayoutEngine 切到 scoped plan、preflight-atomic final order、成功 subtree map cleanup 与独立 checked error/lookup boundary。Owner: `layout-identity-lane` | Done when: top-level VNode 类型不受 root sentinel 限制，保留 GH-58 TextFlow-only error，复用 surviving NodeId，preflight typed failures 零 mutation，成功 map set 精确等于 target tree，exact order/composite lookup 可恢复 | Verify: 本任务列出的 exact 测试全部通过。
   在 `src/layout/engine/patch_error.rs` 定义并从 `src/layout/mod.rs` 导出
-  `IncrementalLayoutError`/`LayoutLookupError`；两者实现 `Error`，只有 composite wrapper
-  variants expose nested sources，leaf lookup error 不伪造 source chain。保留 GH-58 TextFlow-only
+  `IncrementalLayoutError`/`LayoutLookupError`/`#[non_exhaustive] DirectPatchError`；composite
+  wrappers expose nested sources，leaf lookup error 不伪造 source chain。保留 GH-58 TextFlow-only
   try boundary，并新增 `try_compute_element_incremental_checked` composite boundary；
   engine 直接调用 checked plan core 并传播 `ReconcilePlanError`，不得调用 legacy
   `diff`/`diff_children` panic wrappers；
@@ -78,7 +78,9 @@ GH-59: https://github.com/majiayu000/rnk/issues/59
   NodeId 全部在 create/remove/set_children 前失败并证明 tree/map/root/previous VNode 不变；
   commit 后 exact read-back；成功时一次性刷新 target-exact scoped/composite/ElementId maps，
   清除 remove/replace descendants 与 cross-parent old scope。`patching.rs` 的变更只处理 GH-59
-  scoped identity/addressing、direct-patch preflight 与 cleanup；public raw `Patch` topology、
+  scoped identity/addressing、direct-patch preflight 与 cleanup；`PatchFailure` 保持既有六分支，
+  新 `try_apply_patches_checked` 独立承载 identity/lookup/legacy patch cause，旧 direct-patch
+  signatures 委托 checked core 且无法表达的新 cause fail loudly；public raw `Patch` topology、
   whole-frame terminal transaction、rollback/rebuild/fallback 仍留给 GH-60：
   `cargo test --workspace --lib --locked layout::engine::tests::keyed_ancestor_reorder_preserves_descendant_identity -- --exact`;
   `cargo test --workspace --lib --locked layout::engine::tests::same_key_in_distinct_parents_has_distinct_nodes -- --exact`;
@@ -146,7 +148,8 @@ GH-59: https://github.com/majiayu000/rnk/issues/59
   `.github/scripts/check_gh59_coverage.py`、`.github/scripts/gh59_coverage_lib.py`、
   `.github/scripts/gh59_coverage_source.py`、`.github/scripts/test_check_gh59_coverage.py` 与
   `.github/scripts/test_check_gh59_coverage_security.py` 实现并验证 trusted exact-head
-  collect/produce/validate gate。四个 private coverage/error-matrix suites 位于
+  collect/produce/validate gate；`src/testing/golden.rs` 与 `src/testing/harness.rs` 只做
+  macro source-control token 边界所需的局部变量重命名。四个 private coverage/error-matrix suites 位于
   `src/reconciler/identity/tests.rs`、`src/reconciler/plan/tests.rs`、
   `src/layout/engine/incremental/tests.rs`、`src/layout/engine/incremental_order/tests.rs`，只经
   `#[cfg(test)] mod tests` 接入；checker 按 `tests` path component 将这些 files 排除在 production
@@ -210,7 +213,8 @@ GH-59: https://github.com/majiayu000/rnk/issues/59
   `src/layout/engine/incremental_order/tests.rs`、`.github/scripts/check_gh59_coverage.py`、
   `.github/scripts/gh59_coverage_lib.py`、`.github/scripts/gh59_coverage_source.py`、
   `.github/scripts/test_check_gh59_coverage.py`、
-  `.github/scripts/test_check_gh59_coverage_security.py`；其余活动为
+  `.github/scripts/test_check_gh59_coverage_security.py`、`src/testing/golden.rs`、
+  `src/testing/harness.rs`；其余活动为
   只读 verification/review。
 - 依赖图为 `T1 -> T2 -> T3 -> T5 -> T4`，没有并行 writable lane、共享文件或 ownership cycle。
   如需 threads，只有 read-only reviewer 可与 verification 并行，禁止两个 writer 同时编辑
@@ -242,10 +246,11 @@ GH-59: https://github.com/majiayu000/rnk/issues/59
   - private critical coverage/error-matrix：`src/reconciler/identity/tests.rs`、
     `src/reconciler/plan/tests.rs`、`src/layout/engine/incremental/tests.rs`、
     `src/layout/engine/incremental_order/tests.rs`；
+  - checker support：`src/testing/golden.rs`、`src/testing/harness.rs`；
   - integration：`tests/identity_error_paths.rs`、`tests/keyed_incremental_error_paths.rs`、
     `tests/keyed_incremental_identity.rs`、`tests/measurement_identity.rs`。
-  `src/runtime/context_tests.rs`、TextFlow variants、其他 runtime/hooks、chat/workflow 与任何
-  其他 path 都不在 manifest。`patching.rs` 只承载 GH-59 identity/addressing changes；raw
+  `src/runtime/context_tests.rs`、TextFlow variants、其他 runtime/hooks、chat/workflow 与除上述
+  checker support 外的其他 path 都不在 manifest。`patching.rs` 只承载 GH-59 identity/addressing changes；raw
   `Patch` topology 与 GH-60 whole-frame terminal transaction/rollback/rebuild/fallback unchanged。
 - 所有 filtered cargo tests 只能通过 exact helpers；每条 command 必须在相同 target/options
   下先以 `--list --exact` 证明匹配数恰好为 1，0 个或多个匹配均失败。不得移除 `--exact`，

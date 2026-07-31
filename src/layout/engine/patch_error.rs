@@ -12,7 +12,7 @@ use std::fmt;
 
 use crate::core::NodeKey;
 use crate::layout::TextFlowError;
-use crate::reconciler::{ReconcilePlanError, SiblingIdentity};
+use crate::reconciler::{Patch, ReconcilePlanError, SiblingIdentity};
 
 /// Which kind of patch failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,14 +44,10 @@ pub enum PatchFailure {
     UnknownNode,
     /// The node exists but has no parent to attach to or reorder within.
     MissingParent,
-    /// A sibling-local compatibility key names more than one scoped node.
-    AmbiguousNode,
     /// Taffy rejected the structural change.
     TreeRejected,
     /// A subtree could not be built.
     BuildFailed,
-    /// Canonical VNode identity validation rejected the patch before mutation.
-    IdentityRejected,
     /// Layout did not converge after the batch applied.
     LayoutFailed,
     /// The tree no longer matches the batch after applying it.
@@ -63,10 +59,8 @@ impl fmt::Display for PatchFailure {
         let reason = match self {
             Self::UnknownNode => "no node is registered under this key",
             Self::MissingParent => "the node has no parent in the tree",
-            Self::AmbiguousNode => "the compatibility key matches multiple scoped nodes",
             Self::TreeRejected => "the layout tree rejected the change",
             Self::BuildFailed => "the replacement subtree could not be built",
-            Self::IdentityRejected => "canonical node identity validation rejected the patch",
             Self::LayoutFailed => "layout failed after the batch applied",
             Self::PostconditionViolated => "the tree does not match the applied batch",
         };
@@ -194,3 +188,63 @@ impl fmt::Display for LayoutLookupError {
 }
 
 impl std::error::Error for LayoutLookupError {}
+
+/// Checked failure from applying a public raw [`Patch`] batch.
+///
+/// This boundary preserves the legacy [`PatchError`] surface while retaining
+/// canonical identity and scoped-lookup causes for new callers.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DirectPatchError {
+    Identity(ReconcilePlanError),
+    Lookup(LayoutLookupError),
+    Patch(PatchError),
+}
+
+impl fmt::Display for DirectPatchError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Identity(source) => write!(formatter, "direct patch identity failed: {source}"),
+            Self::Lookup(source) => write!(formatter, "direct patch lookup failed: {source}"),
+            Self::Patch(source) => write!(formatter, "direct patch application failed: {source}"),
+        }
+    }
+}
+
+impl std::error::Error for DirectPatchError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Identity(source) => Some(source),
+            Self::Lookup(source) => Some(source),
+            Self::Patch(source) => Some(source),
+        }
+    }
+}
+
+impl From<ReconcilePlanError> for DirectPatchError {
+    fn from(source: ReconcilePlanError) -> Self {
+        Self::Identity(source)
+    }
+}
+
+impl From<LayoutLookupError> for DirectPatchError {
+    fn from(source: LayoutLookupError) -> Self {
+        Self::Lookup(source)
+    }
+}
+
+impl From<PatchError> for DirectPatchError {
+    fn from(source: PatchError) -> Self {
+        Self::Patch(source)
+    }
+}
+
+pub(super) fn batch_key(patches: &[Patch]) -> NodeKey {
+    patches
+        .first()
+        .map(|patch| match patch {
+            Patch::Create { parent, .. } | Patch::Reorder { parent, .. } => *parent,
+            Patch::Update { key, .. } | Patch::Remove { key } | Patch::Replace { key, .. } => *key,
+        })
+        .unwrap_or_else(NodeKey::root)
+}

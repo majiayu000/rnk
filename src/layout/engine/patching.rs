@@ -1,38 +1,34 @@
 //! Applying a batch of reconciler patches to the Taffy tree.
-use super::patch_error::{PatchError, PatchFailure, PatchKind};
+use super::patch_error::{DirectPatchError, PatchError, PatchFailure, PatchKind, batch_key};
 use super::text_flow_bridge::NodeContext;
 use super::{LayoutEngine, normalized_taffy_style};
 use crate::core::{NodeKey, Props, VNode};
 use crate::layout::TextFlowInput;
 use crate::reconciler::{
-    Patch, ScopedIdentityArena, ScopedNodeIdentity, compatibility_token_for_exact,
-    insert_composite_projection, plan_initial_tree, resolve_child_identity,
+    Patch, ReconcilePlanError, ScopedIdentityArena, ScopedNodeIdentity,
+    compatibility_token_for_exact, resolve_child_identity,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use taffy::NodeId;
 impl LayoutEngine {
     /// Apply a batch of patches, or none of them.
     ///
     /// Returns whether the tree changed. A rejected batch leaves this engine
     /// exactly as it was, so the caller can fall back to a full rebuild from
-    /// the current tree; see [`try_apply_patches`](Self::try_apply_patches) for
-    /// the reason it was rejected.
+    /// the current tree; see
+    /// [`try_apply_patches_checked`](Self::try_apply_patches_checked) for every
+    /// typed rejection cause.
     ///
     /// # Panics
     ///
     /// Panics when canonical identity validation fails or a raw compatibility
-    /// address is missing or ambiguous. Use
-    /// [`try_apply_patches`](Self::try_apply_patches) to handle those failures
-    /// explicitly.
+    /// address is missing or ambiguous.
     pub fn apply_patches(&mut self, patches: &[Patch]) -> bool {
         match self.try_apply_patches(patches) {
             Ok(changed) => changed,
             Err(
                 error @ PatchError {
-                    failure:
-                        PatchFailure::IdentityRejected
-                        | PatchFailure::UnknownNode
-                        | PatchFailure::AmbiguousNode,
+                    failure: PatchFailure::UnknownNode,
                     ..
                 },
             ) => panic!("patch identity validation failed: {error}"),
@@ -40,16 +36,31 @@ impl LayoutEngine {
         }
     }
 
-    /// Apply a batch of patches transactionally.
-    ///
-    /// Every patch is applied to a staged copy; any failure drops that copy and
-    /// leaves this engine untouched.
+    /// Legacy transactional adapter preserving the pre-GH59 error signature.
     ///
     /// # Errors
     ///
-    /// Returns [`PatchError`] when identity preflight, a tree mutation,
-    /// postcondition validation, or final layout fails.
+    /// Returns [`PatchError`] for the six legacy patch-application failures.
+    ///
+    /// # Panics
+    ///
+    /// Panics with the typed cause when canonical identity validation or a
+    /// scoped compatibility lookup fails. Use
+    /// [`try_apply_patches_checked`](Self::try_apply_patches_checked) to handle
+    /// those causes explicitly.
     pub fn try_apply_patches(&mut self, patches: &[Patch]) -> Result<bool, PatchError> {
+        match self.try_apply_patches_checked(patches) {
+            Ok(changed) => Ok(changed),
+            Err(DirectPatchError::Patch(source)) => Err(source),
+            Err(error) => panic!("patch identity validation failed: {error}"),
+        }
+    }
+
+    /// Apply a public raw patch batch transactionally with independent errors.
+    pub fn try_apply_patches_checked(
+        &mut self,
+        patches: &[Patch],
+    ) -> Result<bool, DirectPatchError> {
         if patches.is_empty() {
             return Ok(false);
         }
@@ -77,7 +88,7 @@ impl LayoutEngine {
         &mut self,
         patches: &[Patch],
         arena: &mut ScopedIdentityArena,
-    ) -> Result<(), PatchError> {
+    ) -> Result<(), DirectPatchError> {
         for patch in patches {
             match patch {
                 Patch::Create { node, parent, .. } => {
@@ -144,11 +155,11 @@ impl LayoutEngine {
         Ok(())
     }
 
-    fn resolve_patch_scope(
+    pub(super) fn resolve_patch_scope(
         &self,
         key: NodeKey,
         kind: PatchKind,
-    ) -> Result<ScopedNodeIdentity, PatchError> {
+    ) -> Result<ScopedNodeIdentity, DirectPatchError> {
         if ScopedNodeIdentity::is_scoped_patch_address(key) {
             let matches: Vec<_> = self
                 .vnode_legacy_keys
@@ -160,199 +171,19 @@ impl LayoutEngine {
                 .collect();
             return match matches.as_slice() {
                 [identity] => Ok(identity.clone()),
-                [] => Err(PatchError::new(kind, key, PatchFailure::UnknownNode)),
-                _ => Err(PatchError::new(kind, key, PatchFailure::AmbiguousNode)),
+                [] => Err(PatchError::new(kind, key, PatchFailure::UnknownNode).into()),
+                _ => Err(super::LayoutLookupError::AmbiguousLegacyNodeKey {
+                    key,
+                    scoped_match_count: matches.len(),
+                }
+                .into()),
             };
         }
         match self.resolve_legacy_scope(key) {
             Ok(Some(identity)) => Ok(identity),
-            Ok(None) => Err(PatchError::new(kind, key, PatchFailure::UnknownNode)),
-            Err(_) => Err(PatchError::new(kind, key, PatchFailure::AmbiguousNode)),
+            Ok(None) => Err(PatchError::new(kind, key, PatchFailure::UnknownNode).into()),
+            Err(source) => Err(source.into()),
         }
-    }
-
-    fn preflight_patch_identities(
-        &self,
-        patches: &[Patch],
-        arena: &mut ScopedIdentityArena,
-    ) -> Result<(), PatchError> {
-        let mut planned_identities = HashSet::new();
-        let mut planned_keyed_tokens = HashSet::new();
-        let mut prospective_projections = HashMap::new();
-        for (identity, legacy_key) in &self.vnode_legacy_keys {
-            insert_composite_projection(&mut prospective_projections, identity, *legacy_key)
-                .map_err(|_| {
-                    PatchError::new(
-                        PatchKind::Update,
-                        batch_key(patches),
-                        PatchFailure::IdentityRejected,
-                    )
-                })?;
-        }
-        for patch in patches {
-            let (kind, node) = match patch {
-                Patch::Create { node, .. } => (PatchKind::Create, node),
-                Patch::Replace { node, .. } => (PatchKind::Replace, node),
-                _ => continue,
-            };
-            plan_initial_tree(node)
-                .map_err(|_| PatchError::new(kind, node.key, PatchFailure::IdentityRejected))?;
-            let (parent_scope, resolved, excluded, excluded_nodes) = match patch {
-                Patch::Create { parent, .. } => {
-                    let parent_scope = self.resolve_patch_scope(*parent, kind)?;
-                    let resolved = resolve_child_identity(
-                        node,
-                        node.key.index,
-                        &parent_scope,
-                        &compatibility_token_for_exact,
-                        arena,
-                    )
-                    .map_err(|_| PatchError::new(kind, node.key, PatchFailure::IdentityRejected))?;
-                    (parent_scope, resolved, None, None)
-                }
-                Patch::Replace { key, .. } => {
-                    let old_identity = self.resolve_patch_scope(*key, kind)?;
-                    let old_node =
-                        self.vnode_map.get(&old_identity).copied().ok_or_else(|| {
-                            PatchError::new(kind, *key, PatchFailure::UnknownNode)
-                        })?;
-                    let parent_scope = old_identity
-                        .parent()
-                        .cloned()
-                        .ok_or_else(|| PatchError::new(kind, *key, PatchFailure::MissingParent))?;
-                    let parent_node = self
-                        .taffy
-                        .parent(old_node)
-                        .ok_or_else(|| PatchError::new(kind, *key, PatchFailure::MissingParent))?;
-                    let actual_index = self
-                        .taffy
-                        .children(parent_node)
-                        .map_err(|_| PatchError::new(kind, *key, PatchFailure::TreeRejected))?
-                        .iter()
-                        .position(|candidate| *candidate == old_node)
-                        .ok_or_else(|| {
-                            PatchError::new(kind, *key, PatchFailure::PostconditionViolated)
-                        })?;
-                    let resolved = resolve_child_identity(
-                        node,
-                        actual_index,
-                        &parent_scope,
-                        &compatibility_token_for_exact,
-                        arena,
-                    )
-                    .map_err(|_| PatchError::new(kind, node.key, PatchFailure::IdentityRejected))?;
-                    (
-                        parent_scope,
-                        resolved,
-                        Some(old_identity),
-                        Some(self.vnode_subtree_nodes(old_node)),
-                    )
-                }
-                _ => unreachable!("only create and replace reach identity preflight"),
-            };
-            self.preflight_new_sibling_identity(
-                &parent_scope,
-                &resolved.scoped,
-                resolved.legacy_key,
-                excluded.as_ref(),
-                kind,
-            )?;
-            if let Some(excluded_nodes) = excluded_nodes {
-                for (identity, legacy_key) in &self.vnode_legacy_keys {
-                    if self
-                        .vnode_map
-                        .get(identity)
-                        .is_some_and(|node_id| excluded_nodes.contains(node_id))
-                    {
-                        prospective_projections.remove(&identity.composite_identity(*legacy_key));
-                    }
-                }
-            }
-            let mut subtree_identities = Vec::new();
-            Self::collect_scoped_subtree_identities(
-                node,
-                resolved.scoped.clone(),
-                resolved.legacy_key,
-                kind,
-                &mut subtree_identities,
-                arena,
-            )?;
-            for (identity, legacy_key) in subtree_identities {
-                insert_composite_projection(&mut prospective_projections, &identity, legacy_key)
-                    .map_err(|_| {
-                        PatchError::new(kind, legacy_key, PatchFailure::IdentityRejected)
-                    })?;
-            }
-            let duplicate_planned_identity = !planned_identities.insert(resolved.scoped.clone());
-            let duplicate_planned_token = resolved
-                .legacy_key
-                .user_key
-                .is_some_and(|token| !planned_keyed_tokens.insert((parent_scope.clone(), token)));
-            if duplicate_planned_identity || duplicate_planned_token {
-                return Err(PatchError::new(
-                    kind,
-                    resolved.legacy_key,
-                    PatchFailure::IdentityRejected,
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn collect_scoped_subtree_identities(
-        vnode: &VNode,
-        identity: ScopedNodeIdentity,
-        legacy_key: NodeKey,
-        kind: PatchKind,
-        identities: &mut Vec<(ScopedNodeIdentity, NodeKey)>,
-        arena: &mut ScopedIdentityArena,
-    ) -> Result<(), PatchError> {
-        identities.push((identity.clone(), legacy_key));
-        for (index, child) in vnode.children.iter().enumerate() {
-            let resolved = resolve_child_identity(
-                child,
-                index,
-                &identity,
-                &compatibility_token_for_exact,
-                arena,
-            )
-            .map_err(|_| PatchError::new(kind, child.key, PatchFailure::IdentityRejected))?;
-            Self::collect_scoped_subtree_identities(
-                child,
-                resolved.scoped,
-                resolved.legacy_key,
-                kind,
-                identities,
-                arena,
-            )?;
-        }
-        Ok(())
-    }
-
-    fn preflight_new_sibling_identity(
-        &self,
-        parent_scope: &ScopedNodeIdentity,
-        new_identity: &ScopedNodeIdentity,
-        new_key: NodeKey,
-        excluded: Option<&ScopedNodeIdentity>,
-        kind: PatchKind,
-    ) -> Result<(), PatchError> {
-        let collides = self.vnode_legacy_keys.iter().any(|(identity, key)| {
-            identity.parent() == Some(parent_scope)
-                && excluded != Some(identity)
-                && match new_key.user_key {
-                    Some(token) => key.user_key == Some(token),
-                    None => identity == new_identity,
-                }
-        });
-        if collides {
-            return Err(PatchError::new(
-                kind,
-                new_key,
-                PatchFailure::IdentityRejected,
-            ));
-        }
-        Ok(())
     }
 
     fn build_vnode_scoped(
@@ -362,10 +193,13 @@ impl LayoutEngine {
         legacy_key: NodeKey,
         kind: PatchKind,
         arena: &mut ScopedIdentityArena,
-    ) -> Result<NodeId, PatchError> {
-        let fail = |failure| PatchError::new(kind, legacy_key, failure);
+    ) -> Result<NodeId, DirectPatchError> {
+        let fail = |failure| DirectPatchError::Patch(PatchError::new(kind, legacy_key, failure));
         if self.vnode_map.contains_key(&identity) {
-            return Err(fail(PatchFailure::AmbiguousNode));
+            return Err(ReconcilePlanError::DuplicatePlannedIdentity {
+                identity: identity.diagnostic(),
+            }
+            .into());
         }
 
         let mut child_nodes = Vec::with_capacity(vnode.children.len());
@@ -376,8 +210,7 @@ impl LayoutEngine {
                 &identity,
                 &compatibility_token_for_exact,
                 arena,
-            )
-            .map_err(|_| fail(PatchFailure::IdentityRejected))?;
+            )?;
             child_nodes.push(self.build_vnode_scoped(
                 child,
                 resolved.scoped,
@@ -419,8 +252,10 @@ impl LayoutEngine {
         vnode: &VNode,
         parent_key: NodeKey,
         arena: &mut ScopedIdentityArena,
-    ) -> Result<(), PatchError> {
-        let fail = |failure| PatchError::new(PatchKind::Create, parent_key, failure);
+    ) -> Result<(), DirectPatchError> {
+        let fail = |failure| {
+            DirectPatchError::Patch(PatchError::new(PatchKind::Create, parent_key, failure))
+        };
 
         let parent_scope = self.resolve_patch_scope(parent_key, PatchKind::Create)?;
         let parent_node = *self
@@ -433,10 +268,12 @@ impl LayoutEngine {
             &parent_scope,
             &compatibility_token_for_exact,
             arena,
-        )
-        .map_err(|_| fail(PatchFailure::IdentityRejected))?;
+        )?;
         if self.vnode_map.contains_key(&resolved.scoped) {
-            return Err(fail(PatchFailure::AmbiguousNode));
+            return Err(ReconcilePlanError::DuplicatePlannedIdentity {
+                identity: resolved.scoped.diagnostic(),
+            }
+            .into());
         }
         let new_node_id = self.build_vnode_scoped(
             vnode,
@@ -453,8 +290,9 @@ impl LayoutEngine {
         Ok(())
     }
 
-    fn update_node_props(&mut self, key: NodeKey, props: &Props) -> Result<(), PatchError> {
-        let fail = |failure| PatchError::new(PatchKind::Update, key, failure);
+    fn update_node_props(&mut self, key: NodeKey, props: &Props) -> Result<(), DirectPatchError> {
+        let fail =
+            |failure| DirectPatchError::Patch(PatchError::new(PatchKind::Update, key, failure));
 
         let identity = self.resolve_patch_scope(key, PatchKind::Update)?;
         let &node_id = self
@@ -493,8 +331,9 @@ impl LayoutEngine {
         Ok(())
     }
 
-    fn remove_node(&mut self, key: NodeKey) -> Result<(), PatchError> {
-        let fail = |failure| PatchError::new(PatchKind::Remove, key, failure);
+    fn remove_node(&mut self, key: NodeKey) -> Result<(), DirectPatchError> {
+        let fail =
+            |failure| DirectPatchError::Patch(PatchError::new(PatchKind::Remove, key, failure));
 
         let identity = self.resolve_patch_scope(key, PatchKind::Remove)?;
         let &node_id = self
@@ -517,8 +356,10 @@ impl LayoutEngine {
         old_key: NodeKey,
         new_node: &VNode,
         arena: &mut ScopedIdentityArena,
-    ) -> Result<(), PatchError> {
-        let fail = |failure| PatchError::new(PatchKind::Replace, old_key, failure);
+    ) -> Result<(), DirectPatchError> {
+        let fail = |failure| {
+            DirectPatchError::Patch(PatchError::new(PatchKind::Replace, old_key, failure))
+        };
 
         let old_identity = self.resolve_patch_scope(old_key, PatchKind::Replace)?;
         let &old_node_id = self
@@ -557,8 +398,7 @@ impl LayoutEngine {
             &parent_scope,
             &compatibility_token_for_exact,
             arena,
-        )
-        .map_err(|_| fail(PatchFailure::IdentityRejected))?;
+        )?;
         let new_node_id = self.build_vnode_scoped(
             new_node,
             resolved.scoped,
@@ -574,7 +414,7 @@ impl LayoutEngine {
         Ok(())
     }
 
-    fn vnode_subtree_nodes(&self, root: NodeId) -> HashSet<NodeId> {
+    pub(super) fn vnode_subtree_nodes(&self, root: NodeId) -> HashSet<NodeId> {
         let mut nodes = HashSet::new();
         let mut pending = vec![root];
         while let Some(node) = pending.pop() {
@@ -608,8 +448,10 @@ impl LayoutEngine {
         &mut self,
         parent_key: NodeKey,
         order: &[NodeKey],
-    ) -> Result<(), PatchError> {
-        let fail = |failure| PatchError::new(PatchKind::Reorder, parent_key, failure);
+    ) -> Result<(), DirectPatchError> {
+        let fail = |failure| {
+            DirectPatchError::Patch(PatchError::new(PatchKind::Reorder, parent_key, failure))
+        };
 
         let parent_scope = self.resolve_patch_scope(parent_key, PatchKind::Reorder)?;
         let &parent_id = self
@@ -621,7 +463,7 @@ impl LayoutEngine {
         for key in order {
             let identity = self
                 .resolve_child_legacy_scope(&parent_scope, *key)
-                .map_err(|_| fail(PatchFailure::AmbiguousNode))?
+                .map_err(DirectPatchError::Lookup)?
                 .ok_or_else(|| fail(PatchFailure::UnknownNode))?;
             let &node_id = self
                 .vnode_map
@@ -634,16 +476,6 @@ impl LayoutEngine {
             .set_children(parent_id, &children)
             .map_err(|_| fail(PatchFailure::TreeRejected))
     }
-}
-
-fn batch_key(patches: &[Patch]) -> NodeKey {
-    patches
-        .first()
-        .map(|patch| match patch {
-            Patch::Create { parent, .. } | Patch::Reorder { parent, .. } => *parent,
-            Patch::Update { key, .. } | Patch::Remove { key } | Patch::Replace { key, .. } => *key,
-        })
-        .unwrap_or_else(NodeKey::root)
 }
 
 #[cfg(test)]

@@ -13,7 +13,12 @@ import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
 from typing import Any
-from gh59_coverage_source import SourcePolicyError, analyze_rust_source, detect_coverage_control
+from gh59_coverage_source import (
+    SourcePolicyError,
+    analyze_rust_source,
+    detect_coverage_control,
+    is_production_rust_path,
+)
 CHECKER_VERSION = "4"
 COLLECTION_SCHEMA = "gh59-coverage-collection-v1"
 EVIDENCE_SCHEMA = "gh59-coverage-v2"
@@ -34,9 +39,8 @@ CRITICAL_MODULES = (
     ("incremental_order", "src/layout/engine/incremental_order.rs"),
     ("incremental_apply", "src/layout/engine/incremental.rs"),
 )
-EXCLUDED_PARTS = {"test", "tests", "example", "examples", "bench", "benches"}
 DECLARATION_ONLY_COVERAGE_EXCEPTIONS = {
-    "src/layout/mod.rs": "7a220d67132233240dc670f863866083c0a4347bfc2ffd68cb4ded843c2bba78",
+    "src/layout/mod.rs": "3a2ad4713a26f662e8d5eccad9825a8e169f961cef081c47e8f76fe8948deb10",
     "src/reconciler/mod.rs": "69936ac2d1ae91f174640f71bece856b222debffd32b09b905f216c05fc1b55f",
     "src/renderer/mod.rs": "4769f3f331d6671a9f7e986d47957575906a5a1ee214ef96703d11a2acbfc39d",
 }
@@ -179,6 +183,18 @@ def repository_snapshot(
     actual_head = run_git(repo, ["rev-parse", "HEAD"]).decode().strip()
     if actual_head != head: fail("HEAD does not match the supplied head")
     if run_git(repo, ["status", "--porcelain=v1", "--untracked-files=all"]): fail("worktree is not clean")
+    ignored = run_git(repo, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ":(glob)src/**", ":(glob)crates/*/src/**"])
+    for raw in ignored.split(b"\0"):
+        if not raw: continue
+        try: decoded = raw.decode("utf-8")
+        except UnicodeDecodeError: fail("ignored production-root path is not UTF-8")
+        relative = PurePosixPath(decoded)
+        if relative.is_absolute() or not relative.parts or any(part in (".", "..") for part in relative.parts): fail("ignored production-root path is invalid")
+        path = repo.joinpath(*relative.parts)
+        safe_path(path.parent, "ignored production-root parent")
+        try: mode = path.lstat().st_mode
+        except OSError as error: fail(f"ignored production-root path could not be inspected: {error.__class__.__name__}")
+        if decoded.endswith(".rs") or stat.S_ISLNK(mode): fail("ignored Rust source or symlink under a production root is forbidden")
     common_raw = Path(run_git(repo, ["rev-parse", "--git-common-dir"]).decode().strip())
     common = common_raw if common_raw.is_absolute() else repo / common_raw
     if (common / "info/grafts").exists(): fail("legacy Git grafts are forbidden")
@@ -242,13 +258,7 @@ def normalize_source(raw: Any, repo: Path) -> str:
         fail("coverage source path escapes repo-root")
     return normalized
 def is_production_rust(path: str) -> bool:
-    source = PurePosixPath(path)
-    parts = source.parts
-    if not path.endswith(".rs") or source.stem in {"test", "tests"} or any(part in EXCLUDED_PARTS for part in parts):
-        return False
-    if len(parts) >= 2 and parts[0] == "src":
-        return True
-    return len(parts) >= 4 and parts[0] == "crates" and parts[2] == "src"
+    return is_production_rust_path(path)
 def reviewed_declaration_only_change(path: str, added: set[int], bodies: list[bytes]) -> bool:
     expected = DECLARATION_ONLY_COVERAGE_EXCEPTIONS.get(path)
     return expected is not None and len(bodies) == len(added) and sha256(b"\n".join(bodies)) == expected
@@ -414,10 +424,11 @@ def enforce_tracked_head_coverage_policy(repo: Path, head: str) -> None:
         if not raw: continue
         try: metadata, path_raw = raw.split(b"\t", 1); mode, kind, oid, size_raw = metadata.split()
         except ValueError: fail("tracked HEAD tree entry is malformed")
+        if mode not in (b"100644", b"100755") or kind != b"blob": fail("tracked HEAD tree contains an unsupported file type")
         if not path_raw.endswith(b".rs"): continue
         try: path = normalize_source(path_raw.decode("utf-8"), repo); size = int(size_raw)
         except (UnicodeDecodeError, ValueError): fail("tracked HEAD Rust entry is malformed")
-        if mode not in (b"100644", b"100755") or kind != b"blob" or size < 0: fail("tracked HEAD Rust entry is not a regular blob")
+        if size < 0: fail("tracked HEAD Rust entry has an invalid size")
         entries.append((path, oid, size)); total += size
         if len(entries) > MAX_DETAILED_LINES or total > MAX_COVERAGE_BYTES: fail("tracked HEAD Rust source exceeds the size limit")
     output = run_git(repo, ["cat-file", "--batch"], b"".join(oid + b"\n" for _path, oid, _size in entries))
@@ -430,7 +441,7 @@ def enforce_tracked_head_coverage_policy(repo: Path, head: str) -> None:
         if header != [expected_oid, b"blob", str(expected_size).encode()] or stop >= len(output) or output[stop:stop + 1] != b"\n": fail("tracked HEAD Rust blob batch is malformed")
         source = output[start:stop]; algorithm = {40: "sha1", 64: "sha256"}.get(len(expected_oid))
         if algorithm is None or hashlib.new(algorithm, b"blob " + str(len(source)).encode() + b"\0" + source).hexdigest().encode() != expected_oid: fail("tracked HEAD Rust blob hash is invalid")
-        try: suppressed = detect_coverage_control(source)
+        try: suppressed = detect_coverage_control(source, _path)
         except SourcePolicyError as error: fail(f"tracked HEAD Rust source suppression scan failed: {error}")
         if suppressed: fail("tracked HEAD Rust source contains explicit coverage suppression")
         cursor = stop + 1
@@ -727,7 +738,9 @@ def coverage_metrics(repo: Path, diff: bytes, raw: bytes, xml: bytes, head: str)
     policies = {}
     for path in set(added) | {item[1] for item in CRITICAL_MODULES}:
         try:
-            policies[path] = analyze_rust_source(head_blob(repo, head, path))
+            policies[path] = analyze_rust_source(
+                head_blob(repo, head, path), path,
+            )
         except SourcePolicyError as error:
             fail(f"Rust source policy cannot be classified: {error}")
     if any(policies[path].coverage_control for path in added):

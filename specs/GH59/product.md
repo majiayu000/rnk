@@ -136,6 +136,17 @@ complexity: large
 22. **B-022** B-015 的覆盖率证据必须由绑定 implementation PR exact head 的 Cobertura
     artifact 和 fail-closed checker 机器判定：compiler-observed production changed executable
     lines >=80%，`#[cfg(test)]` code 不进入分母/分子，coverage-only suppression 必须被拒绝；
+    未展开的 macro invocation 内任一非 literal coverage/suppression token，以及
+    production-active macro token stream 内任一 `path` 或 production-excluded module
+    identifier，必须保守拒绝；tracked declarative
+    macro 通过动态 attribute name（`#[$meta ...]`）合成控制属性时同样必须拒绝，
+    普通同名 declaration/call 仅在 macro 外允许；任一非 literal/comment `include` source
+    token（包括 import/re-export alias 与 `include!`）必须拒绝；默认 `mod name;`、
+    inline-module context 或 `#[path]` 解析到非 `.rs`、absolute、parent-traversing 或
+    production-excluded source target 时必须拒绝；production-excluded `.rs` target
+    仅在 enclosing item 被证明为 test-only 时允许；POSIX/Windows absolute target
+    与 tracked HEAD symlink/file redirect 均必须 fail closed；production source roots
+    下被 ignore 的 `.rs` 必须拒绝，防止 clean-status 隐藏 HEAD 外编译源码；
     新 identity/plan/incremental-order/incremental-apply critical modules 的 production
     line/branch rate 均为 100%。collector 必须直接执行并绑定已哈希的 pinned coverage plugin，
     不能经 Cargo alias 解析到其他命令。resolved coverage plugin、nightly Cargo/rustc 及其
@@ -180,7 +191,8 @@ complexity: large
 - [ ] `VNode.key` / `props.key` 的全部判定组合和 type mismatch 均得到唯一 exact/opaque/
       positional 结果或 typed error；其中 public props-only keyed VNode 保持合法，stale
       public index 由 child vector position 确定归一；checked layout -> dynamic frame -> App caller
-      保留 identity cause，兼容 wrapper fail loudly，覆盖 B-018、B-019。
+      保留 identity cause，兼容 wrapper fail loudly；既有六分支 `PatchFailure` 仍可被旧 caller
+      无 wildcard 穷举匹配，新 `DirectPatchError` 保持 non-exhaustive，覆盖 B-014、B-018、B-019。
 - [ ] 两个 parent 下相同 key/type/index 通过 public all-layouts 查询同时可见；raw legacy
       single lookup 返回 typed ambiguity，旧 wrapper fail loudly；runtime raw/string
       measurement lookup 对 0/1/N 分别返回 None/exact scoped value/typed ambiguity，legacy
