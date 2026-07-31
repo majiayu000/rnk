@@ -1,10 +1,11 @@
 //! Layout engine using Taffy
 
-use crate::core::{
-    Dimension, Element, ElementId, ElementType, NodeKey, Props, Style, VNode, VNodeType,
+use crate::core::{Dimension, Element, ElementId, ElementType, NodeKey, Style, VNode};
+use crate::layout::{TextFlow, TextFlowError};
+use crate::reconciler::{
+    ScopedIdentityArena, ScopedNodeIdentity, plan_diff_in, plan_initial_tree, plan_initial_tree_in,
+    semantically_equal_vnode_in,
 };
-use crate::layout::{TextFlow, TextFlowError, TextFlowInput};
-use crate::reconciler::{SiblingIdentity, diff};
 use std::{collections::HashMap, sync::Arc};
 use taffy::{NodeId, TaffyTree};
 
@@ -39,12 +40,11 @@ pub struct LayoutEngine {
     taffy: TaffyTree<NodeContext>,
     node_map: HashMap<ElementId, NodeId>,
     element_keys: HashMap<ElementId, NodeKey>,
-    /// Map from a node's cross-frame identity to its Taffy NodeId.
-    ///
-    /// Keyed by `SiblingIdentity`, not by `NodeKey`: `NodeKey`'s derived `Eq`
-    /// includes the current index, so a keyed child that moved would no longer
-    /// find its own node here.
-    vnode_map: HashMap<SiblingIdentity, NodeId>,
+    element_scopes: HashMap<ElementId, ScopedNodeIdentity>,
+    /// Correctness index. Public sibling-local identities are compatibility
+    /// projections only and never address this map directly.
+    vnode_map: HashMap<ScopedNodeIdentity, NodeId>,
+    vnode_legacy_keys: HashMap<ScopedNodeIdentity, NodeKey>,
     /// Root node ID for incremental updates
     root_node: Option<NodeId>,
     /// Last computed width
@@ -54,7 +54,8 @@ pub struct LayoutEngine {
     flow_cache: FlowCache,
     text_flow_policy: TextFlowPolicy,
     current_text_flows: HashMap<ElementId, Arc<TextFlow>>,
-    current_vnode_flows: HashMap<SiblingIdentity, Arc<TextFlow>>,
+    current_vnode_flows: HashMap<ScopedNodeIdentity, Arc<TextFlow>>,
+    committed_vnode: Option<VNode>,
 }
 
 impl LayoutEngine {
@@ -63,7 +64,9 @@ impl LayoutEngine {
             taffy: TaffyTree::new(),
             node_map: HashMap::new(),
             element_keys: HashMap::new(),
+            element_scopes: HashMap::new(),
             vnode_map: HashMap::new(),
+            vnode_legacy_keys: HashMap::new(),
             root_node: None,
             last_width: 0,
             last_height: 0,
@@ -71,6 +74,7 @@ impl LayoutEngine {
             text_flow_policy: TextFlowPolicy::default(),
             current_text_flows: HashMap::new(),
             current_vnode_flows: HashMap::new(),
+            committed_vnode: None,
         }
     }
 
@@ -79,10 +83,13 @@ impl LayoutEngine {
         self.taffy.clear();
         self.node_map.clear();
         self.element_keys.clear();
+        self.element_scopes.clear();
         self.vnode_map.clear();
+        self.vnode_legacy_keys.clear();
         self.root_node = None;
         self.current_text_flows.clear();
         self.current_vnode_flows.clear();
+        self.committed_vnode = None;
         self.build_node(element)
     }
 
@@ -158,6 +165,13 @@ impl LayoutEngine {
     /// Compute layout from an `Element` tree using reconciler diff/patch when possible.
     ///
     /// Returns the current frame VNode snapshot plus incremental execution metadata.
+    ///
+    /// # Panics
+    ///
+    /// Panics on identity-planning or text-flow failure, or if validated-plan
+    /// materialization/publication hits an internal invariant violation. Use
+    /// [`try_compute_element_incremental_checked`](Self::try_compute_element_incremental_checked)
+    /// to handle both failure classes explicitly.
     pub fn compute_element_incremental(
         &mut self,
         root: &Element,
@@ -169,6 +183,18 @@ impl LayoutEngine {
             .unwrap_or_else(|error| panic!("incremental text flow layout failed: {error}"))
     }
 
+    /// Legacy adapter that checks text flow but panics on identity failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TextFlowError`] when text layout fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics when identity planning fails, or if validated-plan
+    /// materialization/publication hits an internal invariant violation. Use
+    /// [`try_compute_element_incremental_checked`](Self::try_compute_element_incremental_checked)
+    /// to handle identity and text-flow failures together.
     pub fn try_compute_element_incremental(
         &mut self,
         root: &Element,
@@ -176,59 +202,93 @@ impl LayoutEngine {
         width: u16,
         height: u16,
     ) -> Result<(VNode, IncrementalLayoutOutcome), TextFlowError> {
-        let mut candidate = self.staged_clone();
-        let mut element_key_map = HashMap::new();
-        let mut text_inputs = HashMap::new();
-        let current_vnode = candidate
-            .element_to_vnode(root, "root", 0, &mut element_key_map, &mut text_inputs)
-            .unwrap_or_else(VNode::root);
-
-        candidate.last_width = width;
-        candidate.last_height = height;
-
-        let mut outcome = IncrementalLayoutOutcome::default();
-
-        let can_use_incremental = previous_vnode.is_some() && candidate.has_tree();
-        if can_use_incremental {
-            let prev = previous_vnode.expect("checked is_some");
-            let patches = diff(prev, &current_vnode);
-            outcome.patch_count = patches.len();
-            outcome.used_reconciler = true;
-
-            if patches.is_empty() {
-                candidate.sync_text_contexts(&text_inputs);
-                candidate.sync_element_node_map(&element_key_map);
-                candidate.run_layout_and_publish(&mut || false)?;
-                *self = candidate;
-                return Ok((current_vnode, outcome));
-            }
-
-            match candidate
-                .apply_patches_only(&patches)
-                .and_then(|()| candidate.check_batch_postconditions(&patches))
-            {
-                Ok(()) => {
-                    candidate.sync_text_contexts(&text_inputs);
-                    candidate.sync_element_node_map(&element_key_map);
-                    candidate.run_layout_and_publish(&mut || false)?;
-                    *self = candidate;
-                    return Ok((current_vnode, outcome));
-                }
-                Err(error) => {
-                    // The batch is rejected whole. `candidate` may be partly
-                    // patched, but the rebuild below clears it first, so what
-                    // is committed comes only from `current_vnode`.
-                    outcome.patch_error = Some(error);
-                }
+        match self.try_compute_element_incremental_checked(root, previous_vnode, width, height) {
+            Ok(result) => Ok(result),
+            Err(IncrementalLayoutError::TextFlow(source)) => Err(source),
+            Err(IncrementalLayoutError::Identity(source)) => {
+                panic!("incremental identity planning failed: {source}")
             }
         }
+    }
 
-        // Fallback path: no previous tree or incremental update failed.
-        candidate.build_vnode_tree(&current_vnode);
-        candidate.sync_text_contexts(&text_inputs);
-        candidate.sync_element_node_map(&element_key_map);
+    /// Checked incremental layout boundary.
+    ///
+    /// Identity/metadata validation and committed-tree preflight happen before
+    /// the engine is cloned or any GH60 patch fallback can run.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IncrementalLayoutError`] for invalid identity metadata, a
+    /// caller snapshot that differs from the committed tree, or text-flow
+    /// failure. The engine remains unchanged.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if an already-validated internal reconciliation plan cannot
+    /// be materialized or its text/element metadata cannot be published
+    /// consistently, which indicates an engine invariant violation.
+    pub fn try_compute_element_incremental_checked(
+        &mut self,
+        root: &Element,
+        previous_vnode: Option<&VNode>,
+        width: u16,
+        height: u16,
+    ) -> Result<(VNode, IncrementalLayoutOutcome), IncrementalLayoutError> {
+        let mut identity_arena = ScopedIdentityArena::seeded(self.vnode_map.keys());
+        let snapshot = incremental::ElementVNodeSnapshot::from_element(root, &mut identity_arena)?;
+        let current_vnode = snapshot.vnode.clone();
+        let can_use_incremental = previous_vnode.is_some() && self.has_tree();
+        let plan = if can_use_incremental {
+            let previous = previous_vnode.expect("incremental precondition checked");
+            let Some(committed) = self.committed_vnode.as_ref() else {
+                return Err(crate::reconciler::ReconcilePlanError::PreviousTreeMismatch.into());
+            };
+            if !semantically_equal_vnode_in(committed, previous, &mut identity_arena)? {
+                return Err(crate::reconciler::ReconcilePlanError::PreviousTreeMismatch.into());
+            }
+            let committed_plan = plan_diff_in(committed, committed, &mut identity_arena)?;
+            self.validate_committed_plan(&committed_plan)?;
+            let plan = plan_diff_in(committed, &current_vnode, &mut identity_arena)?;
+            self.preflight_reconcile_plan(&plan)?;
+            plan
+        } else {
+            plan_initial_tree_in(&current_vnode, &mut identity_arena)?
+        };
+
+        let mut outcome = IncrementalLayoutOutcome {
+            used_reconciler: can_use_incremental,
+            patch_count: plan.patches().len(),
+            ..IncrementalLayoutOutcome::default()
+        };
+        let mut candidate = self.staged_clone();
+        candidate.last_width = width;
+        candidate.last_height = height;
+        if !can_use_incremental {
+            candidate.reset_scoped_vnode_tree();
+        }
+
+        if let Err(error) = candidate.apply_reconcile_plan(&plan) {
+            if !can_use_incremental {
+                panic!("initial checked layout plan could not be committed: {error}");
+            }
+            outcome.patch_error = Some(error);
+            outcome.fallback_full_rebuild = true;
+            candidate.reset_scoped_vnode_tree();
+            let rebuild = plan_initial_tree_in(&current_vnode, &mut identity_arena)?;
+            candidate
+                .apply_reconcile_plan(&rebuild)
+                .unwrap_or_else(|rebuild_error| {
+                    panic!(
+                        "transactional incremental fallback could not rebuild target: \
+                         {rebuild_error}"
+                    )
+                });
+        }
+
+        candidate.sync_text_contexts(&snapshot.text_inputs);
+        candidate.sync_element_node_map_scoped(&snapshot);
         candidate.run_layout_and_publish(&mut || false)?;
-        outcome.fallback_full_rebuild = can_use_incremental;
+        candidate.committed_vnode = Some(current_vnode.clone());
         *self = candidate;
         Ok((current_vnode, outcome))
     }
@@ -237,117 +297,13 @@ impl LayoutEngine {
 
     /// Build layout tree from VNode tree
     pub fn build_vnode_tree(&mut self, vnode: &VNode) -> Option<NodeId> {
-        self.taffy.clear();
-        self.node_map.clear();
-        self.element_keys.clear();
-        self.vnode_map.clear();
-        self.current_text_flows.clear();
-        self.current_vnode_flows.clear();
-        self.root_node = self.build_vnode(vnode);
+        let plan = plan_initial_tree(vnode)
+            .unwrap_or_else(|error| panic!("VNode identity validation failed: {error}"));
+        self.reset_scoped_vnode_tree();
+        self.apply_reconcile_plan(&plan)
+            .unwrap_or_else(|error| panic!("VNode tree build failed: {error}"));
+        self.committed_vnode = Some(vnode.clone());
         self.root_node
-    }
-
-    fn build_vnode(&mut self, vnode: &VNode) -> Option<NodeId> {
-        let taffy_style = normalized_taffy_style(&vnode.props.style, vnode.is_text());
-
-        // Build children first
-        let child_nodes: Vec<NodeId> = vnode
-            .children
-            .iter()
-            .filter_map(|child| self.build_vnode(child))
-            .collect();
-
-        let context = NodeContext::new(input_from_vnode(vnode), &self.text_flow_policy);
-
-        // Create node
-        let node_id = if vnode.is_text() {
-            self.taffy
-                .new_leaf_with_context(taffy_style, context)
-                .ok()?
-        } else {
-            let node = self
-                .taffy
-                .new_with_children(taffy_style, &child_nodes)
-                .ok()?;
-            let _ = self.taffy.set_node_context(node, Some(context));
-            node
-        };
-
-        self.vnode_map.insert(vnode.key.identity(), node_id);
-        Some(node_id)
-    }
-
-    fn element_to_vnode(
-        &self,
-        element: &Element,
-        parent_path: &str,
-        index: usize,
-        element_key_map: &mut HashMap<ElementId, NodeKey>,
-        text_inputs: &mut HashMap<NodeKey, TextFlowInput>,
-    ) -> Option<VNode> {
-        if element.element_type == ElementType::VirtualText {
-            return None;
-        }
-
-        let node_type = match element.element_type {
-            ElementType::Root => VNodeType::Root,
-            ElementType::Box => VNodeType::Box,
-            ElementType::Text => VNodeType::Text(compatibility_text(element)),
-            ElementType::VirtualText => return None,
-        };
-
-        let mut props = Props::with_style(element.style.clone());
-        props.key = element.key.clone();
-        props.scroll_offset_x = element.scroll_offset_x;
-        props.scroll_offset_y = element.scroll_offset_y;
-
-        let mut vnode = VNode::new(node_type, props).with_index(index);
-
-        if element.element_type == ElementType::Root {
-            vnode.key = NodeKey::root();
-        } else {
-            let type_id = vnode.node_type.type_id();
-            let synthetic_key = if let Some(user_key) = &element.key {
-                format!("{parent_path}#key:{user_key}")
-            } else {
-                format!("{parent_path}@idx:{index}:type:{:?}", element.element_type)
-            };
-            vnode.key = NodeKey::with_key(&synthetic_key, type_id, index);
-        }
-
-        element_key_map.insert(element.id, vnode.key);
-        if let Some(input) = input_from_element(element) {
-            text_inputs.insert(vnode.key, input);
-        }
-
-        // A keyed node contributes its key, not its position, so that moving
-        // it among its siblings does not change the synthetic identity of
-        // everything beneath it.
-        let node_path = match &element.key {
-            Some(user_key) => format!("{parent_path}/key:{user_key}"),
-            None => format!("{parent_path}/{index}"),
-        };
-        vnode.children = element
-            .children
-            .iter()
-            .enumerate()
-            .filter_map(|(child_idx, child)| {
-                self.element_to_vnode(child, &node_path, child_idx, element_key_map, text_inputs)
-            })
-            .collect();
-
-        Some(vnode)
-    }
-
-    fn sync_element_node_map(&mut self, element_key_map: &HashMap<ElementId, NodeKey>) {
-        self.node_map.clear();
-        self.element_keys.clear();
-        for (element_id, key) in element_key_map {
-            self.element_keys.insert(*element_id, *key);
-            if let Some(node_id) = self.vnode_map.get(&key.identity()).copied() {
-                self.node_map.insert(*element_id, node_id);
-            }
-        }
     }
 
     /// Compute layout for VNode tree
@@ -385,19 +341,6 @@ impl LayoutEngine {
         })
     }
 
-    /// Get computed layout for a VNode by key
-    pub fn get_vnode_layout(&self, key: NodeKey) -> Option<Layout> {
-        let node_id = self.vnode_map.get(&key.identity())?;
-        let layout = self.taffy.layout(*node_id).ok()?;
-
-        Some(Layout {
-            x: layout.location.x,
-            y: layout.location.y,
-            width: layout.size.width,
-            height: layout.size.height,
-        })
-    }
-
     /// Get all layouts
     pub fn get_all_layouts(&self) -> HashMap<ElementId, Layout> {
         self.node_map
@@ -417,26 +360,8 @@ impl LayoutEngine {
             .collect()
     }
 
-    /// Get all VNode layouts, addressed by cross-frame identity
-    pub fn get_all_vnode_layouts(&self) -> HashMap<SiblingIdentity, Layout> {
-        self.vnode_map
-            .iter()
-            .filter_map(|(key, node_id)| {
-                let layout = self.taffy.layout(*node_id).ok()?;
-                Some((
-                    *key,
-                    Layout {
-                        x: layout.location.x,
-                        y: layout.location.y,
-                        width: layout.size.width,
-                        height: layout.size.height,
-                    },
-                ))
-            })
-            .collect()
-    }
-
     /// Get the stable node key associated with an element in the current frame.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn node_key_for_element(&self, element_id: ElementId) -> Option<NodeKey> {
         self.element_keys.get(&element_id).copied()
     }
@@ -448,7 +373,10 @@ impl LayoutEngine {
 
     #[allow(dead_code)] // Consumed by the renderer integration lane.
     pub(crate) fn current_vnode_text_flow(&self, key: NodeKey) -> Option<Arc<TextFlow>> {
-        self.current_vnode_flows.get(&key.identity()).cloned()
+        let identity = self
+            .resolve_legacy_scope(key)
+            .unwrap_or_else(|error| panic!("VNode text-flow lookup failed: {error}"))?;
+        self.current_vnode_flows.get(&identity).cloned()
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -591,12 +519,14 @@ mod frame_flow_tests {
 }
 
 mod context_sync;
+mod identity_index;
+mod incremental;
+mod incremental_order;
 mod patch_error;
-pub use patch_error::{PatchError, PatchFailure, PatchKind};
+pub use patch_error::{
+    IncrementalLayoutError, LayoutLookupError, PatchError, PatchFailure, PatchKind,
+};
 mod patching;
 mod text_flow_bridge;
 
-use text_flow_bridge::{
-    FlowCache, NodeContext, TextFlowPolicy, compatibility_text, input_from_element,
-    input_from_vnode,
-};
+use text_flow_bridge::{FlowCache, NodeContext, TextFlowPolicy, input_from_element};

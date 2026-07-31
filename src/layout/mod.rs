@@ -5,7 +5,10 @@ pub mod measure;
 pub mod text_flow;
 mod utils;
 
-pub use engine::{Layout, LayoutEngine, PatchError, PatchFailure, PatchKind};
+pub use engine::{
+    IncrementalLayoutError, Layout, LayoutEngine, LayoutLookupError, PatchError, PatchFailure,
+    PatchKind,
+};
 pub use measure::{
     TextAlign, display_width, measure_text, measure_text_width, pad_text, truncate_middle,
     truncate_start, truncate_text, wrap_text,

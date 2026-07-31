@@ -35,7 +35,8 @@ complexity: large
 ## 非目标
 
 - 不实现 GH-60 的通用 patch 事务、Taffy 失败回滚、失败后的 map 恢复或最终 rebuild typed
-  error；成功 remove/replace/move 的完整 subtree map 清理仍是 GH-59 正确性范围。
+  error；不重构 raw `Patch` topology，也不实现 whole-frame terminal transaction、rollback、
+  rebuild 或 fallback。成功 remove/replace/move 的完整 subtree map 清理仍是 GH-59 正确性范围。
 - 不实现 GH-61 的 `LayoutSnapshot`、随机状态机 parity harness 或 benchmark 阈值。
 - 不改变 Taffy 的 Flexbox 算法、GH-58 TextFlow 或 renderer cell composition。
 - 不要求 user key 在整棵树、不同 parent、不同应用或不同进程中全局唯一。
@@ -88,6 +89,9 @@ complexity: large
 14. **B-014** 现有公开 `NodeKey` 字段、构造器、`matches()`、`VNode` builders、
     `diff()` / `Patch` 表面和未 keyed 行为必须保持源码兼容。内部 engine 可以使用新的
     scoped identity/plan，但不得要求应用为已有 Element/VNode 增加字段或迁移 key 格式。
+    runtime 现有 ElementId、raw node identity 与 string-key measurement helpers 保持签名；
+    无歧义调用继续返回该唯一 scoped measurement，只有新增合法多 parent 候选时才由 checked
+    API 返回 typed ambiguity、legacy helper fail loudly。
 15. **B-015** GH-59 只有在当前 implementation head 的 unit、integration、连续多帧和
     full-rebuild parity 测试通过，新代码 patch coverage 至少 80%，identity match、
     duplicate validation 与 final-order planning/apply 分支达到 100%，且 exact-head CI、
@@ -117,14 +121,27 @@ complexity: large
     投影 collision。同 key/type/index 位于两个 parent 时，`get_all_vnode_layouts()` 必须
     同时保留两个不同 composite key；以无 scope 的 raw legacy key 查询多个候选时，新
     `try_get_vnode_layout` 返回 typed ambiguity，旧 `get_vnode_layout` fail loudly，不得
-    任取一个、返回误导性 `None` 或覆盖另一项。
+    任取一个、返回误导性 `None` 或覆盖另一项。engine 的 composite projection 必须继续
+    完整保留；renderer 只在 layout/render 全部成功后把 validated scoped layouts、raw
+    candidates 与 string aliases 发布给 `RuntimeContext`。runtime raw/string measurement
+    lookup 的 0/1/N 合同为：无候选返回 `None`；全局唯一候选返回该 exact scoped value；
+    多个 parent-scoped candidates 时 checked API 返回 typed ambiguity，legacy wrapper fail
+    loudly。每个成功 frame 必须原子替换 ElementId、scoped、composite/raw candidate 与 string
+    alias views；unique -> ambiguous -> unique 转换不得遗留任一旧 ElementId、raw candidate
+    或 alias，identity validation 失败则不得发布任何新 measurement state。
 21. **B-021** `final_children` 在任何 Taffy/map mutation 前必须完成集合和现有映射 preflight：
     missing final identity、duplicate final identity、planned survivor/create 未出现在 final
     order（extra）分别返回 typed error，并证明 tree/map/root/previous VNode 未变。新节点
     创建、remove、`set_children` 或 read-back 的 Taffy commit 失败及其 rollback 仍由 GH-60。
 22. **B-022** B-015 的覆盖率证据必须由绑定 implementation PR exact head 的 Cobertura
-    artifact 和 fail-closed checker 机器判定：changed executable lines >=80%，新 identity/
-    plan/incremental-order/incremental-apply critical modules 的 line/branch rate 均为 100%。
+    artifact 和 fail-closed checker 机器判定：compiler-observed production changed executable
+    lines >=80%，`#[cfg(test)]` code 不进入分母/分子，coverage-only suppression 必须被拒绝；
+    新 identity/plan/incremental-order/incremental-apply critical modules 的 production
+    line/branch rate 均为 100%。collector 必须直接执行并绑定已哈希的 pinned coverage plugin，
+    不能经 Cargo alias 解析到其他命令。resolved coverage plugin、nightly Cargo/rustc 及其
+    sysroot LLVM tools、Git/Python/OS/runner 是受信基础设施；receipt 只绑定其中已记录的
+    plugin/Cargo/rustc/Git entrypoints 与 coverage artifacts，不承担在无外部签名或
+    known-good digest 下自证 vendor authenticity 或证明未记录的基础设施。
     同一 head 还必须通过 bounded property test，覆盖 unique 与 duplicate 的 keyed/unkeyed
     permutation；无界 fuzz、性能随机状态机与长期 stress 留给 GH-61。
 23. **B-023** reconciler 必须公开 `try_diff` 与 `try_diff_children`（或等价、无 type alias
@@ -165,7 +182,11 @@ complexity: large
       public index 由 child vector position 确定归一；checked layout -> dynamic frame -> App caller
       保留 identity cause，兼容 wrapper fail loudly，覆盖 B-018、B-019。
 - [ ] 两个 parent 下相同 key/type/index 通过 public all-layouts 查询同时可见；raw legacy
-      single lookup 返回 typed ambiguity，旧 wrapper fail loudly，覆盖 B-003、B-020。
+      single lookup 返回 typed ambiguity，旧 wrapper fail loudly；runtime raw/string
+      measurement lookup 对 0/1/N 分别返回 None/exact scoped value/typed ambiguity，legacy
+      measurement wrapper 在 N 时 fail loudly；unique -> ambiguous -> unique 成功发布会原子
+      清除旧 ElementId、scoped/composite/raw candidate 与 alias，identity 失败不发布，
+      覆盖 B-003、B-014、B-019、B-020。
 - [ ] missing/duplicate/extra final identity negative injection 在 mutation 前失败并保持
       tree/map/root/previous VNode 逐项不变，覆盖 B-017、B-021。
 - [ ] invalid nested VNode metadata 与 duplicate sibling 分别令 `try_diff` /
@@ -203,10 +224,17 @@ complexity: large
 保留增量身份，same-key/different-parent 也不再发生内部 map 覆盖；unkeyed 节点继续按位置
 匹配。发布说明必须指出：重复 sibling key（包括空 key）现在会显式失败；跨 parent move
 仍是 remove + create；公开 `NodeKey` 保持兼容，但 engine 的正确性由内部 scoped identity
-和完整 final-order plan 保证。GH-60 后续再为所有 patch/Taffy 失败补齐事务恢复合同。
+和完整 final-order plan 保证。所有 patch/Taffy 失败的事务恢复合同仍由 GH-60 ownership
+覆盖，本 corrective 不重构该 topology。
 metadata 不一致、legacy lookup 歧义和无效 final-order plan 会返回新的 typed error；GH-58
 TextFlow error 类型不因此扩张。reconciler 同时提供返回 `ReconcilePlanError` 的 checked
 public diff API；旧 diff API 只保留为 fail-loud compatibility wrapper，不会把错误伪装成
 空或部分 patches。成功 remove/replace/move 会同步清除完整旧 subtree 映射；GH-60 只接管
 失败提交的 rollback。`VNode::root()` 不是必需 sentinel，公开 box/text/component builders
-仍可直接作为 root。coverage 结论只接受 exact-head checker artifact。
+仍可直接作为 root。runtime measurement 的 ElementId、raw identity 与 string helper 签名
+保持兼容：0/1/N 候选分别表现为 None、唯一 exact scoped value、checked typed ambiguity；
+legacy helper 在歧义时 fail loudly。成功 renderer publication 原子替换全部 measurement
+views，unique -> ambiguous -> unique 不保留 stale ElementId/scoped/composite/raw/alias；
+identity 失败不发布。engine 的
+composite projection 仍完整保留。raw `Patch` topology、whole-frame terminal transaction、
+rollback/rebuild/fallback 继续由 GH-60 定义。coverage 结论只接受 exact-head checker artifact。
