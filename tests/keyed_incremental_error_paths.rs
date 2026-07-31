@@ -1,9 +1,14 @@
 //! GH-59 checked identity and direct-patch boundary regressions.
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::{
+    error::Error as _,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 
 use rnk::core::{Dimension, Props, Style, VNode};
-use rnk::layout::{IncrementalLayoutError, LayoutEngine, PatchFailure};
+use rnk::layout::{
+    DirectPatchError, IncrementalLayoutError, LayoutEngine, LayoutLookupError, PatchFailure,
+};
 use rnk::prelude::*;
 use rnk::reconciler::{Patch, ReconcilePlanError, try_diff, try_diff_children};
 
@@ -35,7 +40,35 @@ fn duplicate_key_reaches_checked_layout_boundary() {
 #[test]
 fn dynamic_frame_error_is_publicly_exported() {
     fn accepts_public_error(_: Option<rnk::renderer::DynamicFrameError>) {}
+    fn legacy_patch_failure_is_exhaustive(failure: PatchFailure) -> &'static str {
+        match failure {
+            PatchFailure::UnknownNode => "unknown",
+            PatchFailure::MissingParent => "parent",
+            PatchFailure::TreeRejected => "tree",
+            PatchFailure::BuildFailed => "build",
+            PatchFailure::LayoutFailed => "layout",
+            PatchFailure::PostconditionViolated => "postcondition",
+        }
+    }
+    fn checked_patch_error_is_non_exhaustive(error: DirectPatchError) -> &'static str {
+        match error {
+            DirectPatchError::Identity(_) => "identity",
+            DirectPatchError::Lookup(_) => "lookup",
+            DirectPatchError::Patch(_) => "patch",
+            _ => "future",
+        }
+    }
     accepts_public_error(None);
+    assert_eq!(
+        legacy_patch_failure_is_exhaustive(PatchFailure::UnknownNode),
+        "unknown"
+    );
+    assert_eq!(
+        checked_patch_error_is_non_exhaustive(DirectPatchError::Identity(
+            ReconcilePlanError::PreviousTreeMismatch,
+        )),
+        "identity"
+    );
 }
 
 fn duplicate_subtree() -> VNode {
@@ -56,10 +89,14 @@ fn direct_create_duplicate_subtree_is_an_identity_rejection() {
     engine.compute_vnode(&root, 20, 4);
 
     let failure = engine
-        .try_apply_patches(&[duplicate_subtree_patch(root.key)])
+        .try_apply_patches_checked(&[duplicate_subtree_patch(root.key)])
         .expect_err("a direct patch must preflight duplicate subtree identity");
 
-    assert_eq!(failure.failure, PatchFailure::IdentityRejected);
+    assert!(matches!(
+        failure,
+        DirectPatchError::Identity(ReconcilePlanError::DuplicateSiblingKey { .. })
+    ));
+    assert!(failure.source().is_some());
 }
 
 #[test]
@@ -71,10 +108,13 @@ fn direct_replace_duplicate_subtree_is_an_identity_rejection() {
     let before_count = engine.node_count();
 
     let failure = engine
-        .try_apply_patches(&[Patch::replace(old_key, duplicate_subtree())])
+        .try_apply_patches_checked(&[Patch::replace(old_key, duplicate_subtree())])
         .expect_err("a replacement subtree must pass identity preflight");
 
-    assert_eq!(failure.failure, PatchFailure::IdentityRejected);
+    assert!(matches!(
+        failure,
+        DirectPatchError::Identity(ReconcilePlanError::DuplicateSiblingKey { .. })
+    ));
     assert_eq!(engine.node_count(), before_count);
     assert!(engine.get_vnode_layout(old_key).is_some());
 }
@@ -91,10 +131,13 @@ fn duplicate_create_roots_are_rejected_by_batch_preflight() {
     ];
 
     let failure = engine
-        .try_apply_patches(&patches)
+        .try_apply_patches_checked(&patches)
         .expect_err("the whole batch must be identity-valid before mutation");
 
-    assert_eq!(failure.failure, PatchFailure::IdentityRejected);
+    assert!(matches!(
+        failure,
+        DirectPatchError::Identity(ReconcilePlanError::DuplicatePlannedIdentity { .. })
+    ));
     assert_eq!(engine.node_count(), before_count);
 }
 
@@ -112,6 +155,18 @@ fn legacy_apply_patches_fails_loudly_on_identity_error() {
         result.is_err(),
         "legacy bool API must not silently turn an identity error into false"
     );
+
+    let mut try_engine = LayoutEngine::new();
+    try_engine.compute_vnode(&root, 20, 4);
+    let before_count = try_engine.node_count();
+    let try_result = catch_unwind(AssertUnwindSafe(|| {
+        try_engine.try_apply_patches(&[duplicate_subtree_patch(root.key)])
+    }));
+    assert!(
+        try_result.is_err(),
+        "legacy Result API must not compress an identity cause into PatchError"
+    );
+    assert_eq!(try_engine.node_count(), before_count);
 }
 
 #[test]
@@ -151,7 +206,7 @@ fn checked_diff_apply_handles_same_raw_key_in_distinct_parents() {
 
     assert!(
         engine
-            .try_apply_patches(&patches)
+            .try_apply_patches_checked(&patches)
             .expect("checked diff output must be directly applicable")
     );
     let widths: Vec<_> = engine
@@ -185,7 +240,7 @@ fn child_only_diff_reports_global_raw_ambiguity_without_mutation() {
     before_widths.sort_unstable();
 
     let failure = engine
-        .try_apply_patches(&patches)
+        .try_apply_patches_checked(&patches)
         .expect_err("a partial raw diff must not guess among global scopes");
     let mut after_widths: Vec<_> = engine
         .get_all_vnode_layouts()
@@ -194,7 +249,13 @@ fn child_only_diff_reports_global_raw_ambiguity_without_mutation() {
         .collect();
     after_widths.sort_unstable();
 
-    assert_eq!(failure.failure, PatchFailure::AmbiguousNode);
+    assert!(matches!(
+        failure,
+        DirectPatchError::Lookup(LayoutLookupError::AmbiguousLegacyNodeKey {
+            scoped_match_count: 2,
+            ..
+        })
+    ));
     assert_eq!(after_widths, before_widths);
 }
 

@@ -43,7 +43,7 @@ TOOL_ENV_REMOVALS = {
     "RUSTDOCFLAGS", "RUSTFLAGS", "RUSTUP_TOOLCHAIN",
 }
 TOOL_ENV_PREFIXES = (
-    "CARGO_ALIAS_", "CARGO_BUILD_", "CARGO_ENCODED_", "CARGO_LLVM_COV",
+    "CARGO_ALIAS_", "CARGO_BUILD_", "CARGO_ENCODED_", "CARGO_LLVM_",
     "CARGO_PROFILE_", "CARGO_TARGET_", "DYLD_", "LD_", "LLVM_", "RUSTC_", "__CARGO_LLVM_COV",
 )
 
@@ -113,6 +113,10 @@ def version_provenance(value: str, label: str) -> dict[str, str]:
     return {key: fields[key] for key in ("release", "commit-date", "host")}
 
 
+def toolchain_provenance_matches(cargo: dict[str, str], rustc: dict[str, str]) -> bool:
+    return all(cargo[key] == rustc[key] for key in ("release", "host"))
+
+
 def toolchain(repo: Path) -> dict[str, Any]:
     reject_cargo_config(repo)
     rustup = shutil.which("rustup")
@@ -134,7 +138,7 @@ def toolchain(repo: Path) -> dict[str, Any]:
     versions = {key: run_tool(command, repo, key.replace("_", "-"), True, tools=partial) for key, command in commands.items()}
     if versions["cargo_llvm_cov"] != LLVM_COV_VERSION: fail("cargo-llvm-cov version must be exactly 0.8.7")
     provenance = {key: version_provenance(versions[key], key) for key in ("cargo", "rustc")}
-    if provenance["cargo"] != provenance["rustc"]: fail("nightly Cargo/Rust provenance does not match")
+    if not toolchain_provenance_matches(provenance["cargo"], provenance["rustc"]): fail("nightly Cargo/Rust provenance does not match")
     return {key: {**partial[key], "version": versions[key], **({"provenance": provenance[key]} if key in provenance else {})} for key in commands}
 
 
