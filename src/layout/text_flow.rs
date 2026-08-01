@@ -221,8 +221,12 @@ impl TextFlow {
             });
         }
         let validated_styles = style_normalization::validate_styled_ranges(input)?;
-        let styled_plan =
-            style_normalization::build_styled_range_plan(validated_styles, &mut interrupted)?;
+        let mut plan_observer = style_normalization::NoopNormalizationObserver;
+        let styled_plan = style_normalization::build_styled_range_plan(
+            validated_styles,
+            &mut interrupted,
+            &mut plan_observer,
+        )?;
         let (mut tokens, diagnostics, grapheme_ranges) =
             tokenize_source(input, &styled_plan, &mut interrupted)?;
         let logical_rows = layout_tokens(&mut tokens, options, &mut interrupted)?;
@@ -412,10 +416,10 @@ fn tokenize_source(
     let normalized = style_normalization::normalize_source(
         styled_plan,
         &grapheme_ranges,
+        &mut tokens,
         interrupted,
         &mut observer,
     )?;
-    style_normalization::apply_styles(&mut tokens, normalized.styles, interrupted, &mut observer)?;
     Ok((tokens, normalized.diagnostics, grapheme_ranges))
 }
 

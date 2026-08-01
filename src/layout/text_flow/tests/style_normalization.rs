@@ -3,9 +3,9 @@ use std::{cell::Cell, rc::Rc, sync::Arc};
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::super::style_normalization::{
-    NormalizationObserver, NormalizationOperations, VALIDATION_POLL_INTERVAL, apply_styles,
-    build_styled_range_plan, checked_add, checked_endpoint_count, normalize_source, reserve,
-    validate_styled_ranges,
+    NoopNormalizationObserver, NormalizationObserver, NormalizationOperations,
+    VALIDATION_POLL_INTERVAL, build_styled_range_plan, checked_add, checked_endpoint_count,
+    normalize_source, reserve, validate_styled_ranges,
 };
 use super::super::{
     StyledTextRange, TextFlow, TextFlowCache, TextFlowDiagnostic, TextFlowError, TextFlowInput,
@@ -122,6 +122,9 @@ fn assert_operation_bound(
     let endpoint_count = range_count
         .checked_mul(2)
         .expect("fixture endpoint count overflow");
+    let expected_plan_construction_steps = range_count
+        .checked_mul(3)
+        .expect("fixture plan count overflow");
     let last_grapheme_start = fixture
         .input
         .source
@@ -137,11 +140,12 @@ fn assert_operation_bound(
     let bound = operation_bound(graphemes, fixture.input.styled_ranges.len());
     let slope_bound = previous.map(|value| value.saturating_mul(2).saturating_add(128));
     let components_are_exact = operations.grapheme_steps == graphemes
+        && operations.plan_construction_steps == expected_plan_construction_steps
         && operations.plan_endpoint_visits == endpoint_count
         && operations.style_range_advances == expected_style_range_advances
         && operations.boundary_endpoint_visits == endpoint_count
         && operations.diagnostic_count_visits == endpoint_count
-        && operations.diagnostic_bucket_preparations == graphemes
+        && operations.diagnostic_offset_preparations == graphemes
         && operations.diagnostic_projections == fixture.expected_internal_events
         && operations.style_applications == graphemes;
     let internal_projection_is_nonzero =
@@ -154,8 +158,9 @@ fn assert_operation_bound(
         return Err(format!(
             "family={} size={} G={} R={} internal_events={} projected_events={} \
              grapheme_steps={} plan_endpoint_visits={} style_range_advances={} \
+             plan_construction_steps={} expected_plan_construction_steps={} \
              expected_style_range_advances={} boundary_endpoint_visits={} \
-             diagnostic_count_visits={} diagnostic_bucket_preparations={} \
+             diagnostic_count_visits={} diagnostic_offset_preparations={} \
              diagnostic_projections={} style_applications={} observed={} \
              absolute_bound={} previous_operations={:?} slope_bound={:?}",
             fixture.family,
@@ -167,10 +172,12 @@ fn assert_operation_bound(
             operations.grapheme_steps,
             operations.plan_endpoint_visits,
             operations.style_range_advances,
+            operations.plan_construction_steps,
+            expected_plan_construction_steps,
             expected_style_range_advances,
             operations.boundary_endpoint_visits,
             operations.diagnostic_count_visits,
-            operations.diagnostic_bucket_preparations,
+            operations.diagnostic_offset_preparations,
             operations.diagnostic_projections,
             operations.style_applications,
             observed,
@@ -274,9 +281,11 @@ fn observe(fixture: &Fixture) -> (usize, NormalizationOperations) {
         .map(|(start, grapheme)| start..start + grapheme.len())
         .collect::<Vec<_>>();
     let validated = validate_styled_ranges(&fixture.input).expect("fixture must validate");
-    let plan = build_styled_range_plan(validated, &mut || false).expect("fixture must plan");
     let mut operations = NormalizationOperations::default();
-    let normalized = normalize_source(&plan, &ranges, &mut || false, &mut operations)
+    let plan = build_styled_range_plan(validated, &mut || false, &mut operations)
+        .expect("fixture must plan");
+    let mut applied = observation_tokens(&ranges);
+    let normalized = normalize_source(&plan, &ranges, &mut applied, &mut || false, &mut operations)
         .expect("fixture must normalize");
     assert_eq!(
         normalized.diagnostics.len(),
@@ -284,14 +293,6 @@ fn observe(fixture: &Fixture) -> (usize, NormalizationOperations) {
         "{} diagnostic count",
         fixture.family
     );
-    let mut applied = observation_tokens(&ranges);
-    apply_styles(
-        &mut applied,
-        normalized.styles,
-        &mut || false,
-        &mut operations,
-    )
-    .expect("fixture styles must apply");
     (ranges.len(), operations)
 }
 
@@ -318,11 +319,12 @@ fn styled_boundary_operation_bound_failure_reports_complete_diagnostics() {
     let fixture = internal_boundary_fixture(2_000);
     let operations = NormalizationOperations {
         grapheme_steps: 1_000,
+        plan_construction_steps: 6_000,
         plan_endpoint_visits: 4_000,
         style_range_advances: 2_000,
         boundary_endpoint_visits: 4_000,
         diagnostic_count_visits: 4_000,
-        diagnostic_bucket_preparations: 1_000,
+        diagnostic_offset_preparations: 1_000,
         diagnostic_projections: 100_000,
         style_applications: 1_000,
     };
@@ -338,13 +340,15 @@ fn styled_boundary_operation_bound_failure_reports_complete_diagnostics() {
         "grapheme_steps=1000",
         "plan_endpoint_visits=4000",
         "style_range_advances=2000",
+        "plan_construction_steps=6000",
+        "expected_plan_construction_steps=6000",
         "expected_style_range_advances=1499",
         "boundary_endpoint_visits=4000",
         "diagnostic_count_visits=4000",
-        "diagnostic_bucket_preparations=1000",
+        "diagnostic_offset_preparations=1000",
         "diagnostic_projections=100000",
         "style_applications=1000",
-        "observed=117000",
+        "observed=123000",
         "absolute_bound=36064",
         "previous_operations=Some(20000)",
         "slope_bound=Some(40128)",
@@ -360,10 +364,11 @@ fn styled_boundary_operation_bound_failure_reports_complete_diagnostics() {
 enum NormalizationPhase {
     Start,
     Grapheme,
+    PlanConstruction,
     StyleAdvance,
     Boundary,
     DiagnosticCount,
-    BucketPreparation,
+    OffsetPreparation,
     EndpointProjection,
     DiagnosticProjection,
     StyleApplication,
@@ -385,6 +390,10 @@ impl NormalizationObserver for PhaseObserver {
         self.mark(NormalizationPhase::Grapheme)
     }
 
+    fn plan_construction_step(&mut self) -> Result<(), TextFlowError> {
+        self.mark(NormalizationPhase::PlanConstruction)
+    }
+
     fn plan_endpoint_visit(&mut self) -> Result<(), TextFlowError> {
         self.mark(NormalizationPhase::EndpointProjection)
     }
@@ -401,8 +410,8 @@ impl NormalizationObserver for PhaseObserver {
         self.mark(NormalizationPhase::DiagnosticCount)
     }
 
-    fn diagnostic_bucket_preparation(&mut self) -> Result<(), TextFlowError> {
-        self.mark(NormalizationPhase::BucketPreparation)
+    fn diagnostic_offset_preparation(&mut self) -> Result<(), TextFlowError> {
+        self.mark(NormalizationPhase::OffsetPreparation)
     }
 
     fn diagnostic_projection(&mut self) -> Result<(), TextFlowError> {
@@ -415,22 +424,36 @@ impl NormalizationObserver for PhaseObserver {
 }
 
 #[test]
-fn valid_style_plan_sorting_and_endpoint_construction_are_interruptible() {
+fn valid_style_plan_linear_construction_is_interruptible() {
     let count = VALIDATION_POLL_INTERVAL * 4;
     let sorted = ascii_fixture(count);
-    let sorted_validated =
-        validate_styled_ranges(&sorted.input).expect("sorted fixture must validate");
-    let mut sort_polls = 0usize;
-    assert!(matches!(
-        build_styled_range_plan(sorted_validated, &mut || {
-            sort_polls += 1;
-            sort_polls == 9
-        }),
-        Err(TextFlowError::Interrupted)
-    ));
+    let mut completed_polls = 0usize;
+    let mut observer = NoopNormalizationObserver;
+    let validated = validate_styled_ranges(&sorted.input).expect("fixture must validate");
+    build_styled_range_plan(
+        validated,
+        &mut || {
+            completed_polls += 1;
+            false
+        },
+        &mut observer,
+    )
+    .expect("linear plan construction must complete");
+    assert_eq!(completed_polls, 28, "plan work must be exactly linear");
+
+    let validated = validate_styled_ranges(&sorted.input).expect("fixture must validate");
+    let mut construction_polls = 0usize;
     assert_eq!(
-        sort_polls, 9,
-        "cancellation must reach the merge-sort phase"
+        build_styled_range_plan(
+            validated,
+            &mut || {
+                construction_polls += 1;
+                construction_polls == 1
+            },
+            &mut observer,
+        )
+        .map(|_| ()),
+        Err(TextFlowError::Interrupted)
     );
 
     let empty = TextFlowInput::plain("", TextFlowSourceKind::Exact, Style::new())
@@ -442,36 +465,29 @@ fn valid_style_plan_sorting_and_endpoint_construction_are_interruptible() {
                 })
                 .collect(),
         );
-    let empty_validated = validate_styled_ranges(&empty).expect("empty fixture must validate");
-    let mut endpoint_polls = 0usize;
-    assert!(matches!(
-        build_styled_range_plan(empty_validated, &mut || {
-            endpoint_polls += 1;
-            endpoint_polls == 9
-        }),
-        Err(TextFlowError::Interrupted)
-    ));
-    assert_eq!(
-        endpoint_polls, 9,
-        "cancellation must reach endpoint-plan construction"
-    );
-
-    let mut endpoint_sort_polls = 0usize;
-    assert!(matches!(
-        build_styled_range_plan(empty_validated, &mut || {
-            endpoint_sort_polls += 1;
-            endpoint_sort_polls == 25
-        }),
-        Err(TextFlowError::Interrupted)
-    ));
-    assert_eq!(
-        endpoint_sort_polls, 25,
-        "cancellation must reach endpoint merge-sort"
-    );
+    for (target, phase) in [(9, "filtered stream"), (13, "endpoint merge")] {
+        let validated = validate_styled_ranges(&empty).expect("empty fixture must validate");
+        let mut polls = 0usize;
+        assert!(
+            matches!(
+                build_styled_range_plan(
+                    validated,
+                    &mut || {
+                        polls += 1;
+                        polls == target
+                    },
+                    &mut observer,
+                ),
+                Err(TextFlowError::Interrupted)
+            ),
+            "phase={phase}"
+        );
+        assert_eq!(polls, target, "phase={phase}");
+    }
 }
 
 #[test]
-fn diagnostic_count_bucket_projection_and_style_application_are_interruptible() {
+fn diagnostic_count_offset_projection_and_style_application_are_interruptible() {
     let fixture = internal_boundary_fixture(4_096);
     let ranges = fixture
         .input
@@ -480,11 +496,14 @@ fn diagnostic_count_bucket_projection_and_style_application_are_interruptible() 
         .map(|(start, grapheme)| start..start + grapheme.len())
         .collect::<Vec<_>>();
     let validated = validate_styled_ranges(&fixture.input).expect("fixture must validate");
-    let plan = build_styled_range_plan(validated, &mut || false).expect("fixture must plan");
+    let mut plan_observer = NoopNormalizationObserver;
+    let plan = build_styled_range_plan(validated, &mut || false, &mut plan_observer)
+        .expect("fixture must plan");
 
     for target in [
+        NormalizationPhase::StyleApplication,
         NormalizationPhase::DiagnosticCount,
-        NormalizationPhase::BucketPreparation,
+        NormalizationPhase::OffsetPreparation,
         NormalizationPhase::EndpointProjection,
         NormalizationPhase::DiagnosticProjection,
     ] {
@@ -492,31 +511,20 @@ fn diagnostic_count_bucket_projection_and_style_application_are_interruptible() 
         let mut observer = PhaseObserver {
             phase: Rc::clone(&phase),
         };
-        let result = normalize_source(&plan, &ranges, &mut || phase.get() == target, &mut observer);
+        let mut applied = observation_tokens(&ranges);
+        let result = normalize_source(
+            &plan,
+            &ranges,
+            &mut applied,
+            &mut || phase.get() == target,
+            &mut observer,
+        );
         assert!(
             matches!(result, Err(TextFlowError::Interrupted)),
             "phase={target:?}"
         );
         assert_eq!(phase.get(), target);
     }
-
-    let phase = Rc::new(Cell::new(NormalizationPhase::Start));
-    let mut observer = PhaseObserver {
-        phase: Rc::clone(&phase),
-    };
-    let normalized = normalize_source(&plan, &ranges, &mut || false, &mut observer)
-        .expect("fixture must normalize");
-    let mut applied = observation_tokens(&ranges);
-    assert_eq!(
-        apply_styles(
-            &mut applied,
-            normalized.styles,
-            &mut || phase.get() == NormalizationPhase::StyleApplication,
-            &mut observer,
-        ),
-        Err(TextFlowError::Interrupted)
-    );
-    assert_eq!(phase.get(), NormalizationPhase::StyleApplication);
 }
 
 #[test]
@@ -532,6 +540,15 @@ fn style_normalization_capacity_and_arithmetic_seams_are_typed() {
     );
     assert_eq!(
         checked_add(usize::MAX, 1),
+        Err(TextFlowError::ArithmeticOverflow)
+    );
+    let fixture = ascii_fixture(1);
+    let validated = validate_styled_ranges(&fixture.input).expect("fixture must validate");
+    let mut observer = NoopNormalizationObserver;
+    let plan = build_styled_range_plan(validated, &mut || false, &mut observer).unwrap();
+    let ranges = std::iter::once(0..1).collect::<Vec<_>>();
+    assert_eq!(
+        normalize_source(&plan, &ranges, &mut [], &mut || false, &mut observer).map(|_| ()),
         Err(TextFlowError::ArithmeticOverflow)
     );
 

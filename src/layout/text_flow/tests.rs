@@ -263,9 +263,13 @@ fn finalized_non_grapheme_range_is_error() {
     let source = "e\u{301}";
     let input = plain_input(source);
     let validated_styles = super::style_normalization::validate_styled_ranges(&input).unwrap();
-    let styled_plan =
-        super::style_normalization::build_styled_range_plan(validated_styles, &mut || false)
-            .unwrap();
+    let mut observer = super::style_normalization::NoopNormalizationObserver;
+    let styled_plan = super::style_normalization::build_styled_range_plan(
+        validated_styles,
+        &mut || false,
+        &mut observer,
+    )
+    .unwrap();
     let (tokens, _, grapheme_ranges) =
         tokenize_source(&input, &styled_plan, &mut || false).expect("valid source tokenizes");
     assert_eq!(
