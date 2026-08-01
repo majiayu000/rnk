@@ -1,10 +1,18 @@
 #[allow(unused_imports)]
 use super::*;
 use crate::components::{Line, Span, Text};
-use crate::core::{Color, Element, Props, Style, TextWrap, VNode};
+use crate::core::{Color, Element, Props, Style, VNode};
 use crate::layout::{TextFlowError, TextFlowSource, TextFlowSourceKind};
 use crate::reconciler::Patch;
 use std::sync::Arc;
+
+fn vnode_node_id(engine: &LayoutEngine, key: NodeKey) -> NodeId {
+    let identity = engine
+        .resolve_legacy_scope(key)
+        .expect("legacy key must be unambiguous")
+        .expect("legacy key must be mapped");
+    engine.vnode_map[&identity]
+}
 
 #[test]
 fn test_layout_engine_creation() {
@@ -118,94 +126,7 @@ fn test_compute_element_incremental_uses_reconciler_on_next_frame() {
 
 #[test]
 fn incremental_wrap_modes_refresh_context_bidirectionally() {
-    for truncate_mode in [
-        TextWrap::Truncate,
-        TextWrap::TruncateStart,
-        TextWrap::TruncateMiddle,
-        TextWrap::TruncateEnd,
-    ] {
-        let mut engine = LayoutEngine::new();
-
-        let initial_text = Text::new("abcdefgh")
-            .key("wrap-context")
-            .wrap(TextWrap::Wrap)
-            .into_element();
-        let initial_text_id = initial_text.id;
-        let initial = fixed_width_parent(initial_text);
-        let (wrapped_vnode, initial_outcome) =
-            engine.compute_element_incremental(&initial, None, 80, 10);
-        assert!(!initial_outcome.used_reconciler);
-        let initial_layout = engine
-            .get_layout(initial_text_id)
-            .expect("initial wrapped layout should be available");
-        assert_eq!((initial_layout.width, initial_layout.height), (4.0, 2.0));
-
-        let truncated_text = Text::new("abcdefgh")
-            .key("wrap-context")
-            .wrap(truncate_mode)
-            .into_element();
-        let truncated_text_id = truncated_text.id;
-        let truncated = fixed_width_parent(truncated_text);
-        let (truncated_vnode, truncate_outcome) =
-            engine.compute_element_incremental(&truncated, Some(&wrapped_vnode), 80, 10);
-        assert!(truncate_outcome.used_reconciler);
-        assert_eq!(truncate_outcome.patch_count, 1);
-        assert!(!truncate_outcome.fallback_full_rebuild);
-        let incremental_truncated = engine
-            .get_layout(truncated_text_id)
-            .expect("incrementally truncated layout should be available");
-
-        let mut rebuilt_truncated_engine = LayoutEngine::new();
-        let (_rebuilt_vnode, rebuilt_outcome) =
-            rebuilt_truncated_engine.compute_element_incremental(&truncated, None, 80, 10);
-        assert!(!rebuilt_outcome.used_reconciler);
-        let rebuilt_truncated = rebuilt_truncated_engine
-            .get_layout(truncated_text_id)
-            .expect("rebuilt truncated layout should be available");
-        assert_eq!(
-            (incremental_truncated.width, incremental_truncated.height),
-            (rebuilt_truncated.width, rebuilt_truncated.height),
-            "Wrap -> {truncate_mode:?} must match a full rebuild"
-        );
-        assert_eq!(
-            (incremental_truncated.width, incremental_truncated.height),
-            (4.0, 1.0),
-            "Wrap -> {truncate_mode:?} must update in the same frame"
-        );
-
-        let wrapped_again_text = Text::new("abcdefgh")
-            .key("wrap-context")
-            .wrap(TextWrap::Wrap)
-            .into_element();
-        let wrapped_again_text_id = wrapped_again_text.id;
-        let wrapped_again = fixed_width_parent(wrapped_again_text);
-        let (_current_vnode, wrap_outcome) =
-            engine.compute_element_incremental(&wrapped_again, Some(&truncated_vnode), 80, 10);
-        assert!(wrap_outcome.used_reconciler);
-        assert_eq!(wrap_outcome.patch_count, 1);
-        assert!(!wrap_outcome.fallback_full_rebuild);
-        let incremental_wrapped = engine
-            .get_layout(wrapped_again_text_id)
-            .expect("incrementally wrapped layout should be available");
-
-        let mut rebuilt_wrapped_engine = LayoutEngine::new();
-        let (_rebuilt_vnode, rebuilt_outcome) =
-            rebuilt_wrapped_engine.compute_element_incremental(&wrapped_again, None, 80, 10);
-        assert!(!rebuilt_outcome.used_reconciler);
-        let rebuilt_wrapped = rebuilt_wrapped_engine
-            .get_layout(wrapped_again_text_id)
-            .expect("rebuilt wrapped layout should be available");
-        assert_eq!(
-            (incremental_wrapped.width, incremental_wrapped.height),
-            (rebuilt_wrapped.width, rebuilt_wrapped.height),
-            "{truncate_mode:?} -> Wrap must match a full rebuild"
-        );
-        assert_eq!(
-            (incremental_wrapped.width, incremental_wrapped.height),
-            (4.0, 2.0),
-            "{truncate_mode:?} -> Wrap must update in the same frame"
-        );
-    }
+    super::patching::contract_tests::incremental_wrap_modes_refresh_context_bidirectionally();
 }
 
 #[test]
@@ -321,10 +242,7 @@ fn non_text_style_updates_keep_automatic_min_width() {
     let root_key = root.key;
     engine.compute_vnode(&root, 80, 24);
 
-    let node_id = *engine
-        .vnode_map
-        .get(&root_key.identity())
-        .expect("box node should be present");
+    let node_id = vnode_node_id(&engine, root_key);
     assert_eq!(
         engine.taffy.style(node_id).unwrap().min_size.width,
         ::taffy::Dimension::Auto
@@ -356,10 +274,7 @@ fn element_min_width(engine: &LayoutEngine, element_id: ElementId) -> ::taffy::D
     let key = engine
         .node_key_for_element(element_id)
         .expect("element should have a node key");
-    let node_id = *engine
-        .vnode_map
-        .get(&key.identity())
-        .expect("element key should map to a Taffy node");
+    let node_id = vnode_node_id(engine, key);
     engine
         .taffy
         .style(node_id)
@@ -452,13 +367,15 @@ fn incremental_create_text_uses_shrink_normalization() {
 }
 
 #[test]
-fn replacement_rebuilds_text_and_non_text_with_their_own_normalization() {
+fn successful_replace_cleans_old_descendant_identity_maps() {
     let mut engine = LayoutEngine::new();
-    let box_child = VNode::box_node().with_key("switch");
+    let inner = VNode::text("old descendant").with_key("inner");
+    let inner_key = inner.key;
+    let box_child = VNode::box_node().with_key("switch").child(inner);
     let box_key = box_child.key;
     let root = VNode::box_node().child(box_child);
     engine.compute_vnode(&root, 4, 10);
-    let original_box_id = *engine.vnode_map.get(&box_key.identity()).unwrap();
+    let original_box_id = vnode_node_id(&engine, box_key);
     assert_eq!(
         engine.taffy.style(original_box_id).unwrap().min_size.width,
         ::taffy::Dimension::Auto
@@ -467,8 +384,9 @@ fn replacement_rebuilds_text_and_non_text_with_their_own_normalization() {
     let text_child = VNode::text("abcdefgh").with_key("switch");
     let text_key = text_child.key;
     assert!(engine.apply_patches(&[Patch::replace(box_key, text_child)]));
-    let text_id = *engine.vnode_map.get(&text_key.identity()).unwrap();
+    let text_id = vnode_node_id(&engine, text_key);
     assert_ne!(text_id, original_box_id);
+    assert!(engine.get_vnode_layout(inner_key).is_none());
     assert_eq!(
         engine.taffy.style(text_id).unwrap().min_size.width,
         ::taffy::Dimension::Length(0.0)
@@ -477,10 +395,7 @@ fn replacement_rebuilds_text_and_non_text_with_their_own_normalization() {
     let replacement_box = VNode::box_node().with_key("switch");
     let replacement_box_key = replacement_box.key;
     assert!(engine.apply_patches(&[Patch::replace(text_key, replacement_box)]));
-    let replacement_box_id = *engine
-        .vnode_map
-        .get(&replacement_box_key.identity())
-        .unwrap();
+    let replacement_box_id = vnode_node_id(&engine, replacement_box_key);
     assert_ne!(replacement_box_id, text_id);
     assert_eq!(
         engine
@@ -519,7 +434,7 @@ fn incremental_text_update_preserves_percentage_min_width() {
 }
 
 #[test]
-fn test_incremental_layout_avoids_key_collision_across_branches() {
+fn same_key_in_distinct_parents_has_distinct_nodes() {
     let mut engine = LayoutEngine::new();
 
     let mut root = Element::root();
@@ -539,12 +454,25 @@ fn test_incremental_layout_avoids_key_collision_across_branches() {
 
     let (_vnode, _outcome) = engine.compute_element_incremental(&root, None, 80, 24);
 
-    assert!(engine.get_layout(left_text_id).is_some());
-    assert!(engine.get_layout(right_text_id).is_some());
+    assert_ne!(
+        engine.node_map[&left_text_id],
+        engine.node_map[&right_text_id]
+    );
+    assert_eq!(engine.get_all_vnode_layouts().len(), 5);
+    assert_eq!(
+        (
+            engine.get_layout(left_text_id).expect("left layout").width,
+            engine
+                .get_layout(right_text_id)
+                .expect("right layout")
+                .width,
+        ),
+        (4.0, 5.0)
+    );
 }
 
 #[test]
-fn test_incremental_layout_keyed_reorder_no_fallback() {
+fn keyed_insert_delete_and_moves_reuse_survivor_nodes() {
     let mut engine = LayoutEngine::new();
 
     let mut first = Element::root();
@@ -552,6 +480,9 @@ fn test_incremental_layout_keyed_reorder_no_fallback() {
     first.add_child(Element::box_element().with_key("b"));
     let (previous_vnode, first_outcome) = engine.compute_element_incremental(&first, None, 80, 24);
     assert!(!first_outcome.used_reconciler);
+    let first_a = first.children.iter().next().expect("a");
+    let first_b = first.children.iter().nth(1).expect("b");
+    let survivor_nodes = (engine.node_map[&first_a.id], engine.node_map[&first_b.id]);
 
     let mut second = Element::root();
     let second_a = Element::box_element().with_key("a");
@@ -559,6 +490,9 @@ fn test_incremental_layout_keyed_reorder_no_fallback() {
     let second_b = Element::box_element().with_key("b");
     let second_b_id = second_b.id;
     second.add_child(second_b);
+    let second_c = Element::box_element().with_key("c");
+    let second_c_id = second_c.id;
+    second.add_child(second_c);
     second.add_child(second_a);
 
     let (_current_vnode, second_outcome) =
@@ -566,8 +500,20 @@ fn test_incremental_layout_keyed_reorder_no_fallback() {
 
     assert!(second_outcome.used_reconciler);
     assert!(!second_outcome.fallback_full_rebuild);
-    assert!(engine.get_layout(second_a_id).is_some());
-    assert!(engine.get_layout(second_b_id).is_some());
+    assert_eq!(engine.node_map[&second_a_id], survivor_nodes.0);
+    assert_eq!(engine.node_map[&second_b_id], survivor_nodes.1);
+    assert_ne!(engine.node_map[&second_c_id], survivor_nodes.0);
+    assert_eq!(
+        engine
+            .taffy
+            .children(engine.root_node.expect("root"))
+            .expect("root children"),
+        vec![
+            engine.node_map[&second_b_id],
+            engine.node_map[&second_c_id],
+            engine.node_map[&second_a_id],
+        ]
+    );
 }
 
 #[test]
@@ -627,10 +573,12 @@ fn test_apply_patches_create() {
 }
 
 #[test]
-fn test_apply_patches_remove() {
+fn successful_remove_cleans_descendant_identity_maps() {
     let mut engine = LayoutEngine::new();
 
-    let child = VNode::text("Child");
+    let descendant = VNode::text("descendant").with_key("descendant");
+    let descendant_key = descendant.key;
+    let child = VNode::box_node().with_key("branch").child(descendant);
     let child_key = child.key;
     let root = VNode::box_node().child(child);
     engine.compute_vnode(&root, 80, 24);
@@ -640,6 +588,8 @@ fn test_apply_patches_remove() {
     let changed = engine.apply_patches(&patches);
     assert!(changed);
     assert!(engine.get_vnode_layout(child_key).is_none());
+    assert!(engine.get_vnode_layout(descendant_key).is_none());
+    assert_eq!(engine.get_all_vnode_layouts().len(), 1);
 }
 
 #[test]
@@ -799,4 +749,24 @@ fn try_compute_entrypoints_return_text_flow_error() {
     assert_eq!(vnode, Err(TextFlowError::InvalidTabStop));
     let incremental = engine.try_compute_element_incremental(&Element::text("x"), None, 4, 4);
     assert!(matches!(incremental, Err(TextFlowError::InvalidTabStop)));
+}
+
+macro_rules! engine_contract_tests {
+    ($($name:ident => $scenario:path;)+) => {$(
+        #[test]
+        fn $name() { $scenario(); }
+    )+};
+}
+
+engine_contract_tests! {
+    keyed_ancestor_reorder_preserves_descendant_identity => super::incremental::tests::keyed_ancestor_reorder_preserves_descendant_identity;
+    taffy_child_order_equals_target_vnode_order => keyed_insert_delete_and_moves_reuse_survivor_nodes;
+    duplicate_sibling_key_fails_before_mutation => super::patching::contract_tests::duplicate_sibling_key_fails_before_mutation;
+    cross_parent_move_is_remove_and_create => super::incremental::tests::cross_parent_move_cleans_old_scope_without_deleting_new_scope;
+    same_raw_key_across_parents_has_two_composite_layouts => same_key_in_distinct_parents_has_distinct_nodes;
+    raw_legacy_lookup_reports_typed_ambiguity => super::patching::contract_tests::raw_legacy_lookup_reports_typed_ambiguity;
+    invalid_final_order_variants_fail_before_mutation => super::incremental_order::tests::invalid_final_order_variants_fail_before_mutation;
+    textflow_and_identity_causes_remain_distinct => super::patching::contract_tests::textflow_and_identity_causes_remain_distinct;
+    cross_parent_move_cleans_old_scope_without_deleting_new_scope => super::incremental::tests::cross_parent_move_cleans_old_scope_without_deleting_new_scope;
+    checked_layout_accepts_public_box_text_component_roots => super::patching::contract_tests::checked_layout_accepts_public_box_text_component_roots;
 }

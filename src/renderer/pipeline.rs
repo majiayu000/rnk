@@ -5,10 +5,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::core::{Element, VNode};
-use crate::layout::LayoutEngine;
-use crate::reconciler::SiblingIdentity;
+use crate::layout::{IncrementalLayoutError, LayoutEngine};
+use crate::reconciler::{ScopedNodeIdentity, SiblingIdentity};
 use crate::renderer::element_renderer::try_render_element;
-use crate::renderer::{Output, TextRenderError};
+use crate::renderer::{DynamicFrameError, Output, TextRenderError};
 use crate::runtime::RuntimeContext;
 
 /// Dynamic render pipeline for the `App` runner.
@@ -43,7 +43,37 @@ impl RenderPipeline {
         runtime_context: &Rc<RefCell<RuntimeContext>>,
         previous_vnode: &mut Option<VNode>,
     ) -> Result<String, TextRenderError> {
-        Self::try_render_dynamic_frame_with_renderer(
+        match Self::try_render_dynamic_frame_checked(
+            dynamic_root,
+            width,
+            height,
+            layout_engine,
+            runtime_context,
+            previous_vnode,
+        ) {
+            Ok(rendered) => Ok(rendered),
+            Err(DynamicFrameError::Text(source)) => Err(source),
+            Err(DynamicFrameError::Incremental(IncrementalLayoutError::TextFlow(source))) => {
+                Err(TextRenderError::flow(dynamic_root.id, source))
+            }
+            Err(DynamicFrameError::Incremental(IncrementalLayoutError::Identity(source))) => {
+                panic!("dynamic identity validation failed: {source}")
+            }
+            Err(DynamicFrameError::LegacyLookup(source)) => {
+                panic!("dynamic layout lookup failed: {source}")
+            }
+        }
+    }
+
+    pub(crate) fn try_render_dynamic_frame_checked(
+        dynamic_root: &Element,
+        width: u16,
+        height: u16,
+        layout_engine: &mut LayoutEngine,
+        runtime_context: &Rc<RefCell<RuntimeContext>>,
+        previous_vnode: &mut Option<VNode>,
+    ) -> Result<String, DynamicFrameError> {
+        Self::try_render_dynamic_frame_with_renderer_checked(
             dynamic_root,
             width,
             height,
@@ -54,6 +84,7 @@ impl RenderPipeline {
         )
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn try_render_dynamic_frame_with_renderer(
         dynamic_root: &Element,
         width: u16,
@@ -69,29 +100,74 @@ impl RenderPipeline {
             f32,
         ) -> Result<(), TextRenderError>,
     ) -> Result<String, TextRenderError> {
-        let (current_vnode, _layout_outcome) = match layout_engine.try_compute_element_incremental(
+        match Self::try_render_dynamic_frame_with_renderer_checked(
             dynamic_root,
-            previous_vnode.as_ref(),
             width,
             height,
+            layout_engine,
+            runtime_context,
+            previous_vnode,
+            renderer,
         ) {
+            Ok(rendered) => Ok(rendered),
+            Err(DynamicFrameError::Text(source)) => Err(source),
+            Err(DynamicFrameError::Incremental(IncrementalLayoutError::TextFlow(source))) => {
+                Err(TextRenderError::flow(dynamic_root.id, source))
+            }
+            Err(DynamicFrameError::Incremental(IncrementalLayoutError::Identity(source))) => {
+                panic!("dynamic identity validation failed: {source}")
+            }
+            Err(DynamicFrameError::LegacyLookup(source)) => {
+                panic!("dynamic layout lookup failed: {source}")
+            }
+        }
+    }
+
+    fn try_render_dynamic_frame_with_renderer_checked(
+        dynamic_root: &Element,
+        width: u16,
+        height: u16,
+        layout_engine: &mut LayoutEngine,
+        runtime_context: &Rc<RefCell<RuntimeContext>>,
+        previous_vnode: &mut Option<VNode>,
+        renderer: impl FnOnce(
+            &Element,
+            &LayoutEngine,
+            &mut Output,
+            f32,
+            f32,
+        ) -> Result<(), TextRenderError>,
+    ) -> Result<String, DynamicFrameError> {
+        let (current_vnode, _layout_outcome) = match layout_engine
+            .try_compute_element_incremental_checked(
+                dynamic_root,
+                previous_vnode.as_ref(),
+                width,
+                height,
+            ) {
             Ok(candidate) => candidate,
-            Err(source) => {
+            Err(error @ IncrementalLayoutError::Identity(_)) => {
+                return Err(DynamicFrameError::Incremental(error));
+            }
+            Err(error @ IncrementalLayoutError::TextFlow(_)) => {
                 *layout_engine = LayoutEngine::new();
-                return Err(TextRenderError::flow(dynamic_root.id, source));
+                return Err(DynamicFrameError::Incremental(error));
             }
         };
 
         let mut key_aliases = HashMap::new();
         Self::collect_key_aliases(dynamic_root, layout_engine, &mut key_aliases);
         let layouts = layout_engine.get_all_layouts();
-        let vnode_layouts = layout_engine.get_all_vnode_layouts();
+        let scoped_vnode_layouts = layout_engine.get_all_scoped_vnode_layouts();
+        let vnode_layouts = layout_engine.try_get_all_vnode_layouts()?;
+        let raw_node_candidates = layout_engine.raw_vnode_identity_candidates();
 
         let Some(root_layout) = layout_engine.get_layout(dynamic_root.id) else {
             *layout_engine = LayoutEngine::new();
             return Err(TextRenderError::IncompleteSourceMap {
                 element_id: dynamic_root.id,
-            });
+            }
+            .into());
         };
         let content_width = (root_layout.width as u16).max(1).min(width);
         let render_height = (root_layout.height as u16).max(1).min(height);
@@ -99,13 +175,19 @@ impl RenderPipeline {
         let mut output = Output::new(content_width, render_height);
         if let Err(error) = renderer(dynamic_root, layout_engine, &mut output, 0.0, 0.0) {
             *layout_engine = LayoutEngine::new();
-            return Err(error);
+            return Err(error.into());
         }
         let rendered = output.render();
 
         runtime_context
             .borrow_mut()
-            .set_measure_layouts_with_node_keys(layouts, vnode_layouts, key_aliases);
+            .set_measure_layouts_with_scoped_keys(
+                layouts,
+                scoped_vnode_layouts,
+                vnode_layouts,
+                raw_node_candidates,
+                key_aliases,
+            );
         *previous_vnode = Some(current_vnode);
         Ok(rendered)
     }
@@ -113,12 +195,15 @@ impl RenderPipeline {
     fn collect_key_aliases(
         element: &Element,
         layout_engine: &LayoutEngine,
-        out: &mut HashMap<String, SiblingIdentity>,
+        out: &mut HashMap<String, Vec<(ScopedNodeIdentity, SiblingIdentity)>>,
     ) {
         if let Some(key) = &element.key
-            && let Some(node_key) = layout_engine.node_key_for_element(element.id)
+            && let Some((identity, projection)) =
+                layout_engine.scoped_projection_for_element(element.id)
         {
-            out.insert(key.clone(), node_key.identity());
+            out.entry(key.clone())
+                .or_default()
+                .push((identity, projection));
         }
 
         for child in &element.children {
@@ -128,10 +213,12 @@ impl RenderPipeline {
 }
 
 #[cfg(test)]
-mod typed_error_tests {
+mod tests {
     use super::*;
     use crate::components::{Box, Text};
-    use crate::layout::TextFlowError;
+    use crate::layout::{IncrementalLayoutError, LayoutLookupError, TextFlowError};
+    use crate::reconciler::ReconcilePlanError;
+    use crate::renderer::DynamicFrameError;
     use crate::renderer::TextCoordinateError;
 
     #[test]
@@ -342,5 +429,296 @@ mod typed_error_tests {
         assert_eq!(layout_engine.get_all_layouts().len(), 2);
         assert_eq!(layout_engine.get_all_vnode_layouts().len(), 2);
         assert_eq!(layout_engine.node_count(), 4);
+    }
+
+    #[test]
+    fn identity_error_commits_no_frame_or_previous_vnode() {
+        let runtime_context = Rc::new(RefCell::new(RuntimeContext::new()));
+        let mut layout_engine = LayoutEngine::new();
+        let mut previous_vnode = None;
+        let stable = keyed_root("stable");
+        RenderPipeline::try_render_dynamic_frame_checked(
+            &stable,
+            20,
+            4,
+            &mut layout_engine,
+            &runtime_context,
+            &mut previous_vnode,
+        )
+        .unwrap();
+        let before_vnode = previous_vnode.clone();
+        let before_measurement = runtime_context
+            .borrow()
+            .get_measurement_by_key_dims("child");
+        let stable_root_id = stable.id;
+
+        let invalid = Box::new()
+            .child(Text::new("first").key("duplicate"))
+            .child(Text::new("second").key("duplicate"))
+            .into_element();
+        let failure = RenderPipeline::try_render_dynamic_frame_checked(
+            &invalid,
+            20,
+            4,
+            &mut layout_engine,
+            &runtime_context,
+            &mut previous_vnode,
+        )
+        .expect_err("duplicate target must reach checked pipeline");
+
+        assert!(matches!(
+            failure,
+            DynamicFrameError::Incremental(IncrementalLayoutError::Identity(
+                ReconcilePlanError::DuplicateSiblingKey { .. }
+            ))
+        ));
+        assert_eq!(previous_vnode, before_vnode);
+        assert!(layout_engine.get_layout(stable_root_id).is_some());
+        assert_eq!(
+            runtime_context
+                .borrow()
+                .get_measurement_by_key_dims("child"),
+            before_measurement
+        );
+    }
+
+    #[test]
+    fn repeated_raw_measurement_key_is_typed_ambiguity() {
+        let runtime_context = Rc::new(RefCell::new(RuntimeContext::new()));
+        let mut layout_engine = LayoutEngine::new();
+        let mut previous_vnode = None;
+        let tree = Box::new()
+            .child(
+                Box::new()
+                    .key("left")
+                    .child(Box::new().key("shared").width(3.0)),
+            )
+            .child(
+                Box::new()
+                    .key("right")
+                    .child(Box::new().key("shared").width(7.0)),
+            )
+            .into_element();
+
+        RenderPipeline::try_render_dynamic_frame_checked(
+            &tree,
+            20,
+            4,
+            &mut layout_engine,
+            &runtime_context,
+            &mut previous_vnode,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            runtime_context
+                .borrow()
+                .try_get_measurement_by_key_dims("shared"),
+            Err(LayoutLookupError::AmbiguousMeasurementKey {
+                scoped_match_count: 2,
+                ..
+            })
+        ));
+    }
+
+    fn measurement_frame(branches: &[(&str, f32)]) -> (Element, Vec<crate::core::ElementId>) {
+        let mut root = Box::new().width(30.0).height(4.0);
+        let mut shared_ids = Vec::new();
+        for (branch, width) in branches {
+            let shared = Box::new()
+                .key("shared")
+                .width(*width)
+                .height(1.0)
+                .into_element();
+            shared_ids.push(shared.id);
+            root = root.child(Box::new().key(*branch).child(shared));
+        }
+        (root.into_element(), shared_ids)
+    }
+
+    #[test]
+    fn measurement_candidates_transition_unique_ambiguous_unique() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let runtime_context = Rc::new(RefCell::new(RuntimeContext::new()));
+        let mut layout_engine = LayoutEngine::new();
+        let mut previous_vnode = None;
+
+        let (first, first_ids) = measurement_frame(&[("left", 3.0)]);
+        RenderPipeline::try_render_dynamic_frame_checked(
+            &first,
+            30,
+            4,
+            &mut layout_engine,
+            &runtime_context,
+            &mut previous_vnode,
+        )
+        .expect("unique frame renders");
+        let first_raw = layout_engine
+            .node_key_for_element(first_ids[0])
+            .expect("current element has a raw key")
+            .identity();
+        assert_eq!(
+            runtime_context.borrow().get_measurement(first_ids[0]),
+            Some((3, 1))
+        );
+        assert_eq!(
+            runtime_context
+                .borrow()
+                .try_get_measurement_by_key_dims("shared"),
+            Ok(Some((3.0, 1.0)))
+        );
+        assert_eq!(
+            runtime_context
+                .borrow()
+                .try_get_measurement_by_node_key_dims(first_raw),
+            Ok(Some((3.0, 1.0)))
+        );
+        let first_composite = runtime_context
+            .borrow()
+            .try_resolve_measurement_key_alias("shared")
+            .expect("unique alias is not ambiguous")
+            .expect("unique alias has a composite projection");
+        assert_ne!(first_raw, first_composite);
+        assert_eq!(
+            runtime_context
+                .borrow()
+                .try_get_measurement_by_node_key_dims(first_composite),
+            Ok(Some((3.0, 1.0)))
+        );
+
+        let (second, second_ids) = measurement_frame(&[("left", 4.0), ("right", 7.0)]);
+        RenderPipeline::try_render_dynamic_frame_checked(
+            &second,
+            30,
+            4,
+            &mut layout_engine,
+            &runtime_context,
+            &mut previous_vnode,
+        )
+        .expect("ambiguous frame still renders");
+        let second_raw = layout_engine
+            .node_key_for_element(second_ids[0])
+            .expect("current element has a raw key")
+            .identity();
+        assert_eq!(runtime_context.borrow().get_measurement(first_ids[0]), None);
+        assert_eq!(
+            second_ids
+                .iter()
+                .map(|id| runtime_context.borrow().get_measurement(*id))
+                .collect::<Vec<_>>(),
+            vec![Some((4, 1)), Some((7, 1))]
+        );
+        assert!(matches!(
+            runtime_context
+                .borrow()
+                .try_get_measurement_by_key_dims("shared"),
+            Err(LayoutLookupError::AmbiguousMeasurementKey {
+                scoped_match_count: 2,
+                ..
+            })
+        ));
+        assert!(matches!(
+            runtime_context
+                .borrow()
+                .try_get_measurement_by_node_key_dims(second_raw),
+            Err(LayoutLookupError::AmbiguousMeasurementNodeIdentity {
+                scoped_match_count: 2,
+                ..
+            })
+        ));
+        assert_eq!(
+            runtime_context
+                .borrow()
+                .try_resolve_measurement_key_alias("shared"),
+            Err(LayoutLookupError::AmbiguousMeasurementKey {
+                key_token: crate::core::NodeKey::compatibility_token("shared"),
+                scoped_match_count: 2,
+            })
+        );
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                runtime_context
+                    .borrow()
+                    .get_measurement_by_node_key_dims(second_raw)
+            }))
+            .is_err()
+        );
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                runtime_context
+                    .borrow()
+                    .resolve_measurement_key_alias("shared")
+            }))
+            .is_err()
+        );
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                runtime_context
+                    .borrow()
+                    .get_measurement_by_key_dims("shared")
+            }))
+            .is_err()
+        );
+
+        let (third, third_ids) = measurement_frame(&[("right", 9.0)]);
+        RenderPipeline::try_render_dynamic_frame_checked(
+            &third,
+            30,
+            4,
+            &mut layout_engine,
+            &runtime_context,
+            &mut previous_vnode,
+        )
+        .expect("unique frame renders after ambiguity");
+        let third_raw = layout_engine
+            .node_key_for_element(third_ids[0])
+            .expect("current element has a raw key")
+            .identity();
+        assert_eq!(
+            second_ids
+                .iter()
+                .map(|id| runtime_context.borrow().get_measurement(*id))
+                .collect::<Vec<_>>(),
+            vec![None, None]
+        );
+        assert_eq!(
+            runtime_context.borrow().get_measurement(third_ids[0]),
+            Some((9, 1))
+        );
+        assert_eq!(
+            runtime_context
+                .borrow()
+                .try_get_measurement_by_key_dims("shared"),
+            Ok(Some((9.0, 1.0)))
+        );
+        assert_eq!(
+            runtime_context
+                .borrow()
+                .try_get_measurement_by_node_key_dims(third_raw),
+            Ok(Some((9.0, 1.0)))
+        );
+        assert_eq!(
+            runtime_context
+                .borrow()
+                .try_get_measurement_by_node_key_dims(first_composite),
+            Ok(None),
+            "the removed first-frame composite identity must not retain a stale measurement"
+        );
+        let unknown = crate::core::NodeKey::with_key(
+            "unknown",
+            layout_engine
+                .node_key_for_element(third_ids[0])
+                .expect("current raw key")
+                .type_id,
+            0,
+        )
+        .identity();
+        assert_eq!(
+            runtime_context
+                .borrow()
+                .try_get_measurement_by_node_key_dims(unknown),
+            Ok(None)
+        );
     }
 }
