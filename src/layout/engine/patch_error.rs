@@ -11,6 +11,8 @@
 use std::fmt;
 
 use crate::core::NodeKey;
+use crate::layout::TextFlowError;
+use crate::reconciler::{Patch, ReconcilePlanError, SiblingIdentity};
 
 /// Which kind of patch failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,3 +94,157 @@ impl fmt::Display for PatchError {
 }
 
 impl std::error::Error for PatchError {}
+
+/// Checked incremental-layout failure.
+///
+/// Identity planning is intentionally separate from TextFlow so callers can
+/// reject invalid trees without treating them as rebuildable patch failures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IncrementalLayoutError {
+    Identity(ReconcilePlanError),
+    TextFlow(TextFlowError),
+}
+
+impl fmt::Display for IncrementalLayoutError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Identity(source) => write!(formatter, "incremental identity failed: {source}"),
+            Self::TextFlow(source) => write!(formatter, "incremental text flow failed: {source}"),
+        }
+    }
+}
+
+impl std::error::Error for IncrementalLayoutError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Identity(source) => Some(source),
+            Self::TextFlow(source) => Some(source),
+        }
+    }
+}
+
+impl From<ReconcilePlanError> for IncrementalLayoutError {
+    fn from(source: ReconcilePlanError) -> Self {
+        Self::Identity(source)
+    }
+}
+
+impl From<TextFlowError> for IncrementalLayoutError {
+    fn from(source: TextFlowError) -> Self {
+        Self::TextFlow(source)
+    }
+}
+
+/// Recoverable failure of a compatibility lookup that lacks parent scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutLookupError {
+    AmbiguousLegacyNodeKey {
+        key: NodeKey,
+        scoped_match_count: usize,
+    },
+    CompositeIdentityCollision {
+        identity: SiblingIdentity,
+    },
+    AmbiguousMeasurementKey {
+        key_token: u64,
+        scoped_match_count: usize,
+    },
+    AmbiguousMeasurementNodeIdentity {
+        identity: SiblingIdentity,
+        scoped_match_count: usize,
+    },
+}
+
+impl fmt::Display for LayoutLookupError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AmbiguousLegacyNodeKey {
+                key,
+                scoped_match_count,
+            } => write!(
+                formatter,
+                "legacy node key {key:?} matches {scoped_match_count} parent scopes"
+            ),
+            Self::CompositeIdentityCollision { identity } => write!(
+                formatter,
+                "scoped layout projection collided at compatibility identity {identity:?}"
+            ),
+            Self::AmbiguousMeasurementKey {
+                key_token,
+                scoped_match_count,
+            } => write!(
+                formatter,
+                "measurement key token {key_token:#018x} matches {scoped_match_count} parent scopes"
+            ),
+            Self::AmbiguousMeasurementNodeIdentity {
+                identity,
+                scoped_match_count,
+            } => write!(
+                formatter,
+                "measurement node identity {identity:?} matches {scoped_match_count} parent scopes"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for LayoutLookupError {}
+
+/// Checked failure from applying a public raw [`Patch`] batch.
+///
+/// This boundary preserves the legacy [`PatchError`] surface while retaining
+/// canonical identity and scoped-lookup causes for new callers.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DirectPatchError {
+    Identity(ReconcilePlanError),
+    Lookup(LayoutLookupError),
+    Patch(PatchError),
+}
+
+impl fmt::Display for DirectPatchError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Identity(source) => write!(formatter, "direct patch identity failed: {source}"),
+            Self::Lookup(source) => write!(formatter, "direct patch lookup failed: {source}"),
+            Self::Patch(source) => write!(formatter, "direct patch application failed: {source}"),
+        }
+    }
+}
+
+impl std::error::Error for DirectPatchError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Identity(source) => Some(source),
+            Self::Lookup(source) => Some(source),
+            Self::Patch(source) => Some(source),
+        }
+    }
+}
+
+impl From<ReconcilePlanError> for DirectPatchError {
+    fn from(source: ReconcilePlanError) -> Self {
+        Self::Identity(source)
+    }
+}
+
+impl From<LayoutLookupError> for DirectPatchError {
+    fn from(source: LayoutLookupError) -> Self {
+        Self::Lookup(source)
+    }
+}
+
+impl From<PatchError> for DirectPatchError {
+    fn from(source: PatchError) -> Self {
+        Self::Patch(source)
+    }
+}
+
+pub(super) fn batch_key(patches: &[Patch]) -> NodeKey {
+    patches
+        .first()
+        .map(|patch| match patch {
+            Patch::Create { parent, .. } | Patch::Reorder { parent, .. } => *parent,
+            Patch::Update { key, .. } | Patch::Remove { key } | Patch::Replace { key, .. } => *key,
+        })
+        .unwrap_or_else(NodeKey::root)
+}

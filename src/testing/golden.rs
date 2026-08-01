@@ -99,11 +99,14 @@ impl GoldenTest {
             GoldenResult::Created => {
                 println!("Golden file created: {}", self.golden_path().display());
             }
-            GoldenResult::Missing { path, actual } => {
+            GoldenResult::Missing {
+                path: missing_path,
+                actual,
+            } => {
                 panic!(
                     "\n\nGolden file missing for '{}': {}\n\nActual:\n{}\n\nRun with UPDATE_GOLDEN=1 to create it.",
                     self.name,
-                    path.display(),
+                    missing_path.display(),
                     actual
                 );
             }

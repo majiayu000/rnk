@@ -402,6 +402,14 @@ mod tests {
         reconciler::Patch,
     };
 
+    fn vnode_node_id(engine: &LayoutEngine, key: crate::core::NodeKey) -> taffy::NodeId {
+        let identity = engine
+            .resolve_legacy_scope(key)
+            .expect("legacy key must be unambiguous")
+            .expect("legacy key must be mapped");
+        engine.vnode_map[&identity]
+    }
+
     #[test]
     fn engine_cache_compares_every_logical_identity_value() {
         let input = TextFlowInput::plain("ab", TextFlowSourceKind::Exact, Style::new())
@@ -739,17 +747,14 @@ mod tests {
         let sibling_key = root.children[1].key;
         let mut engine = LayoutEngine::new();
         engine.compute_vnode(&root, 20, 4);
-        let old_branch_node = engine.vnode_map[&old_branch_key.identity()];
-        let sibling_node = engine.vnode_map[&sibling_key.identity()];
+        let old_branch_node = vnode_node_id(&engine, old_branch_key);
+        let sibling_node = vnode_node_id(&engine, sibling_key);
         let sibling_flow = engine.current_vnode_text_flow(sibling_key).unwrap();
         let new_leaf = VNode::text("new").with_key("new-leaf");
         let new_leaf_key = new_leaf.key;
         let replacement = VNode::box_node().with_key("branch").child(new_leaf);
         assert!(engine.apply_patches(&[Patch::replace(old_branch_key, replacement)]));
-        assert_ne!(
-            engine.vnode_map[&old_branch_key.identity()],
-            old_branch_node
-        );
+        assert_ne!(vnode_node_id(&engine, old_branch_key), old_branch_node);
         assert!(engine.get_vnode_layout(old_leaf_key).is_none());
         assert!(engine.current_vnode_text_flow(old_leaf_key).is_none());
         assert_eq!(
@@ -761,7 +766,7 @@ mod tests {
                 .source,
             "new"
         );
-        assert_eq!(engine.vnode_map[&sibling_key.identity()], sibling_node);
+        assert_eq!(vnode_node_id(&engine, sibling_key), sibling_node);
         assert!(Arc::ptr_eq(
             &sibling_flow,
             &engine.current_vnode_text_flow(sibling_key).unwrap()
@@ -769,7 +774,7 @@ mod tests {
         assert!(
             engine.apply_patches(&[Patch::reorder(root.key, vec![sibling_key, old_branch_key])])
         );
-        assert_eq!(engine.vnode_map[&sibling_key.identity()], sibling_node);
+        assert_eq!(vnode_node_id(&engine, sibling_key), sibling_node);
         assert!(engine.get_vnode_layout(sibling_key).is_some());
         assert!(Arc::ptr_eq(
             &sibling_flow,

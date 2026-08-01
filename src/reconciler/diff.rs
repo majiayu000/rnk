@@ -3,10 +3,10 @@
 //! Compares old and new VNode trees to produce minimal patches.
 //! Uses a simplified algorithm optimized for typical UI patterns.
 
-use std::collections::HashMap;
+use crate::core::{NodeKey, Props, VNode};
+use crate::reconciler::ReconcilePlanError;
 
-use crate::core::{NodeKey, Props, VNode, VNodeType};
-use crate::reconciler::SiblingIdentity;
+use super::plan::{plan_child_patches, plan_diff};
 
 /// A patch representing a change to apply to the tree
 #[derive(Debug, Clone)]
@@ -90,145 +90,74 @@ impl Patch {
 /// This is the main entry point for the diff algorithm.
 /// It compares the old and new trees and returns a list of
 /// patches that transform the old tree into the new tree.
-pub fn diff(old: &VNode, new: &VNode) -> Vec<Patch> {
-    let mut patches = Vec::new();
-    diff_node(old, new, &mut patches);
-    patches
-}
-
-/// Diff a single node
-fn diff_node(old: &VNode, new: &VNode, patches: &mut Vec<Patch>) {
-    // If keys don't match, this is a replacement
-    if !old.key.matches(&new.key) {
-        patches.push(Patch::replace(old.key, new.clone()));
-        return;
-    }
-
-    // If node types are different, replace
-    if std::mem::discriminant(&old.node_type) != std::mem::discriminant(&new.node_type) {
-        patches.push(Patch::replace(old.key, new.clone()));
-        return;
-    }
-
-    // Check for text content changes
-    if let (VNodeType::Text(old_text), VNodeType::Text(new_text)) = (&old.node_type, &new.node_type)
-    {
-        if old_text != new_text {
-            patches.push(Patch::replace(old.key, new.clone()));
-            return;
-        }
-    }
-
-    // Check for props changes
-    if old.props != new.props {
-        patches.push(Patch::update(old.key, old.props.clone(), new.props.clone()));
-    }
-
-    // Diff children
-    diff_children(&old.children, &new.children, old.key, patches);
-}
-
-/// Diff children lists, matching by [`SiblingIdentity`].
 ///
-/// Surviving children are diffed in place, absent ones removed, unrecognised
-/// ones created, and the parent's final child order stated outright whenever it
-/// differs from the order the old children were in.
+/// # Errors
+///
+/// Returns [`ReconcilePlanError`] when either tree has invalid identity
+/// metadata, duplicate sibling keys, or a non-bijective final-order plan.
+pub fn try_diff(old: &VNode, new: &VNode) -> Result<Vec<Patch>, ReconcilePlanError> {
+    plan_diff(old, new).map(|plan| plan.into_patches())
+}
+
+/// Legacy adapter for [`try_diff`].
+///
+/// # Panics
+///
+/// Panics when checked reconciliation planning fails. Use [`try_diff`] to
+/// handle invalid identity metadata or sibling order explicitly.
+pub fn diff(old: &VNode, new: &VNode) -> Vec<Patch> {
+    try_diff(old, new).unwrap_or_else(|error| panic!("reconciliation planning failed: {error}"))
+}
+
+/// Checked child-list diff. No patches are returned when validation fails.
+///
+/// The existing signature supplies only a sibling-local `parent_key`, so its
+/// patch addresses remain sibling-local too. Applying this partial diff to a
+/// whole layout tree can therefore return a checked ambiguity error when the
+/// same raw address exists under multiple scopes. Use [`try_diff`] when the
+/// complete old/new trees are available; it emits scoped internal addresses
+/// without guessing a parent scope.
+///
+/// # Errors
+///
+/// Returns [`ReconcilePlanError`] when either sibling list has invalid or
+/// duplicate identity metadata, or cannot produce one bijective final order.
+pub fn try_diff_children(
+    old_children: &[VNode],
+    new_children: &[VNode],
+    parent_key: NodeKey,
+) -> Result<Vec<Patch>, ReconcilePlanError> {
+    plan_child_patches(old_children, new_children, parent_key)
+}
+
+/// Legacy child-list adapter.
+///
+/// The destination is extended only after the complete checked result exists.
+/// Invalid input therefore fails loudly without leaving partial patches.
+///
+/// # Panics
+///
+/// Panics when [`try_diff_children`] would return an error. Use that checked
+/// function to preserve the destination and handle the failure explicitly.
 pub fn diff_children(
     old_children: &[VNode],
     new_children: &[VNode],
     parent_key: NodeKey,
     patches: &mut Vec<Patch>,
 ) {
-    // First occurrence wins. A duplicate identity must never rebind the map
-    // entry of an existing node, or which node a key refers to would depend on
-    // sibling order.
-    let mut old_by_identity: HashMap<SiblingIdentity, usize> = HashMap::new();
-    for (old_idx, child) in old_children.iter().enumerate() {
-        old_by_identity
-            .entry(child.key.identity())
-            .or_insert(old_idx);
-    }
-
-    let mut matched_old = vec![false; old_children.len()];
-    // The keys the parent must end up holding, in order, as of the new tree.
-    // A survivor's new key carries a fresh `index` but the same identity, which
-    // is what the apply step resolves against.
-    let mut final_order = Vec::with_capacity(new_children.len());
-
-    // Creating a node appends it, so the order is already right only when the
-    // survivors are an unbroken run from the front of the old list and every
-    // create lands after all of them. Anything else has to be stated.
-    let mut already_in_order = true;
-    let mut next_untouched_old = 0usize;
-    let mut seen_create = false;
-
-    for new_child in new_children {
-        let identity = new_child.key.identity();
-        // An old node can be claimed once. Two new children sharing an identity
-        // are not the same node, so the second is a create, not a second match.
-        let survivor = old_by_identity
-            .get(&identity)
-            .copied()
-            .filter(|&old_idx| !matched_old[old_idx]);
-
-        match survivor {
-            Some(old_idx) => {
-                if seen_create || old_idx != next_untouched_old {
-                    already_in_order = false;
-                }
-                next_untouched_old = old_idx + 1;
-                matched_old[old_idx] = true;
-                diff_node(&old_children[old_idx], new_child, patches);
-                final_order.push(new_child.key);
-            }
-            None => {
-                seen_create = true;
-                patches.push(Patch::create(new_child.clone(), parent_key));
-                final_order.push(new_child.key);
-            }
-        }
-    }
-
-    for (old_idx, matched) in matched_old.iter().enumerate() {
-        if !matched {
-            patches.push(Patch::remove(old_children[old_idx].key));
-        }
-    }
-
-    if !already_in_order {
-        patches.push(Patch::reorder(parent_key, final_order));
-    }
+    let checked = try_diff_children(old_children, new_children, parent_key)
+        .unwrap_or_else(|error| panic!("child reconciliation planning failed: {error}"));
+    patches.extend(checked);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::VNode;
-
-    fn lcs_length<T: PartialEq>(a: &[T], b: &[T]) -> usize {
-        let m = a.len();
-        let n = b.len();
-
-        if m == 0 || n == 0 {
-            return 0;
-        }
-
-        let mut dp = vec![vec![0; n + 1]; m + 1];
-        for i in 1..=m {
-            for j in 1..=n {
-                if a[i - 1] == b[j - 1] {
-                    dp[i][j] = dp[i - 1][j - 1] + 1;
-                } else {
-                    dp[i][j] = dp[i - 1][j].max(dp[i][j - 1]);
-                }
-            }
-        }
-
-        dp[m][n]
-    }
+    use crate::reconciler::SiblingIdentity;
 
     #[test]
-    fn test_diff_identical_trees() {
+    fn identical_tree_has_empty_deterministic_plan() {
         // Create new nodes with same structure but matching keys
         let old = VNode::box_node()
             .with_index(0)
@@ -242,12 +171,7 @@ mod tests {
 
         let patches = diff(&old, &new);
         // Should have no patches for identical trees with same keys
-        assert!(
-            patches.is_empty()
-                || patches
-                    .iter()
-                    .all(|p| matches!(p, Patch::Update { old_props, new_props, .. } if old_props == new_props))
-        );
+        assert!(patches.is_empty(), "{patches:?}");
     }
 
     #[test]
@@ -300,9 +224,9 @@ mod tests {
     }
 
     #[test]
-    fn test_diff_replace_different_type() {
-        let old = VNode::box_node();
-        let new = VNode::text("Replaced");
+    fn same_key_incompatible_type_is_replace() {
+        let old = VNode::box_node().child(VNode::box_node().with_key("stable"));
+        let new = VNode::box_node().child(VNode::text("Replaced").with_key("stable"));
 
         let patches = diff(&old, &new);
         assert_eq!(patches.len(), 1);
@@ -310,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn test_diff_keyed_reorder() {
+    fn keyed_match_ignores_position_within_parent() {
         let old = VNode::box_node()
             .child(VNode::text("A").with_key("a"))
             .child(VNode::text("B").with_key("b"))
@@ -378,33 +302,8 @@ mod tests {
     }
 
     #[test]
-    fn keyed_children_keep_their_identity_through_every_edit() {
-        // Front, middle and tail insert; delete; swap; and a multi-position
-        // move. In each case the surviving keys must not be rebuilt.
-        let cases: &[(&[&str], &[&str])] = &[
-            (&["b", "c"], &["a", "b", "c"]),
-            (&["a", "c"], &["a", "b", "c"]),
-            (&["a", "b"], &["a", "b", "c"]),
-            (&["a", "b", "c"], &["a", "c"]),
-            (&["a", "b"], &["b", "a"]),
-            (&["a", "b", "c", "d"], &["d", "b", "c", "a"]),
-            (&["a", "b", "c"], &["c", "b", "a"]),
-        ];
-
-        for (before, after) in cases {
-            let patches = apply_order(before, after);
-            let survivors: Vec<&&str> = after.iter().filter(|k| before.contains(k)).collect();
-
-            let rebuilt: Vec<_> = patches
-                .iter()
-                .filter(|p| matches!(p, Patch::Create { .. }))
-                .collect();
-            assert_eq!(
-                rebuilt.len(),
-                after.len() - survivors.len(),
-                "{before:?} -> {after:?} created a node it should have kept: {patches:?}"
-            );
-        }
+    fn property_mixed_key_permutations_are_bijective_or_typed_error() {
+        super::super::error::property_tests::run_bounded_mixed_key_property();
     }
 
     #[test]
@@ -416,11 +315,13 @@ mod tests {
     }
 
     #[test]
-    fn a_front_insert_states_the_order_because_appending_is_wrong() {
+    fn plan_contains_total_hole_free_final_order() {
         let patches = apply_order(&["b", "c"], &["a", "b", "c"]);
-        assert!(
-            final_order(&patches).is_some(),
-            "a create landing at the front must be positioned: {patches:?}"
+        let order = final_order(&patches).expect("front create needs exact target order");
+        assert_eq!(order.len(), 3);
+        assert_eq!(
+            order.iter().collect::<std::collections::HashSet<_>>().len(),
+            3
         );
     }
 
@@ -431,40 +332,51 @@ mod tests {
     }
 
     #[test]
-    fn a_duplicate_key_does_not_rebind_an_existing_node() {
-        // Two siblings sharing a key are not the same node. The first claims
-        // the existing node; the second must be created, never silently
-        // remapped onto it.
+    fn try_diff_children_duplicate_returns_error_without_patches() {
         let parent_key = VNode::box_node().key;
-        let patches = diff(
-            &parent_with(parent_key, &["a"]),
-            &parent_with(parent_key, &["a", "a"]),
-        );
+        let old = parent_with(parent_key, &["a"]);
+        let new = parent_with(parent_key, &["a", "a"]);
+        let failure = try_diff_children(&old.children, &new.children, parent_key)
+            .expect_err("duplicate sibling key must fail");
 
-        let creates = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::Create { .. }))
-            .count();
-        assert_eq!(creates, 1, "{patches:?}");
-        assert!(
-            !patches.iter().any(|p| matches!(p, Patch::Remove { .. })),
-            "the first occurrence must keep the existing node: {patches:?}"
-        );
+        assert!(matches!(
+            failure,
+            ReconcilePlanError::DuplicateSiblingKey {
+                first_index: 0,
+                second_index: 1,
+                ..
+            }
+        ));
     }
 
     #[test]
-    fn an_unkeyed_child_is_still_matched_by_position() {
+    fn mixed_keyed_unkeyed_keeps_positional_contract() {
         // Unchanged public semantics: without a key, position is identity.
         let parent_key = VNode::box_node().key;
         let mut before = VNode::box_node();
         before.key = parent_key;
-        let before = before.child(VNode::text("x")).child(VNode::text("y"));
+        let before = before
+            .child(VNode::text("a").with_key("a"))
+            .child(VNode::text("x"))
+            .child(VNode::text("b").with_key("b"));
 
         let mut after = VNode::box_node();
         after.key = parent_key;
-        let after = after.child(VNode::text("x")).child(VNode::text("y"));
+        let after = after
+            .child(VNode::text("b").with_key("b"))
+            .child(VNode::text("x"))
+            .child(VNode::text("a").with_key("a"));
 
-        assert!(diff(&before, &after).is_empty());
+        let patches = diff(&before, &after);
+        assert!(
+            patches
+                .iter()
+                .any(|patch| matches!(patch, Patch::Reorder { .. }))
+        );
+        assert!(patches.iter().all(|patch| !matches!(
+            patch,
+            Patch::Create { .. } | Patch::Remove { .. } | Patch::Replace { .. }
+        )));
     }
 
     #[test]
@@ -477,17 +389,398 @@ mod tests {
     }
 
     #[test]
-    fn test_lcs_length() {
-        let a = vec![1, 2, 3, 4, 5];
-        let b = vec![2, 3, 5];
-        assert_eq!(lcs_length(&a, &b), 3);
+    fn vnode_key_metadata_decision_table() {
+        let old = VNode::box_node().children([
+            VNode::text("a").with_props(Props::new().key("a")),
+            VNode::text("b").with_props(Props::new().key("b")),
+        ]);
+        let new = VNode::box_node().children([
+            VNode::text("b").with_props(Props::new().key("b")),
+            VNode::text("a").with_props(Props::new().key("a")),
+        ]);
 
-        let a = vec![1, 2, 3];
-        let b = vec![4, 5, 6];
-        assert_eq!(lcs_length(&a, &b), 0);
+        let patches = try_diff(&old, &new).expect("props-only exact keys are valid");
 
-        let a: Vec<i32> = vec![];
-        let b = vec![1, 2, 3];
-        assert_eq!(lcs_length(&a, &b), 0);
+        assert!(
+            patches
+                .iter()
+                .all(|patch| !matches!(patch, Patch::Create { .. } | Patch::Remove { .. }))
+        );
+        assert!(
+            patches
+                .iter()
+                .any(|patch| matches!(patch, Patch::Reorder { .. }))
+        );
+
+        let exact_with_metadata = VNode::text("x")
+            .with_key("exact")
+            .with_props(Props::new().key("exact"));
+        let props_only = VNode::text("x").with_props(Props::new().key("exact"));
+        assert!(
+            try_diff(
+                &VNode::box_node().child(exact_with_metadata),
+                &VNode::box_node().child(props_only)
+            )
+            .expect("both exact metadata forms have one canonical source")
+            .is_empty()
+        );
+        assert!(
+            try_diff(
+                &VNode::box_node().child(VNode::text("x").with_key("opaque")),
+                &VNode::box_node().child(VNode::text("x").with_key("opaque"))
+            )
+            .expect("opaque metadata is valid")
+            .is_empty()
+        );
+        assert!(
+            try_diff(
+                &VNode::box_node().child(VNode::text("x")),
+                &VNode::box_node().child(VNode::text("x"))
+            )
+            .expect("missing key metadata is positional")
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn mismatched_key_metadata_and_type_are_typed_errors() {
+        let mismatched_token = VNode::text("x")
+            .with_key("opaque")
+            .with_props(Props::new().key("exact"));
+        let token_error = try_diff(
+            &VNode::box_node(),
+            &VNode::box_node().child(mismatched_token),
+        )
+        .expect_err("mismatched exact/token metadata must fail");
+        assert!(matches!(
+            token_error,
+            ReconcilePlanError::KeyMetadataMismatch { .. }
+        ));
+
+        let mut mismatched_type = VNode::text("x");
+        mismatched_type.key.type_id = VNode::box_node().node_type.type_id();
+        let type_error = try_diff(
+            &VNode::box_node(),
+            &VNode::box_node().child(mismatched_type),
+        )
+        .expect_err("mismatched key type metadata must fail");
+        assert!(matches!(
+            type_error,
+            ReconcilePlanError::KeyTypeMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn opaque_token_collision_is_error() {
+        let invalid = VNode::box_node()
+            .child(VNode::box_node().with_key("duplicate"))
+            .child(VNode::text("x").with_key("duplicate"));
+
+        assert!(matches!(
+            try_diff(&VNode::box_node(), &invalid),
+            Err(ReconcilePlanError::DuplicateSiblingKey { .. })
+        ));
+    }
+
+    #[test]
+    fn raw_hash_collision_never_aliases_exact_keys() {
+        let target = VNode::box_node().children([
+            VNode::text("a").with_props(Props::new().key("a")),
+            VNode::text("b").with_props(Props::new().key("b")),
+        ]);
+
+        let failure = super::super::plan::plan_diff_with_token_source(
+            &VNode::box_node(),
+            &target,
+            &super::super::plan::constant_token,
+        )
+        .expect_err("distinct exact strings with one projection token must fail closed");
+
+        assert!(matches!(
+            failure,
+            ReconcilePlanError::KeyTokenCollision {
+                first_index: 0,
+                second_index: 1,
+                ..
+            }
+        ));
+    }
+
+    fn opaque_text(token: u64) -> VNode {
+        let mut node = VNode::text("same");
+        node.key.user_key = Some(token);
+        node
+    }
+
+    #[test]
+    fn exact_to_opaque_same_token_is_one_replace() {
+        let old = VNode::box_node()
+            .child(VNode::text("same").with_props(Props::new().key("exact-source")));
+        let new = VNode::box_node().child(opaque_text(7));
+
+        let plan = super::super::plan::plan_diff_with_token_source(
+            &old,
+            &new,
+            &super::super::plan::constant_token,
+        )
+        .expect("one-to-one exact-to-opaque projection is unambiguous");
+        let patches = plan.patches();
+
+        assert_eq!(
+            patches
+                .iter()
+                .filter(|patch| matches!(patch, Patch::Replace { .. }))
+                .count(),
+            1,
+            "{patches:?}"
+        );
+        assert!(
+            patches
+                .iter()
+                .all(|patch| !matches!(patch, Patch::Create { .. } | Patch::Remove { .. })),
+            "a source-domain conversion must be directly applicable: {patches:?}"
+        );
+    }
+
+    #[test]
+    fn opaque_to_exact_same_token_is_one_replace() {
+        let old = VNode::box_node().child(opaque_text(7));
+        let new = VNode::box_node()
+            .child(VNode::text("same").with_props(Props::new().key("exact-source")));
+
+        let plan = super::super::plan::plan_diff_with_token_source(
+            &old,
+            &new,
+            &super::super::plan::constant_token,
+        )
+        .expect("one-to-one opaque-to-exact projection is unambiguous");
+        let patches = plan.patches();
+
+        assert_eq!(
+            patches
+                .iter()
+                .filter(|patch| matches!(patch, Patch::Replace { .. }))
+                .count(),
+            1,
+            "{patches:?}"
+        );
+        assert!(
+            patches
+                .iter()
+                .all(|patch| !matches!(patch, Patch::Create { .. } | Patch::Remove { .. })),
+            "a source-domain conversion must be directly applicable: {patches:?}"
+        );
+    }
+
+    #[test]
+    fn distinct_exact_keys_with_one_cross_frame_token_are_typed_collision() {
+        let old =
+            VNode::box_node().child(VNode::text("same").with_props(Props::new().key("old-exact")));
+        let new =
+            VNode::box_node().child(VNode::text("same").with_props(Props::new().key("new-exact")));
+
+        let failure = super::super::plan::plan_diff_with_token_source(
+            &old,
+            &new,
+            &super::super::plan::constant_token,
+        )
+        .expect_err("distinct exact sources must not alias through one token");
+
+        assert!(matches!(
+            failure,
+            ReconcilePlanError::KeyTokenCollision { token: 7, .. }
+        ));
+    }
+
+    #[test]
+    fn actual_child_position_overrides_stale_public_index() {
+        let mut old_child = VNode::text("same");
+        old_child.key.index = 99;
+        let mut new_child = VNode::text("same");
+        new_child.key.index = 42;
+
+        let patches = try_diff(
+            &VNode::box_node().child(old_child),
+            &VNode::box_node().child(new_child),
+        )
+        .expect("stale public indices are compatibility metadata");
+
+        assert!(patches.is_empty(), "{patches:?}");
+    }
+
+    #[test]
+    fn empty_key_is_keyed_and_duplicate_is_error() {
+        let single = VNode::box_node().child(VNode::text("x").with_props(Props::new().key("")));
+        assert!(
+            try_diff(&single, &single)
+                .expect("empty exact key is valid")
+                .is_empty()
+        );
+        let duplicate = VNode::box_node().children([
+            VNode::text("a").with_props(Props::new().key("")),
+            VNode::text("b").with_props(Props::new().key("")),
+        ]);
+        assert!(matches!(
+            try_diff(&VNode::box_node(), &duplicate),
+            Err(ReconcilePlanError::DuplicateSiblingKey {
+                key_kind: crate::reconciler::IdentityKeyKind::Exact,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn discarded_plan_mutates_no_engine_state() {
+        let old = VNode::box_node().child(VNode::text("old").with_key("stable"));
+        let new = VNode::box_node().child(VNode::text("new").with_key("stable"));
+        let mut engine = crate::layout::LayoutEngine::new();
+        engine.compute_vnode(&old, 20, 4);
+        let before_count = engine.node_count();
+        let before_layout = engine.get_vnode_layout(old.children[0].key);
+
+        let _discarded = try_diff(&old, &new).expect("planning succeeds");
+
+        assert_eq!(engine.node_count(), before_count);
+        assert_eq!(
+            engine
+                .get_vnode_layout(old.children[0].key)
+                .map(|layout| (layout.width, layout.height)),
+            before_layout.map(|layout| (layout.width, layout.height))
+        );
+    }
+
+    #[test]
+    fn try_diff_invalid_nested_metadata_returns_error_without_partial_patches() {
+        let invalid = VNode::box_node().child(
+            VNode::box_node().with_key("branch").child(
+                VNode::text("x")
+                    .with_key("opaque")
+                    .with_props(Props::new().key("exact")),
+            ),
+        );
+        assert!(matches!(
+            try_diff(&VNode::box_node(), &invalid),
+            Err(ReconcilePlanError::KeyMetadataMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn legacy_diff_fails_loudly_on_invalid_input() {
+        let invalid = VNode::box_node().children([
+            VNode::text("a").with_key("duplicate"),
+            VNode::text("b").with_key("duplicate"),
+        ]);
+        assert!(std::panic::catch_unwind(|| diff(&VNode::box_node(), &invalid)).is_err());
+    }
+
+    #[test]
+    fn legacy_diff_children_fails_loudly_without_mutating_destination() {
+        let parent = VNode::box_node().key;
+        let mut destination = vec![Patch::remove(NodeKey::root())];
+        let invalid = [
+            VNode::text("a").with_key("duplicate"),
+            VNode::text("b").with_key("duplicate"),
+        ];
+
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            diff_children(&[], &invalid, parent, &mut destination);
+        }));
+
+        assert!(failure.is_err());
+        assert_eq!(destination.len(), 1);
+        assert!(matches!(destination[0], Patch::Remove { .. }));
+    }
+
+    #[test]
+    fn try_diff_accepts_public_box_root() {
+        assert!(
+            try_diff(&VNode::box_node(), &VNode::box_node())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn try_diff_accepts_public_text_root() {
+        assert!(
+            try_diff(&VNode::text("x"), &VNode::text("x"))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn try_diff_accepts_public_component_root() {
+        struct Component;
+        assert!(
+            try_diff(
+                &VNode::component::<Component>(),
+                &VNode::component::<Component>()
+            )
+            .unwrap()
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn legacy_diff_accepts_public_non_container_roots() {
+        struct Component;
+        assert!(diff(&VNode::text("x"), &VNode::text("x")).is_empty());
+        assert!(
+            diff(
+                &VNode::component::<Component>(),
+                &VNode::component::<Component>()
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn planned_children_and_parent_final_order_cannot_diverge() {
+        let mut plan = super::super::plan::plan_initial_tree(
+            &VNode::box_node().child(VNode::text("child").with_key("child")),
+        )
+        .expect("fixture has a valid plan");
+        plan.root.children.clear();
+
+        plan.validate_final_orders()
+            .expect_err("the executable child tree and declared final order must agree");
+    }
+
+    #[test]
+    fn old_and_new_projection_collision_is_rejected_by_the_pure_plan() {
+        use std::any::TypeId;
+
+        let old_plan = super::super::plan::plan_initial_tree(
+            &VNode::box_node().child(VNode::text("old").with_key("old")),
+        )
+        .expect("old fixture has valid structural identities");
+        let new_plan = super::super::plan::plan_initial_tree(
+            &VNode::box_node().child(VNode::text("new").with_key("new")),
+        )
+        .expect("new fixture has valid structural identities");
+        let root_projection = SiblingIdentity::Keyed {
+            user_key: 1,
+            type_id: TypeId::of::<u8>(),
+        };
+        let forced_projection = SiblingIdentity::Keyed {
+            user_key: 7,
+            type_id: TypeId::of::<u8>(),
+        };
+
+        let failure = new_plan
+            .validate_composite_projection_union_with(&old_plan, &|planned| {
+                if planned.identity == super::super::ScopedNodeIdentity::Root {
+                    root_projection
+                } else {
+                    forced_projection
+                }
+            })
+            .expect_err("old and new exact scopes must not share a transient patch address");
+        assert!(matches!(
+            failure,
+            ReconcilePlanError::CompositeIdentityCollision { identity, .. }
+                if identity == forced_projection
+        ));
     }
 }
