@@ -1,17 +1,17 @@
-use std::{cmp::Ordering, ops::Range};
+use std::ops::Range;
 
 use super::{StyledTextRange, TextFlowDiagnostic, TextFlowError, TextFlowInput, TextFlowToken};
-use crate::core::Style;
 
 pub(super) const VALIDATION_POLL_INTERVAL: usize = 1_024;
 
 pub(super) trait NormalizationObserver {
     fn grapheme_step(&mut self) -> Result<(), TextFlowError>;
+    fn plan_construction_step(&mut self) -> Result<(), TextFlowError>;
     fn plan_endpoint_visit(&mut self) -> Result<(), TextFlowError>;
     fn style_range_advance(&mut self) -> Result<(), TextFlowError>;
     fn boundary_endpoint_visit(&mut self) -> Result<(), TextFlowError>;
     fn diagnostic_count_visit(&mut self) -> Result<(), TextFlowError>;
-    fn diagnostic_bucket_preparation(&mut self) -> Result<(), TextFlowError>;
+    fn diagnostic_offset_preparation(&mut self) -> Result<(), TextFlowError>;
     fn diagnostic_projection(&mut self) -> Result<(), TextFlowError>;
     fn style_application(&mut self) -> Result<(), TextFlowError>;
 }
@@ -20,6 +20,10 @@ pub(super) struct NoopNormalizationObserver;
 
 impl NormalizationObserver for NoopNormalizationObserver {
     fn grapheme_step(&mut self) -> Result<(), TextFlowError> {
+        Ok(())
+    }
+
+    fn plan_construction_step(&mut self) -> Result<(), TextFlowError> {
         Ok(())
     }
 
@@ -39,7 +43,7 @@ impl NormalizationObserver for NoopNormalizationObserver {
         Ok(())
     }
 
-    fn diagnostic_bucket_preparation(&mut self) -> Result<(), TextFlowError> {
+    fn diagnostic_offset_preparation(&mut self) -> Result<(), TextFlowError> {
         Ok(())
     }
 
@@ -55,6 +59,8 @@ impl NormalizationObserver for NoopNormalizationObserver {
 #[derive(Clone, Copy)]
 struct PlannedRange<'a> {
     original_ordinal: usize,
+    start_event_index: usize,
+    end_event_index: usize,
     styled: &'a StyledTextRange,
 }
 
@@ -70,13 +76,14 @@ pub(super) struct ValidatedStyledRanges<'a> {
     sorted_endpoint_indices: Vec<usize>,
 }
 
-#[derive(Clone, Copy)]
 pub(super) struct ValidatedStyledInput<'a> {
     input: &'a TextFlowInput,
+    endpoint_count: usize,
+    sorted_all: Vec<PlannedRange<'a>>,
+    sorted_non_empty: Vec<PlannedRange<'a>>,
 }
 
 pub(super) struct StyledNormalization {
-    pub(super) styles: Vec<Style>,
     pub(super) diagnostics: Vec<TextFlowDiagnostic>,
 }
 
@@ -125,53 +132,6 @@ impl ValidationPoller {
     }
 }
 
-fn pollable_sort_by<T: Copy>(
-    values: &mut Vec<T>,
-    compare: &dyn Fn(&T, &T) -> Ordering,
-    poller: &mut ValidationPoller,
-    interrupted_callback: &mut dyn FnMut() -> bool,
-) -> Result<(), TextFlowError> {
-    let len = values.len();
-    if len < 2 {
-        return Ok(());
-    }
-
-    let mut scratch = Vec::new();
-    reserve(&mut scratch, len)?;
-    let mut width = 1usize;
-    while width < len {
-        scratch.clear();
-        let mut chunk_start = 0usize;
-        while chunk_start < len {
-            let middle = chunk_start.saturating_add(width).min(len);
-            let chunk_end = middle.saturating_add(width).min(len);
-            let mut left = chunk_start;
-            let mut right = middle;
-            while left < middle || right < chunk_end {
-                poller.step(interrupted_callback)?;
-                let take_left = if left == middle {
-                    false
-                } else if right == chunk_end {
-                    true
-                } else {
-                    compare(&values[left], &values[right]) != Ordering::Greater
-                };
-                if take_left {
-                    scratch.push(values[left]);
-                    left += 1;
-                } else {
-                    scratch.push(values[right]);
-                    right += 1;
-                }
-            }
-            chunk_start = chunk_end;
-        }
-        std::mem::swap(values, &mut scratch);
-        width = width.saturating_mul(2);
-    }
-    Ok(())
-}
-
 pub(super) fn validate_styled_ranges(
     input: &TextFlowInput,
 ) -> Result<ValidatedStyledInput<'_>, TextFlowError> {
@@ -188,21 +148,35 @@ pub(super) fn validate_styled_ranges(
         }
     }
 
-    let mut sorted_non_empty = Vec::new();
-    reserve(&mut sorted_non_empty, input.styled_ranges.len())?;
-    sorted_non_empty.extend(
+    let endpoint_count = checked_endpoint_count(input.styled_ranges.len())?;
+    let mut sorted_all = Vec::new();
+    reserve(&mut sorted_all, input.styled_ranges.len())?;
+    sorted_all.extend(
         input
             .styled_ranges
             .iter()
             .enumerate()
-            .filter(|(_, styled)| !styled.range.is_empty())
-            .map(|(original_ordinal, styled)| PlannedRange {
-                original_ordinal,
-                styled,
+            .map(|(original_ordinal, styled)| {
+                let start_event_index = original_ordinal * 2;
+                PlannedRange {
+                    original_ordinal,
+                    start_event_index,
+                    end_event_index: start_event_index + 1,
+                    styled,
+                }
             }),
     );
-    sorted_non_empty
+    sorted_all
         .sort_unstable_by_key(|planned| (planned.styled.range.start, planned.original_ordinal));
+
+    let mut sorted_non_empty = Vec::new();
+    reserve(&mut sorted_non_empty, sorted_all.len())?;
+    sorted_non_empty.extend(
+        sorted_all
+            .iter()
+            .copied()
+            .filter(|planned| !planned.styled.range.is_empty()),
+    );
     for pair in sorted_non_empty.windows(2) {
         if pair[0].styled.range.end > pair[1].styled.range.start {
             return Err(TextFlowError::OverlappingStyleRanges {
@@ -212,36 +186,64 @@ pub(super) fn validate_styled_ranges(
         }
     }
 
-    Ok(ValidatedStyledInput { input })
+    Ok(ValidatedStyledInput {
+        input,
+        endpoint_count,
+        sorted_all,
+        sorted_non_empty,
+    })
+}
+
+#[derive(Clone, Copy)]
+enum EndpointStream {
+    Start,
+    NonEmptyEnd,
+    EmptyEnd,
+}
+
+fn next_endpoint_candidate(
+    sorted_all: &[PlannedRange<'_>],
+    cursor: &mut usize,
+    stream: EndpointStream,
+    poller: &mut ValidationPoller,
+    interrupted_callback: &mut dyn FnMut() -> bool,
+) -> Result<Option<(usize, usize)>, TextFlowError> {
+    while let Some(planned) = sorted_all.get(*cursor) {
+        poller.step(interrupted_callback)?;
+        // `cursor < sorted_all.len()` and the endpoint-count check bounds len to usize::MAX / 2.
+        *cursor += 1;
+        let is_empty = planned.styled.range.is_empty();
+        let matches = match stream {
+            EndpointStream::Start => true,
+            EndpointStream::NonEmptyEnd => !is_empty,
+            EndpointStream::EmptyEnd => is_empty,
+        };
+        if !matches {
+            continue;
+        }
+        let (boundary, event_index) = match stream {
+            EndpointStream::Start => (planned.styled.range.start, planned.start_event_index),
+            EndpointStream::NonEmptyEnd | EndpointStream::EmptyEnd => {
+                (planned.styled.range.end, planned.end_event_index)
+            }
+        };
+        return Ok(Some((boundary, event_index)));
+    }
+    Ok(None)
 }
 
 pub(super) fn build_styled_range_plan<'a>(
     validated: ValidatedStyledInput<'a>,
     interrupted_callback: &mut dyn FnMut() -> bool,
+    observer: &mut dyn NormalizationObserver,
 ) -> Result<ValidatedStyledRanges<'a>, TextFlowError> {
-    let input = validated.input;
+    let ValidatedStyledInput {
+        input,
+        endpoint_count,
+        sorted_all,
+        sorted_non_empty,
+    } = validated;
     let mut poller = ValidationPoller::default();
-    let mut sorted_non_empty = Vec::new();
-    reserve(&mut sorted_non_empty, input.styled_ranges.len())?;
-    for (original_ordinal, styled) in input.styled_ranges.iter().enumerate() {
-        poller.step(interrupted_callback)?;
-        if !styled.range.is_empty() {
-            sorted_non_empty.push(PlannedRange {
-                original_ordinal,
-                styled,
-            });
-        }
-    }
-    pollable_sort_by(
-        &mut sorted_non_empty,
-        &|left, right| {
-            (left.styled.range.start, left.original_ordinal)
-                .cmp(&(right.styled.range.start, right.original_ordinal))
-        },
-        &mut poller,
-        interrupted_callback,
-    )?;
-    let endpoint_count = checked_endpoint_count(input.styled_ranges.len())?;
     let mut endpoints = Vec::new();
     reserve(&mut endpoints, endpoint_count)?;
     for styled in &input.styled_ranges {
@@ -250,6 +252,7 @@ pub(super) fn build_styled_range_plan<'a>(
             boundary: styled.range.start,
         });
         poller.step(interrupted_callback)?;
+        observer.plan_construction_step()?;
         endpoints.push(EndpointEvent {
             boundary: styled.range.end,
         });
@@ -257,18 +260,45 @@ pub(super) fn build_styled_range_plan<'a>(
 
     let mut sorted_endpoint_indices = Vec::new();
     reserve(&mut sorted_endpoint_indices, endpoint_count)?;
-    for index in 0..endpoint_count {
-        poller.step(interrupted_callback)?;
-        sorted_endpoint_indices.push(index);
+    let streams = [
+        EndpointStream::Start,
+        EndpointStream::NonEmptyEnd,
+        EndpointStream::EmptyEnd,
+    ];
+    let mut cursors = [0usize; 3];
+    let mut candidates = [None; 3];
+    for stream_index in 0..streams.len() {
+        candidates[stream_index] = next_endpoint_candidate(
+            &sorted_all,
+            &mut cursors[stream_index],
+            streams[stream_index],
+            &mut poller,
+            interrupted_callback,
+        )?;
     }
-    pollable_sort_by(
-        &mut sorted_endpoint_indices,
-        &|left, right| {
-            (endpoints[*left].boundary, *left).cmp(&(endpoints[*right].boundary, *right))
-        },
-        &mut poller,
-        interrupted_callback,
-    )?;
+    while sorted_endpoint_indices.len() < endpoint_count {
+        let stream_index = candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(index, candidate)| candidate.map(|value| (index, value)))
+            .min_by_key(|(_, value)| *value)
+            .map(|(index, _)| index)
+            .ok_or(TextFlowError::ArithmeticOverflow)?;
+        let (_, event_index) = candidates[stream_index]
+            .take()
+            .ok_or(TextFlowError::ArithmeticOverflow)?;
+        poller.step(interrupted_callback)?;
+        observer.plan_construction_step()?;
+        sorted_endpoint_indices.push(event_index);
+        let stream = streams[stream_index];
+        candidates[stream_index] = next_endpoint_candidate(
+            &sorted_all,
+            &mut cursors[stream_index],
+            stream,
+            &mut poller,
+            interrupted_callback,
+        )?;
+    }
 
     Ok(ValidatedStyledRanges {
         input,
@@ -281,18 +311,19 @@ pub(super) fn build_styled_range_plan<'a>(
 pub(super) fn normalize_source(
     plan: &ValidatedStyledRanges<'_>,
     grapheme_ranges: &[Range<usize>],
+    targets: &mut [TextFlowToken],
     interrupted_callback: &mut dyn FnMut() -> bool,
     observer: &mut dyn NormalizationObserver,
 ) -> Result<StyledNormalization, TextFlowError> {
+    if targets.len() != grapheme_ranges.len() {
+        return Err(TextFlowError::ArithmeticOverflow);
+    }
     if plan.endpoints.is_empty() {
         return Ok(StyledNormalization {
-            styles: Vec::new(),
             diagnostics: Vec::new(),
         });
     }
 
-    let mut styles = Vec::new();
-    reserve(&mut styles, grapheme_ranges.len())?;
     let mut endpoint_targets = Vec::new();
     reserve(&mut endpoint_targets, plan.endpoints.len())?;
     for _ in &plan.endpoints {
@@ -324,7 +355,9 @@ pub(super) fn normalize_source(
                 || plan.input.default_style.clone(),
                 |candidate| candidate.styled.style.clone(),
             );
-        styles.push(style);
+        interrupted(interrupted_callback)?;
+        observer.style_application()?;
+        targets[grapheme_ordinal].style = style;
 
         while let Some(index) = plan.sorted_endpoint_indices.get(endpoint_cursor).copied() {
             let boundary = plan.endpoints[index].boundary;
@@ -369,69 +402,64 @@ pub(super) fn normalize_source(
         }
     }
 
-    let mut diagnostics_by_grapheme = Vec::new();
-    reserve(&mut diagnostics_by_grapheme, grapheme_ranges.len())?;
-    for count in diagnostic_counts {
+    let mut next_offset = 0usize;
+    for count in &mut diagnostic_counts {
         interrupted(interrupted_callback)?;
-        observer.diagnostic_bucket_preparation()?;
-        let mut bucket = Vec::new();
-        reserve(&mut bucket, count)?;
-        diagnostics_by_grapheme.push(bucket);
+        observer.diagnostic_offset_preparation()?;
+        let diagnostic_count_for_grapheme = *count;
+        *count = next_offset;
+        next_offset = checked_add(next_offset, diagnostic_count_for_grapheme)?;
     }
-
-    for (event, target) in plan.endpoints.iter().zip(endpoint_targets) {
+    let mut ordered_event_indices = Vec::new();
+    reserve(&mut ordered_event_indices, diagnostic_count)?;
+    for _ in 0..diagnostic_count {
+        interrupted(interrupted_callback)?;
+        ordered_event_indices.push(0usize);
+    }
+    for (event_index, target) in endpoint_targets.iter().copied().enumerate() {
         interrupted(interrupted_callback)?;
         observer.plan_endpoint_visit()?;
         if let Some(grapheme_ordinal) = target {
-            diagnostics_by_grapheme[grapheme_ordinal].push(
-                TextFlowDiagnostic::StyleBoundaryNormalized {
-                    boundary: event.boundary,
-                    grapheme_range: grapheme_ranges[grapheme_ordinal].clone(),
-                },
-            );
+            let offset = diagnostic_counts
+                .get_mut(grapheme_ordinal)
+                .ok_or(TextFlowError::ArithmeticOverflow)?;
+            let slot = ordered_event_indices
+                .get_mut(*offset)
+                .ok_or(TextFlowError::ArithmeticOverflow)?;
+            *slot = event_index;
+            *offset = checked_add(*offset, 1)?;
         }
     }
 
     let mut diagnostics = Vec::new();
     reserve(&mut diagnostics, diagnostic_count)?;
-    for bucket in diagnostics_by_grapheme {
+    for event_index in ordered_event_indices {
         interrupted(interrupted_callback)?;
-        for diagnostic in bucket {
-            interrupted(interrupted_callback)?;
-            observer.diagnostic_projection()?;
-            diagnostics.push(diagnostic);
-        }
+        observer.diagnostic_projection()?;
+        let grapheme_ordinal = endpoint_targets
+            .get(event_index)
+            .copied()
+            .flatten()
+            .ok_or(TextFlowError::ArithmeticOverflow)?;
+        diagnostics.push(TextFlowDiagnostic::StyleBoundaryNormalized {
+            boundary: plan.endpoints[event_index].boundary,
+            grapheme_range: grapheme_ranges[grapheme_ordinal].clone(),
+        });
     }
 
-    Ok(StyledNormalization {
-        styles,
-        diagnostics,
-    })
-}
-
-pub(super) fn apply_styles(
-    targets: &mut [TextFlowToken],
-    styles: Vec<Style>,
-    interrupted_callback: &mut dyn FnMut() -> bool,
-    observer: &mut dyn NormalizationObserver,
-) -> Result<(), TextFlowError> {
-    for (target, style) in targets.iter_mut().zip(styles) {
-        interrupted(interrupted_callback)?;
-        observer.style_application()?;
-        target.style = style;
-    }
-    Ok(())
+    Ok(StyledNormalization { diagnostics })
 }
 
 #[cfg(test)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct NormalizationOperations {
     pub(super) grapheme_steps: usize,
+    pub(super) plan_construction_steps: usize,
     pub(super) plan_endpoint_visits: usize,
     pub(super) style_range_advances: usize,
     pub(super) boundary_endpoint_visits: usize,
     pub(super) diagnostic_count_visits: usize,
-    pub(super) diagnostic_bucket_preparations: usize,
+    pub(super) diagnostic_offset_preparations: usize,
     pub(super) diagnostic_projections: usize,
     pub(super) style_applications: usize,
 }
@@ -447,11 +475,12 @@ impl NormalizationOperations {
         let mut total = 0usize;
         for value in [
             self.grapheme_steps,
+            self.plan_construction_steps,
             self.plan_endpoint_visits,
             self.style_range_advances,
             self.boundary_endpoint_visits,
             self.diagnostic_count_visits,
-            self.diagnostic_bucket_preparations,
+            self.diagnostic_offset_preparations,
             self.diagnostic_projections,
             self.style_applications,
         ] {
@@ -465,6 +494,10 @@ impl NormalizationOperations {
 impl NormalizationObserver for NormalizationOperations {
     fn grapheme_step(&mut self) -> Result<(), TextFlowError> {
         Self::increment(&mut self.grapheme_steps)
+    }
+
+    fn plan_construction_step(&mut self) -> Result<(), TextFlowError> {
+        Self::increment(&mut self.plan_construction_steps)
     }
 
     fn plan_endpoint_visit(&mut self) -> Result<(), TextFlowError> {
@@ -483,8 +516,8 @@ impl NormalizationObserver for NormalizationOperations {
         Self::increment(&mut self.diagnostic_count_visits)
     }
 
-    fn diagnostic_bucket_preparation(&mut self) -> Result<(), TextFlowError> {
-        Self::increment(&mut self.diagnostic_bucket_preparations)
+    fn diagnostic_offset_preparation(&mut self) -> Result<(), TextFlowError> {
+        Self::increment(&mut self.diagnostic_offset_preparations)
     }
 
     fn diagnostic_projection(&mut self) -> Result<(), TextFlowError> {
