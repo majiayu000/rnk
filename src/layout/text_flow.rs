@@ -7,6 +7,7 @@ use crate::core::{Overflow, Style, TextWrap};
 
 use super::measure::grapheme_width;
 
+mod style_normalization;
 mod truncate;
 mod wrap;
 
@@ -219,8 +220,11 @@ impl TextFlow {
                 requested: options.tab_stop,
             });
         }
-        validate_styled_ranges(input)?;
-        let (mut tokens, diagnostics, grapheme_ranges) = tokenize_source(input, &mut interrupted)?;
+        let validated_styles = style_normalization::validate_styled_ranges(input)?;
+        let styled_plan =
+            style_normalization::build_styled_range_plan(validated_styles, &mut interrupted)?;
+        let (mut tokens, diagnostics, grapheme_ranges) =
+            tokenize_source(input, &styled_plan, &mut interrupted)?;
         let logical_rows = layout_tokens(&mut tokens, options, &mut interrupted)?;
         validate_source_coverage(&input.source, &tokens, &grapheme_ranges)?;
         let position_map = build_position_map(&tokens);
@@ -373,69 +377,19 @@ impl fmt::Display for TextFlowError {
 
 impl Error for TextFlowError {}
 
-fn validate_styled_ranges(input: &TextFlowInput) -> Result<(), TextFlowError> {
-    for styled in &input.styled_ranges {
-        let range = &styled.range;
-        if range.start > range.end
-            || range.end > input.source.len()
-            || !input.source.is_char_boundary(range.start)
-            || !input.source.is_char_boundary(range.end)
-        {
-            return Err(TextFlowError::InvalidStyleRange {
-                range: (*range).clone(),
-            });
-        }
-    }
-    let mut ranges: Vec<_> = input
-        .styled_ranges
-        .iter()
-        .filter(|styled| !styled.range.is_empty())
-        .map(|styled| &styled.range)
-        .collect();
-    ranges.sort_by_key(|range| range.start);
-    for pair in ranges.windows(2) {
-        if pair[0].end > pair[1].start {
-            return Err(TextFlowError::OverlappingStyleRanges {
-                first: pair[0].clone(),
-                second: pair[1].clone(),
-            });
-        }
-    }
-    Ok(())
-}
-
 fn tokenize_source(
     input: &TextFlowInput,
+    styled_plan: &style_normalization::ValidatedStyledRanges<'_>,
     interrupted: &mut impl FnMut() -> bool,
 ) -> Result<Tokenization, TextFlowError> {
-    let mut tokens = Vec::new();
-    let mut diagnostics = Vec::new();
     let mut grapheme_ranges = Vec::new();
+    let mut tokens = Vec::new();
     for (start, grapheme) in input.source.grapheme_indices(true) {
         if interrupted() {
             return Err(TextFlowError::Interrupted);
         }
         let range = start..start + grapheme.len();
         grapheme_ranges.push(range.clone());
-        let style = input
-            .styled_ranges
-            .iter()
-            .find(|styled| styled.range.start <= start && start < styled.range.end)
-            .map_or_else(
-                || input.default_style.clone(),
-                |styled| styled.style.clone(),
-            );
-        for boundary in input
-            .styled_ranges
-            .iter()
-            .flat_map(|styled| [styled.range.start, styled.range.end])
-            .filter(|boundary| range.start < *boundary && *boundary < range.end)
-        {
-            diagnostics.push(TextFlowDiagnostic::StyleBoundaryNormalized {
-                boundary,
-                grapheme_range: range.clone(),
-            });
-        }
         let (safe_text, class) = classify_grapheme(grapheme);
         let display_width = if class == TokenClass::Tab {
             0
@@ -448,13 +402,21 @@ fn tokenize_source(
                 kind: input.source_kind,
             },
             safe_text,
-            style,
+            style: input.default_style.clone(),
             display_width,
             placement: TextFlowPlacement::Omitted { row: 0 },
             class,
         });
     }
-    Ok((tokens, diagnostics, grapheme_ranges))
+    let mut observer = style_normalization::NoopNormalizationObserver;
+    let normalized = style_normalization::normalize_source(
+        styled_plan,
+        &grapheme_ranges,
+        interrupted,
+        &mut observer,
+    )?;
+    style_normalization::apply_styles(&mut tokens, normalized.styles, interrupted, &mut observer)?;
+    Ok((tokens, normalized.diagnostics, grapheme_ranges))
 }
 
 fn classify_grapheme(grapheme: &str) -> (String, TokenClass) {
