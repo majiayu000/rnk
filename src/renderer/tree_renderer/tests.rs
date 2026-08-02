@@ -77,8 +77,7 @@ fn virtual_text(content: &str) -> Element {
 #[test]
 fn direct_virtual_text_is_skipped_by_fallible_and_compatibility_rendering() {
     let element = virtual_text("hidden");
-    let mut engine = LayoutEngine::new();
-    engine.try_compute(&element, 8, 1).unwrap();
+    let engine = LayoutEngine::new();
 
     let mut fallible_output = Output::new(8, 1);
     try_render_element_tree(&element, &engine, &mut fallible_output, 0.0, 0.0).unwrap();

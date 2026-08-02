@@ -170,7 +170,9 @@ pub use crate::core::{AccessibilityProps, AccessibilityRole, Color, Element, Ele
 pub use crate::renderer::{
     AppBuilder,
     AppOptions,
+    CheckedRenderError,
     IntoPrintable,
+    LayoutRenderError,
     ModeSwitch,
     Printable,
     // Types
@@ -179,6 +181,7 @@ pub use crate::renderer::{
     TextCoordinateError,
     TextProjectionError,
     TextRenderError,
+    TransactionalFrameError,
     enter_alt_screen,
     exit_alt_screen,
     is_alt_screen,
@@ -197,8 +200,11 @@ pub use crate::renderer::{
     render_to_string_with_options,
     // Cross-thread APIs
     request_render,
+    try_render_element_checked,
+    try_render_element_tree_checked,
     try_render_to_string,
     try_render_to_string_auto,
+    try_render_to_string_checked,
     try_render_to_string_no_trim,
     try_render_to_string_raw,
     try_render_to_string_with_options,

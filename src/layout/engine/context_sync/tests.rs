@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::super::*;
+use super::{LayoutRunError, set_context_pin_fault, set_layout_compute_fault};
 use crate::core::{Color, Element, Overflow, TextWrap};
 use crate::layout::engine::text_flow_bridge::input_from_element;
 use crate::layout::{TextFlowInput, TextFlowSourceKind};
@@ -210,4 +211,147 @@ fn tab_ellipsis_and_width_policy_changes_dirty_every_text_path() {
         fixture.assert_all_text_paths_dirty();
         fixture.publish_and_assert_flow_changes(true, true);
     }
+}
+
+#[test]
+fn compute_layout_backend_error_is_not_silently_discarded() {
+    let root = Element::text("text");
+    let mut engine = LayoutEngine::new();
+    engine.try_compute(&root, 20, 4).expect("fixture computes");
+    set_layout_compute_fault();
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        engine.run_layout_and_publish(&mut || false)
+    }));
+
+    assert!(
+        result.is_err(),
+        "the legacy TextFlow-only boundary must fail loudly on a Taffy error"
+    );
+}
+
+#[test]
+fn checked_context_sync_returns_typed_invariant_instead_of_panicking() {
+    let root = Element::text("text");
+    let input = input_from_element(&root).expect("text input");
+    let mut engine = LayoutEngine::new();
+    engine.try_compute(&root, 20, 4).expect("fixture computes");
+    let missing_key = crate::core::VNode::text("missing").with_key("missing").key;
+
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        engine.try_sync_text_contexts(&HashMap::from([(missing_key, input)]))
+    }));
+
+    assert!(matches!(
+        outcome,
+        Ok(Err(super::ContextSyncError::Invariant {
+            node_id: None,
+            key: Some(key),
+            source: IncrementalInvariantError::ScopedMapMismatch,
+        })) if key == missing_key
+    ));
+}
+
+#[test]
+fn missing_required_text_context_fails_instead_of_disappearing() {
+    let root = Element::text("required");
+    let root_id = root.id;
+    let mut engine = LayoutEngine::new();
+    engine.try_compute(&root, 20, 4).expect("fixture computes");
+    let node_id = engine.node_map[&root_id];
+    engine
+        .taffy
+        .set_node_context(node_id, None)
+        .expect("fixture removes required context");
+
+    let result = engine.run_layout_and_publish_checked(&mut || false);
+
+    assert!(result.is_err(), "missing required text context was omitted");
+}
+
+#[test]
+fn disappearing_mutable_context_fails_before_flow_publication() {
+    let root = Element::text("required");
+    let root_id = root.id;
+    let mut engine = LayoutEngine::new();
+    engine.try_compute(&root, 20, 4).expect("fixture computes");
+    let node_id = engine.node_map[&root_id];
+    set_context_pin_fault();
+
+    let result = engine.flow_at_final_width(node_id, &mut || false);
+
+    assert!(matches!(
+        result,
+        Err(LayoutRunError::Invariant {
+            node_id: Some(_),
+            source: IncrementalInvariantError::CurrentFrameContextMismatch,
+        })
+    ));
+}
+
+#[test]
+fn stale_compatibility_projection_is_not_silently_omitted() {
+    let root = crate::core::VNode::box_node().child(crate::core::VNode::text("required"));
+    let mut engine = LayoutEngine::new();
+    engine.compute_vnode(&root, 20, 4);
+    let child_identity = engine
+        .vnode_map
+        .keys()
+        .find(|identity| **identity != ScopedNodeIdentity::Root)
+        .expect("child identity")
+        .clone();
+    engine.vnode_legacy_keys.remove(&child_identity);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        engine.try_get_all_vnode_layouts()
+    }));
+
+    assert!(result.is_err(), "stale compatibility entry was omitted");
+}
+
+#[test]
+fn mapped_layout_backend_failures_fail_loudly() {
+    let element = Element::text("required");
+    let element_id = element.id;
+    let mut element_engine = LayoutEngine::new();
+    element_engine
+        .try_compute(&element, 20, 4)
+        .expect("element fixture computes");
+    let unknown_id = Element::text("unknown").id;
+    assert!(element_engine.get_layout(unknown_id).is_none());
+    let element_node = element_engine.node_map[&element_id];
+    element_engine
+        .taffy
+        .set_node_context(element_node, None)
+        .expect("fixture removes element context");
+    let element_lookup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        element_engine.get_layout(element_id)
+    }));
+    assert!(
+        element_lookup.is_err(),
+        "mapped element backend failure must not become None"
+    );
+
+    let child = crate::core::VNode::text("required").with_key("required");
+    let child_key = child.key;
+    let root = crate::core::VNode::root().child(child);
+    let mut vnode_engine = LayoutEngine::new();
+    vnode_engine.compute_vnode(&root, 20, 4);
+    let child_node = *vnode_engine
+        .vnode_map
+        .iter()
+        .find(|(identity, _)| **identity != ScopedNodeIdentity::Root)
+        .expect("child mapping")
+        .1;
+    vnode_engine
+        .taffy
+        .set_node_context(child_node, None)
+        .expect("fixture removes VNode context");
+    let vnode_lookup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        vnode_engine.try_get_vnode_layout(child_key)
+    }));
+    assert!(
+        vnode_lookup.is_err(),
+        "mapped VNode backend failure must not become None"
+    );
 }

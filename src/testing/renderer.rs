@@ -7,9 +7,10 @@ use std::collections::HashMap;
 use unicode_width::UnicodeWidthChar;
 
 use crate::core::{Element, ElementId};
-use crate::layout::{Layout, LayoutEngine};
-use crate::renderer::tree_renderer::try_render_element_tree;
-use crate::renderer::{Output, TextRenderError};
+use crate::layout::{
+    FullRebuildError, Layout, LayoutEngine, RebuildFailure, TransactionalLayoutError,
+};
+use crate::renderer::TextRenderError;
 
 /// Test renderer configuration
 #[derive(Debug, Clone)]
@@ -46,8 +47,13 @@ impl TestRenderer {
     }
 
     pub fn try_render_to_plain(&self, element: &Element) -> Result<String, TextRenderError> {
-        self.try_render_to_ansi(element)
-            .map(|ansi| strip_ansi_codes(&ansi))
+        match self.try_render_to_plain_checked(element) {
+            Ok(output) => Ok(output),
+            Err(crate::renderer::CheckedRenderError::Text(source)) => Err(source),
+            Err(other) => {
+                panic!("legacy test renderer cannot represent checked error: {other}")
+            }
+        }
     }
 
     /// Render element and return string with ANSI codes
@@ -57,17 +63,13 @@ impl TestRenderer {
     }
 
     pub fn try_render_to_ansi(&self, element: &Element) -> Result<String, TextRenderError> {
-        let engine = self.try_compute_layout(element)?;
-
-        let mut output = Output::new(self.width, self.height);
-        let clip_depth_before = output.clip_depth();
-        try_render_element_tree(element, &engine, &mut output, 0.0, 0.0)?;
-        assert_eq!(
-            output.clip_depth(),
-            clip_depth_before,
-            "test renderer left an unbalanced clip stack"
-        );
-        Ok(output.render())
+        match self.try_render_to_ansi_checked(element) {
+            Ok(output) => Ok(output),
+            Err(crate::renderer::CheckedRenderError::Text(source)) => Err(source),
+            Err(other) => {
+                panic!("legacy test renderer cannot represent checked error: {other}")
+            }
+        }
     }
 
     /// Get computed layouts for all elements
@@ -88,10 +90,19 @@ impl TestRenderer {
 
     fn try_compute_layout(&self, element: &Element) -> Result<LayoutEngine, TextRenderError> {
         let mut engine = LayoutEngine::new();
-        engine
-            .try_compute(element, self.width, self.height)
-            .map_err(|source| TextRenderError::flow(element.id, source))?;
-        Ok(engine)
+        match engine.prepare_element_incremental(element, None, self.width, self.height) {
+            Ok(prepared) => {
+                prepared.commit(&mut engine);
+                Ok(engine)
+            }
+            Err(TransactionalLayoutError::InitialBuild(FullRebuildError {
+                source: RebuildFailure::TextFlow(source),
+                ..
+            })) => Err(TextRenderError::flow(element.id, source)),
+            Err(other) => {
+                panic!("legacy test layout cannot represent checked error: {other}")
+            }
+        }
     }
 
     /// Validate layout constraints

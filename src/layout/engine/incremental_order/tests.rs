@@ -1,5 +1,6 @@
 use super::*;
-use crate::core::{Element, VNode};
+use crate::core::{Color, Element, Style, VNode};
+use crate::layout::PatchTransactionCause;
 use crate::reconciler::plan_diff;
 
 #[derive(Clone)]
@@ -17,9 +18,9 @@ impl EngineBaseline {
         let root = engine.root_node;
         Self {
             root,
-            vnode_map: engine.vnode_map.clone(),
-            legacy: engine.vnode_legacy_keys.clone(),
-            committed: engine.committed_vnode.clone(),
+            vnode_map: (*engine.vnode_map).clone(),
+            legacy: (*engine.vnode_legacy_keys).clone(),
+            committed: (*engine.committed_vnode).clone(),
             root_children: engine
                 .taffy
                 .children(root.expect("fixture has a root"))
@@ -30,9 +31,9 @@ impl EngineBaseline {
 
     fn assert_unchanged(&self, engine: &LayoutEngine) {
         assert_eq!(engine.root_node, self.root);
-        assert_eq!(engine.vnode_map, self.vnode_map);
-        assert_eq!(engine.vnode_legacy_keys, self.legacy);
-        assert_eq!(engine.committed_vnode, self.committed);
+        assert_eq!(&*engine.vnode_map, &self.vnode_map);
+        assert_eq!(&*engine.vnode_legacy_keys, &self.legacy);
+        assert_eq!(&*engine.committed_vnode, &self.committed);
         assert_eq!(engine.taffy.total_node_count(), self.node_count);
         assert_eq!(
             engine
@@ -154,9 +155,8 @@ fn preflight_existing_identity_and_node_use_matrix_is_exact() {
         .clone()
         .expect("survivor has old identity");
     let mut aliased_node_engine = engine.staged_clone();
-    aliased_node_engine
-        .vnode_map
-        .insert(second_old, aliased_node_engine.vnode_map[&first_old]);
+    let first_node = aliased_node_engine.vnode_map[&first_old];
+    aliased_node_engine.vnode_map.insert(second_old, first_node);
     assert!(matches!(
         aliased_node_engine.preflight_reconcile_plan(&valid),
         Err(ReconcilePlanError::DuplicateExistingNodeIdUse { .. })
@@ -296,7 +296,8 @@ fn committed_validation_reports_map_count_alias_root_and_projection_corruption()
     let mut alias = engine.staged_clone();
     let left = plan.root.children[0].identity.clone();
     let right = plan.root.children[1].identity.clone();
-    alias.vnode_map.insert(right, alias.vnode_map[&left]);
+    let left_node = alias.vnode_map[&left];
+    alias.vnode_map.insert(right, left_node);
     assert_committed_reason(
         &alias,
         &plan,
@@ -387,6 +388,105 @@ fn committed_validation_reports_duplicate_missing_and_order_corruption() {
 }
 
 #[test]
+pub(crate) fn incremental_reorder_fault_reports_the_real_parent_locator() {
+    let old = VNode::root().children([
+        VNode::box_node().with_key("left"),
+        VNode::box_node().with_key("right"),
+    ]);
+    let new = VNode::root().children([
+        VNode::box_node().with_key("right"),
+        VNode::box_node().with_key("left"),
+    ]);
+    let plan = plan_diff(&old, &new).expect("reorder fixture plan");
+    let expected_parent = plan
+        .patches()
+        .iter()
+        .find_map(|patch| match patch {
+            crate::reconciler::Patch::Reorder { parent, .. } => Some(*parent),
+            _ => None,
+        })
+        .expect("fixture has one reorder");
+    let mut engine = LayoutEngine::new();
+    engine.compute_vnode(&old, 20, 4);
+    set_incremental_order_fault(IncrementalOrderFault::CommitChildren);
+
+    assert_eq!(
+        engine
+            .apply_reconcile_plan(&plan)
+            .map_err(|error| error.patch),
+        Err(PatchError {
+            kind: PatchKind::Reorder,
+            key: expected_parent,
+            failure: PatchFailure::TreeRejected,
+        })
+    );
+}
+
+fn assert_structural_set_children_origin(old: &VNode, new: &VNode, kind: PatchKind) {
+    let plan = plan_diff(old, new).expect("structural SetChildren fixture plan");
+    let patch_index = plan
+        .patches()
+        .iter()
+        .position(|patch| {
+            matches!(
+                (kind, patch),
+                (PatchKind::Create, Patch::Create { .. })
+                    | (PatchKind::Remove, Patch::Remove { .. })
+                    | (PatchKind::Replace, Patch::Replace { .. })
+            )
+        })
+        .expect("fixture contains the requested structural patch");
+    let mut engine = LayoutEngine::new();
+    engine.compute_vnode(old, 20, 4);
+    set_incremental_order_fault(IncrementalOrderFault::CommitChildren);
+
+    let error = engine
+        .apply_reconcile_plan(&plan)
+        .expect_err("changed child order must exercise the SetChildren fault");
+
+    assert_eq!(error.patch_index, Some(patch_index));
+    assert_eq!(error.patch.kind, kind);
+    assert_eq!(error.stage, PatchStage::SetChildren);
+    assert!(matches!(error.source, PatchTransactionCause::Taffy(_)));
+}
+
+#[test]
+pub(crate) fn structural_set_children_faults_keep_create_remove_replace_origins() {
+    let empty = VNode::root();
+    let boxed = VNode::root().child(VNode::box_node().with_key("child"));
+    let text = VNode::root().child(VNode::text("child").with_key("child"));
+
+    assert_structural_set_children_origin(&empty, &boxed, PatchKind::Create);
+    assert_structural_set_children_origin(&boxed, &empty, PatchKind::Remove);
+    assert_structural_set_children_origin(&boxed, &text, PatchKind::Replace);
+}
+
+#[test]
+fn unchanged_child_lists_skip_the_fallible_set_children_write() {
+    let old = VNode::root().child(VNode::box_node().with_key("child"));
+    let mut style = Style::new();
+    style.color = Some(Color::Red);
+    let new = VNode::root().child(VNode::box_node().with_key("child").with_style(style));
+    let plan = plan_diff(&old, &new).expect("update-only fixture plan");
+    assert!(
+        plan.patches()
+            .iter()
+            .all(|patch| matches!(patch, Patch::Update { .. }))
+    );
+    let mut engine = LayoutEngine::new();
+    engine.compute_vnode(&old, 20, 4);
+    set_incremental_order_fault(IncrementalOrderFault::CommitChildren);
+
+    engine
+        .apply_reconcile_plan(&plan)
+        .expect("update-only plans do not rewrite unchanged child lists");
+
+    assert!(take_incremental_order_fault(
+        IncrementalOrderFault::CommitChildren
+    ));
+}
+
+#[test]
 fn committed_validation_detects_multiple_identities_for_one_node_after_order_is_coherent() {
     let tree = two_child_tree();
     let plan = plan_diff(&tree, &tree).expect("fixture plan is valid");
@@ -410,7 +510,7 @@ fn committed_validation_detects_multiple_identities_for_one_node_after_order_is_
 }
 
 #[test]
-fn commit_and_postcondition_faults_recover_atomically_through_checked_caller() {
+pub(crate) fn commit_and_postcondition_faults_recover_atomically_through_checked_caller() {
     fn element_tree(order: &[&str]) -> Element {
         let mut root = Element::root();
         for key in order {

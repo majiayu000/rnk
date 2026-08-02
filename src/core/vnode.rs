@@ -162,7 +162,17 @@ impl Props {
 
     /// Check if props have changed (for shouldComponentUpdate)
     pub fn has_changed(&self, other: &Props) -> bool {
-        self != other
+        !self.semantically_eq(other)
+    }
+
+    pub(crate) fn semantically_eq(&self, other: &Self) -> bool {
+        self.key == other.key && self.semantically_eq_ignoring_key(other)
+    }
+
+    pub(crate) fn semantically_eq_ignoring_key(&self, other: &Self) -> bool {
+        self.scroll_offset_x == other.scroll_offset_x
+            && self.scroll_offset_y == other.scroll_offset_y
+            && self.style.semantically_eq(&other.style)
     }
 }
 
@@ -427,6 +437,10 @@ mod tests {
 
         let props3 = Props::new().key("different");
         assert!(props1.has_changed(&props3));
+
+        let mut nan_props = Props::new();
+        nan_props.style.flex_grow = f32::NAN;
+        assert!(!nan_props.has_changed(&nan_props.clone()));
     }
 
     #[test]
@@ -436,6 +450,10 @@ mod tests {
         // Different instances have different keys by default
         // but same content
         assert_eq!(node1.node_type, node2.node_type);
+
+        let mut nan_node = VNode::box_node();
+        nan_node.props.style.flex_grow = f32::NAN;
+        assert_eq!(nan_node, nan_node.clone());
     }
 
     #[test]

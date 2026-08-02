@@ -20,6 +20,9 @@ use crossterm::{
 use std::io::{Write, stdout};
 use std::time::Duration;
 
+mod frame;
+pub(crate) use frame::PreparedTerminalFrame;
+
 /// ANSI escape codes for terminal control
 mod ansi {
     /// Move cursor to specific position (1-indexed)

@@ -17,12 +17,19 @@ use tokio::sync::mpsc;
 
 use super::builder::{AppOptions, CancelToken};
 use super::filter::FilterChain;
-use super::pipeline::RenderPipeline;
+use super::pipeline::{PreparedDynamicFrame, RenderPipeline};
 use super::registry::{AppRuntime, AppSink, RenderHandle, register_app};
 use super::runtime::EventLoop;
 use super::runtime_bridge::RuntimeBridge;
 use super::static_content::StaticRenderer;
+use super::terminal::PreparedTerminalFrame;
 use super::terminal_controller::TerminalController;
+
+struct PreparedAppFrame {
+    terminal: PreparedTerminalFrame,
+    static_lines: Vec<String>,
+    dynamic: PreparedDynamicFrame,
+}
 
 /// Application state
 pub struct App<F>
@@ -258,45 +265,91 @@ where
             self.cmd_executor.execute(Cmd::batch(cmds));
         }
 
-        // Enable/disable mouse mode based on whether any component uses it
-        if is_mouse_enabled() {
-            self.terminal.enable_mouse()?;
-        } else {
-            self.terminal.disable_mouse()?;
-        }
-
-        // Extract and commit static content
-        let (new_static_lines, rendered) = self
-            .try_prepare_frame(&root, width, height)
-            .map_err(crate::renderer::DynamicFrameError::into_io)?;
-
-        if !new_static_lines.is_empty() {
-            self.static_renderer
-                .commit_static_content(&new_static_lines, &mut self.terminal)?;
-        }
-
-        self.terminal.render(&rendered)
+        let prepared = self
+            .try_prepare_frame_with_mouse(&root, width, height, is_mouse_enabled())
+            .map_err(crate::renderer::TransactionalFrameError::into_io)?;
+        self.commit_prepared_frame(prepared)
     }
 
+    #[cfg(test)]
     fn try_prepare_frame(
-        &mut self,
+        &self,
         root: &Element,
         width: u16,
         height: u16,
-    ) -> Result<(Vec<String>, String), crate::renderer::DynamicFrameError> {
+    ) -> Result<PreparedAppFrame, crate::renderer::TransactionalFrameError> {
+        self.try_prepare_frame_with_mouse(root, width, height, is_mouse_enabled())
+    }
+
+    fn try_prepare_frame_with_mouse(
+        &self,
+        root: &Element,
+        width: u16,
+        height: u16,
+        mouse_enabled: bool,
+    ) -> Result<PreparedAppFrame, crate::renderer::TransactionalFrameError> {
         let new_static_lines = self
             .static_renderer
-            .try_extract_static_content(root, width)?;
+            .try_extract_static_content_checked(root, width)
+            .map_err(crate::renderer::TransactionalFrameError::Render)?;
         let dynamic_root = self.static_renderer.filter_static_elements(root);
-        let rendered = RenderPipeline::try_render_dynamic_frame_checked(
+        let dynamic = RenderPipeline::prepare_dynamic_frame(
             &dynamic_root,
             width,
             height,
-            &mut self.layout_engine,
-            &self.runtime_context,
-            &mut self.previous_vnode,
+            &self.layout_engine,
+            self.previous_vnode.as_ref(),
         )?;
-        Ok((new_static_lines, rendered))
+        let terminal =
+            self.terminal
+                .prepare_frame(&new_static_lines, dynamic.rendered(), mouse_enabled);
+        Ok(PreparedAppFrame {
+            terminal,
+            static_lines: new_static_lines,
+            dynamic,
+        })
+    }
+
+    fn commit_prepared_frame(&mut self, prepared: PreparedAppFrame) -> std::io::Result<()> {
+        let PreparedAppFrame {
+            terminal,
+            static_lines,
+            dynamic,
+        } = prepared;
+        let dynamic = dynamic
+            .bind(&mut self.layout_engine)
+            .map_err(std::io::Error::other)?;
+        let mut runtime_context = self.runtime_context.try_borrow_mut().map_err(|_| {
+            std::io::Error::other("runtime context is borrowed during frame publication")
+        })?;
+        self.terminal.commit_prepared(terminal)?;
+        self.static_renderer.commit_prepared_lines(static_lines);
+        dynamic.commit_with_runtime(&mut runtime_context, &mut self.previous_vnode);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn commit_prepared_frame_with_writer(
+        &mut self,
+        prepared: PreparedAppFrame,
+        writer: &mut impl std::io::Write,
+    ) -> std::io::Result<()> {
+        let PreparedAppFrame {
+            terminal,
+            static_lines,
+            dynamic,
+        } = prepared;
+        let dynamic = dynamic
+            .bind(&mut self.layout_engine)
+            .map_err(std::io::Error::other)?;
+        let mut runtime_context = self.runtime_context.try_borrow_mut().map_err(|_| {
+            std::io::Error::other("runtime context is borrowed during frame publication")
+        })?;
+        self.terminal
+            .commit_prepared_with_writer(terminal, writer)?;
+        self.static_renderer.commit_prepared_lines(static_lines);
+        dynamic.commit_with_runtime(&mut runtime_context, &mut self.previous_vnode);
+        Ok(())
     }
 
     /// Request exit
@@ -306,120 +359,4 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use std::error::Error;
-
-    use super::*;
-    use crate::core::Element;
-    use crate::layout::TextFlowError;
-    use crate::renderer::registry::{is_alt_screen, lock_test_registry, render_handle};
-
-    #[test]
-    fn test_registry_cleanup_on_drop() {
-        let _registry_guard = lock_test_registry();
-        let runtime = AppRuntime::new(false);
-
-        {
-            let _guard = register_app(runtime);
-            assert!(render_handle().is_some());
-            assert_eq!(is_alt_screen(), Some(false));
-        }
-
-        assert!(render_handle().is_none());
-        assert_eq!(is_alt_screen(), None);
-    }
-
-    #[test]
-    fn test_exit_sets_should_exit_flag() {
-        let app = App::new(|| Element::text("ok"));
-        assert!(!app.should_exit.load(Ordering::SeqCst));
-
-        app.exit();
-
-        assert!(app.should_exit.load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn test_exit_updates_runtime_context_exit_state() {
-        let app = App::new(|| Element::text("ok"));
-        assert!(!app.runtime_context.borrow().should_exit());
-
-        app.exit();
-
-        assert!(app.runtime_context.borrow().should_exit());
-    }
-
-    #[test]
-    fn app_render_candidate_preserves_typed_error_source() {
-        let mut app = App::new(|| Element::text("app"));
-        app.layout_engine.set_text_flow_policy(0, "…", 1);
-        let failure = app
-            .try_prepare_frame(&Element::text("app"), 20, 4)
-            .unwrap_err();
-        assert!(matches!(
-            failure,
-            crate::renderer::DynamicFrameError::Incremental(
-                crate::layout::IncrementalLayoutError::TextFlow(TextFlowError::InvalidTabStop)
-            )
-        ));
-        let io_error = failure.into_io();
-        let dynamic_error = io_error
-            .get_ref()
-            .and_then(|source| source.downcast_ref::<crate::renderer::DynamicFrameError>())
-            .expect("io error must retain DynamicFrameError");
-        assert!(matches!(
-            dynamic_error
-                .source()
-                .and_then(|source| {
-                    source.downcast_ref::<crate::layout::IncrementalLayoutError>()
-                })
-                .and_then(std::error::Error::source)
-                .and_then(|source| source.downcast_ref::<TextFlowError>()),
-            Some(TextFlowError::InvalidTabStop),
-        ));
-    }
-
-    #[test]
-    fn duplicate_key_reaches_app_io_error_without_frame_commit() {
-        let mut app = App::new(|| Element::text("app"));
-        let mut invalid = Element::root();
-        invalid.add_child(Element::text("first").with_key("duplicate"));
-        invalid.add_child(Element::text("second").with_key("duplicate"));
-
-        let failure = app
-            .try_prepare_frame(&invalid, 20, 4)
-            .expect_err("duplicate sibling key must reach the App boundary");
-        assert!(matches!(
-            &failure,
-            crate::renderer::DynamicFrameError::Incremental(
-                crate::layout::IncrementalLayoutError::Identity(
-                    crate::reconciler::ReconcilePlanError::DuplicateSiblingKey { .. }
-                )
-            )
-        ));
-        assert!(app.previous_vnode.is_none());
-        assert!(!app.layout_engine.has_tree());
-        assert!(
-            app.runtime_context
-                .borrow()
-                .get_measurement_by_key_dims("duplicate")
-                .is_none()
-        );
-
-        let io_error = failure.into_io();
-        let dynamic_error = io_error
-            .get_ref()
-            .and_then(|source| source.downcast_ref::<crate::renderer::DynamicFrameError>())
-            .expect("io error must retain DynamicFrameError");
-        let incremental_error = dynamic_error
-            .source()
-            .and_then(|source| source.downcast_ref::<crate::layout::IncrementalLayoutError>())
-            .expect("dynamic error must retain IncrementalLayoutError");
-        assert!(matches!(
-            incremental_error.source().and_then(|source| {
-                source.downcast_ref::<crate::reconciler::ReconcilePlanError>()
-            }),
-            Some(crate::reconciler::ReconcilePlanError::DuplicateSiblingKey { .. })
-        ));
-    }
-}
+mod tests;
