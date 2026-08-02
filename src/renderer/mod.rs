@@ -56,7 +56,7 @@ pub use app::App;
 
 // Builder and options
 pub use builder::{AppBuilder, AppOptions, CancelToken, render, render_fullscreen, render_inline};
-pub use error::{TextCoordinateError, TextProjectionError, TextRenderError};
+pub use error::{DynamicFrameError, TextCoordinateError, TextProjectionError, TextRenderError};
 
 // Registry APIs
 pub use registry::{

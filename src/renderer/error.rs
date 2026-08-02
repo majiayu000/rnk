@@ -3,7 +3,7 @@ use std::fmt;
 use std::io;
 
 use crate::core::ElementId;
-use crate::layout::TextFlowError;
+use crate::layout::{IncrementalLayoutError, LayoutLookupError, TextFlowError};
 
 /// A typed projection failure that does not expose frame contents or source text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,5 +143,63 @@ impl Error for TextRenderError {
             Self::Io { source, .. } => Some(source),
             Self::MissingCurrentFlow { .. } | Self::IncompleteSourceMap { .. } => None,
         }
+    }
+}
+
+/// Checked dynamic-frame failure.
+///
+/// Reconciliation identity and legacy lookup failures remain separate from
+/// TextFlow/text projection errors so invalid targets cannot enter a rebuild
+/// fallback or appear as a successful frame.
+#[derive(Debug)]
+pub enum DynamicFrameError {
+    Incremental(IncrementalLayoutError),
+    Text(TextRenderError),
+    LegacyLookup(LayoutLookupError),
+}
+
+impl DynamicFrameError {
+    pub(crate) fn into_io(self) -> io::Error {
+        io::Error::other(self)
+    }
+}
+
+impl fmt::Display for DynamicFrameError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Incremental(source) => write!(formatter, "dynamic layout failed: {source}"),
+            Self::Text(source) => write!(formatter, "dynamic text render failed: {source}"),
+            Self::LegacyLookup(source) => {
+                write!(formatter, "dynamic layout lookup failed: {source}")
+            }
+        }
+    }
+}
+
+impl Error for DynamicFrameError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Incremental(source) => Some(source),
+            Self::Text(source) => Some(source),
+            Self::LegacyLookup(source) => Some(source),
+        }
+    }
+}
+
+impl From<IncrementalLayoutError> for DynamicFrameError {
+    fn from(source: IncrementalLayoutError) -> Self {
+        Self::Incremental(source)
+    }
+}
+
+impl From<TextRenderError> for DynamicFrameError {
+    fn from(source: TextRenderError) -> Self {
+        Self::Text(source)
+    }
+}
+
+impl From<LayoutLookupError> for DynamicFrameError {
+    fn from(source: LayoutLookupError) -> Self {
+        Self::LegacyLookup(source)
     }
 }

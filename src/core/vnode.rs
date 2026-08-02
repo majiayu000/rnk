@@ -25,12 +25,16 @@ pub struct NodeKey {
 }
 
 impl NodeKey {
-    /// Create a new NodeKey with a user-provided key
-    pub fn with_key(key: &(impl Hash + ?Sized), type_id: TypeId, index: usize) -> Self {
+    pub(crate) fn compatibility_token(key: &(impl Hash + ?Sized)) -> u64 {
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Create a new NodeKey with a user-provided key
+    pub fn with_key(key: &(impl Hash + ?Sized), type_id: TypeId, index: usize) -> Self {
         Self {
-            user_key: Some(hasher.finish()),
+            user_key: Some(Self::compatibility_token(key)),
             type_id,
             index,
         }

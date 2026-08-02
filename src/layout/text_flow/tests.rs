@@ -1,8 +1,10 @@
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::*;
-use crate::core::{Color, Overflow, Style};
+use crate::core::{Overflow, Style};
 use crate::layout::measure::measure_text_width;
+
+mod style_normalization;
 
 fn flow_rows(text: &str, width: usize, wrap: TextWrap) -> Vec<String> {
     flow_text(text, width, wrap).rows().to_vec()
@@ -225,24 +227,7 @@ fn text_flow_tab_expansion_bound_is_typed_and_atomic() {
 
 #[test]
 fn text_flow_styled_runs() {
-    let mut red = Style::new();
-    red.color = Some(Color::Red);
-    let mut blue = Style::new();
-    blue.color = Some(Color::Blue);
-    let input = plain_input("ab界").with_styled_ranges(vec![
-        StyledTextRange {
-            range: 0..2,
-            style: red.clone(),
-        },
-        StyledTextRange {
-            range: 2..5,
-            style: blue.clone(),
-        },
-    ]);
-    let flow = TextFlow::try_build(&input, &TextFlowOptions::new(8, TextWrap::Wrap)).unwrap();
-    assert_eq!(flow.tokens[0].style, red);
-    assert_eq!(flow.tokens[2].style, blue);
-    assert_eq!(flow.logical_rows[0].runs[2].text, "界");
+    style_normalization::assert_text_flow_styled_runs();
 }
 
 #[test]
@@ -270,49 +255,23 @@ fn text_flow_graphemes() {
 
 #[test]
 fn split_combining_and_zwj_style_boundary_normalizes() {
-    let family = "👨‍👩‍👧‍👦";
-    let source = format!("e\u{301}{family}");
-    let family_boundary = 3 + "👨".len();
-    let mut first = Style::new();
-    first.bold = true;
-    let mut later = Style::new();
-    later.italic = true;
-    let input = TextFlowInput::plain(&source, TextFlowSourceKind::Exact, Style::new())
-        .with_styled_ranges(vec![
-            StyledTextRange {
-                range: 0..1,
-                style: first.clone(),
-            },
-            StyledTextRange {
-                range: 1..family_boundary,
-                style: later.clone(),
-            },
-            StyledTextRange {
-                range: family_boundary..source.len(),
-                style: Style::new(),
-            },
-        ]);
-    let flow = TextFlow::try_build(&input, &TextFlowOptions::new(20, TextWrap::Wrap)).unwrap();
-    assert_eq!(flow.tokens.len(), 2);
-    assert_eq!(flow.tokens[0].style, first);
-    assert_eq!(flow.tokens[1].style, later);
-    assert!(flow.diagnostics.iter().any(|diagnostic| matches!(
-        diagnostic,
-        TextFlowDiagnostic::StyleBoundaryNormalized { boundary: 1, .. }
-    )));
-    assert!(flow.diagnostics.iter().any(|diagnostic| matches!(
-        diagnostic,
-        TextFlowDiagnostic::StyleBoundaryNormalized { boundary, .. }
-            if *boundary == family_boundary
-    )));
+    style_normalization::assert_split_combining_and_zwj_style_boundary_normalizes();
 }
 
 #[test]
 fn finalized_non_grapheme_range_is_error() {
     let source = "e\u{301}";
     let input = plain_input(source);
+    let validated_styles = super::style_normalization::validate_styled_ranges(&input).unwrap();
+    let mut observer = super::style_normalization::NoopNormalizationObserver;
+    let styled_plan = super::style_normalization::build_styled_range_plan(
+        validated_styles,
+        &mut || false,
+        &mut observer,
+    )
+    .unwrap();
     let (tokens, _, grapheme_ranges) =
-        tokenize_source(&input, &mut || false).expect("valid source tokenizes");
+        tokenize_source(&input, &styled_plan, &mut || false).expect("valid source tokenizes");
     assert_eq!(
         validate_source_coverage(source, &tokens, &grapheme_ranges),
         Ok(())

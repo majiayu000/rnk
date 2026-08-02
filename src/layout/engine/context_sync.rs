@@ -11,7 +11,27 @@ use super::{
     LayoutEngine,
     text_flow_bridge::{NodeContext, flow_for_width, measure_text_node},
 };
+use crate::core::NodeKey;
 use crate::layout::{TextFlow, TextFlowError, TextFlowInput};
+use crate::reconciler::ScopedNodeIdentity;
+
+pub(super) trait TextContextKey {
+    fn resolve_scope(&self, engine: &LayoutEngine) -> Option<ScopedNodeIdentity>;
+}
+
+impl TextContextKey for ScopedNodeIdentity {
+    fn resolve_scope(&self, _engine: &LayoutEngine) -> Option<ScopedNodeIdentity> {
+        Some(self.clone())
+    }
+}
+
+impl TextContextKey for NodeKey {
+    fn resolve_scope(&self, engine: &LayoutEngine) -> Option<ScopedNodeIdentity> {
+        engine
+            .resolve_legacy_scope(*self)
+            .unwrap_or_else(|error| panic!("text context lookup failed: {error}"))
+    }
+}
 
 impl LayoutEngine {
     pub(super) fn staged_clone(&self) -> Self {
@@ -19,7 +39,9 @@ impl LayoutEngine {
             taffy: self.taffy.clone(),
             node_map: self.node_map.clone(),
             element_keys: self.element_keys.clone(),
+            element_scopes: self.element_scopes.clone(),
             vnode_map: self.vnode_map.clone(),
+            vnode_legacy_keys: self.vnode_legacy_keys.clone(),
             root_node: self.root_node,
             last_width: self.last_width,
             last_height: self.last_height,
@@ -27,17 +49,24 @@ impl LayoutEngine {
             text_flow_policy: self.text_flow_policy.clone(),
             current_text_flows: self.current_text_flows.clone(),
             current_vnode_flows: self.current_vnode_flows.clone(),
+            committed_vnode: self.committed_vnode.clone(),
         }
     }
 
-    pub(super) fn sync_text_contexts(
-        &mut self,
-        inputs: &HashMap<crate::core::NodeKey, TextFlowInput>,
-    ) {
+    pub(super) fn sync_text_contexts<K>(&mut self, inputs: &HashMap<K, TextFlowInput>)
+    where
+        K: TextContextKey + Eq + std::hash::Hash,
+    {
         for (key, input) in inputs {
-            let Some(node_id) = self.vnode_map.get(&key.identity()).copied() else {
-                continue;
-            };
+            let identity = key.resolve_scope(self).unwrap_or_else(|| {
+                panic!("text context identity is not registered in the scoped VNode map")
+            });
+            let node_id = self.vnode_map.get(&identity).copied().unwrap_or_else(|| {
+                panic!(
+                    "text context identity {} has no scoped layout node",
+                    identity.diagnostic()
+                )
+            });
             if self
                 .taffy
                 .get_node_context(node_id)
@@ -135,7 +164,7 @@ impl LayoutEngine {
         let vnode_flows = self
             .vnode_map
             .iter()
-            .filter_map(|(key, node_id)| Some((*key, Arc::clone(node_flows.get(node_id)?))))
+            .filter_map(|(key, node_id)| Some((key.clone(), Arc::clone(node_flows.get(node_id)?))))
             .collect();
         self.current_text_flows = element_flows;
         self.current_vnode_flows = vnode_flows;
