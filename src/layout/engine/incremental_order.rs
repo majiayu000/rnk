@@ -5,15 +5,18 @@ use std::collections::{HashMap, HashSet};
 use taffy::NodeId;
 
 use crate::reconciler::{
-    PlannedNode, PlannedNodeAction, ReconcilePlan, ReconcilePlanError, ScopedNodeIdentity,
+    Patch, PlannedNode, PlannedNodeAction, ReconcilePlan, ReconcilePlanError, ScopedNodeIdentity,
 };
 
 use super::LayoutEngine;
-use super::patch_error::{PatchError, PatchFailure, PatchKind};
+use super::incremental::{ApplyPlanError, apply_error, taffy_apply_error};
+#[cfg(test)]
+use super::patch_error::PatchError;
+use super::patch_error::{PatchFailure, PatchKind, PatchStage};
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum IncrementalOrderFault {
+pub(super) enum IncrementalOrderFault {
     PreflightStyle,
     ValidateChildren,
     CommitChildren,
@@ -22,25 +25,33 @@ enum IncrementalOrderFault {
 
 #[cfg(test)]
 thread_local! {
-    static INCREMENTAL_ORDER_FAULT: std::cell::Cell<Option<IncrementalOrderFault>> = const {
+    static INCREMENTAL_ORDER_FAULT: std::cell::Cell<Option<(IncrementalOrderFault, usize)>> = const {
         std::cell::Cell::new(None)
     };
 }
 
 #[cfg(test)]
-fn set_incremental_order_fault(fault: IncrementalOrderFault) {
-    INCREMENTAL_ORDER_FAULT.with(|slot| slot.set(Some(fault)));
+pub(super) fn set_incremental_order_fault(fault: IncrementalOrderFault) {
+    set_incremental_order_fault_at(fault, 0);
+}
+
+#[cfg(test)]
+pub(super) fn set_incremental_order_fault_at(fault: IncrementalOrderFault, occurrence: usize) {
+    INCREMENTAL_ORDER_FAULT.with(|slot| slot.set(Some((fault, occurrence))));
 }
 
 #[cfg(test)]
 fn take_incremental_order_fault(fault: IncrementalOrderFault) -> bool {
-    INCREMENTAL_ORDER_FAULT.with(|slot| {
-        if slot.get() == Some(fault) {
+    INCREMENTAL_ORDER_FAULT.with(|slot| match slot.get() {
+        Some((armed, 0)) if armed == fault => {
             slot.set(None);
             true
-        } else {
+        }
+        Some((armed, remaining)) if armed == fault => {
+            slot.set(Some((armed, remaining - 1)));
             false
         }
+        _ => false,
     })
 }
 
@@ -217,13 +228,45 @@ impl LayoutEngine {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn commit_planned_children(
         &mut self,
         planned: &PlannedNode,
         target_map: &HashMap<ScopedNodeIdentity, NodeId>,
     ) -> Result<(), PatchError> {
+        self.commit_planned_children_for_plan(planned, target_map, &[])
+            .map_err(|error| error.patch)
+    }
+
+    pub(super) fn commit_planned_children_for_plan(
+        &mut self,
+        planned: &PlannedNode,
+        target_map: &HashMap<ScopedNodeIdentity, NodeId>,
+        patches: &[Patch],
+    ) -> Result<(), ApplyPlanError> {
+        self.commit_planned_children_recursive(planned, target_map, patches, None, None)
+    }
+
+    fn commit_planned_children_recursive(
+        &mut self,
+        planned: &PlannedNode,
+        target_map: &HashMap<ScopedNodeIdentity, NodeId>,
+        patches: &[Patch],
+        parent_address: Option<crate::core::NodeKey>,
+        enclosing_origin: Option<(usize, PatchKind, crate::core::NodeKey)>,
+    ) -> Result<(), ApplyPlanError> {
+        let node_origin = self
+            .planned_node_origin(planned, parent_address, patches)
+            .or(enclosing_origin);
+        let planned_address = planned.identity.scoped_patch_address(planned.legacy_key);
         for child in &planned.children {
-            self.commit_planned_children(child, target_map)?;
+            self.commit_planned_children_recursive(
+                child,
+                target_map,
+                patches,
+                Some(planned_address),
+                node_origin,
+            )?;
         }
         let node_id = target_map[&planned.identity];
         let child_ids: Vec<_> = planned
@@ -231,36 +274,162 @@ impl LayoutEngine {
             .iter()
             .map(|child| target_map[&child.identity])
             .collect();
+        let origin = if matches!(
+            planned.action,
+            PlannedNodeAction::Create | PlannedNodeAction::Replace
+        ) {
+            node_origin
+        } else {
+            self.structural_child_origin(planned, patches)
+        };
+        let (patch_index, kind, key) =
+            origin.unwrap_or((usize::MAX, PatchKind::Reorder, planned_address));
+        let patch_index = (patch_index != usize::MAX).then_some(patch_index);
+        let current_children = self.taffy.children(node_id).map_err(|source| {
+            taffy_apply_error(
+                kind,
+                key,
+                PatchFailure::TreeRejected,
+                PatchStage::SetChildren,
+                source,
+                patch_index,
+            )
+        })?;
+        if current_children == child_ids {
+            return Ok(());
+        }
         #[cfg(test)]
         let commit_result = if take_incremental_order_fault(IncrementalOrderFault::CommitChildren) {
-            Err(())
+            Err(taffy::TaffyError::InvalidInputNode(node_id))
         } else {
-            self.taffy
-                .set_children(node_id, &child_ids)
-                .expect("validated target nodes remain writable");
-            Ok(())
+            self.taffy.set_children(node_id, &child_ids)
         };
         #[cfg(not(test))]
         let commit_result = self.taffy.set_children(node_id, &child_ids);
-        commit_result.map_err(|_| {
-            PatchError::new(
-                PatchKind::Reorder,
-                planned.legacy_key,
+        commit_result.map_err(|source| {
+            taffy_apply_error(
+                kind,
+                key,
                 PatchFailure::TreeRejected,
+                PatchStage::SetChildren,
+                source,
+                patch_index,
             )
         })
     }
 
+    fn planned_node_origin(
+        &self,
+        planned: &PlannedNode,
+        parent_address: Option<crate::core::NodeKey>,
+        patches: &[Patch],
+    ) -> Option<(usize, PatchKind, crate::core::NodeKey)> {
+        match planned.action {
+            PlannedNodeAction::Create => {
+                patches
+                    .iter()
+                    .enumerate()
+                    .find_map(|(patch_index, patch)| match patch {
+                        Patch::Create { key, parent, .. }
+                            if key.identity() == planned.legacy_key.identity()
+                                && parent_address.is_some_and(|address| {
+                                    address.identity() == parent.identity()
+                                }) =>
+                        {
+                            Some((patch_index, PatchKind::Create, *parent))
+                        }
+                        _ => None,
+                    })
+            }
+            PlannedNodeAction::Replace => {
+                let old_identity = planned.old_identity.as_ref()?;
+                let legacy_key = self.vnode_legacy_keys.get(old_identity).copied()?;
+                let address = old_identity.scoped_patch_address(legacy_key);
+                patches
+                    .iter()
+                    .enumerate()
+                    .find_map(|(patch_index, patch)| match patch {
+                        Patch::Replace { key, .. }
+                            if key.identity() == address.identity()
+                                || (!ScopedNodeIdentity::is_scoped_patch_address(*key)
+                                    && key.identity() == legacy_key.identity()) =>
+                        {
+                            Some((patch_index, PatchKind::Replace, address))
+                        }
+                        _ => None,
+                    })
+            }
+            PlannedNodeAction::Reuse | PlannedNodeAction::Update => None,
+        }
+    }
+
+    fn structural_child_origin(
+        &self,
+        planned: &PlannedNode,
+        patches: &[Patch],
+    ) -> Option<(usize, PatchKind, crate::core::NodeKey)> {
+        let parent_address = planned.identity.scoped_patch_address(planned.legacy_key);
+        patches
+            .iter()
+            .enumerate()
+            .find_map(|(patch_index, patch)| match patch {
+                Patch::Create { parent, .. } if parent.identity() == parent_address.identity() => {
+                    Some((patch_index, PatchKind::Create, *parent))
+                }
+                Patch::Reorder { parent, .. } if parent.identity() == parent_address.identity() => {
+                    Some((patch_index, PatchKind::Reorder, *parent))
+                }
+                Patch::Remove { key } if self.patch_target_is_child_of(*key, &planned.identity) => {
+                    Some((patch_index, PatchKind::Remove, *key))
+                }
+                Patch::Replace { key, .. }
+                    if self.patch_target_is_child_of(*key, &planned.identity) =>
+                {
+                    Some((patch_index, PatchKind::Replace, *key))
+                }
+                _ => None,
+            })
+    }
+
+    fn patch_target_is_child_of(
+        &self,
+        key: crate::core::NodeKey,
+        parent: &ScopedNodeIdentity,
+    ) -> bool {
+        self.vnode_legacy_keys.iter().any(|(identity, legacy_key)| {
+            identity.parent() == Some(parent)
+                && (identity.scoped_patch_address(*legacy_key).identity() == key.identity()
+                    || (!ScopedNodeIdentity::is_scoped_patch_address(key)
+                        && legacy_key.identity() == key.identity()))
+        })
+    }
+
+    #[cfg(test)]
     pub(super) fn check_reconcile_postconditions(
         &self,
         planned: &PlannedNode,
     ) -> Result<(), PatchError> {
+        self.check_reconcile_postconditions_for_plan(planned, &[])
+            .map_err(|error| error.patch)
+    }
+
+    pub(super) fn check_reconcile_postconditions_for_plan(
+        &self,
+        planned: &PlannedNode,
+        patches: &[Patch],
+    ) -> Result<(), ApplyPlanError> {
+        let patch_key = planned.identity.scoped_patch_address(planned.legacy_key);
+        let patch_index = patches.iter().position(|patch| {
+            matches!(patch, Patch::Reorder { parent, .. } if parent.identity() == patch_key.identity())
+        });
         let fail = || {
-            PatchError::new(
+            apply_error(
                 PatchKind::Reorder,
-                planned.legacy_key,
+                patch_key,
                 PatchFailure::PostconditionViolated,
+                PatchStage::VerifyPostcondition,
             )
+            .with_patch_index(patch_index)
         };
         let node_id = self
             .vnode_map
@@ -270,16 +439,22 @@ impl LayoutEngine {
         #[cfg(test)]
         let children_result =
             if take_incremental_order_fault(IncrementalOrderFault::PostconditionChildren) {
-                Err(())
+                Err(taffy::TaffyError::InvalidInputNode(node_id))
             } else {
-                Ok(self
-                    .taffy
-                    .children(node_id)
-                    .expect("committed target node remains readable"))
+                self.taffy.children(node_id)
             };
         #[cfg(not(test))]
         let children_result = self.taffy.children(node_id);
-        let actual = children_result.map_err(|_| fail())?;
+        let actual = children_result.map_err(|source| {
+            taffy_apply_error(
+                PatchKind::Reorder,
+                patch_key,
+                PatchFailure::PostconditionViolated,
+                PatchStage::VerifyPostcondition,
+                source,
+                patch_index,
+            )
+        })?;
         let expected: Option<Vec<_>> = planned
             .children
             .iter()
@@ -289,7 +464,7 @@ impl LayoutEngine {
             return Err(fail());
         }
         for child in &planned.children {
-            self.check_reconcile_postconditions(child)?;
+            self.check_reconcile_postconditions_for_plan(child, patches)?;
         }
         Ok(())
     }

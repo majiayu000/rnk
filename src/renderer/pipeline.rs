@@ -1,15 +1,16 @@
 //! Render pipeline extraction for dynamic frame rendering.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::core::{Element, VNode};
 use crate::layout::{IncrementalLayoutError, LayoutEngine};
-use crate::reconciler::{ScopedNodeIdentity, SiblingIdentity};
 use crate::renderer::element_renderer::try_render_element;
 use crate::renderer::{DynamicFrameError, Output, TextRenderError};
 use crate::runtime::RuntimeContext;
+
+mod prepared;
+pub(crate) use prepared::PreparedDynamicFrame;
 
 /// Dynamic render pipeline for the `App` runner.
 pub(crate) struct RenderPipeline;
@@ -138,77 +139,19 @@ impl RenderPipeline {
             f32,
         ) -> Result<(), TextRenderError>,
     ) -> Result<String, DynamicFrameError> {
-        let (current_vnode, _layout_outcome) = match layout_engine
-            .try_compute_element_incremental_checked(
-                dynamic_root,
-                previous_vnode.as_ref(),
-                width,
-                height,
-            ) {
-            Ok(candidate) => candidate,
-            Err(error @ IncrementalLayoutError::Identity(_)) => {
-                return Err(DynamicFrameError::Incremental(error));
-            }
-            Err(error @ IncrementalLayoutError::TextFlow(_)) => {
-                *layout_engine = LayoutEngine::new();
-                return Err(DynamicFrameError::Incremental(error));
-            }
-        };
-
-        let mut key_aliases = HashMap::new();
-        Self::collect_key_aliases(dynamic_root, layout_engine, &mut key_aliases);
-        let layouts = layout_engine.get_all_layouts();
-        let scoped_vnode_layouts = layout_engine.get_all_scoped_vnode_layouts();
-        let vnode_layouts = layout_engine.try_get_all_vnode_layouts()?;
-        let raw_node_candidates = layout_engine.raw_vnode_identity_candidates();
-
-        let Some(root_layout) = layout_engine.get_layout(dynamic_root.id) else {
-            *layout_engine = LayoutEngine::new();
-            return Err(TextRenderError::IncompleteSourceMap {
-                element_id: dynamic_root.id,
-            }
-            .into());
-        };
-        let content_width = (root_layout.width as u16).max(1).min(width);
-        let render_height = (root_layout.height as u16).max(1).min(height);
-
-        let mut output = Output::new(content_width, render_height);
-        if let Err(error) = renderer(dynamic_root, layout_engine, &mut output, 0.0, 0.0) {
-            *layout_engine = LayoutEngine::new();
-            return Err(error.into());
-        }
-        let rendered = output.render();
-
-        runtime_context
-            .borrow_mut()
-            .set_measure_layouts_with_scoped_keys(
-                layouts,
-                scoped_vnode_layouts,
-                vnode_layouts,
-                raw_node_candidates,
-                key_aliases,
-            );
-        *previous_vnode = Some(current_vnode);
-        Ok(rendered)
-    }
-
-    fn collect_key_aliases(
-        element: &Element,
-        layout_engine: &LayoutEngine,
-        out: &mut HashMap<String, Vec<(ScopedNodeIdentity, SiblingIdentity)>>,
-    ) {
-        if let Some(key) = &element.key
-            && let Some((identity, projection)) =
-                layout_engine.scoped_projection_for_element(element.id)
-        {
-            out.entry(key.clone())
-                .or_default()
-                .push((identity, projection));
-        }
-
-        for child in &element.children {
-            Self::collect_key_aliases(child, layout_engine, out);
-        }
+        let prepared = Self::prepare_dynamic_frame_with_renderer(
+            dynamic_root,
+            width,
+            height,
+            layout_engine,
+            previous_vnode.as_ref(),
+            |element, engine, output, x, y| {
+                renderer(element, engine, output, x, y)
+                    .map_err(crate::renderer::CheckedRenderError::from)
+            },
+        )
+        .map_err(prepared::legacy_dynamic_error)?;
+        Ok(prepared.commit(layout_engine, runtime_context, previous_vnode))
     }
 }
 
@@ -216,7 +159,7 @@ impl RenderPipeline {
 mod tests {
     use super::*;
     use crate::components::{Box, Text};
-    use crate::layout::{IncrementalLayoutError, LayoutLookupError, TextFlowError};
+    use crate::layout::{IncrementalLayoutError, LayoutLookupError};
     use crate::reconciler::ReconcilePlanError;
     use crate::renderer::DynamicFrameError;
     use crate::renderer::TextCoordinateError;
@@ -238,24 +181,22 @@ mod tests {
         let before = previous_vnode.clone();
         layout_engine.set_text_flow_policy(0, "…", 1);
 
-        let attempt = RenderPipeline::try_render_dynamic_frame(
+        let attempt = RenderPipeline::prepare_dynamic_frame(
             &Element::text("failing"),
             20,
             4,
-            &mut layout_engine,
-            &runtime_context,
-            &mut previous_vnode,
+            &layout_engine,
+            previous_vnode.as_ref(),
         );
 
         assert!(matches!(
             attempt,
-            Err(TextRenderError::Flow {
-                source: TextFlowError::InvalidTabStop,
-                ..
-            })
+            Err(crate::renderer::TransactionalFrameError::Transaction(
+                crate::layout::TransactionalLayoutError::RecoveryFailed { .. }
+            ))
         ));
         assert_eq!(previous_vnode, before);
-        assert!(layout_engine.get_all_layouts().is_empty());
+        assert_eq!(layout_engine.get_all_layouts().len(), 1);
     }
 
     fn keyed_root(text: &str) -> Element {
@@ -310,7 +251,7 @@ mod tests {
                 ..
             })
         ));
-        assert!(layout_engine.get_all_layouts().is_empty());
+        assert_eq!(layout_engine.get_all_layouts().len(), 2);
         assert_eq!(previous_vnode, stable_vnode);
         assert_eq!(
             runtime_context
@@ -339,23 +280,21 @@ mod tests {
 
         let flow_candidate = keyed_root("flow retry");
         layout_engine.set_text_flow_policy(0, "…", 2);
-        let flow_failure = RenderPipeline::try_render_dynamic_frame(
+        let flow_failure = RenderPipeline::prepare_dynamic_frame(
             &flow_candidate,
             20,
             4,
-            &mut layout_engine,
-            &runtime_context,
-            &mut previous_vnode,
+            &layout_engine,
+            previous_vnode.as_ref(),
         );
         assert!(matches!(
             flow_failure,
-            Err(TextRenderError::Flow {
-                source: TextFlowError::InvalidTabStop,
-                ..
-            })
+            Err(crate::renderer::TransactionalFrameError::Transaction(
+                crate::layout::TransactionalLayoutError::RecoveryFailed { .. }
+            ))
         ));
-        assert!(layout_engine.get_all_layouts().is_empty());
-        assert!(!layout_engine.has_tree());
+        assert_eq!(layout_engine.get_all_layouts().len(), 2);
+        assert!(layout_engine.has_tree());
         assert_eq!(previous_vnode, corrected_vnode);
         assert_eq!(
             runtime_context
@@ -407,7 +346,7 @@ mod tests {
             Err(TextRenderError::MissingCurrentFlow { element_id })
                 if element_id == missing_id
         ));
-        assert!(layout_engine.get_all_layouts().is_empty());
+        assert_eq!(layout_engine.get_all_layouts().len(), 2);
         assert_eq!(previous_vnode, flow_vnode);
         assert_eq!(
             runtime_context
@@ -720,5 +659,25 @@ mod tests {
                 .try_get_measurement_by_node_key_dims(unknown),
             Ok(None)
         );
+    }
+
+    #[test]
+    fn failure_commits_no_engine_previous_measurement_or_frame() {
+        super::prepared::tests::failure_commits_no_engine_previous_measurement_or_frame();
+    }
+
+    #[test]
+    fn cancelled_candidate_cannot_interleave_with_next_batch() {
+        super::prepared::tests::cancelled_candidate_cannot_interleave_with_next_batch();
+    }
+
+    #[test]
+    fn unchanged_frame_new_element_ids_render_and_commit_aliases() {
+        super::prepared::tests::unchanged_frame_new_element_ids_render_and_commit_aliases();
+    }
+
+    #[test]
+    fn failed_unchanged_frame_keeps_previous_aliases() {
+        super::prepared::tests::failed_unchanged_frame_keeps_previous_aliases();
     }
 }

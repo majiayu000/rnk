@@ -5,9 +5,16 @@ pub mod measure;
 pub mod text_flow;
 mod utils;
 
+pub(crate) use engine::{
+    BoundPreparedLayoutFrame, CheckedLayoutSnapshot, LayoutSnapshotError, PreparedLayoutCommitError,
+};
 pub use engine::{
-    DirectPatchError, IncrementalLayoutError, Layout, LayoutEngine, LayoutLookupError, PatchError,
-    PatchFailure, PatchKind,
+    CheckedIncrementalLayoutReport, DirectPatchApplyReport, DirectPatchError,
+    DirectPatchPreflightCause, DirectPatchPreflightError, FullRebuildError,
+    IncrementalInvariantError, IncrementalLayoutError, IncrementalLayoutOutcome,
+    IncrementalPatchKind, InvalidLayoutTargetError, Layout, LayoutEngine, LayoutLookupError,
+    PatchError, PatchFailure, PatchKind, PatchStage, PatchTransactionCause, PatchTransactionError,
+    PreparedLayoutFrame, RebuildFailure, RebuildStage, TransactionalLayoutError,
 };
 pub use measure::{
     TextAlign, display_width, measure_text, measure_text_width, pad_text, truncate_middle,

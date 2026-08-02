@@ -3,10 +3,10 @@ use std::fmt;
 use std::ops::Range;
 
 use crate::core::{Display, Element, ElementId, ElementType};
-use crate::layout::LayoutEngine;
 use crate::layout::text_flow::{
     TextFlow, TextFlowPlacement, TextFlowRow, TextFlowRun, TextFlowSource, TextFlowToken,
 };
+use crate::layout::{IncrementalInvariantError, LayoutEngine};
 use crate::renderer::Output;
 use crate::renderer::{TextCoordinateError, TextProjectionError, TextRenderError};
 
@@ -128,6 +128,7 @@ pub(super) struct ProjectionOptions {
 pub(super) enum ProjectionError {
     MissingCurrentFlow(ElementId),
     MissingLayout(ElementId),
+    LayoutInvariant(IncrementalInvariantError),
     NonFiniteCoordinate,
     CoordinateOverflow,
     MalformedFlow(&'static str),
@@ -148,6 +149,7 @@ impl fmt::Display for ProjectionError {
             Self::MissingLayout(id) => {
                 write!(formatter, "missing current layout for element {id:?}")
             }
+            Self::LayoutInvariant(source) => source.fmt(formatter),
             Self::NonFiniteCoordinate => write!(formatter, "non-finite render coordinate"),
             Self::CoordinateOverflow => write!(formatter, "render coordinate overflow"),
             Self::MalformedFlow(reason) => {
@@ -179,6 +181,9 @@ impl ProjectionError {
             }
             Self::MissingLayout(element_id) => {
                 TextRenderError::projection(element_id, TextProjectionError::MissingLayout)
+            }
+            Self::LayoutInvariant(source) => {
+                panic!("checked layout invariant failed inside legacy renderer: {source}")
             }
             Self::NonFiniteCoordinate => {
                 TextRenderError::coordinate(fallback_element_id, TextCoordinateError::NonFinite)

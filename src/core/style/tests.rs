@@ -14,6 +14,30 @@ fn test_new_equals_default() {
 }
 
 #[test]
+fn nan_style_clone_is_equal_in_the_style_domain() {
+    let mut style = Style::new();
+    style.flex_grow = f32::NAN;
+    let mut other_nan = style.clone();
+    other_nan.flex_grow = f32::from_bits(0x7fc0_0001);
+
+    assert_eq!(style, style.clone());
+    assert_eq!(style, other_nan);
+
+    let mut positive_zero = Style::new();
+    positive_zero.flex_grow = 0.0;
+    let mut negative_zero = positive_zero.clone();
+    negative_zero.flex_grow = -0.0;
+    assert_eq!(positive_zero, negative_zero);
+
+    let mut positive_infinity = Style::new();
+    positive_infinity.flex_grow = f32::INFINITY;
+    assert_eq!(positive_infinity, positive_infinity.clone());
+    let mut negative_infinity = positive_infinity.clone();
+    negative_infinity.flex_grow = f32::NEG_INFINITY;
+    assert_ne!(positive_infinity, negative_infinity);
+}
+
+#[test]
 fn test_edges() {
     let edges = Edges::all(5.0);
     assert_eq!(edges.top, 5.0);

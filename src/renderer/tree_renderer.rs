@@ -163,7 +163,8 @@ fn render_element_tree_staged(
     }
 
     let layout = layout_engine
-        .get_layout(element.id)
+        .try_get_required_layout(element.id)
+        .map_err(ProjectionError::LayoutInvariant)?
         .ok_or(ProjectionError::MissingLayout(element.id))?;
 
     let raw_x = offset_x + layout.x;
