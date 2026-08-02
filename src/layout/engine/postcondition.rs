@@ -4,7 +4,7 @@ use std::{collections::HashSet, sync::Arc};
 
 use taffy::NodeId;
 
-use crate::core::{Dimension, Edges, NodeKey, Props, Style, VNode};
+use crate::core::{NodeKey, Props, VNode};
 use crate::reconciler::{PlannedNode, ReconcilePlan, ScopedNodeIdentity};
 
 use super::{
@@ -458,89 +458,12 @@ fn planned_tree_matches_target(planned: &PlannedNode, target: &VNode) -> bool {
 }
 
 fn props_snapshots_match(left: &Props, right: &Props) -> bool {
-    left.key == right.key
-        && left.scroll_offset_x == right.scroll_offset_x
-        && left.scroll_offset_y == right.scroll_offset_y
-        && style_snapshots_match(&left.style, &right.style)
+    left.semantically_eq(right)
 }
 
-fn style_snapshots_match(left: &Style, right: &Style) -> bool {
-    left.display == right.display
-        && left.position == right.position
-        && same_optional_float(left.top, right.top)
-        && same_optional_float(left.right, right.right)
-        && same_optional_float(left.bottom, right.bottom)
-        && same_optional_float(left.left, right.left)
-        && left.flex_direction == right.flex_direction
-        && left.flex_wrap == right.flex_wrap
-        && same_float(left.flex_grow, right.flex_grow)
-        && same_float(left.flex_shrink, right.flex_shrink)
-        && same_dimension(left.flex_basis, right.flex_basis)
-        && left.align_items == right.align_items
-        && left.align_self == right.align_self
-        && left.justify_content == right.justify_content
-        && same_edges(left.padding, right.padding)
-        && same_edges(left.margin, right.margin)
-        && same_float(left.gap, right.gap)
-        && same_optional_float(left.row_gap, right.row_gap)
-        && same_optional_float(left.column_gap, right.column_gap)
-        && same_dimension(left.width, right.width)
-        && same_dimension(left.height, right.height)
-        && same_dimension(left.min_width, right.min_width)
-        && same_dimension(left.min_height, right.min_height)
-        && same_dimension(left.max_width, right.max_width)
-        && same_dimension(left.max_height, right.max_height)
-        && left.border_style == right.border_style
-        && left.border_color == right.border_color
-        && left.border_top_color == right.border_top_color
-        && left.border_right_color == right.border_right_color
-        && left.border_bottom_color == right.border_bottom_color
-        && left.border_left_color == right.border_left_color
-        && left.border_dim == right.border_dim
-        && left.border_top == right.border_top
-        && left.border_bottom == right.border_bottom
-        && left.border_left == right.border_left
-        && left.border_right == right.border_right
-        && left.color == right.color
-        && left.background_color == right.background_color
-        && left.bold == right.bold
-        && left.italic == right.italic
-        && left.underline == right.underline
-        && left.strikethrough == right.strikethrough
-        && left.dim == right.dim
-        && left.inverse == right.inverse
-        && left.text_wrap == right.text_wrap
-        && left.overflow_x == right.overflow_x
-        && left.overflow_y == right.overflow_y
-        && left.is_static == right.is_static
-}
-
-fn same_edges(left: Edges, right: Edges) -> bool {
-    same_float(left.top, right.top)
-        && same_float(left.right, right.right)
-        && same_float(left.bottom, right.bottom)
-        && same_float(left.left, right.left)
-}
-
-fn same_dimension(left: Dimension, right: Dimension) -> bool {
-    match (left, right) {
-        (Dimension::Auto, Dimension::Auto) => true,
-        (Dimension::Points(left), Dimension::Points(right))
-        | (Dimension::Percent(left), Dimension::Percent(right)) => same_float(left, right),
-        _ => false,
-    }
-}
-
-fn same_optional_float(left: Option<f32>, right: Option<f32>) -> bool {
-    match (left, right) {
-        (Some(left), Some(right)) => same_float(left, right),
-        (None, None) => true,
-        _ => false,
-    }
-}
-
-fn same_float(left: f32, right: f32) -> bool {
-    left == right || (left.is_nan() && right.is_nan())
+#[cfg(test)]
+fn style_snapshots_match(left: &crate::core::Style, right: &crate::core::Style) -> bool {
+    left.semantically_eq(right)
 }
 
 fn taffy_styles_match(actual: &taffy::Style, expected: &taffy::Style) -> bool {

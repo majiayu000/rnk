@@ -711,3 +711,76 @@ fn rebuild_failure_returns_both_causes_and_preserves_committed_state() {
     assert!(engine.get_layout(before_id).is_some());
     assert!(engine.get_layout(after_id).is_none());
 }
+
+#[test]
+fn cloned_nan_props_produce_no_planner_update() {
+    let mut vnode = VNode::root();
+    vnode.props.style.flex_grow = f32::NAN;
+    assert!(
+        try_diff(&vnode, &vnode.clone())
+            .expect("a cloned valid tree plans")
+            .is_empty()
+    );
+}
+
+#[test]
+fn cloned_nan_props_are_unchanged_for_previous_frame_validation() {
+    let mut element = Element::root();
+    element.style.flex_grow = f32::NAN;
+    let mut engine = LayoutEngine::new();
+    let (previous, first) = engine
+        .try_compute_element_incremental_transactional(&element, None, 20, 4)
+        .expect("initial NaN style frame commits");
+    assert_eq!(first, CheckedIncrementalLayoutReport::InitialFullBuild);
+    let (_, second) = engine
+        .try_compute_element_incremental_transactional(&element, Some(&previous), 20, 4)
+        .expect("an identical NaN style frame remains valid");
+    assert_eq!(second, CheckedIncrementalLayoutReport::NoChange);
+}
+
+#[test]
+fn cloned_nan_props_are_valid_raw_update_create_and_replace_payloads() {
+    let mut updated = VNode::root();
+    updated.props.style.flex_grow = f32::NAN;
+    let mut update_engine = LayoutEngine::new();
+    update_engine.compute_vnode(&updated, 20, 4);
+    let old_props = updated.props.clone();
+    let mut new_props = old_props.clone();
+    new_props.scroll_offset_x = Some(1);
+    let update_applied = matches!(
+        update_engine.try_apply_patches_transactional(&[Patch::update(
+            updated.key,
+            old_props,
+            new_props,
+        )]),
+        Ok(DirectPatchApplyReport::Applied { patch_count: 1 })
+    );
+
+    let root = VNode::root();
+    let mut created = VNode::box_node().with_key("created");
+    created.props.style.flex_grow = f32::NAN;
+    let mut create_engine = LayoutEngine::new();
+    create_engine.compute_vnode(&root, 20, 4);
+    let create_applied = matches!(
+        create_engine.try_apply_patches_transactional(&[Patch::create(created, root.key)]),
+        Ok(DirectPatchApplyReport::Applied { patch_count: 1 })
+    );
+
+    let existing = VNode::box_node().with_key("existing");
+    let existing_key = existing.key;
+    let replace_root = VNode::root().child(existing);
+    let mut replacement = VNode::text("replacement").with_key("replacement");
+    replacement.props.style.flex_grow = f32::NAN;
+    let mut replace_engine = LayoutEngine::new();
+    replace_engine.compute_vnode(&replace_root, 20, 4);
+    let replace_applied = matches!(
+        replace_engine
+            .try_apply_patches_transactional(&[Patch::replace(existing_key, replacement)]),
+        Ok(DirectPatchApplyReport::Applied { patch_count: 1 })
+    );
+
+    assert_eq!(
+        (update_applied, create_applied, replace_applied),
+        (true, true, true)
+    );
+}

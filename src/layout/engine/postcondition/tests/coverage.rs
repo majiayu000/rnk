@@ -3,7 +3,7 @@ use std::{collections::HashSet, sync::Arc};
 use taffy::{AvailableSpace, NodeId, Size};
 
 use crate::core::{
-    AlignItems, AlignSelf, BorderStyle, Color, Dimension, Display, Edges, ElementId, FlexDirection,
+    AlignItems, AlignSelf, BorderStyle, Color, Dimension, Display, ElementId, FlexDirection,
     JustifyContent, Overflow, Position, Props, Style, TextWrap, VNode, VNodeType,
 };
 use crate::layout::{IncrementalInvariantError, TextFlow, TextFlowInput, TextFlowSourceKind};
@@ -12,8 +12,7 @@ use crate::reconciler::{ScopedIdentityArena, ScopedNodeIdentity, plan_initial_tr
 use super::super::super::{Shared, text_flow_bridge::NodeContext};
 use super::super::{
     TargetAliasExpectation, TargetValidationCause, TargetValidationError,
-    planned_tree_matches_target, props_snapshots_match, same_dimension, same_edges, same_float,
-    same_optional_float, style_snapshots_match,
+    planned_tree_matches_target, props_snapshots_match, style_snapshots_match,
 };
 
 mod remaining;
@@ -98,34 +97,16 @@ fn snapshot_comparators_reject_every_independent_field_change() {
         assert_style_difference(*mutate);
     }
 
-    assert!(!same_edges(
-        Edges::default(),
-        Edges::new(1.0, 0.0, 0.0, 0.0)
-    ));
-    assert!(!same_edges(
-        Edges::default(),
-        Edges::new(0.0, 1.0, 0.0, 0.0)
-    ));
-    assert!(!same_edges(
-        Edges::default(),
-        Edges::new(0.0, 0.0, 1.0, 0.0)
-    ));
-    assert!(!same_edges(
-        Edges::default(),
-        Edges::new(0.0, 0.0, 0.0, 1.0)
-    ));
-    assert!(same_dimension(
-        Dimension::Points(f32::NAN),
-        Dimension::Points(f32::NAN)
-    ));
-    assert!(same_dimension(
-        Dimension::Percent(f32::NAN),
-        Dimension::Percent(f32::NAN)
-    ));
-    assert!(!same_dimension(Dimension::Auto, Dimension::Points(0.0)));
-    assert!(same_optional_float(Some(f32::NAN), Some(f32::NAN)));
-    assert!(!same_optional_float(Some(0.0), None));
-    assert!(!same_float(0.0, 1.0));
+    for mutate in [
+        |style: &mut Style| style.flex_grow = f32::NAN,
+        |style: &mut Style| style.flex_basis = Dimension::Points(f32::NAN),
+        |style: &mut Style| style.flex_basis = Dimension::Percent(f32::NAN),
+        |style: &mut Style| style.top = Some(f32::NAN),
+    ] {
+        let mut left = Style::default();
+        mutate(&mut left);
+        assert!(style_snapshots_match(&left, &left.clone()));
+    }
 }
 
 #[test]

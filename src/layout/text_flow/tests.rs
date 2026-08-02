@@ -181,6 +181,19 @@ fn text_flow_cache_reuse() {
 }
 
 #[test]
+fn text_flow_cache_reuses_cloned_nan_style_input() {
+    let mut style = Style::new();
+    style.flex_grow = f32::NAN;
+    let input = TextFlowInput::plain("same", TextFlowSourceKind::Exact, style);
+    let options = TextFlowOptions::new(4, TextWrap::Wrap);
+    let mut cache = TextFlowCache::default();
+    let first = cache.get_or_compute(&input, &options).unwrap();
+    let second = cache.get_or_compute(&input.clone(), &options).unwrap();
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(cache.build_count, 1);
+}
+
+#[test]
 fn text_flow_tab_expansion_bound_is_typed_and_atomic() {
     let mut cache = TextFlowCache::default();
     let baseline_input = plain_input("baseline");

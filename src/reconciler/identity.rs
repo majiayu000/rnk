@@ -398,7 +398,7 @@ fn semantically_equal_node(
         || if is_root {
             !props_equal_ignoring_key(&left.props, &right.props)
         } else {
-            left.props != right.props
+            !left.props.semantically_eq(&right.props)
         }
         || left.children.len() != right.children.len()
     {
@@ -438,11 +438,7 @@ fn semantically_equal_node(
 }
 
 fn props_equal_ignoring_key(left: &Props, right: &Props) -> bool {
-    let mut left = left.clone();
-    let mut right = right.clone();
-    left.key = None;
-    right.key = None;
-    left == right
+    left.semantically_eq_ignoring_key(right)
 }
 
 fn child_scope_hash(parent_hash: u64, segment: &ScopedIdentitySegment) -> u64 {

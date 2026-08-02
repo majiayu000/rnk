@@ -185,6 +185,19 @@ fn virtual_text_is_filtered_before_required_layout_lookup() {
 }
 
 #[test]
+fn cloned_nan_text_style_remains_renderable() {
+    let mut element = Element::text("nan projection");
+    element.style.flex_grow = f32::NAN;
+
+    assert_eq!(
+        TestRenderer::new(20, 4)
+            .try_render_to_plain_checked(&element)
+            .expect("cloned token and run styles remain semantically equal"),
+        "nan projection"
+    );
+}
+
+#[test]
 fn hidden_test_root_is_filtered_before_layout_preparation() {
     let mut hidden = duplicate_key_tree();
     hidden.style.display = Display::None;

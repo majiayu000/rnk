@@ -2,6 +2,7 @@
 
 use crate::core::Color;
 
+mod equality;
 mod taffy;
 
 /// Generate `impl From<LocalEnum> for taffy::TaffyEnum` for enums with matching variant names.
@@ -268,7 +269,10 @@ macro_rules! impl_edges_from {
 impl_edges_from!(f32, u16, i32);
 
 /// Complete style definition
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Equality treats NaN-valued numeric fields as equal so a cloned style remains
+/// the same domain value across reconciliation, caching, and rendering.
+#[derive(Debug, Clone)]
 pub struct Style {
     // Display
     pub display: Display,

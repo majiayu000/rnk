@@ -304,6 +304,20 @@ fn child_patch_planner_covers_create_update_replace_remove_and_reorder_contracts
 }
 
 #[test]
+fn nan_style_scroll_only_update_does_not_mark_style_or_text_context() {
+    let mut old = VNode::text("stable");
+    old.props.style.flex_grow = f32::NAN;
+    let mut new = old.clone();
+    new.props.scroll_offset_y = Some(1);
+
+    let plan = plan_diff(&old, &new).expect("scroll-only update plans");
+
+    assert_eq!(plan.root.action, PlannedNodeAction::Update);
+    assert!(!plan.root.mutations.style);
+    assert!(!plan.root.mutations.text_context);
+}
+
+#[test]
 fn plan_patch_views_preserve_owned_complete_result() {
     let old = VNode::box_node();
     let new = VNode::box_node().child(VNode::text("new").with_key("new"));

@@ -259,7 +259,7 @@ impl LayoutEngine {
                     props,
                     node,
                 } => {
-                    if props != &node.props {
+                    if !props.semantically_eq(&node.props) {
                         return Err(preflight_error(
                             patch_index,
                             patch,
@@ -350,7 +350,7 @@ impl LayoutEngine {
                             .map_err(|error| resolution_error(patch_index, patch, error))?;
                     locator = resolved_entry_locator(&index, patch, &entry);
                     let target_node = vnode_at_mut(&mut target, &entry.path);
-                    if &target_node.props != old_props {
+                    if !target_node.props.semantically_eq(old_props) {
                         return Err(preflight_error_with_locator(
                             patch_index,
                             IncrementalPatchKind::Update,
@@ -406,7 +406,7 @@ impl LayoutEngine {
                         resolve_virtual(&index, *key, LookupRole::Target, &tombstones, &aliases)
                             .map_err(|error| resolution_error(patch_index, patch, error))?;
                     locator = resolved_entry_locator(&index, patch, &entry);
-                    if new_props != &node.props {
+                    if !new_props.semantically_eq(&node.props) {
                         return Err(preflight_error_with_locator(
                             patch_index,
                             IncrementalPatchKind::Replace,

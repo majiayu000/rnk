@@ -450,7 +450,7 @@ impl Planner {
             return Ok(replacement);
         }
 
-        let action = if old.props != new.props {
+        let action = if !old.props.semantically_eq(&new.props) {
             self.patches.push(Patch::update(
                 self.patch_address(&ScopedNodeIdentity::Root, old.key),
                 old.props.clone(),
@@ -632,7 +632,7 @@ impl Planner {
             return Ok(replacement);
         }
 
-        let action = if old_vnode.props != new_vnode.props {
+        let action = if !old_vnode.props.semantically_eq(&new_vnode.props) {
             self.patches.push(Patch::update(
                 self.patch_address(&old_identity.scoped, old_identity.legacy_key),
                 old_vnode.props.clone(),
@@ -759,7 +759,7 @@ fn is_source_domain_conversion(old: &ResolvedNodeIdentity, new: &ResolvedNodeIde
 }
 
 fn planned_mutations(old: &VNode, new: &VNode) -> PlannedNodeMutations {
-    let style = old.props.style != new.props.style;
+    let style = !old.props.style.semantically_eq(&new.props.style);
     PlannedNodeMutations {
         style,
         text_context: old.is_text() && style,
