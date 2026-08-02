@@ -1,5 +1,9 @@
+use super::super::RebuildFailure;
 use super::*;
 use crate::core::Dimension;
+use crate::layout::{
+    CheckedIncrementalLayoutReport, IncrementalPatchKind, TransactionalLayoutError,
+};
 use crate::reconciler::plan_diff;
 
 fn keyed_tree(order: &[&str]) -> Element {
@@ -348,7 +352,7 @@ fn changed_style_and_text_context_are_written_by_the_production_operations() {
 }
 
 #[test]
-fn taffy_fault_seams_preserve_error_mapping_and_checked_caller_atomicity() {
+pub(crate) fn taffy_fault_seams_preserve_error_mapping_and_checked_caller_atomicity() {
     let empty = Element::root();
     let mut with_text = Element::root();
     with_text.add_child(Element::text("new").with_key("new"));
@@ -416,6 +420,44 @@ fn taffy_fault_seams_preserve_error_mapping_and_checked_caller_atomicity() {
     );
 }
 
+fn recovered_stage(before: &Element, after: &Element, fault: IncrementalFault) -> PatchStage {
+    let mut engine = LayoutEngine::new();
+    let (previous, _) = engine.compute_element_incremental(before, None, 20, 4);
+    set_incremental_fault(fault);
+    let (_, report) = engine
+        .try_compute_element_incremental_transactional(after, Some(&previous), 20, 4)
+        .expect("one-shot fault recovers");
+    match report {
+        CheckedIncrementalLayoutReport::RecoveredFullRebuild {
+            incremental_failure,
+            ..
+        } => incremental_failure.stage,
+        other => panic!("expected recovery report, got {other:?}"),
+    }
+}
+
+#[test]
+pub(crate) fn context_faults_report_set_context_stage() {
+    let empty = Element::root();
+    let mut created = Element::root();
+    created.add_child(Element::box_element().with_key("created"));
+    assert_eq!(
+        recovered_stage(&empty, &created, IncrementalFault::CreateBoxContext),
+        PatchStage::SetContext
+    );
+
+    let mut old = Element::root();
+    old.add_child(Element::text("same").with_key("stable"));
+    let mut updated = Element::root();
+    let mut text = Element::text("same").with_key("stable");
+    text.style.width = Dimension::Points(5.0);
+    updated.add_child(text);
+    assert_eq!(
+        recovered_stage(&old, &updated, IncrementalFault::UpdateTextContext),
+        PatchStage::SetContext
+    );
+}
+
 #[test]
 fn corrupt_materialization_state_returns_exact_defensive_errors() {
     let tree = VNode::box_node().child(VNode::box_node().with_key("child"));
@@ -425,7 +467,9 @@ fn corrupt_materialization_state_returns_exact_defensive_errors() {
     let mut missing_old_identity = plan_diff(&tree, &tree).expect("fixture plan is valid");
     missing_old_identity.root.old_identity = None;
     assert!(matches!(
-        engine.apply_reconcile_plan(&missing_old_identity),
+        engine
+            .apply_reconcile_plan(&missing_old_identity)
+            .map_err(|error| error.patch),
         Err(PatchError {
             kind: PatchKind::Update,
             failure: PatchFailure::UnknownNode,
@@ -436,7 +480,9 @@ fn corrupt_materialization_state_returns_exact_defensive_errors() {
     let mut missing_old_node_engine = engine.staged_clone();
     missing_old_node_engine.vnode_map.clear();
     assert!(matches!(
-        missing_old_node_engine.apply_reconcile_plan(&plan_diff(&tree, &tree).unwrap()),
+        missing_old_node_engine
+            .apply_reconcile_plan(&plan_diff(&tree, &tree).unwrap())
+            .map_err(|error| error.patch),
         Err(PatchError {
             kind: PatchKind::Update,
             failure: PatchFailure::UnknownNode,
@@ -447,7 +493,9 @@ fn corrupt_materialization_state_returns_exact_defensive_errors() {
     let mut duplicate_target = plan_diff(&tree, &tree).expect("fixture plan is valid");
     duplicate_target.root.children[0].identity = ScopedNodeIdentity::Root;
     assert!(matches!(
-        engine.apply_reconcile_plan(&duplicate_target),
+        engine
+            .apply_reconcile_plan(&duplicate_target)
+            .map_err(|error| error.patch),
         Err(PatchError {
             kind: PatchKind::Create,
             failure: PatchFailure::PostconditionViolated,
@@ -466,7 +514,9 @@ fn corrupt_taffy_node_count_fails_closed() {
         .new_leaf(taffy::Style::default())
         .expect("unmapped fixture node is allocated");
     assert!(matches!(
-        count_engine.apply_reconcile_plan(&plan_diff(&new, &new).unwrap()),
+        count_engine
+            .apply_reconcile_plan(&plan_diff(&new, &new).unwrap())
+            .map_err(|error| error.patch),
         Err(PatchError {
             kind: PatchKind::Remove,
             failure: PatchFailure::PostconditionViolated,
@@ -488,6 +538,7 @@ fn reset_and_element_map_sync_cover_success_and_fail_loud_contracts() {
 
     let mut invalid = ElementVNodeSnapshot {
         vnode: VNode::root(),
+        has_layout_root: true,
         element_scopes: HashMap::new(),
         element_keys: HashMap::new(),
         text_inputs: HashMap::new(),
@@ -514,4 +565,228 @@ fn reset_and_element_map_sync_cover_success_and_fail_loud_contracts() {
     assert!(engine.current_text_flows.is_empty());
     assert!(engine.current_vnode_flows.is_empty());
     assert!(engine.committed_vnode.is_none());
+}
+
+fn only_patch_key(plan: &ReconcilePlan, expected_kind: PatchKind) -> NodeKey {
+    let matches: Vec<_> = plan
+        .patches()
+        .iter()
+        .filter_map(|patch| match (expected_kind, patch) {
+            (PatchKind::Create, crate::reconciler::Patch::Create { parent: key, .. })
+            | (PatchKind::Update, crate::reconciler::Patch::Update { key, .. })
+            | (PatchKind::Remove, crate::reconciler::Patch::Remove { key })
+            | (PatchKind::Replace, crate::reconciler::Patch::Replace { key, .. }) => Some(*key),
+            (PatchKind::Reorder, crate::reconciler::Patch::Reorder { parent, .. }) => Some(*parent),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(matches.len(), 1, "fixture must contain one matching patch");
+    matches[0]
+}
+
+#[test]
+pub(crate) fn incremental_create_fault_reports_the_real_patch_locator() {
+    let empty = VNode::root();
+    let created = VNode::root().child(VNode::box_node().with_key("created"));
+    let create_plan = plan_diff(&empty, &created).expect("create fixture plan");
+    let mut create_engine = LayoutEngine::new();
+    create_engine.compute_vnode(&empty, 20, 4);
+    set_incremental_fault(IncrementalFault::CreateBox);
+    assert_eq!(
+        create_engine
+            .apply_reconcile_plan(&create_plan)
+            .map_err(|error| error.patch),
+        Err(PatchError {
+            kind: PatchKind::Create,
+            key: only_patch_key(&create_plan, PatchKind::Create),
+            failure: PatchFailure::BuildFailed,
+        })
+    );
+}
+
+#[test]
+pub(crate) fn incremental_replace_fault_reports_the_real_patch_locator() {
+    let old = VNode::root().child(VNode::text("old").with_key("same"));
+    let replaced = VNode::root().child(VNode::box_node().with_key("same"));
+    let replace_plan = plan_diff(&old, &replaced).expect("replace fixture plan");
+    let mut replace_engine = LayoutEngine::new();
+    replace_engine.compute_vnode(&old, 20, 4);
+    set_incremental_fault(IncrementalFault::CreateBox);
+    assert_eq!(
+        replace_engine
+            .apply_reconcile_plan(&replace_plan)
+            .map_err(|error| error.patch),
+        Err(PatchError {
+            kind: PatchKind::Replace,
+            key: only_patch_key(&replace_plan, PatchKind::Replace),
+            failure: PatchFailure::BuildFailed,
+        })
+    );
+}
+
+#[test]
+pub(crate) fn incremental_remove_fault_reports_the_real_patch_locator() {
+    let removed = VNode::root().child(VNode::box_node().with_key("removed"));
+    let remove_plan = plan_diff(&removed, &VNode::root()).expect("remove fixture plan");
+    let mut remove_engine = LayoutEngine::new();
+    remove_engine.compute_vnode(&removed, 20, 4);
+    set_incremental_fault(IncrementalFault::Remove);
+    assert_eq!(
+        remove_engine
+            .apply_reconcile_plan(&remove_plan)
+            .map_err(|error| error.patch),
+        Err(PatchError {
+            kind: PatchKind::Remove,
+            key: only_patch_key(&remove_plan, PatchKind::Remove),
+            failure: PatchFailure::TreeRejected,
+        })
+    );
+}
+
+#[test]
+pub(crate) fn replacement_descendant_cleanup_fault_keeps_replace_root_locator() {
+    let old = VNode::root().child(
+        VNode::box_node()
+            .with_key("branch")
+            .child(VNode::box_node().child(VNode::text("leaf"))),
+    );
+    let target = VNode::root().child(VNode::text("replacement").with_key("branch"));
+    let plan = plan_diff(&old, &target).expect("replacement fixture plan");
+    let expected_key = only_patch_key(&plan, PatchKind::Replace);
+    let mut engine = LayoutEngine::new();
+    engine.compute_vnode(&old, 20, 4);
+    set_incremental_fault(IncrementalFault::Remove);
+
+    assert_eq!(
+        engine
+            .apply_reconcile_plan(&plan)
+            .map_err(|error| error.patch),
+        Err(PatchError {
+            kind: PatchKind::Replace,
+            key: expected_key,
+            failure: PatchFailure::TreeRejected,
+        })
+    );
+}
+
+#[test]
+fn persistent_recovery_failure_returns_both_typed_causes_and_keeps_committed_state() {
+    let before = Element::root();
+    let mut after = Element::root();
+    after.add_child(Element::box_element().with_key("created"));
+    let mut engine = LayoutEngine::new();
+    let (previous, _) = engine.compute_element_incremental(&before, None, 20, 4);
+    let root_before = engine.root_node;
+    let committed_before = engine.committed_vnode.clone();
+    set_incremental_fault(IncrementalFault::CreateBox);
+    super::super::context_sync::set_layout_compute_fault();
+
+    let failure = engine
+        .try_compute_element_incremental_transactional(&after, Some(&previous), 20, 4)
+        .expect_err("candidate and fresh rebuild faults must both be retained");
+
+    match failure {
+        TransactionalLayoutError::RecoveryFailed {
+            incremental,
+            rebuild,
+        } => {
+            assert_eq!(incremental.kind, IncrementalPatchKind::Create);
+            assert_eq!(incremental.stage, PatchStage::CreateNode);
+            assert!(matches!(rebuild.source, RebuildFailure::Taffy(_)));
+        }
+        other => panic!("expected both primary and recovery causes, got {other:?}"),
+    }
+    assert_eq!(engine.root_node, root_before);
+    assert_eq!(engine.committed_vnode, committed_before);
+}
+
+fn unchanged_element_fixture() -> Element {
+    let mut root = Element::root();
+    root.add_child(Element::text("same").with_key("stable"));
+    root
+}
+
+#[test]
+pub(crate) fn unchanged_target_and_viewport_is_noop_with_fresh_aliases() {
+    let first = unchanged_element_fixture();
+    let first_id = first.id;
+    let first_text_id = first.children.iter().next().expect("text child").id;
+    let mut engine = LayoutEngine::new();
+    let (previous, _) = engine.compute_element_incremental(&first, None, 20, 4);
+    let root_node = engine.root_node;
+    let vnode_map = engine.vnode_map.clone();
+    let vnode_legacy_keys = engine.vnode_legacy_keys.clone();
+    let current_vnode_flows = engine.current_vnode_flows.clone();
+    let committed_vnode = engine.committed_vnode.clone();
+    let node_count = engine.taffy.total_node_count();
+    let cache_len = engine.flow_cache.len();
+    assert!(
+        cache_len > 0,
+        "fixture must populate the committed flow cache"
+    );
+    super::super::context_sync::set_layout_compute_fault();
+
+    let current_frame = unchanged_element_fixture();
+    let current_id = current_frame.id;
+    let current_text_id = current_frame.children.iter().next().expect("text child").id;
+    let prepared = engine
+        .prepare_element_incremental(&current_frame, Some(&previous), 20, 4)
+        .expect("unchanged frame prepares aliases without layout work");
+    assert!(
+        engine.taffy.shares_storage(&prepared.engine().taffy),
+        "no-op preparation must share, not clone, the Taffy backend"
+    );
+    assert!(
+        engine
+            .vnode_map
+            .shares_storage(&prepared.engine().vnode_map)
+    );
+    assert!(
+        engine
+            .vnode_legacy_keys
+            .shares_storage(&prepared.engine().vnode_legacy_keys)
+    );
+    assert!(
+        engine
+            .current_vnode_flows
+            .shares_storage(&prepared.engine().current_vnode_flows)
+    );
+    assert!(
+        engine
+            .committed_vnode
+            .shares_storage(&prepared.engine().committed_vnode)
+    );
+    assert_eq!(prepared.engine().flow_cache.len(), 0);
+    assert!(engine.get_layout(first_text_id).is_some());
+    assert!(engine.get_layout(current_text_id).is_none());
+    assert!(prepared.engine().get_layout(current_text_id).is_some());
+    let (current, report) = prepared.commit(&mut engine);
+
+    assert_eq!(report, CheckedIncrementalLayoutReport::NoChange);
+    assert_eq!(engine.root_node, root_node);
+    assert_eq!(engine.vnode_map, vnode_map);
+    assert!(engine.vnode_map.shares_storage(&vnode_map));
+    assert!(engine.vnode_legacy_keys.shares_storage(&vnode_legacy_keys));
+    assert!(
+        engine
+            .current_vnode_flows
+            .shares_storage(&current_vnode_flows)
+    );
+    assert!(engine.committed_vnode.shares_storage(&committed_vnode));
+    assert_eq!(engine.taffy.total_node_count(), node_count);
+    assert_eq!(engine.flow_cache.len(), cache_len);
+    assert!(engine.get_layout(current_id).is_some());
+    assert!(engine.get_layout(current_text_id).is_some());
+    assert!(engine.current_text_flow(current_text_id).is_some());
+    assert_eq!(first_id, current_id, "root ElementId is canonical");
+    assert!(engine.get_layout(first_text_id).is_none());
+
+    let viewport_frame = unchanged_element_fixture();
+    let (_, viewport_report) = engine
+        .try_compute_element_incremental_transactional(&viewport_frame, Some(&current), 21, 4)
+        .expect("the untouched one-shot fault is consumed by viewport recompute recovery");
+    assert!(matches!(
+        viewport_report,
+        CheckedIncrementalLayoutReport::RecoveredFullRebuild { patch_count: 0, .. }
+    ));
 }

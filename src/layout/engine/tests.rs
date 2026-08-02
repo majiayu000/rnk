@@ -724,8 +724,15 @@ fn text_flow_failure_is_atomic() {
     engine.set_text_flow_policy(0, "…", 1);
     let mut changed = Element::root();
     changed.add_child(Element::text("new"));
-    let failure = engine.try_compute_element_incremental(&changed, Some(&previous), 20, 4);
-    assert!(matches!(failure, Err(TextFlowError::InvalidTabStop)));
+    let failure = engine
+        .try_compute_element_incremental_transactional(&changed, Some(&previous), 20, 4)
+        .expect_err("candidate and rebuild preserve both text-flow causes");
+    assert!(matches!(
+        failure,
+        TransactionalLayoutError::RecoveryFailed { incremental, rebuild }
+            if matches!(*incremental.source, PatchTransactionCause::TextFlow(TextFlowError::InvalidTabStop))
+                && matches!(rebuild.source, RebuildFailure::TextFlow(TextFlowError::InvalidTabStop))
+    ));
     let current = engine.current_text_flow(id).unwrap();
     assert!(Arc::ptr_eq(&published, &current));
     assert_eq!(engine.node_map[&id], node);
@@ -769,4 +776,21 @@ engine_contract_tests! {
     textflow_and_identity_causes_remain_distinct => super::patching::contract_tests::textflow_and_identity_causes_remain_distinct;
     cross_parent_move_cleans_old_scope_without_deleting_new_scope => super::incremental::tests::cross_parent_move_cleans_old_scope_without_deleting_new_scope;
     checked_layout_accepts_public_box_text_component_roots => super::patching::contract_tests::checked_layout_accepts_public_box_text_component_roots;
+    incremental_success_has_target_exact_tree_root_and_order => super::transaction::tests::incremental_success_has_target_exact_tree_root_and_order;
+    remove_replace_success_has_no_descendant_or_orphan_state => super::transaction::tests::remove_replace_success_has_no_descendant_or_orphan_state;
+    commit_failure_attempts_exactly_one_fresh_rebuild => super::transaction::tests::commit_failure_attempts_exactly_one_fresh_rebuild;
+    rebuild_success_must_pass_target_exact_postcondition => super::transaction::tests::rebuild_success_must_pass_target_exact_postcondition;
+    repeated_fault_has_stable_result_and_rebuild_count => super::transaction::tests::repeated_fault_has_stable_result_and_rebuild_count;
+    candidate_and_recovery_resources_drop_on_every_exit => super::transaction::tests::candidate_and_recovery_resources_drop_on_every_exit;
+    initial_frame_success_commits_target_exact_state => super::transaction::tests::initial_frame_success_commits_target_exact_state;
+    initial_build_failure_has_no_incremental_cause_or_commit => super::transaction::tests::initial_build_failure_has_no_incremental_cause_or_commit;
+    initial_compute_failure_has_no_incremental_cause_or_commit => super::transaction::tests::initial_compute_failure_has_no_incremental_cause_or_commit;
+    initial_postcondition_failure_has_no_incremental_cause_or_commit => super::transaction::tests::initial_postcondition_failure_has_no_incremental_cause_or_commit;
+    unchanged_target_and_viewport_is_noop => super::incremental::tests::unchanged_target_and_viewport_is_noop_with_fresh_aliases;
+    unchanged_vnode_refreshes_current_element_id_aliases => super::incremental::tests::unchanged_target_and_viewport_is_noop_with_fresh_aliases;
+    viewport_only_recompute_is_transactional => super::transaction::tests::viewport_only_recompute_is_transactional;
+    each_patch_failure_has_exact_locator_and_cause => super::transaction::tests::each_patch_failure_has_exact_locator_and_cause;
+    failed_or_dropped_candidate_preserves_committed_fingerprint => super::transaction::tests::failed_or_dropped_candidate_preserves_committed_fingerprint;
+    all_backend_failures_are_observed => super::transaction::tests::all_backend_failures_are_observed;
+    fault_backend_is_test_only_and_diagnostics_are_terminal_safe => super::transaction::tests::fault_backend_is_test_only_and_diagnostics_are_terminal_safe;
 }

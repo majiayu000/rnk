@@ -3,10 +3,11 @@
 //! This module handles the extraction and rendering of `Static` elements,
 //! which are elements that persist in the terminal history (like Ink's `<Static>`).
 
-use crate::core::Element;
+use crate::core::{Display, Element, ElementType};
 use crate::layout::LayoutEngine;
-use crate::renderer::tree_renderer::try_render_element_tree;
-use crate::renderer::{Output, Terminal, TextRenderError};
+use crate::renderer::{
+    CheckedRenderError, LayoutRenderError, Output, TextRenderError, try_render_element_tree_checked,
+};
 
 /// Static content renderer for inline mode
 ///
@@ -40,40 +41,60 @@ impl StaticRenderer {
         element: &Element,
         width: u16,
     ) -> Result<Vec<String>, TextRenderError> {
+        self.try_extract_static_content_checked(element, width)
+            .map_err(|error| match error {
+                CheckedRenderError::Text(source) => source,
+                other => panic!("legacy static renderer cannot represent checked error: {other}"),
+            })
+    }
+
+    pub(crate) fn try_extract_static_content_checked(
+        &self,
+        element: &Element,
+        width: u16,
+    ) -> Result<Vec<String>, CheckedRenderError> {
         let mut lines = Vec::new();
-        self.try_extract_recursive(element, width, &mut lines)?;
+        self.try_extract_recursive_checked(element, width, &mut lines)?;
         Ok(lines)
     }
 
     /// Recursive helper for extracting static content
-    fn try_extract_recursive(
+    fn try_extract_recursive_checked(
         &self,
         element: &Element,
         width: u16,
         lines: &mut Vec<String>,
-    ) -> Result<(), TextRenderError> {
+    ) -> Result<(), CheckedRenderError> {
+        if element.style.display == Display::None
+            || element.element_type == ElementType::VirtualText
+        {
+            return Ok(());
+        }
         if element.style.is_static {
             // Only render if the static element has children (new items)
             // Empty Static elements mean all items have already been rendered
             if !element.children.is_empty() {
                 // Render static element to get its content
-                let mut engine = LayoutEngine::new();
-                engine
-                    .try_compute(element, width, 100)
-                    .map_err(|source| TextRenderError::flow(element.id, source))?;
+                let prepared =
+                    LayoutEngine::new().prepare_element_incremental(element, None, width, 100)?;
+                let engine = prepared.engine();
 
-                let layout =
-                    engine
-                        .get_layout(element.id)
-                        .ok_or(TextRenderError::IncompleteSourceMap {
+                let layout = engine
+                    .try_get_required_layout(element.id)
+                    .map_err(|source| {
+                        CheckedRenderError::Layout(LayoutRenderError::Invariant(source))
+                    })?
+                    .ok_or({
+                        CheckedRenderError::Layout(LayoutRenderError::MissingRootLayout {
                             element_id: element.id,
-                        })?;
+                        })
+                    })?;
                 // Ensure we have valid dimensions
                 let render_width = (layout.width as u16).max(1);
                 let render_height = (layout.height as u16).max(1);
                 let mut output = Output::new(render_width, render_height);
                 let clip_depth_before = output.clip_depth();
-                try_render_element_tree(element, &engine, &mut output, 0.0, 0.0)?;
+                try_render_element_tree_checked(element, engine, &mut output, 0.0, 0.0)?;
                 debug_assert_eq!(
                     output.clip_depth(),
                     clip_depth_before,
@@ -93,44 +114,19 @@ impl StaticRenderer {
 
         // Check children for static content (non-static elements might contain static children)
         for child in &element.children {
-            self.try_extract_recursive(child, width, lines)?;
+            self.try_extract_recursive_checked(child, width, lines)?;
         }
         Ok(())
     }
 
-    /// Commit static content to the terminal (write permanently)
-    ///
-    /// This follows the Ink/Bubbletea pattern:
-    /// 1. Clear the current dynamic UI
-    /// 2. Write the static content (which will persist)
-    /// 3. The dynamic UI will be re-rendered below
-    pub(crate) fn commit_static_content(
-        &mut self,
-        new_lines: &[String],
-        terminal: &mut Terminal,
-    ) -> std::io::Result<()> {
-        use std::io::{Write, stdout};
+    /// Publish lines after the terminal frame has succeeded.
+    pub(crate) fn commit_prepared_lines(&mut self, new_lines: Vec<String>) {
+        self.committed_lines.extend(new_lines);
+    }
 
-        // Skip if no lines to commit
-        if new_lines.is_empty() {
-            return Ok(());
-        }
-
-        // Clear current dynamic UI first (like Ink's log.clear())
-        terminal.clear()?;
-
-        let mut stdout = stdout();
-        for line in new_lines {
-            // Write the line with erase-to-end-of-line to ensure clean output
-            writeln!(stdout, "{}\x1b[K", line)?;
-        }
-        stdout.flush()?;
-        self.committed_lines.extend_from_slice(new_lines);
-
-        // Force a full repaint of the dynamic UI
-        terminal.repaint();
-
-        Ok(())
+    #[cfg(test)]
+    pub(crate) fn committed_lines(&self) -> &[String] {
+        &self.committed_lines
     }
 
     /// Filter out static elements from the tree
@@ -139,6 +135,10 @@ impl StaticRenderer {
     /// leaving only dynamic content for rendering.
     pub(crate) fn filter_static_elements(&self, element: &Element) -> Element {
         let mut new_element = element.clone();
+        // This is a projection of the current frame, not a new logical tree.
+        // Preserve source IDs so layout aliases and runtime measurements refer
+        // to the Elements that the component actually produced.
+        new_element.id = element.id;
 
         // Remove static children
         new_element.children = element
@@ -251,5 +251,31 @@ mod tests {
             })
         ));
         assert!(renderer.committed_lines.is_empty());
+    }
+
+    #[test]
+    fn hidden_and_virtual_static_roots_are_filtered_before_layout() {
+        let renderer = StaticRenderer::new();
+        let mut hidden = Box::new()
+            .child(Text::new("hidden").into_element())
+            .into_element();
+        hidden.style.is_static = true;
+        hidden.style.display = crate::core::Display::None;
+        let mut virtual_text = Element::new(crate::core::ElementType::VirtualText);
+        virtual_text.style.is_static = true;
+        virtual_text.add_child(Text::new("virtual").into_element());
+
+        assert!(
+            renderer
+                .try_extract_static_content_checked(&hidden, 20)
+                .expect("hidden static root is filtered")
+                .is_empty()
+        );
+        assert!(
+            renderer
+                .try_extract_static_content_checked(&virtual_text, 20)
+                .expect("VirtualText static root is filtered")
+                .is_empty()
+        );
     }
 }

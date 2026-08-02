@@ -3,10 +3,15 @@
 //! This module provides utilities for rendering elements to strings
 //! outside of the main application runtime.
 
-use crate::core::{Element, ElementType};
-use crate::layout::LayoutEngine;
-use crate::renderer::tree_renderer::try_render_element_tree;
-use crate::renderer::{Output, Terminal, TextRenderError};
+use crate::core::{Display, Element, ElementType};
+use crate::layout::{
+    FullRebuildError, IncrementalLayoutError, LayoutEngine, RebuildFailure,
+    TransactionalLayoutError,
+};
+use crate::renderer::{
+    CheckedRenderError, LayoutRenderError, Output, Terminal, TextRenderError,
+    try_render_element_tree_checked,
+};
 
 const DEFAULT_TEXT_FLOW_TAB_STOP: usize = 4;
 
@@ -75,7 +80,17 @@ fn try_render_to_string_with_options_and_tab_stop(
     options: &RenderOptions,
     tab_stop: usize,
 ) -> Result<String, TextRenderError> {
-    let raw = RenderHelper.try_render_to_output(element, width, tab_stop)?;
+    try_render_to_string_checked_core(element, width, options, tab_stop)
+        .map_err(|error| legacy_string_error(element, error))
+}
+
+pub(super) fn try_render_to_string_checked_core(
+    element: &Element,
+    width: u16,
+    options: &RenderOptions,
+    tab_stop: usize,
+) -> Result<String, CheckedRenderError> {
+    let raw = RenderHelper.try_render_to_output_checked(element, width, tab_stop)?;
 
     if !options.normalize_line_endings {
         return Ok(raw);
@@ -94,22 +109,34 @@ fn try_render_to_string_with_options_and_tab_stop(
     }
 }
 
+fn legacy_string_error(element: &Element, error: CheckedRenderError) -> TextRenderError {
+    match error {
+        CheckedRenderError::Text(source) => source,
+        CheckedRenderError::LayoutBuild(TransactionalLayoutError::Upstream(
+            IncrementalLayoutError::TextFlow(source),
+        ))
+        | CheckedRenderError::LayoutBuild(TransactionalLayoutError::InitialBuild(
+            FullRebuildError {
+                source: RebuildFailure::TextFlow(source),
+                ..
+            },
+        )) => TextRenderError::flow(element.id, source),
+        other => panic!("legacy string renderer cannot represent checked error: {other}"),
+    }
+}
+
 /// Render an element to a string with specified width.
 ///
 /// Trims trailing whitespace and normalizes line endings to LF.
 ///
 /// # Example
 ///
-/// ```ignore
-/// use rnk::prelude::*;
+/// ```
+/// use rnk::core::Element;
 ///
-/// let element = Box::new()
-///     .border_style(BorderStyle::Round)
-///     .child(Text::new("Hello!").into_element())
-///     .into_element();
-///
+/// let element = Element::text("Hello!");
 /// let output = rnk::render_to_string(&element, 80);
-/// println!("{}", output);
+/// assert!(output.contains("Hello!"));
 /// ```
 pub fn render_to_string(element: &Element, width: u16) -> String {
     try_render_to_string(element, width)
@@ -164,12 +191,12 @@ pub fn try_render_to_string_raw(element: &Element, width: u16) -> Result<String,
 ///
 /// # Example
 ///
-/// ```ignore
-/// use rnk::prelude::*;
+/// ```
+/// use rnk::core::Element;
 ///
-/// let element = Text::new("Hello, world!").into_element();
-/// let output = rnk::render_to_string_auto(&element);
-/// println!("{}", output);
+/// // Keep the example independent of whether rustdoc owns a terminal.
+/// let render: fn(&Element) -> String = rnk::render_to_string_auto;
+/// let _ = render;
 /// ```
 pub fn render_to_string_auto(element: &Element) -> String {
     try_render_to_string_auto(element)
@@ -193,21 +220,22 @@ fn try_render_to_string_auto_with_size_provider(
 struct RenderHelper;
 
 impl RenderHelper {
-    fn try_render_to_output(
+    fn try_render_to_output_checked(
         &self,
         element: &Element,
         width: u16,
         tab_stop: usize,
-    ) -> Result<String, TextRenderError> {
+    ) -> Result<String, CheckedRenderError> {
         let mut engine = LayoutEngine::new();
         engine.set_text_flow_policy(tab_stop, "…", 1);
         let layout_width = width;
-        let content_height = self.try_resolve_render_height(element, layout_width, &mut engine)?;
+        let content_height =
+            self.try_resolve_render_height_checked(element, layout_width, &mut engine)?;
         let render_width = layout_width;
 
         let mut output = Output::new(render_width, content_height);
         let clip_depth_before = output.clip_depth();
-        try_render_element_tree(element, &engine, &mut output, 0.0, 0.0)?;
+        try_render_element_tree_checked(element, &engine, &mut output, 0.0, 0.0)?;
         debug_assert_eq!(
             output.clip_depth(),
             clip_depth_before,
@@ -217,13 +245,15 @@ impl RenderHelper {
         Ok(output.render())
     }
 
-    fn try_resolve_render_height(
+    fn try_resolve_render_height_checked(
         &self,
         element: &Element,
         width: u16,
         engine: &mut LayoutEngine,
-    ) -> Result<u16, TextRenderError> {
-        if element.element_type == ElementType::VirtualText {
+    ) -> Result<u16, CheckedRenderError> {
+        if element.element_type == ElementType::VirtualText
+            || element.style.display == Display::None
+        {
             return Ok(1);
         }
 
@@ -232,18 +262,22 @@ impl RenderHelper {
         let mut measured_height = initial_guess;
 
         for _ in 0..6 {
-            engine
-                .try_compute(element, width, probe_height)
-                .map_err(|source| TextRenderError::flow(element.id, source))?;
-
-            measured_height = engine
-                .get_layout(element.id)
-                .ok_or(TextRenderError::IncompleteSourceMap {
-                    element_id: element.id,
+            let prepared = engine
+                .prepare_element_incremental(element, None, width, probe_height)
+                .map_err(CheckedRenderError::LayoutBuild)?;
+            measured_height = prepared
+                .engine()
+                .try_get_required_layout(element.id)
+                .map_err(|source| CheckedRenderError::Layout(LayoutRenderError::Invariant(source)))?
+                .ok_or({
+                    CheckedRenderError::Layout(LayoutRenderError::MissingRootLayout {
+                        element_id: element.id,
+                    })
                 })?
                 .height
                 .ceil()
                 .max(1.0) as u16;
+            prepared.commit(engine);
 
             // We have headroom; current probe height is enough.
             if measured_height.saturating_add(1) < probe_height {
@@ -262,8 +296,9 @@ impl RenderHelper {
         let resolved_height = measured_height.max(1);
         // Recompute using resolved height so final layout and output height align.
         engine
-            .try_compute(element, width, resolved_height)
-            .map_err(|source| TextRenderError::flow(element.id, source))?;
+            .prepare_element_incremental(element, None, width, resolved_height)
+            .map_err(CheckedRenderError::LayoutBuild)?
+            .commit(engine);
         Ok(resolved_height)
     }
 
@@ -343,7 +378,7 @@ mod tests {
 
     use super::*;
     use crate::components::{Box, Text};
-    use crate::core::BorderStyle;
+    use crate::core::{BorderStyle, Display};
 
     #[test]
     fn test_render_to_string_simple() {
@@ -400,6 +435,28 @@ mod tests {
 
         assert!(output.contains("line-0"));
         assert!(output.contains("line-1099"));
+    }
+
+    #[test]
+    fn hidden_root_is_filtered_before_layout_probe() {
+        let mut element = Box::new()
+            .children([
+                Text::new("hidden-a").key("duplicate").into_element(),
+                Text::new("hidden-b").key("duplicate").into_element(),
+            ])
+            .into_element();
+        element.style.display = Display::None;
+
+        assert!(
+            try_render_to_string_checked_core(
+                &element,
+                20,
+                &RenderOptions::default(),
+                DEFAULT_TEXT_FLOW_TAB_STOP,
+            )
+            .expect("hidden root is filtered")
+            .is_empty()
+        );
     }
 
     #[test]

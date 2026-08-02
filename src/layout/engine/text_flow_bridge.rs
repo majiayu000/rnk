@@ -42,7 +42,10 @@ impl NodeContext {
     }
 
     pub(super) fn matches(&self, input: &TextFlowInput, policy: &TextFlowPolicy) -> bool {
-        self.input.as_ref() == Some(input) && self.policy == *policy
+        self.input
+            .as_ref()
+            .is_some_and(|current| same_text_flow_input(current, input))
+            && self.policy == *policy
     }
 
     pub(super) fn begin_frame(&mut self) {
@@ -86,7 +89,7 @@ impl NodeContext {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TextFlowPolicy {
     tab_stop: usize,
     ellipsis: String,
@@ -111,7 +114,7 @@ impl TextFlowPolicy {
         self.width_policy = UnicodeWidthPolicy { revision };
     }
 
-    fn options(&self, input: &TextFlowInput, max_width: usize) -> TextFlowOptions {
+    pub(super) fn options(&self, input: &TextFlowInput, max_width: usize) -> TextFlowOptions {
         let mut options = TextFlowOptions::new(max_width, input.default_style.text_wrap);
         options.overflow_x = input.default_style.overflow_x;
         options.overflow_y = input.default_style.overflow_y;
@@ -150,7 +153,8 @@ impl FlowCache {
             return Err(TextFlowError::Interrupted);
         }
         if let Some(flow) = self.entries.iter().find(|flow| {
-            flow.cache_identity().input == *input && flow.cache_identity().options == *options
+            same_text_flow_input(&flow.cache_identity().input, input)
+                && flow.cache_identity().options == *options
         }) {
             return Ok(Arc::clone(flow));
         }
@@ -190,6 +194,10 @@ pub(super) fn input_from_vnode(vnode: &VNode) -> Option<TextFlowInput> {
         )),
         _ => None,
     }
+}
+
+pub(super) fn same_text_flow_input(actual: &TextFlowInput, expected: &TextFlowInput) -> bool {
+    actual == expected || format!("{actual:?}") == format!("{expected:?}")
 }
 
 pub(super) fn compatibility_text(element: &Element) -> String {
@@ -384,7 +392,8 @@ pub(super) fn flow_for_width(
     };
     let options = policy.options(input, width);
     if let Some(flow) = context.active_flow().filter(|flow| {
-        flow.cache_identity().input == *input && flow.cache_identity().options == options
+        same_text_flow_input(&flow.cache_identity().input, input)
+            && flow.cache_identity().options == options
     }) {
         return Ok(Some(Arc::clone(flow)));
     }

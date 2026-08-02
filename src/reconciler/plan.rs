@@ -1,10 +1,13 @@
 //! Pure, checked, parent-scoped reconciliation planning.
+mod patch_schedule;
+
 use super::identity::{
     CanonicalKey, ResolvedNodeIdentity, ScopedIdentityArena, ScopedNodeIdentity, SiblingIdentity,
     SiblingMatchKey, compatibility_token_for_exact, resolve_child_identity,
 };
 use super::{Patch, ReconcilePlanError};
 use crate::core::{NodeKey, VNode, VNodeType};
+use patch_schedule::schedule_structural_patches;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
@@ -481,6 +484,7 @@ impl Planner {
         parent: &ScopedNodeIdentity,
         parent_address: NodeKey,
     ) -> Result<Vec<PlannedNode>, ReconcilePlanError> {
+        let parent_patch_start = self.patches.len();
         validate_cross_frame_projections(parent, old_children, new_children)?;
         let old_by_match: HashMap<_, _> = old_children
             .iter()
@@ -502,6 +506,7 @@ impl Planner {
         let mut final_children = Vec::with_capacity(new_children.len());
         let mut survivors = Vec::new();
         let mut creates = Vec::new();
+        let mut create_patches = Vec::new();
         let mut already_in_order = true;
         let mut next_untouched_old = 0usize;
         let mut seen_create = false;
@@ -528,7 +533,7 @@ impl Planner {
                 )?
             } else {
                 seen_create = true;
-                self.patches.push(Patch::Create {
+                create_patches.push(Patch::Create {
                     key: new_identity.legacy_key,
                     parent: parent_address,
                     props: new_child.vnode.props.clone(),
@@ -557,23 +562,38 @@ impl Planner {
         }
 
         let mut removals = Vec::new();
+        let mut removal_patches = Vec::new();
         for (old_index, matched) in matched_old.into_iter().enumerate() {
             if !matched {
                 let old_identity = &old_children[old_index].identity;
                 removals.push(old_identity.scoped.clone());
-                self.patches.push(Patch::remove(
-                    self.patch_address(&old_identity.scoped, old_identity.legacy_key),
+                removal_patches.push((
+                    old_index,
+                    Patch::remove(
+                        self.patch_address(&old_identity.scoped, old_identity.legacy_key),
+                    ),
                 ));
             }
         }
+        let structural_patches = schedule_structural_patches(
+            parent,
+            old_children,
+            &planned_children,
+            already_in_order,
+            create_patches,
+            removal_patches,
+        )?;
+        self.patches
+            .splice(parent_patch_start..parent_patch_start, structural_patches);
 
         if !already_in_order {
             self.patches.push(Patch::reorder(
                 parent_address,
-                new_children
-                    .iter()
-                    .map(|child| child.identity.legacy_key)
-                    .collect(),
+                patch_schedule::reorder_keys(
+                    new_children,
+                    &planned_children,
+                    self.scoped_patch_addresses,
+                ),
             ));
         }
         self.parents.push(ParentPlan {
