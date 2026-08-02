@@ -120,13 +120,14 @@ pub(super) fn resolve_virtual(
 ) -> Result<VirtualNodeEntry, ResolutionFailure> {
     let matches = if ScopedNodeIdentity::is_scoped_patch_address(key) {
         match aliases.path_for(key.identity()) {
-            Some(path) => vec![
-                index
+            Some(path) => {
+                let entry = index
                     .iter()
                     .find(|entry| entry.path == path)
                     .cloned()
-                    .ok_or_else(|| ResolutionFailure::plain(stale_alias_path()))?,
-            ],
+                    .ok_or_else(|| ResolutionFailure::plain(stale_alias_path()))?;
+                vec![entry]
+            }
             None => Vec::new(),
         }
     } else {
