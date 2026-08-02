@@ -15,6 +15,8 @@ use super::super::{
     test_fingerprint::EngineFingerprint,
 };
 
+mod coverage;
+
 fn frame(branch_is_text: bool, extra: bool) -> Element {
     let mut root = Element::root();
     if branch_is_text {

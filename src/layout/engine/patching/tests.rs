@@ -11,6 +11,7 @@ use crate::layout::{
 use crate::reconciler::{Patch, try_diff};
 
 mod compute_provenance;
+mod coverage;
 pub(crate) mod freeze_regressions;
 mod raw_alias_regressions;
 

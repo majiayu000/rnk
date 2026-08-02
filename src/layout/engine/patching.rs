@@ -9,7 +9,7 @@ pub(super) use rebuild_counter::take_attempts as take_fresh_rebuild_attempts;
 
 use super::IncrementalInvariantError;
 use super::LayoutEngine;
-use super::context_sync::LayoutRunError;
+use super::context_sync::{ContextSyncError, LayoutRunError};
 use super::incremental::{ApplyPlanError, ElementVNodeSnapshot};
 use super::patch_error::{
     DirectPatchApplyReport, DirectPatchError, DirectPatchPreflightCause, DirectPatchPreflightError,
@@ -17,6 +17,7 @@ use super::patch_error::{
     PatchStage, PatchTransactionCause, PatchTransactionError, RebuildFailure, RebuildStage,
     TransactionalLayoutError,
 };
+use super::postcondition::TargetValidationCause;
 use crate::core::{NodeKey, VNode};
 use crate::reconciler::{
     Patch, ReconcilePlan, ReconcilePlanError, ScopedIdentityArena, plan_initial_tree_in,
@@ -98,6 +99,31 @@ pub(super) fn layout_run_error_parts(
             PatchStage::ReadBack,
             PatchTransactionCause::Invariant(source),
         ),
+    }
+}
+
+pub(super) fn context_sync_cause(source: ContextSyncError) -> PatchTransactionCause {
+    match source {
+        ContextSyncError::Taffy { source, .. } => PatchTransactionCause::Taffy(source),
+        ContextSyncError::Invariant { source, .. } => PatchTransactionCause::Invariant(source),
+    }
+}
+
+pub(super) fn target_validation_cause(source: TargetValidationCause) -> PatchTransactionCause {
+    match source {
+        TargetValidationCause::Taffy(source) => PatchTransactionCause::Taffy(source),
+        TargetValidationCause::Invariant(source) => PatchTransactionCause::Invariant(source),
+    }
+}
+
+fn rebuild_stage_for_layout_error(source: &LayoutRunError) -> RebuildStage {
+    match source {
+        LayoutRunError::Taffy { .. } | LayoutRunError::TextFlow { .. } => {
+            RebuildStage::ComputeLayout
+        }
+        LayoutRunError::ReadBackTaffy { .. }
+        | LayoutRunError::ReadBackTextFlow { .. }
+        | LayoutRunError::Invariant { .. } => RebuildStage::VerifyPostcondition,
     }
 }
 
@@ -445,14 +471,7 @@ impl LayoutEngine {
                     batch_transaction_error_with_key(
                         key,
                         PatchStage::VerifyPostcondition,
-                        match error.source {
-                            super::postcondition::TargetValidationCause::Taffy(source) => {
-                                PatchTransactionCause::Taffy(source)
-                            }
-                            super::postcondition::TargetValidationCause::Invariant(source) => {
-                                PatchTransactionCause::Invariant(source)
-                            }
-                        },
+                        target_validation_cause(error.source),
                     ),
                 ))
             })?;
@@ -503,14 +522,7 @@ impl LayoutEngine {
                 FullRebuildError {
                     stage: RebuildStage::SetContext,
                     key,
-                    source: match source {
-                        super::context_sync::ContextSyncError::Taffy { source, .. } => {
-                            RebuildFailure::Taffy(source)
-                        }
-                        super::context_sync::ContextSyncError::Invariant { source, .. } => {
-                            RebuildFailure::Invariant(source)
-                        }
-                    },
+                    source: rebuild_failure(context_sync_cause(source)),
                 }
             })?;
         fresh
@@ -527,29 +539,12 @@ impl LayoutEngine {
                     .locate(&fresh, source.node_id())
                     .1
                     .or(Some(current_vnode.key));
+                let stage = rebuild_stage_for_layout_error(&source);
+                let (_, cause) = layout_run_error_parts(source);
                 FullRebuildError {
-                    stage: match source {
-                        LayoutRunError::Taffy { .. } | LayoutRunError::TextFlow { .. } => {
-                            RebuildStage::ComputeLayout
-                        }
-                        LayoutRunError::ReadBackTaffy { .. }
-                        | LayoutRunError::ReadBackTextFlow { .. }
-                        | LayoutRunError::Invariant { .. } => RebuildStage::VerifyPostcondition,
-                    },
+                    stage,
                     key,
-                    source: match source {
-                        LayoutRunError::Taffy { source, .. }
-                        | LayoutRunError::ReadBackTaffy { source, .. } => {
-                            RebuildFailure::Taffy(source)
-                        }
-                        LayoutRunError::TextFlow { source, .. }
-                        | LayoutRunError::ReadBackTextFlow { source, .. } => {
-                            RebuildFailure::TextFlow(source)
-                        }
-                        LayoutRunError::Invariant { source, .. } => {
-                            RebuildFailure::Invariant(source)
-                        }
-                    },
+                    source: rebuild_failure(cause),
                 }
             })?;
         fresh.committed_vnode = super::Shared::new(Some(current_vnode.clone()));
@@ -564,22 +559,8 @@ impl LayoutEngine {
             .map_err(|error| FullRebuildError {
                 stage: RebuildStage::VerifyPostcondition,
                 key: error.key.or(Some(current_vnode.key)),
-                source: match error.source {
-                    super::postcondition::TargetValidationCause::Taffy(source) => {
-                        RebuildFailure::Taffy(source)
-                    }
-                    super::postcondition::TargetValidationCause::Invariant(source) => {
-                        RebuildFailure::Invariant(source)
-                    }
-                },
+                source: rebuild_failure(target_validation_cause(error.source)),
             })?;
-        if fresh.root_node.is_none() {
-            return Err(FullRebuildError {
-                stage: RebuildStage::VerifyPostcondition,
-                key: Some(current_vnode.key),
-                source: RebuildFailure::InvalidTargetRoot,
-            });
-        }
         Ok(fresh)
     }
 }

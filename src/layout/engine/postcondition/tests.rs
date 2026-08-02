@@ -6,6 +6,8 @@ use super::{
     TargetAliasExpectation, TargetValidationCause, TargetValidationError,
 };
 
+mod coverage;
+
 fn raw_fixture() -> (LayoutEngine, VNode, ReconcilePlan) {
     let target = VNode::root().children([
         VNode::box_node().with_key("left"),

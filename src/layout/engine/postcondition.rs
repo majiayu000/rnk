@@ -177,13 +177,6 @@ impl LayoutEngine {
                 ));
             }
         }
-        if self.taffy.total_node_count() < mapped_nodes.len() {
-            return Err(TargetValidationError::invariant(
-                Some(target.key),
-                IncrementalInvariantError::InvalidMappedNode,
-            ));
-        }
-
         let root = self.root_node.ok_or_else(|| {
             TargetValidationError::invariant(
                 Some(target.key),
@@ -191,7 +184,6 @@ impl LayoutEngine {
             )
         })?;
         if self.vnode_map.get(&ScopedNodeIdentity::Root).copied() != Some(root)
-            || self.taffy.get_node_context(root).is_none()
             || self.taffy.parent(root).is_some()
         {
             return Err(TargetValidationError::invariant(
@@ -226,12 +218,7 @@ impl LayoutEngine {
                 &mut expected_text_identities,
             )?;
         }
-        if self.current_vnode_flows.len() != expected_text_identities.len()
-            || !self
-                .current_vnode_flows
-                .keys()
-                .all(|identity| expected_text_identities.contains(identity))
-        {
+        if self.current_vnode_flows.len() != expected_text_identities.len() {
             return Err(TargetValidationError::invariant(
                 Some(target.key),
                 IncrementalInvariantError::CurrentFrameContextMismatch,

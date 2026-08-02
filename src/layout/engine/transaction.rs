@@ -15,7 +15,7 @@ use super::{
     context_sync::{ContextSyncError, LayoutRunError},
     incremental::ElementVNodeSnapshot,
     patching,
-    postcondition::{TargetAliasExpectation, TargetValidationCause, TargetValidationError},
+    postcondition::{TargetAliasExpectation, TargetValidationError},
 };
 
 /// A fully validated layout frame that has not changed the committed engine.
@@ -432,10 +432,7 @@ fn context_sync_error(
 ) -> PatchTransactionError {
     let fallback_key = source.key();
     let (patch_index, key) = origins.locate(candidate, source.node_id());
-    let cause = match source {
-        ContextSyncError::Taffy { source, .. } => PatchTransactionCause::Taffy(source),
-        ContextSyncError::Invariant { source, .. } => PatchTransactionCause::Invariant(source),
-    };
+    let cause = patching::context_sync_cause(source);
     if let Some(patch_index) = patch_index {
         return patching::direct_transaction_error_at_with_parent(
             plan.patches(),
@@ -480,10 +477,7 @@ fn postcondition_error(
     error: TargetValidationError,
 ) -> PatchTransactionError {
     let key = error.key;
-    let cause = match error.source {
-        TargetValidationCause::Taffy(source) => PatchTransactionCause::Taffy(source),
-        TargetValidationCause::Invariant(source) => PatchTransactionCause::Invariant(source),
-    };
+    let cause = patching::target_validation_cause(error.source);
     patching::transaction_stage_error_for_key(
         plan,
         origins,
