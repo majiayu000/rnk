@@ -2,7 +2,7 @@
 
 //! Generalized checked entrypoints for [`TestRenderer`].
 
-use crate::core::{Element, ElementType};
+use crate::core::{Display, Element, ElementType};
 use crate::layout::LayoutEngine;
 use crate::renderer::{CheckedRenderError, Output, try_render_element_tree_checked};
 
@@ -34,7 +34,9 @@ impl TestRenderer {
         element: &Element,
     ) -> Result<String, CheckedRenderError> {
         let committed = LayoutEngine::new();
-        if element.element_type == ElementType::VirtualText {
+        if element.style.display == Display::None
+            || element.element_type == ElementType::VirtualText
+        {
             return render_candidate(self, element, &committed);
         }
         let prepared = committed

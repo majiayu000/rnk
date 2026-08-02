@@ -185,6 +185,33 @@ fn virtual_text_is_filtered_before_required_layout_lookup() {
 }
 
 #[test]
+fn hidden_test_root_is_filtered_before_layout_preparation() {
+    let mut hidden = duplicate_key_tree();
+    hidden.style.display = Display::None;
+    let renderer = TestRenderer::new(20, 4);
+
+    assert_eq!(
+        renderer
+            .try_render_to_ansi_checked(&hidden)
+            .expect("hidden checked ANSI root is filtered"),
+        ""
+    );
+    assert_eq!(
+        renderer
+            .try_render_to_plain_checked(&hidden)
+            .expect("hidden checked plain root is filtered"),
+        ""
+    );
+    assert_eq!(
+        renderer
+            .try_render_to_ansi(&hidden)
+            .expect("hidden legacy ANSI root is filtered"),
+        ""
+    );
+    assert_eq!(renderer.render_to_plain(&hidden), "");
+}
+
+#[test]
 fn static_and_string_layout_failure_returns_no_partial_output() {
     let invalid = duplicate_element_id_tree();
     let string_failure = try_render_to_string_checked(&invalid, 20)
