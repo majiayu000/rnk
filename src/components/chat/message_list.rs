@@ -1,6 +1,6 @@
 //! Variable-height message list with row-based scrolling and anchoring.
 //!
-//! The fixed-height virtual scroll in [`crate::components::layout::scrollable`]
+//! The fixed-height virtual scroll in `components::layout::scrollable`
 //! treats the scroll offset and viewport as *item counts*. A chat message can
 //! be one row or several hundred, so counting items puts the viewport nowhere
 //! near where the renderer paints. This module indexes messages by the terminal

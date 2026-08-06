@@ -10,7 +10,8 @@ use crate::components::chat::{MessageId, MessageRevision};
 ///
 /// Equality and hashing go through a bit-pattern snapshot rather than the
 /// config's own `PartialEq`, so a key is always equal to itself even when the
-/// styles it carries contain NaN. See [`super::key_snapshot`].
+/// styles it carries contain NaN. Float `PartialEq` is not reflexive, and a key
+/// that did not equal itself would miss its own cache entry on every lookup.
 #[derive(Debug, Clone)]
 pub struct MessageMeasureKey {
     message_id: MessageId,
