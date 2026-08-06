@@ -74,7 +74,15 @@ jobs:
         with:
           toolchain: "1.88"
 
+      # This job compiles every target from scratch on a non-cached toolchain,
+      # which makes it the heaviest in CI. At the runner's default parallelism
+      # it has been dying mid-compile with SIGTERM (exit 143) and no diagnostic
+      # — the signature of the runner running out of memory, not of a build
+      # failure. Capping concurrent rustc invocations lowers the peak at the
+      # cost of some wall time.
       - name: Test workspace on MSRV
+        env:
+          CARGO_BUILD_JOBS: 2
         run: cargo test --workspace --all-targets --all-features --locked --verbose
 
   feature-matrix:
