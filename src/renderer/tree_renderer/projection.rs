@@ -129,9 +129,10 @@ pub(super) enum ProjectionError {
     MissingCurrentFlow(ElementId),
     MissingLayout(ElementId),
     LayoutInvariant(IncrementalInvariantError),
-    NonFiniteCoordinate,
-    CoordinateOverflow,
+    NonFiniteCoordinate(Option<ElementId>),
+    CoordinateOverflow(Option<ElementId>),
     MalformedFlow(&'static str),
+    MalformedFlowAt(ElementId, &'static str),
     DuplicateForwardRecord(ProjectionId),
     DuplicateReverseCell(FrameCell),
     MalformedProjection(&'static str),
@@ -150,10 +151,22 @@ impl fmt::Display for ProjectionError {
                 write!(formatter, "missing current layout for element {id:?}")
             }
             Self::LayoutInvariant(source) => source.fmt(formatter),
-            Self::NonFiniteCoordinate => write!(formatter, "non-finite render coordinate"),
-            Self::CoordinateOverflow => write!(formatter, "render coordinate overflow"),
+            Self::NonFiniteCoordinate(Some(id)) => {
+                write!(formatter, "non-finite render coordinate for element {id:?}")
+            }
+            Self::NonFiniteCoordinate(None) => write!(formatter, "non-finite render coordinate"),
+            Self::CoordinateOverflow(Some(id)) => {
+                write!(formatter, "render coordinate overflow for element {id:?}")
+            }
+            Self::CoordinateOverflow(None) => write!(formatter, "render coordinate overflow"),
             Self::MalformedFlow(reason) => {
                 write!(formatter, "malformed current TextFlow: {reason}")
+            }
+            Self::MalformedFlowAt(id, reason) => {
+                write!(
+                    formatter,
+                    "malformed current TextFlow for element {id:?}: {reason}"
+                )
             }
             Self::DuplicateForwardRecord(id) => {
                 write!(formatter, "duplicate projection record {id:?}")
@@ -174,6 +187,21 @@ impl fmt::Display for ProjectionError {
 impl std::error::Error for ProjectionError {}
 
 impl ProjectionError {
+    /// Name the element a coordinate or malformed-flow failure came from.
+    ///
+    /// Coordinate arithmetic lives below the tree walk, so the failing site
+    /// often does not know which element it is projecting. The walk attaches
+    /// that identity on the way out, and the innermost frame to do so wins:
+    /// once an error names a child, an ancestor must not relabel it.
+    pub(super) fn attributed_to(self, element_id: ElementId) -> Self {
+        match self {
+            Self::NonFiniteCoordinate(None) => Self::NonFiniteCoordinate(Some(element_id)),
+            Self::CoordinateOverflow(None) => Self::CoordinateOverflow(Some(element_id)),
+            Self::MalformedFlow(reason) => Self::MalformedFlowAt(element_id, reason),
+            other => other,
+        }
+    }
+
     pub(super) fn into_text_render_error(self, fallback_element_id: ElementId) -> TextRenderError {
         match self {
             Self::MissingCurrentFlow(element_id) => {
@@ -185,11 +213,16 @@ impl ProjectionError {
             Self::LayoutInvariant(source) => {
                 panic!("checked layout invariant failed inside legacy renderer: {source}")
             }
-            Self::NonFiniteCoordinate => {
-                TextRenderError::coordinate(fallback_element_id, TextCoordinateError::NonFinite)
-            }
-            Self::CoordinateOverflow => {
-                TextRenderError::coordinate(fallback_element_id, TextCoordinateError::Overflow)
+            Self::NonFiniteCoordinate(element_id) => TextRenderError::coordinate(
+                element_id.unwrap_or(fallback_element_id),
+                TextCoordinateError::NonFinite,
+            ),
+            Self::CoordinateOverflow(element_id) => TextRenderError::coordinate(
+                element_id.unwrap_or(fallback_element_id),
+                TextCoordinateError::Overflow,
+            ),
+            Self::MalformedFlowAt(element_id, _) => {
+                TextRenderError::IncompleteSourceMap { element_id }
             }
             Self::MalformedFlow(_)
             | Self::DuplicateForwardRecord(_)
@@ -269,7 +302,7 @@ fn validate_tree_flows(
         let flow = layout_engine
             .current_text_flow(element.id)
             .ok_or(ProjectionError::MissingCurrentFlow(element.id))?;
-        validate_flow(&flow)?;
+        validate_flow(&flow).map_err(|error| error.attributed_to(element.id))?;
     }
     for child in &element.children {
         validate_tree_flows(child, layout_engine)?;
@@ -330,7 +363,7 @@ fn validate_row_footprints(rows: &[TextFlowRow]) -> Result<(), ProjectionError> 
             next_column = run
                 .column
                 .checked_add(run.width)
-                .ok_or(ProjectionError::CoordinateOverflow)?;
+                .ok_or(ProjectionError::CoordinateOverflow(None))?;
         }
         if next_column != row.width {
             return Err(ProjectionError::MalformedFlow(
@@ -503,7 +536,7 @@ pub(super) fn validate_round_trip(projection: &RenderProjection) -> Result<usize
                 .checked_sub(min_x)
                 .and_then(|value| value.checked_add(1))
                 .and_then(|value| usize::try_from(value).ok())
-                .ok_or(ProjectionError::CoordinateOverflow)?;
+                .ok_or(ProjectionError::CoordinateOverflow(None))?;
             if span != record.display_width {
                 return Err(ProjectionError::MalformedProjection(
                     "token cells contain a gap",
@@ -542,6 +575,25 @@ fn validate_projected_cell(
         return Err(ProjectionError::MalformedProjection("duplicate token cell"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod attribution_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_flow_attribution_keeps_the_innermost_element() {
+        let child_id = ElementId::new();
+        let root_id = ElementId::new();
+        let error = ProjectionError::MalformedFlow("invalid run")
+            .attributed_to(child_id)
+            .attributed_to(root_id);
+
+        assert!(matches!(
+            error.into_text_render_error(root_id),
+            TextRenderError::IncompleteSourceMap { element_id } if element_id == child_id
+        ));
+    }
 }
 
 #[cfg(test)]

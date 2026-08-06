@@ -101,11 +101,13 @@ impl StagedFrame {
             | TextFlowPlacement::Truncated { .. } => return Ok(()),
         };
         let base_x = origin_x
-            .checked_add(i64::try_from(column).map_err(|_| ProjectionError::CoordinateOverflow)?)
-            .ok_or(ProjectionError::CoordinateOverflow)?;
+            .checked_add(
+                i64::try_from(column).map_err(|_| ProjectionError::CoordinateOverflow(None))?,
+            )
+            .ok_or(ProjectionError::CoordinateOverflow(None))?;
         let y = origin_y
-            .checked_add(i64::try_from(row).map_err(|_| ProjectionError::CoordinateOverflow)?)
-            .ok_or(ProjectionError::CoordinateOverflow)?;
+            .checked_add(i64::try_from(row).map_err(|_| ProjectionError::CoordinateOverflow(None))?)
+            .ok_or(ProjectionError::CoordinateOverflow(None))?;
 
         if token.display_width == 0 {
             return self.write_zero_width(id, row, column, base_x, y, &token.safe_text);
@@ -113,10 +115,10 @@ impl StagedFrame {
         if is_published_space_expansion(token) {
             for offset in 0..token.display_width {
                 let offset =
-                    i64::try_from(offset).map_err(|_| ProjectionError::CoordinateOverflow)?;
+                    i64::try_from(offset).map_err(|_| ProjectionError::CoordinateOverflow(None))?;
                 let x = base_x
                     .checked_add(offset)
-                    .ok_or(ProjectionError::CoordinateOverflow)?;
+                    .ok_or(ProjectionError::CoordinateOverflow(None))?;
                 self.project_visible_grapheme(id, x, y, " ", 1, &token.style)?;
             }
             return Ok(());
@@ -258,7 +260,7 @@ impl StagedFrame {
                     self.fill_candidate_visits = self
                         .fill_candidate_visits
                         .checked_add(1)
-                        .ok_or(ProjectionError::CoordinateOverflow)?;
+                        .ok_or(ProjectionError::CoordinateOverflow(None))?;
                 }
                 self.paint_grapheme(column, row, " ", style)?;
             }
@@ -295,7 +297,7 @@ impl StagedFrame {
         self.writes = self
             .writes
             .checked_add(1)
-            .ok_or(ProjectionError::CoordinateOverflow)?;
+            .ok_or(ProjectionError::CoordinateOverflow(None))?;
         Ok(())
     }
 
@@ -349,10 +351,10 @@ impl VisibleRect {
         }
         let x2 = x
             .checked_add(i64::from(width))
-            .ok_or(ProjectionError::CoordinateOverflow)?;
+            .ok_or(ProjectionError::CoordinateOverflow(None))?;
         let y2 = y
             .checked_add(i64::from(height))
-            .ok_or(ProjectionError::CoordinateOverflow)?;
+            .ok_or(ProjectionError::CoordinateOverflow(None))?;
         Ok(Some(Self {
             x1: x,
             y1: y,
@@ -413,9 +415,9 @@ fn signed_cells(x: i64, y: i64, width: usize) -> Result<Vec<SignedCell>, Project
     for offset in 0..width {
         cells.push(SignedCell {
             x: x.checked_add(
-                i64::try_from(offset).map_err(|_| ProjectionError::CoordinateOverflow)?,
+                i64::try_from(offset).map_err(|_| ProjectionError::CoordinateOverflow(None))?,
             )
-            .ok_or(ProjectionError::CoordinateOverflow)?,
+            .ok_or(ProjectionError::CoordinateOverflow(None))?,
             y,
         });
     }

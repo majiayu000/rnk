@@ -52,29 +52,35 @@ impl ClipBounds {
         raw_x: f32,
         raw_y: f32,
         content_rect: ContentRect,
-    ) -> Option<Self> {
+    ) -> Result<Option<Self>, ProjectionError> {
         let clips_x = matches!(style.overflow_x, Overflow::Hidden | Overflow::Scroll);
         let clips_y = matches!(style.overflow_y, Overflow::Hidden | Overflow::Scroll);
         if !clips_x && !clips_y {
-            return None;
+            return Ok(None);
         }
 
-        let content_x = raw_x + f32::from(content_rect.x);
-        let content_y = raw_y + f32::from(content_rect.y);
-        Some(Self {
+        let content_x = checked_coordinate_add(raw_x, f32::from(content_rect.x))?;
+        let content_y = checked_coordinate_add(raw_y, f32::from(content_rect.y))?;
+        Ok(Some(Self {
             x1: if clips_x { clip_bound(content_x) } else { 0 },
             y1: if clips_y { clip_bound(content_y) } else { 0 },
             x2: if clips_x {
-                clip_bound(content_x + f32::from(content_rect.width))
+                clip_bound(checked_coordinate_add(
+                    content_x,
+                    f32::from(content_rect.width),
+                )?)
             } else {
                 u16::MAX
             },
             y2: if clips_y {
-                clip_bound(content_y + f32::from(content_rect.height))
+                clip_bound(checked_coordinate_add(
+                    content_y,
+                    f32::from(content_rect.height),
+                )?)
             } else {
                 u16::MAX
             },
-        })
+        }))
     }
 
     fn intersect(self, other: Self) -> Self {
@@ -114,7 +120,7 @@ fn clip_bound(v: f32) -> u16 {
 #[inline]
 fn clamp_extent(v: f32) -> Result<u16, ProjectionError> {
     if !v.is_finite() {
-        return Err(ProjectionError::NonFiniteCoordinate);
+        return Err(ProjectionError::NonFiniteCoordinate(None));
     }
     if v <= 0.0 {
         Ok(0)
@@ -150,7 +156,32 @@ pub(crate) fn try_render_element_tree(
         .map_err(|error| error.into_text_render_error(element.id))
 }
 
+/// Render one element and its descendants, naming the element that failed.
+///
+/// Recursion runs through this wrapper so a coordinate failure is labelled by
+/// the frame that raised it. A child's own frame attributes first, and
+/// [`ProjectionError::attributed_to`] leaves an already-named error alone, so
+/// ancestors unwinding past it cannot claim the failure for themselves.
 fn render_element_tree_staged(
+    element: &Element,
+    layout_engine: &LayoutEngine,
+    staged: &mut StagedFrame,
+    offset_x: f32,
+    offset_y: f32,
+    inherited_clip: Option<ClipBounds>,
+) -> Result<(), ProjectionError> {
+    render_element_subtree_staged(
+        element,
+        layout_engine,
+        staged,
+        offset_x,
+        offset_y,
+        inherited_clip,
+    )
+    .map_err(|error| error.attributed_to(element.id))
+}
+
+fn render_element_subtree_staged(
     element: &Element,
     layout_engine: &LayoutEngine,
     staged: &mut StagedFrame,
@@ -167,8 +198,8 @@ fn render_element_tree_staged(
         .map_err(ProjectionError::LayoutInvariant)?
         .ok_or(ProjectionError::MissingLayout(element.id))?;
 
-    let raw_x = offset_x + layout.x;
-    let raw_y = offset_y + layout.y;
+    let raw_x = checked_coordinate_add(offset_x, layout.x)?;
+    let raw_y = checked_coordinate_add(offset_y, layout.y)?;
     let x = signed_coord(raw_x)?;
     let y = signed_coord(raw_y)?;
     let width = clamp_extent(layout.width)?;
@@ -179,7 +210,7 @@ fn render_element_tree_staged(
         staged.fill_rect(x, y, width, height, &element.style)?;
     }
 
-    let own_clip = ClipBounds::from_overflow(&element.style, raw_x, raw_y, content_rect);
+    let own_clip = ClipBounds::from_overflow(&element.style, raw_x, raw_y, content_rect)?;
     let clip_to_push =
         own_clip.map(|clip| inherited_clip.map_or(clip, |ancestor| ancestor.intersect(clip)));
     let effective_clip = clip_to_push.or(inherited_clip);
@@ -204,12 +235,12 @@ fn render_element_tree_staged(
             .checked_add(i64::from(content_rect.x))
             .and_then(|value| value.checked_add(padding_left))
             .and_then(|value| value.checked_sub(scroll_x))
-            .ok_or(ProjectionError::CoordinateOverflow)?;
+            .ok_or(ProjectionError::CoordinateOverflow(None))?;
         let text_y = y
             .checked_add(i64::from(content_rect.y))
             .and_then(|value| value.checked_add(padding_top))
             .and_then(|value| value.checked_sub(scroll_y))
-            .ok_or(ProjectionError::CoordinateOverflow)?;
+            .ok_or(ProjectionError::CoordinateOverflow(None))?;
         let flow = layout_engine
             .current_text_flow(element.id)
             .ok_or(ProjectionError::MissingCurrentFlow(element.id))?;
@@ -218,8 +249,8 @@ fn render_element_tree_staged(
 
     let scroll_offset_x = element.scroll_offset_x.unwrap_or(0) as f32;
     let scroll_offset_y = element.scroll_offset_y.unwrap_or(0) as f32;
-    let child_offset_x = offset_x + layout.x - scroll_offset_x;
-    let child_offset_y = offset_y + layout.y - scroll_offset_y;
+    let child_offset_x = checked_coordinate_sub(raw_x, scroll_offset_x)?;
+    let child_offset_y = checked_coordinate_sub(raw_y, scroll_offset_y)?;
 
     for child in &element.children {
         render_element_tree_staged(
@@ -270,10 +301,10 @@ fn render_border_staged(
 
     let right_x = x
         .checked_add(i64::from(width - 1))
-        .ok_or(ProjectionError::CoordinateOverflow)?;
+        .ok_or(ProjectionError::CoordinateOverflow(None))?;
     let bottom_y = y
         .checked_add(i64::from(height - 1))
-        .ok_or(ProjectionError::CoordinateOverflow)?;
+        .ok_or(ProjectionError::CoordinateOverflow(None))?;
 
     if element.style.border_top {
         style.color = element.style.get_border_top_color();
@@ -282,7 +313,7 @@ fn render_border_staged(
             for col_offset in 1..(width - 1) {
                 let column = x
                     .checked_add(i64::from(col_offset))
-                    .ok_or(ProjectionError::CoordinateOverflow)?;
+                    .ok_or(ProjectionError::CoordinateOverflow(None))?;
                 paint_char(staged, column, y, h, &style)?;
             }
         }
@@ -298,7 +329,7 @@ fn render_border_staged(
     for row_offset in first_vertical_row..vertical_end {
         let row = y
             .checked_add(i64::from(row_offset))
-            .ok_or(ProjectionError::CoordinateOverflow)?;
+            .ok_or(ProjectionError::CoordinateOverflow(None))?;
         if element.style.border_left {
             style.color = element.style.get_border_left_color();
             paint_char(staged, x, row, v, &style)?;
@@ -318,7 +349,7 @@ fn render_border_staged(
             for col_offset in 1..(width - 1) {
                 let column = x
                     .checked_add(i64::from(col_offset))
-                    .ok_or(ProjectionError::CoordinateOverflow)?;
+                    .ok_or(ProjectionError::CoordinateOverflow(None))?;
                 paint_char(staged, column, bottom_y, h, &style)?;
             }
         }
@@ -340,14 +371,54 @@ fn paint_char(
     staged.paint_grapheme(x, y, ch.encode_utf8(&mut buffer), style)
 }
 
+/// Project a screen-space coordinate onto the cell grid it falls in.
+///
+/// A cell owns the half-open span from its own coordinate to the next, so the
+/// containing cell is `floor(value)` on both sides of the origin. Casting
+/// instead truncates toward zero, which folds every coordinate in `(-1.0, 0.0)`
+/// onto cell `0` and paints off-screen content along the viewport edge.
 fn signed_coord(value: f32) -> Result<i64, ProjectionError> {
     if !value.is_finite() {
-        return Err(ProjectionError::NonFiniteCoordinate);
+        return Err(ProjectionError::NonFiniteCoordinate(None));
     }
-    if value < i64::MIN as f32 || value > i64::MAX as f32 {
-        return Err(ProjectionError::CoordinateOverflow);
+    let floored = value.floor();
+    // `i64::MAX as f32` rounds up to 2^63, so the upper bound is exclusive:
+    // a value that reaches it has no i64 representation.
+    if floored < i64::MIN as f32 || floored >= i64::MAX as f32 {
+        return Err(ProjectionError::CoordinateOverflow(None));
     }
-    Ok(value as i64)
+    Ok(floored as i64)
+}
+
+/// Add two coordinate operands without collapsing arithmetic overflow into an
+/// already-invalid input value. The result remains fractional until
+/// [`signed_coord`] applies the containing-cell floor.
+#[inline]
+fn checked_coordinate_add(left: f32, right: f32) -> Result<f32, ProjectionError> {
+    if !left.is_finite() || !right.is_finite() {
+        return Err(ProjectionError::NonFiniteCoordinate(None));
+    }
+    let result = left + right;
+    if result.is_finite() {
+        Ok(result)
+    } else {
+        Err(ProjectionError::CoordinateOverflow(None))
+    }
+}
+
+/// Subtract two coordinate operands with the same input and result checks as
+/// [`checked_coordinate_add`].
+#[inline]
+fn checked_coordinate_sub(left: f32, right: f32) -> Result<f32, ProjectionError> {
+    if !left.is_finite() || !right.is_finite() {
+        return Err(ProjectionError::NonFiniteCoordinate(None));
+    }
+    let result = left - right;
+    if result.is_finite() {
+        Ok(result)
+    } else {
+        Err(ProjectionError::CoordinateOverflow(None))
+    }
 }
 
 fn border_char(raw: &str) -> char {
@@ -420,6 +491,22 @@ mod typed_error_tests {
     use crate::components::{Box, Text};
     use crate::layout::TextFlowError;
     use crate::renderer::{TextCoordinateError, TextProjectionError};
+
+    #[test]
+    fn finite_coordinate_arithmetic_overflow_is_not_non_finite() {
+        assert_eq!(
+            checked_coordinate_add(f32::MAX, f32::MAX),
+            Err(ProjectionError::CoordinateOverflow(None))
+        );
+        assert_eq!(
+            checked_coordinate_add(f32::NAN, 1.0),
+            Err(ProjectionError::NonFiniteCoordinate(None))
+        );
+        assert_eq!(
+            signed_coord(checked_coordinate_add(-0.75, 0.5).unwrap()).unwrap(),
+            -1
+        );
+    }
 
     #[test]
     fn text_flow_error_preserves_source_and_commits_no_partial_output() {
