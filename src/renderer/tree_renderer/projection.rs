@@ -132,6 +132,7 @@ pub(super) enum ProjectionError {
     NonFiniteCoordinate(Option<ElementId>),
     CoordinateOverflow(Option<ElementId>),
     MalformedFlow(&'static str),
+    MalformedFlowAt(ElementId, &'static str),
     DuplicateForwardRecord(ProjectionId),
     DuplicateReverseCell(FrameCell),
     MalformedProjection(&'static str),
@@ -161,6 +162,12 @@ impl fmt::Display for ProjectionError {
             Self::MalformedFlow(reason) => {
                 write!(formatter, "malformed current TextFlow: {reason}")
             }
+            Self::MalformedFlowAt(id, reason) => {
+                write!(
+                    formatter,
+                    "malformed current TextFlow for element {id:?}: {reason}"
+                )
+            }
             Self::DuplicateForwardRecord(id) => {
                 write!(formatter, "duplicate projection record {id:?}")
             }
@@ -180,7 +187,7 @@ impl fmt::Display for ProjectionError {
 impl std::error::Error for ProjectionError {}
 
 impl ProjectionError {
-    /// Name the element a coordinate failure came from.
+    /// Name the element a coordinate or malformed-flow failure came from.
     ///
     /// Coordinate arithmetic lives below the tree walk, so the failing site
     /// often does not know which element it is projecting. The walk attaches
@@ -190,6 +197,7 @@ impl ProjectionError {
         match self {
             Self::NonFiniteCoordinate(None) => Self::NonFiniteCoordinate(Some(element_id)),
             Self::CoordinateOverflow(None) => Self::CoordinateOverflow(Some(element_id)),
+            Self::MalformedFlow(reason) => Self::MalformedFlowAt(element_id, reason),
             other => other,
         }
     }
@@ -213,6 +221,9 @@ impl ProjectionError {
                 element_id.unwrap_or(fallback_element_id),
                 TextCoordinateError::Overflow,
             ),
+            Self::MalformedFlowAt(element_id, _) => {
+                TextRenderError::IncompleteSourceMap { element_id }
+            }
             Self::MalformedFlow(_)
             | Self::DuplicateForwardRecord(_)
             | Self::DuplicateReverseCell(_)
@@ -564,6 +575,25 @@ fn validate_projected_cell(
         return Err(ProjectionError::MalformedProjection("duplicate token cell"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod attribution_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_flow_attribution_keeps_the_innermost_element() {
+        let child_id = ElementId::new();
+        let root_id = ElementId::new();
+        let error = ProjectionError::MalformedFlow("invalid run")
+            .attributed_to(child_id)
+            .attributed_to(root_id);
+
+        assert!(matches!(
+            error.into_text_render_error(root_id),
+            TextRenderError::IncompleteSourceMap { element_id } if element_id == child_id
+        ));
+    }
 }
 
 #[cfg(test)]

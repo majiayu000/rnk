@@ -7,8 +7,12 @@
 //! reported the root.
 
 use rnk::components::{Box, Text};
-use rnk::core::{Element, Overflow};
-use rnk::renderer::{TextCoordinateError, TextRenderError, try_render_to_string};
+use rnk::core::{Element, Overflow, Style};
+use rnk::layout::LayoutEngine;
+use rnk::renderer::{
+    CheckedRenderError, Output, TextCoordinateError, TextRenderError,
+    try_render_element_tree_checked, try_render_to_string,
+};
 use rnk::testing::TestRenderer;
 
 /// A child whose own painting fails, nested one level below the root.
@@ -126,19 +130,27 @@ fn test_renderer_reports_the_same_failing_child_as_the_string_api() {
 
 #[test]
 fn a_failed_coordinate_commits_no_partial_frame() {
-    let (tree, _) = tree_with_failing_grandchild(f32::NAN);
-    let renderer = TestRenderer::new(20, 4);
+    let (tree, failing_id) = tree_with_failing_grandchild(f32::NAN);
+    let mut engine = LayoutEngine::new();
+    engine.try_compute(&tree, 20, 4).unwrap();
 
-    assert!(renderer.try_render_to_plain(&tree).is_err());
+    let mut output = Output::new(20, 4);
+    output.write(0, 0, "caller-owned", &Style::default());
+    let before_render = output.render();
+    let before_dirty = output.dirty_row_indices().collect::<Vec<_>>();
+    let before_is_dirty = output.is_dirty();
 
-    // The sibling laid out before the failing child must not reach the frame.
-    let healthy = Box::new()
-        .width(20)
-        .height(4)
-        .child(Text::new("sibling").into_element())
-        .into_element();
-    let recovered = renderer
-        .try_render_to_plain(&healthy)
-        .expect("a later frame still renders");
-    assert!(recovered.contains("sibling"));
+    let error = try_render_element_tree_checked(&tree, &engine, &mut output, 0.0, 0.0)
+        .expect_err("NaN padding must fail");
+    assert!(matches!(
+        error,
+        CheckedRenderError::Text(TextRenderError::Coordinate {
+            element_id,
+            source: TextCoordinateError::NonFinite,
+        }) if element_id == failing_id
+    ));
+
+    assert_eq!(output.render(), before_render);
+    assert_eq!(output.dirty_row_indices().collect::<Vec<_>>(), before_dirty);
+    assert_eq!(output.is_dirty(), before_is_dirty);
 }

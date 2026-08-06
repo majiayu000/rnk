@@ -52,29 +52,35 @@ impl ClipBounds {
         raw_x: f32,
         raw_y: f32,
         content_rect: ContentRect,
-    ) -> Option<Self> {
+    ) -> Result<Option<Self>, ProjectionError> {
         let clips_x = matches!(style.overflow_x, Overflow::Hidden | Overflow::Scroll);
         let clips_y = matches!(style.overflow_y, Overflow::Hidden | Overflow::Scroll);
         if !clips_x && !clips_y {
-            return None;
+            return Ok(None);
         }
 
-        let content_x = raw_x + f32::from(content_rect.x);
-        let content_y = raw_y + f32::from(content_rect.y);
-        Some(Self {
+        let content_x = checked_coordinate_add(raw_x, f32::from(content_rect.x))?;
+        let content_y = checked_coordinate_add(raw_y, f32::from(content_rect.y))?;
+        Ok(Some(Self {
             x1: if clips_x { clip_bound(content_x) } else { 0 },
             y1: if clips_y { clip_bound(content_y) } else { 0 },
             x2: if clips_x {
-                clip_bound(content_x + f32::from(content_rect.width))
+                clip_bound(checked_coordinate_add(
+                    content_x,
+                    f32::from(content_rect.width),
+                )?)
             } else {
                 u16::MAX
             },
             y2: if clips_y {
-                clip_bound(content_y + f32::from(content_rect.height))
+                clip_bound(checked_coordinate_add(
+                    content_y,
+                    f32::from(content_rect.height),
+                )?)
             } else {
                 u16::MAX
             },
-        })
+        }))
     }
 
     fn intersect(self, other: Self) -> Self {
@@ -192,8 +198,8 @@ fn render_element_subtree_staged(
         .map_err(ProjectionError::LayoutInvariant)?
         .ok_or(ProjectionError::MissingLayout(element.id))?;
 
-    let raw_x = offset_x + layout.x;
-    let raw_y = offset_y + layout.y;
+    let raw_x = checked_coordinate_add(offset_x, layout.x)?;
+    let raw_y = checked_coordinate_add(offset_y, layout.y)?;
     let x = signed_coord(raw_x)?;
     let y = signed_coord(raw_y)?;
     let width = clamp_extent(layout.width)?;
@@ -204,7 +210,7 @@ fn render_element_subtree_staged(
         staged.fill_rect(x, y, width, height, &element.style)?;
     }
 
-    let own_clip = ClipBounds::from_overflow(&element.style, raw_x, raw_y, content_rect);
+    let own_clip = ClipBounds::from_overflow(&element.style, raw_x, raw_y, content_rect)?;
     let clip_to_push =
         own_clip.map(|clip| inherited_clip.map_or(clip, |ancestor| ancestor.intersect(clip)));
     let effective_clip = clip_to_push.or(inherited_clip);
@@ -243,8 +249,8 @@ fn render_element_subtree_staged(
 
     let scroll_offset_x = element.scroll_offset_x.unwrap_or(0) as f32;
     let scroll_offset_y = element.scroll_offset_y.unwrap_or(0) as f32;
-    let child_offset_x = offset_x + layout.x - scroll_offset_x;
-    let child_offset_y = offset_y + layout.y - scroll_offset_y;
+    let child_offset_x = checked_coordinate_sub(raw_x, scroll_offset_x)?;
+    let child_offset_y = checked_coordinate_sub(raw_y, scroll_offset_y)?;
 
     for child in &element.children {
         render_element_tree_staged(
@@ -384,6 +390,37 @@ fn signed_coord(value: f32) -> Result<i64, ProjectionError> {
     Ok(floored as i64)
 }
 
+/// Add two coordinate operands without collapsing arithmetic overflow into an
+/// already-invalid input value. The result remains fractional until
+/// [`signed_coord`] applies the containing-cell floor.
+#[inline]
+fn checked_coordinate_add(left: f32, right: f32) -> Result<f32, ProjectionError> {
+    if !left.is_finite() || !right.is_finite() {
+        return Err(ProjectionError::NonFiniteCoordinate(None));
+    }
+    let result = left + right;
+    if result.is_finite() {
+        Ok(result)
+    } else {
+        Err(ProjectionError::CoordinateOverflow(None))
+    }
+}
+
+/// Subtract two coordinate operands with the same input and result checks as
+/// [`checked_coordinate_add`].
+#[inline]
+fn checked_coordinate_sub(left: f32, right: f32) -> Result<f32, ProjectionError> {
+    if !left.is_finite() || !right.is_finite() {
+        return Err(ProjectionError::NonFiniteCoordinate(None));
+    }
+    let result = left - right;
+    if result.is_finite() {
+        Ok(result)
+    } else {
+        Err(ProjectionError::CoordinateOverflow(None))
+    }
+}
+
 fn border_char(raw: &str) -> char {
     raw.chars().next().unwrap_or(' ')
 }
@@ -454,6 +491,22 @@ mod typed_error_tests {
     use crate::components::{Box, Text};
     use crate::layout::TextFlowError;
     use crate::renderer::{TextCoordinateError, TextProjectionError};
+
+    #[test]
+    fn finite_coordinate_arithmetic_overflow_is_not_non_finite() {
+        assert_eq!(
+            checked_coordinate_add(f32::MAX, f32::MAX),
+            Err(ProjectionError::CoordinateOverflow(None))
+        );
+        assert_eq!(
+            checked_coordinate_add(f32::NAN, 1.0),
+            Err(ProjectionError::NonFiniteCoordinate(None))
+        );
+        assert_eq!(
+            signed_coord(checked_coordinate_add(-0.75, 0.5).unwrap()).unwrap(),
+            -1
+        );
+    }
 
     #[test]
     fn text_flow_error_preserves_source_and_commits_no_partial_output() {
