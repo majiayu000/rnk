@@ -114,7 +114,7 @@ fn clip_bound(v: f32) -> u16 {
 #[inline]
 fn clamp_extent(v: f32) -> Result<u16, ProjectionError> {
     if !v.is_finite() {
-        return Err(ProjectionError::NonFiniteCoordinate);
+        return Err(ProjectionError::NonFiniteCoordinate(None));
     }
     if v <= 0.0 {
         Ok(0)
@@ -150,7 +150,32 @@ pub(crate) fn try_render_element_tree(
         .map_err(|error| error.into_text_render_error(element.id))
 }
 
+/// Render one element and its descendants, naming the element that failed.
+///
+/// Recursion runs through this wrapper so a coordinate failure is labelled by
+/// the frame that raised it. A child's own frame attributes first, and
+/// [`ProjectionError::attributed_to`] leaves an already-named error alone, so
+/// ancestors unwinding past it cannot claim the failure for themselves.
 fn render_element_tree_staged(
+    element: &Element,
+    layout_engine: &LayoutEngine,
+    staged: &mut StagedFrame,
+    offset_x: f32,
+    offset_y: f32,
+    inherited_clip: Option<ClipBounds>,
+) -> Result<(), ProjectionError> {
+    render_element_subtree_staged(
+        element,
+        layout_engine,
+        staged,
+        offset_x,
+        offset_y,
+        inherited_clip,
+    )
+    .map_err(|error| error.attributed_to(element.id))
+}
+
+fn render_element_subtree_staged(
     element: &Element,
     layout_engine: &LayoutEngine,
     staged: &mut StagedFrame,
@@ -204,12 +229,12 @@ fn render_element_tree_staged(
             .checked_add(i64::from(content_rect.x))
             .and_then(|value| value.checked_add(padding_left))
             .and_then(|value| value.checked_sub(scroll_x))
-            .ok_or(ProjectionError::CoordinateOverflow)?;
+            .ok_or(ProjectionError::CoordinateOverflow(None))?;
         let text_y = y
             .checked_add(i64::from(content_rect.y))
             .and_then(|value| value.checked_add(padding_top))
             .and_then(|value| value.checked_sub(scroll_y))
-            .ok_or(ProjectionError::CoordinateOverflow)?;
+            .ok_or(ProjectionError::CoordinateOverflow(None))?;
         let flow = layout_engine
             .current_text_flow(element.id)
             .ok_or(ProjectionError::MissingCurrentFlow(element.id))?;
@@ -270,10 +295,10 @@ fn render_border_staged(
 
     let right_x = x
         .checked_add(i64::from(width - 1))
-        .ok_or(ProjectionError::CoordinateOverflow)?;
+        .ok_or(ProjectionError::CoordinateOverflow(None))?;
     let bottom_y = y
         .checked_add(i64::from(height - 1))
-        .ok_or(ProjectionError::CoordinateOverflow)?;
+        .ok_or(ProjectionError::CoordinateOverflow(None))?;
 
     if element.style.border_top {
         style.color = element.style.get_border_top_color();
@@ -282,7 +307,7 @@ fn render_border_staged(
             for col_offset in 1..(width - 1) {
                 let column = x
                     .checked_add(i64::from(col_offset))
-                    .ok_or(ProjectionError::CoordinateOverflow)?;
+                    .ok_or(ProjectionError::CoordinateOverflow(None))?;
                 paint_char(staged, column, y, h, &style)?;
             }
         }
@@ -298,7 +323,7 @@ fn render_border_staged(
     for row_offset in first_vertical_row..vertical_end {
         let row = y
             .checked_add(i64::from(row_offset))
-            .ok_or(ProjectionError::CoordinateOverflow)?;
+            .ok_or(ProjectionError::CoordinateOverflow(None))?;
         if element.style.border_left {
             style.color = element.style.get_border_left_color();
             paint_char(staged, x, row, v, &style)?;
@@ -318,7 +343,7 @@ fn render_border_staged(
             for col_offset in 1..(width - 1) {
                 let column = x
                     .checked_add(i64::from(col_offset))
-                    .ok_or(ProjectionError::CoordinateOverflow)?;
+                    .ok_or(ProjectionError::CoordinateOverflow(None))?;
                 paint_char(staged, column, bottom_y, h, &style)?;
             }
         }
@@ -340,14 +365,23 @@ fn paint_char(
     staged.paint_grapheme(x, y, ch.encode_utf8(&mut buffer), style)
 }
 
+/// Project a screen-space coordinate onto the cell grid it falls in.
+///
+/// A cell owns the half-open span from its own coordinate to the next, so the
+/// containing cell is `floor(value)` on both sides of the origin. Casting
+/// instead truncates toward zero, which folds every coordinate in `(-1.0, 0.0)`
+/// onto cell `0` and paints off-screen content along the viewport edge.
 fn signed_coord(value: f32) -> Result<i64, ProjectionError> {
     if !value.is_finite() {
-        return Err(ProjectionError::NonFiniteCoordinate);
+        return Err(ProjectionError::NonFiniteCoordinate(None));
     }
-    if value < i64::MIN as f32 || value > i64::MAX as f32 {
-        return Err(ProjectionError::CoordinateOverflow);
+    let floored = value.floor();
+    // `i64::MAX as f32` rounds up to 2^63, so the upper bound is exclusive:
+    // a value that reaches it has no i64 representation.
+    if floored < i64::MIN as f32 || floored >= i64::MAX as f32 {
+        return Err(ProjectionError::CoordinateOverflow(None));
     }
-    Ok(value as i64)
+    Ok(floored as i64)
 }
 
 fn border_char(raw: &str) -> char {
