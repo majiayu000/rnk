@@ -16,7 +16,7 @@
 
 #![cfg(unix)]
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::fd::RawFd;
 use std::time::{Duration, Instant};
 
@@ -33,7 +33,16 @@ use rnk::renderer::Terminal;
 const CHILD_MARKER: &str = "RNK_PTY_CHILD";
 
 /// Printed once the child holds raw mode, so the parent knows when to look.
+///
+/// The child then *blocks* until the parent replies. Printing alone is not
+/// enough: seeing the marker in the output stream says only that the bytes
+/// arrived, not that the child is still holding the terminal. On a fast machine
+/// one `read` returns the whole session, restore included, and a termios sample
+/// taken then measures the restored state and passes for the wrong reason.
 const RAW_MODE_HELD: &str = "<<RAW-MODE-HELD>>";
+
+/// Written by the parent to release the child once it has sampled the termios.
+const RELEASE: u8 = b'\n';
 
 /// Printed after the child has restored the terminal.
 const RESTORED: &str = "<<RESTORED>>";
@@ -63,6 +72,10 @@ fn pty_child_entrypoint() {
     terminal.enter_inline().expect("inline mode");
     print!("{RAW_MODE_HELD}\r\n");
     flush();
+    // Hold the terminal until the parent has looked at it. This is the whole
+    // handshake: without it the assertion depends on the parent winning a race
+    // it has no way to win reliably.
+    await_release();
 
     let mut shell = InlineChatShell::new(
         ScrollbackNamespace::new("pty-test").expect("non-empty"),
@@ -105,6 +118,20 @@ fn commit<S: rnk::components::chat::ScrollbackSink>(
 fn flush() {
     use std::io::Write;
     std::io::stdout().flush().expect("flush");
+}
+
+/// Blocks until the parent writes one byte to the pty.
+fn await_release() {
+    let mut byte = [0u8; 1];
+    let mut stdin = std::io::stdin();
+    loop {
+        match stdin.read(&mut byte) {
+            Ok(0) => panic!("the parent closed the pty without releasing the child"),
+            Ok(_) => return,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => panic!("reading the release byte failed: {error}"),
+        }
+    }
 }
 
 /// Reads the pty's termios, which is shared between master and slave.
@@ -162,6 +189,7 @@ fn an_inline_chat_commits_into_scrollback_and_restores_the_terminal() {
 
     let mut child = pty.slave.spawn_command(command).expect("spawn the child");
     let mut reader = pty.master.try_clone_reader().expect("a reader");
+    let mut writer = pty.master.take_writer().expect("a writer");
     drop(pty.slave);
 
     let mut output = String::new();
@@ -178,10 +206,15 @@ fn an_inline_chat_commits_into_scrollback_and_restores_the_terminal() {
             Ok(count) => output.push_str(&String::from_utf8_lossy(&buffer[..count])),
             Err(error) => panic!("reading the pty failed: {error}\nsaw:\n{output}"),
         }
-        // Sampled while the child still holds the terminal. Reading it after the
-        // child exits would prove nothing: the restore would already have run.
+        // Sampled while the child is blocked waiting to be released, so it
+        // provably still holds the terminal. Sampling on the marker alone would
+        // be a race: one `read` can return the whole session, restore included,
+        // and the sample would measure the restored state and pass for the wrong
+        // reason.
         if raw_mode_while_held.is_none() && output.contains(RAW_MODE_HELD) {
             raw_mode_while_held = Some(termios_of(master_fd));
+            writer.write_all(&[RELEASE]).expect("release the child");
+            writer.flush().expect("flush the release byte");
         }
         if output.contains(RESTORED) {
             break;
