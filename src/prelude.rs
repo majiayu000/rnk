@@ -52,6 +52,11 @@ pub use crate::components::{Box, Box as LayoutBox, Spacer, Static, Transform};
 // Display Components - Text & Content
 // =============================================================================
 
+pub use crate::components::chat::message_list::{
+    BottomFollowState, MessageAnchor, MessageList, MessageListEntry, MessageListMutation,
+    MessageListObservation, MessageListState, MessageRows, RowOffset, ViewportRows,
+    VisibleMessageRange, VisibleMessageSlice,
+};
 pub use crate::components::chat::{
     AffectedMessage, AffectedMessageDisposition, AppendTextUpdate, ApplyOutcome, BlockId,
     BlockUpdate, ChatMessage, ChatMessageMetadata, ChatRole, CodeContent, ConversationError,

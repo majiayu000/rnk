@@ -44,6 +44,7 @@
 
 pub mod composer;
 mod error;
+pub mod message_list;
 mod model;
 mod reducer;
 mod state;
