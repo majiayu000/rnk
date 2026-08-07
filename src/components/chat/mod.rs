@@ -47,12 +47,22 @@ mod error;
 pub mod message_list;
 mod model;
 mod reducer;
+pub mod scrollback;
 mod state;
 pub mod view;
 
 pub use composer::{
     ChatComposerKeyMap, ChatComposerState, ComposerAction, ComposerError, ComposerProjection,
     ComposerRevision, PendingSubmission, SubmissionToken, handle_key,
+};
+pub use scrollback::{
+    AttemptDisposition, ConfirmedLedger, ContentDigest, DigestBuilder, DurableApply,
+    DurableCertainty, DurableCommitStore, DurableFailure, DurableScrollbackSink,
+    ForbiddenControlKind, LedgerLookup, LedgerRecordError, NativeTerminalSink, NotCommittedCause,
+    ProjectionContext, ScrollbackCommitId, ScrollbackCommitKey, ScrollbackCommitOutcome,
+    ScrollbackContent, ScrollbackContentError, ScrollbackContentIdentity, ScrollbackGuarantee,
+    ScrollbackIdentityError, ScrollbackNamespace, ScrollbackReceipt, ScrollbackSink, ThemeIdentity,
+    TransportEncoding, TransportStage, UnknownEvidence, UnknownReason,
 };
 pub use view::{
     ChatBlockRef, ChatBlockRenderer, ChatMessageView, ChatMessageViewOptions, ChatMessageViewStyle,
