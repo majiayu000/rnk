@@ -119,7 +119,8 @@ jobs:
             --test chat_message_views \
             --test chat_targeted_updates \
             --test message_list_properties \
-            --test message_list_public_api
+            --test message_list_public_api \
+            --test golden_real_apps
 
       # Built, not just type-checked: an example that compiles but fails to link
       # is not a runnable example, and these are the ones users copy from.
