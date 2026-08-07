@@ -166,7 +166,7 @@ impl FullscreenChatShell {
             focus: FullscreenFocus::default(),
             overlay_open: false,
         };
-        shell.sync_transcript_viewport()?;
+        shell.commit_layout(layout)?;
         Ok(shell)
     }
 
@@ -280,8 +280,7 @@ impl FullscreenChatShell {
     pub fn try_resize(&mut self, width: u16, height: u16) -> Result<(), FullscreenShellError> {
         let composer_rows = composer_rows(&self.composer, width);
         let layout = FullscreenLayout::try_new(width, height, composer_rows, self.status_rows)?;
-        self.layout = layout;
-        self.sync_transcript_viewport()
+        self.commit_layout(layout)
     }
 
     /// Recomputes the layout for the composer's current height.
@@ -295,15 +294,23 @@ impl FullscreenChatShell {
             return Ok(self.layout);
         }
         let layout = FullscreenLayout::try_new(width, height, composer_rows, self.status_rows)?;
-        self.layout = layout;
-        self.sync_transcript_viewport()?;
+        self.commit_layout(layout)?;
         Ok(layout)
     }
 
-    fn sync_transcript_viewport(&mut self) -> Result<(), FullscreenShellError> {
-        let rows = ViewportRows::new(u64::from(self.layout.transcript().rows()));
+    /// Adopts `layout`, but only once the transcript has accepted its viewport.
+    ///
+    /// The order is the point. Writing the layout first and syncing after leaves
+    /// the two disagreeing whenever the sync is refused — the layout says the
+    /// transcript owns N rows while the transcript is still scrolling as though
+    /// it owned M, which is the partially-applied resize this method exists to
+    /// prevent. The transcript is asked first, and the layout is adopted only if
+    /// it agreed.
+    fn commit_layout(&mut self, layout: FullscreenLayout) -> Result<(), FullscreenShellError> {
+        let rows = ViewportRows::new(u64::from(layout.transcript().rows()));
         self.transcript
             .try_set_viewport_rows(self.transcript.revision(), rows)?;
+        self.layout = layout;
         Ok(())
     }
 }

@@ -136,6 +136,63 @@ fn a_resize_the_terminal_cannot_hold_leaves_the_old_layout_in_force() {
     );
 }
 
+/// The invariant every mutating path has to preserve: the layout's transcript
+/// region and the transcript's own viewport are the same number of rows.
+///
+/// They are two copies of one fact. Whenever they disagree the transcript
+/// scrolls to positions the renderer never paints, and nothing reports it —
+/// which is why this is asserted after *every* operation below rather than
+/// documented once.
+fn assert_layout_and_viewport_agree(shell: &FullscreenChatShell, after: &str) {
+    assert_eq!(
+        shell.transcript().viewport_rows(),
+        ViewportRows::new(u64::from(shell.layout().transcript().rows())),
+        "layout and viewport disagreed after {after}"
+    );
+}
+
+#[test]
+fn layout_and_viewport_agree_after_every_operation() {
+    let mut shell = shell(24);
+    assert_layout_and_viewport_agree(&shell, "construction");
+
+    let keymap = ChatComposerKeyMap::new();
+    let newline = Key {
+        return_key: true,
+        shift: true,
+        ..Key::default()
+    };
+
+    for height in [40u16, 12, 3, 80, 5, 24] {
+        // A refused resize must leave both untouched rather than half-applied.
+        let before = shell.layout();
+        if shell.try_resize(WIDTH, height).is_err() {
+            assert_eq!(shell.layout(), before, "a refused resize moved the layout");
+        }
+        assert_layout_and_viewport_agree(&shell, &format!("a resize to {height}"));
+
+        // Growing the draft re-lays out through the same path.
+        let before = shell.layout();
+        if shell.handle_key(&keymap, "", &newline).is_err() {
+            assert_eq!(shell.layout(), before, "a refused reflow moved the layout");
+        }
+        assert_layout_and_viewport_agree(&shell, &format!("a newline at height {height}"));
+
+        // So does appending to the transcript, which must not touch the regions.
+        let id = u64::from(height) + 100;
+        let revision = shell.transcript().revision();
+        shell
+            .transcript_mut()
+            .try_append(
+                revision,
+                &[entry_with_rows(id, 3)],
+                measure_from_table(&[(id, 3)]),
+            )
+            .expect("appends");
+        assert_layout_and_viewport_agree(&shell, &format!("an append at height {height}"));
+    }
+}
+
 #[test]
 fn consecutive_resizes_never_leave_the_regions_overlapping() {
     let mut shell = shell(24);
