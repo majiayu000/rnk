@@ -73,6 +73,12 @@ dirs-next = "2.0"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# The PTY integration test reads the pty's termios directly, which is a Unix
+# concept, so both of these stay off the Windows build entirely.
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+portable-pty = "0.9"      # Drive a real terminal in tests
+
 [dev-dependencies]
 env_logger = "0.11"
 tokio = { version = "1", features = ["full"] }
