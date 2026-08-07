@@ -87,6 +87,10 @@ name = "layout"
 harness = false
 
 [[bench]]
+name = "message_list"
+harness = false
+
+[[bench]]
 name = "render"
 harness = false
 
