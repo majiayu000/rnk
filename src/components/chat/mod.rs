@@ -44,6 +44,7 @@
 
 pub mod composer;
 mod error;
+pub mod fullscreen_shell;
 pub mod inline_shell;
 pub mod message_list;
 mod model;
@@ -55,6 +56,10 @@ pub mod view;
 pub use composer::{
     ChatComposerKeyMap, ChatComposerState, ComposerAction, ComposerError, ComposerProjection,
     ComposerRevision, PendingSubmission, SubmissionToken, handle_key,
+};
+pub use fullscreen_shell::{
+    FullscreenChatShell, FullscreenFocus, FullscreenFocusOutcome, FullscreenKeyOutcome,
+    FullscreenLayout, FullscreenLayoutError, FullscreenShellError, Region,
 };
 pub use inline_shell::{
     InlineChatShell, InlineCommitReport, InlineFocus, InlineFocusOutcome, InlineKeyOutcome,
