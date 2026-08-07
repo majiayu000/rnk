@@ -19,6 +19,10 @@ fn message(error: &TextFlowError) -> String {
     error.to_string()
 }
 
+// `InvalidStyleRange` exists precisely to describe a range whose start is past
+// its end, so constructing one here is the point of the test rather than the
+// mistake the lint is looking for.
+#[allow(clippy::reversed_empty_ranges)]
 #[test]
 fn every_variant_says_which_failure_it_is() {
     let cases = [
