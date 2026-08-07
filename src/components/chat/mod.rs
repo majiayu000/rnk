@@ -44,6 +44,7 @@
 
 pub mod composer;
 mod error;
+pub mod inline_shell;
 pub mod message_list;
 mod model;
 mod reducer;
@@ -54,6 +55,10 @@ pub mod view;
 pub use composer::{
     ChatComposerKeyMap, ChatComposerState, ComposerAction, ComposerError, ComposerProjection,
     ComposerRevision, PendingSubmission, SubmissionToken, handle_key,
+};
+pub use inline_shell::{
+    InlineChatShell, InlineCommitReport, InlineFocus, InlineFocusOutcome, InlineKeyOutcome,
+    InlineShellError, LiveMessage, LiveState, UnknownResolution,
 };
 pub use scrollback::{
     AttemptDisposition, ConfirmedLedger, ContentDigest, DigestBuilder, DurableApply,
