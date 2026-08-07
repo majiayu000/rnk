@@ -266,16 +266,23 @@ fn app() -> Element {
         composer_input.set(state);
     });
 
-    transcript.update(|state| state.resize_viewport(viewport_rows));
+    // Checked before updating, and read without cloning. `Signal::update` calls
+    // `trigger_render()` unconditionally, so an unconditional update here would
+    // schedule a render from inside a render and spin forever.
+    let viewport_changed = transcript
+        .with(|state| state.rows.viewport_rows() != ViewportRows::new(viewport_rows.max(1)));
+    if viewport_changed {
+        transcript.update(|state| state.resize_viewport(viewport_rows));
+    }
+
+    // Borrowed rather than cloned: `get()` would copy the whole transcript —
+    // every message plus the row index — on every frame.
+    let transcript_view = transcript.with(|state| message_list(state, is_typing.get()));
+    let composer_view = composer.with(input_area);
 
     Box::new()
         .flex_direction(FlexDirection::Column)
-        .children(vec![
-            header(),
-            message_list(&transcript.get(), is_typing.get()),
-            input_area(&composer.get()),
-            footer(),
-        ])
+        .children(vec![header(), transcript_view, composer_view, footer()])
         .into_element()
 }
 
