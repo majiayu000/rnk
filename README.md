@@ -107,6 +107,12 @@ until a dedicated CLI distribution is added.
 For a copy-paste path from an empty Cargo project to an interactive TUI, follow
 [docs/getting-started.md](https://github.com/majiayu000/rnk/blob/main/docs/getting-started.md).
 
+Building a chat? Start from
+[docs/CHAT_QUICKSTART.md](https://github.com/majiayu000/rnk/blob/main/docs/CHAT_QUICKSTART.md),
+which covers the inline and fullscreen shapes, how to update a conversation,
+custom block renderers, keymaps, the three-state commit outcome, and what the
+chat surface deliberately does not do.
+
 ## Limitations
 
 - The public distribution is the Rust crate API. The `rnk` binary target is a
