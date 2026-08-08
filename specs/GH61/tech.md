@@ -1,4 +1,4 @@
-# Tech Spec：LayoutSnapshot、绝对 Cell 边界量化与聊天负载证据
+# Tech Spec：LayoutSnapshot、绝对 Cell 边界量化与 producer parity
 
 ## Linked Issue
 
@@ -29,7 +29,6 @@ GH-58 至 GH-60 的生产实现；GH-61 implementation 必须在三个真实 mer
 | String path | `src/renderer/render_to_string.rs:123`, `src/renderer/render_to_string.rs:151`, `src/renderer/render_to_string.rs:175` | string renderer反复 compute并从 engine读root height，最后仍把 engine交给 renderer | height probe/final render 必须使用同一 snapshot contract |
 | Static path | `src/renderer/static_content.rs:45`, `src/renderer/static_content.rs:48`, `src/renderer/static_content.rs:54` | static 独立 full compute、default root layout、engine renderer | 需要 checked full snapshot，且接入 GH-60 whole-frame prepare |
 | Testing path | `src/testing/renderer.rs:49`, `src/testing/renderer.rs:54`, `src/testing/renderer.rs:64` | TestRenderer 计算新 engine并分别读 layout/render | 测试不能保留另一套量化解释 |
-| Existing benchmarks | `benches/layout.rs:71`, `benches/layout.rs:90`, `benches/layout.rs:137`, `benches/layout.rs:160` | 只测 creation、通用 full tree/grid/text/getters | 没有 chat mutation、incremental/full pair、allocation/work evidence |
 | GH-58 projection | `specs/GH58/tech.md:70`, `specs/GH58/tech.md:77`, `specs/GH58/tech.md:127`, `specs/GH58/tech.md:168` | logical TextFlow immutable；visible/clipped projection由每帧 overflow/scroll/content/clip/terminal 输入生成 | snapshot 提供 projection geometry，不复制 logical flow |
 | GH-59 identity/order | `specs/GH59/tech.md:170`, `specs/GH59/tech.md:178`, `specs/GH59/tech.md:190`, `specs/GH59/tech.md:203` | checked core产出`ReconcilePlan`，每个parent保存`final_children`，LayoutEngine直接消费该plan | snapshot semantic node/order直接复用该结果 |
 | GH-60 error/report algebra | `specs/GH60/tech.md:141`, `specs/GH60/tech.md:151`, `specs/GH60/tech.md:157`, `specs/GH60/tech.md:285` | layout wrapper为`Upstream`/`DirectPatch`/`InitialBuild`/`RecoveryFailed`，frame wrapper只有`Upstream`/`Transaction`/`Render`，initial build失败为`Transaction(InitialBuild(...))` | GH-61只能在现有non-exhaustive wrapper中组合snapshot cause，不能发明initial frame variant |
@@ -94,8 +93,8 @@ scroll/TextFlow 的借用或 copy accessor。不得公开 field、setter、任�
 已验证 `Arc`。
 
 `LayoutSnapshot` 的 semantic equality 只比较 viewport 与 semantic nodes。producer strategy、
-Taffy NodeId、ElementId alias、cache slot、generation counter、timing/allocation counters
-不进入 equality。frame-local alias overlay 结构上只存在于 `PreparedSnapshotFrame`，允许
+Taffy NodeId、ElementId alias、cache slot、generation counter 与独立 build/report work
+counters 不进入 equality。frame-local alias overlay 结构上只存在于 `PreparedSnapshotFrame`，允许
 同一 semantic snapshot配合 GH-60 fresh ElementId；不得把 aliases放回snapshot再靠自定义
 `PartialEq`排除。
 
@@ -399,8 +398,9 @@ snapshot_nodes
 rebuild_count
 ```
 
-这些 counters 是 `SnapshotBuildReport` 的一部分。以它们为输入的 benchmark
-workload matrix、baseline artifact 与回归门属于 #85，不在本 packet 内定义。
+这些 counters 是 `SnapshotBuildReport` 的一部分。GH-61 只负责在 full、incremental 与
+recovered producer 上以同一 closed 字段集生成 counters；以它们为输入的 benchmark harness、
+artifact、baseline、compare 与 promotion 生命周期全部属于 #85。
 
 ### 8. Verification、public docs 与 coverage
 
@@ -455,9 +455,9 @@ Element target + viewport
   -> atomic publication of engine/snapshot/previous/aliases/measurements/static state
 ```
 
-full/incremental/recovered只改变producer report，不改变snapshot semantic data。#85 的 benchmark
-runner对等价起点执行同一data flow并把report、allocation与timing写成CI artifact；artifact
-不进入运行时持久化。生产snapshot只保存在当前App/checked caller内，无磁盘或全局跨App cache。
+full/incremental/recovered 只改变 producer report，不改变 snapshot semantic data。report
+随 checked producer 返回但不进入 snapshot equality 或运行时持久化；生产 snapshot 只保存在
+当前 App/checked caller 内，无磁盘或全局跨 App cache。
 
 ## 备选方案
 
@@ -471,17 +471,13 @@ runner对等价起点执行同一data flow并把report、allocation与timing写�
 - **TextFlow generation counter直接判等**：拒绝。cold full与cache hit可能语义相同但
   generation不同。
 - **snapshot失败再触发一次full rebuild**：拒绝。违反GH-60 exactly-once recovery并可能循环。
-- **普通PR CI按单次wall-clock失败**：拒绝。hosted runner噪声会制造不稳定门。
-- **要求incremental始终快于full**：拒绝。GH-60 clone-staging优先correctness，真实数据之后
-  再spec优化。
-- **解析未版本化的Divan pretty output作为长期contract**：拒绝。gate必须消费versioned
-  machine-readable artifact。
+- **从 work counters 直接宣称 incremental 更快**：拒绝。counters 只描述确定性工作量；
+  benchmark 与 performance decision 属于 #85。
 
 ## 风险
 
-- **Security**：benchmark corpus、identity或error payload可能含terminal controls。沿用
-  GH-58 sanitization；artifact使用JSON结构化值，不把payload写入terminal命令。bench/test
-  instrumentation不暴露public `Any`、arbitrary closure或运行时allocator替换。
+- **Security**：identity 或 error payload 可能含 terminal controls。沿用 GH-58
+  sanitization；诊断不暴露 public `Any`、arbitrary closure 或不受控执行 seam。
 - **Compatibility**：GH-58至GH-60尚未实现，真实module/public enum可能变化。implementation
   只在merged SHA重定位后开始；GH-61 semantic error set首版closed，只有GH-60既有公开outer
   wrapper可保持`#[non_exhaustive]`；旧`Layout`/wrappers保留。
@@ -491,12 +487,10 @@ runner对等价起点执行同一data flow并把report、allocation与timing写�
   prepared frame或明确排除semantic equality。
 - **TextFlow**：opaque generation若被当semantic revision会让full/cache-hit伪不等；必须
   绑定完整logical identity并对hash碰撞逐字段确认。
-- **Performance**：snapshot node/index/Arc与clone-staging增加分配。work/allocation gate先
-  暴露成本；不能以删postcondition、typed errors或原子ity优化。
-- **CI noise**：runner CPU调度、thermal与toolchain漂移影响wall time。使用same-runner
-  base/head ABBA、3 batches、双threshold和fingerprint；不可比较时needs_rebaseline。
-- **Maintenance**：布局、renderer与benchmark文件多。按模块拆分，保持每文件低于800行；
-  state-machine fixture与benchmark corpus共享只读builder但不共享writer ownership。
+- **Performance**：snapshot node/index/Arc 与 clone-staging 可能增加工作量。closed work
+  counters 暴露变化；不能以删除 postcondition、typed errors 或 atomicity 优化。
+- **Maintenance**：布局与 renderer 文件多。按模块拆分，保持每文件低于800行；
+  parity/state-machine fixtures 与 production writer 保持明确 ownership。
 
 ## 测试计划
 
@@ -511,9 +505,6 @@ runner对等价起点执行同一data flow并把report、allocation与timing写�
       source chain。
 - [ ] Property/state-machine：上述五个fixed seeds、每个exact 64步、SplitMix64每步固定8 draws
       和closed operation权重；逐步snapshot equality并输出可重放诊断。
-- [ ] Benchmark contract：固定六scenario/strategy/minimum-operation matrix、trusted base
-      ancestry/tree/content fingerprint、所有counters、schema/bootstrap/promotion、
-      timing 2-of-3、allocation与self/stale/untrusted negative fixtures。
 - [ ] Public docs：直接执行checker；manifest双向、`forbid(missing_docs)`、nonzero exact
       runnable doctests、拒绝`ignore`/`no_run`、`RUSTDOCFLAGS="-D warnings"`。
 - [ ] Coverage：直接执行checker；changed executable >=80%且denominator非零；五个critical
@@ -533,7 +524,7 @@ GH-61 implementation 使用独立PR。若snapshot migration引入正确性回归
 恢复GH-60已合入的prepared renderer/transaction行为；不得只恢复某个renderer的live-engine
 lookup、default layout或独立float cast，否则重新形成多套布局语义。
 
-work与allocation gate；不得删除artifact schema、exact-head binding或把invalid evidence判
-green。若allocation/CPU成本确实过高，保留snapshot/correctness合同，另开spec优化storage、
-incremental snapshot reuse或GH-60 candidate strategy。回滚后GH-61保持打开且
-`ready_to_implement`，保存exact failed head、CI、benchmark与review evidence；GH-68继续blocked。
+若 snapshot/work-counter 成本确实过高，保留 correctness、typed error 与 atomic publication
+合同，另开 spec 优化 storage、incremental snapshot reuse 或 GH-60 candidate strategy。
+回滚后 GH-61 保持打开并保存 exact failed head、CI 与 review evidence；#85 不得在缺少
+merged GH-61 measurement seam 时开始 implementation。

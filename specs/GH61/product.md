@@ -1,4 +1,4 @@
-# Product Spec：统一 LayoutSnapshot、终端 Cell 量化与聊天布局基准
+# Product Spec：统一 LayoutSnapshot 与终端 Cell 量化
 
 ## Linked Issue
 
@@ -15,13 +15,12 @@ Taffy，但它们仍直接读取可变 `LayoutEngine`，并在 renderer 中各�
 
 终端 AI Chat 会持续执行 streaming delta、消息追加、中部插入、可变高度 transcript、
 CJK/emoji 重排和 resize。用户需要一个唯一、不可变、后端无关的 `LayoutSnapshot` 作为布局
-与绘制边界，并需要可复现的正确性、工作量、分配与耗时证据来判断 incremental 路径是否真的
-保持语义和成本，而不是只看通用整树 microbenchmark。
+与绘制边界，并需要可复现的正确性与每帧工作量证据来判断各 producer 是否保持同一语义。
 
 本规格是 GH-61 的独立产品合同。GH-58 提供 TextFlow 与 frame-local projection，GH-59
 提供 scoped identity/final order，GH-60 提供 prepared candidate、transaction/recovery 与
-整帧提交；GH-61 只把这些已完成结果投影为统一 cell snapshot 并验证 parity
-门，不重新实现三个上游合同。
+整帧提交；GH-61 只把这些已完成结果投影为统一 cell snapshot、验证 parity 并输出确定性
+work counters，不重新实现三个上游合同。
 
 ## 目标
 
@@ -42,8 +41,8 @@ CJK/emoji 重排和 resize。用户需要一个唯一、不可变、后端无关
 - 不重新设计 GH-59 identity/order plan，或削弱 GH-60 clone-staging、一次 rebuild 和
   prepared App frame 原子提交。
 - 不实现 MessageList 高度索引、虚拟化、ChatComposer、shell 或模型 provider。
-- 不承诺 incremental 在所有规模和场景都快于 full；本 issue 先建立可解释 baseline 和
-  回归门，性能优化不能牺牲正确性。
+- 不承诺 incremental 在所有规模和场景都快于 full；本 issue 只暴露确定性 work counters，
+  不从 counters 推导 performance-green 结论。
 - 不定义 benchmark workload matrix、baseline artifact、promotion 流程或回归门；
   这些是 #85 的范围。本 issue 只交付 snapshot、量化与 parity。
 - 不保证不同终端字体的像素级一致，只保证选定 terminal cell 模型中的一致结果。
@@ -88,8 +87,8 @@ CJK/emoji 重排和 resize。用户需要一个唯一、不可变、后端无关
     generation counter 只能进入非语义诊断，不能让 cold full 与 cache-hit incremental
     snapshot 产生伪不等。
 11. **B-011** frame producer strategy、patch count、incremental cause、rebuild count、
-    cache-hit 与 timing counters 必须位于独立 build/report evidence 中；它们不得进入
-    `LayoutSnapshot` semantic equality。
+    cache-hit、visited/mutated nodes、TextFlow recomputes 与 snapshot nodes 必须位于独立
+    build/report evidence 中；它们不得进入 `LayoutSnapshot` semantic equality。
 12. **B-012** 对同一 target tree、viewport 和 TextFlow policy，initial/full、
     successful incremental 与 GH-60 `RecoveredFullRebuild` snapshot 必须逐节点语义等价：
     identity、order、bounds、clip、scroll 与 TextFlow semantic revision 全部一致。
