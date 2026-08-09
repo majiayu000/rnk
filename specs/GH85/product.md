@@ -80,16 +80,21 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    artifact binding，拒绝PR-head workflow/OIDC与repo token spoof，然后才以专用App写status。
 
    App每次fresh GET PR，解析current exact head与current test-merge SHA，验证test-merge object current/
-   mergeable且parents精确为base+head；没有有效test merge即保持pending或写failure并blocked。context
-   `gh85/layout-benchmark`必须同时写到head与GitHub UI/ruleset实际评估的test-merge SHA；final re-query要求
+   mergeable且parents精确为base+head；没有有效test merge即保持pending或写failure并blocked。active
+   context `gh85/layout-benchmark/vN`中的`N`必须等于单调递增、不可复用的`reporter_epoch`，并同时写到
+   head与GitHub UI/ruleset实际评估的test-merge SHA；final re-query要求
    pair未变，stale/superseded run绝不success。
 
-   T3 provisioning或App reinstall/id rotation时，external service必须先在current protected
-   default-branch SHA创建一个closed、non-required `gh85/reporter-registration` check run，验证返回check
-   run的App integration identity，再将ruleset中的required status context绑定该integration_id；registration
-   check永不required，也不能满足`gh85/layout-benchmark`。rotation在blocked maintenance window内重新
-   registration并原子切换rule/service config、撤销old installation/key，旧integration不得再report或满足
-   gate。ruleset将该context绑定专用App integration_id并要求
+   T3 provisioning及任一key/install/config/trust rotation都必须进入merge-locked maintenance、递增epoch，
+   并由external service在current protected default-branch SHA创建closed、non-required
+   `gh85/reporter-registration/vN` check run，验证当前App integration identity。service必须分页枚举每个open
+   PR，fresh验证其current head/test-merge pair并向两端写new-epoch pending；规则切换前再次证明枚举完整且
+   pair current。随后才原子切换service active config与ruleset required tuple到
+   `(gh85/layout-benchmark/vN,current integration_id)`并完成smoke后解除merge lock。routine rotation保持
+   同一App/integration id；old status仍是同一App source，但old context不再required且因context不等不能
+   满足new epoch。只有实际App credential compromise才在锁内额外provision新App ID/integration与new epoch，
+   完成registration/priming/rule switch后撤销old App credentials。registration check永不required，也不能
+   满足benchmark gate。ruleset要求
    latest evaluated SHA success，任何repo workflow/GITHUB_TOKEN都不能伪造。same-repo/fork任一路径若
    不支持双status，实施blocked，无workflow-check、单SHA或其他source fallback。
 
@@ -192,7 +197,8 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
       source/hash/paired-order 字段均由 schema/checker 的正负 fixture 验证，覆盖
       B-001 至 B-003。
 - [ ] base-owned workflow证明guarded PR-target/dispatch隔离、OIDC requester identity、dedicated App service、
-      non-required registration check/integration binding/rotation anti-spoof、
+      versioned non-required registration、all-open-PR epoch priming、routine same-App rotation与
+      compromise new-App anti-spoof、
       current head+test-merge pending/final status、real Statuses API/combined schema、same-repo/fork、
       sandbox/validator/requester权限与文件系统隔离、newest-pair concurrency、timeout、前置确定性门、
       container/archive/raw-controller containment、exact ancestry/merge-base、

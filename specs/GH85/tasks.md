@@ -83,7 +83,8 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       有timeout。全部PR jobs有explicit event guard，两个requester权限仅`id-token:write`，repo workflow无
       statuses/checks write且无reporter key/token secret；它们向T3 protected external service发送closed
       OIDC bundle。service才fresh解析head/test-merge pair并用dedicated App双写
-      `gh85/layout-benchmark`；classifier不读reviews。
+      active `gh85/layout-benchmark/v{reporter_epoch}`；bundle/status绑定epoch与service config digest，
+      classifier不读reviews。
       sandbox host权限为空，unauthenticated fetch exact public SHA；PR Cargo/build/binary只在tech固定
       digest的networkless/read-only/no-capability ephemeral containers执行，base/head/leg输出隔离，host在
       container结束后hash并由host `raw_upload`输出artifact name/id/digest/run/attempt/PR/head binding；
@@ -149,7 +150,10 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_service_verifies_oidc_workflow_repository_and_binding_claims -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_registration_check_binds_required_status_to_verified_app_integration -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked registration_check_is_non_required_and_cannot_satisfy_benchmark_context -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked reporter_rotation_revokes_old_integration_and_rebinds_atomically -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_rotation_keeps_same_app_integration_and_versions_context -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_rotation_primes_all_open_pr_head_and_test_merge_pairs_before_switch -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_and_config_digest_bind_oidc_status_and_receipt -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked reporter_compromise_provisions_new_app_epoch_and_revokes_old_credentials -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked required_statuses_bind_current_head_and_test_merge_for_same_repo_and_fork -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked commit_status_response_and_combined_status_schema_are_exact -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked raw_upload_controller_outputs_bind_artifact_to_head_and_run -- --exact`；
@@ -193,22 +197,34 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       checks write；Checks API与App credential只由external service持有，任何Actions job均不可取得；
       key/token只在server-side secret manager/HSM，repo/org/environment Actions secrets均无副本。记录并
       保护exact endpoint、固定OIDC audience `gh85-benchmark-status-reporter`、App/installation id、
-      allowed workflow path/ref/SHA、service config
+      allowed workflow path/ref/SHA、positive monotonic reporter epoch、active status/registration contexts、
+      service config
       digest、key version、rotation/revocation procedure、audit retention/alerting；不新增或假设service repo
-      source path。首次provision、reinstall或App-id rotation时，external owner在blocked maintenance
-      window由service调用`POST /repos/{base_owner}/{base_repo}/check-runs`，于current protected
+      source path。首次provision及任一key/install/config/trust rotation时，external owner进入merge-locked
+      maintenance window，严格递增epoch且不复用/回退；service调用
+      `POST /repos/{base_owner}/{base_repo}/check-runs`，于current protected
       default-branch SHA创建唯一completed/success、non-required
-      `gh85/reporter-registration` check run，closed external_id绑定repo/App/installation/config/key/epoch；
+      `gh85/reporter-registration/v{reporter_epoch}` check run，closed external_id绑定
+      repo/App/installation/config/key/epoch；
       `GET /repos/{base_owner}/{base_repo}/check-runs/{check_run_id}` fresh验证check id/name/head/status/
       conclusion/external_id，并证明returned `app.id`/`app.slug`与service-held installation对应App一致后记录
-      immutable response digest。registration check不得required，也不得满足`gh85/layout-benchmark`。
-      rotation重复registration并原子切换service active config/ruleset integration_id、撤销old installation/
-      key；旧integration的新report必须失败，旧evidence不得满足新rule。service unavailable/revoked/audit gap
-      或任一步失败即blocked，无repo token/workflow-check/双integration fallback。
+      immutable response digest。registration check不得required，也不得满足benchmark。
+
+      service完整分页枚举每个open PR，fresh验证current head/test-merge ordered pair，向每个pair两端写
+      `gh85/layout-benchmark/v{reporter_epoch}=pending`并记录closed sorted priming manifest/page/pair digest；
+      rule switch前再次分页与re-query，集合或pair变化就丢弃并重做。全部current pair已pending后，才原子
+      切换service active epoch/config与ruleset required tuple到
+      `(gh85/layout-benchmark/v{reporter_epoch},current App integration_id)`，smoke通过后解除merge lock。
+      routine rotation保持同一App integration id；old context仅因不再required/context mismatch不能满足，
+      old status保持同一App source且不得改写；switch后撤销被替换key/installation但App
+      integration id不变。只有confirmed App credential compromise才
+      额外provision新App ID/integration与new epoch，完成registration/priming/switch后撤销old App credential
+      并验证请求失败。service unavailable/revoked/audit gap或任一步失败即blocked，无repo token、unversioned
+      context、workflow-check或双required-context fallback。
 
       reviewed T2A checkpoint合入
       protected default ref；GitHub branch protection/ruleset将exact commit status context
-      `gh85/layout-benchmark`设为required，并绑定dedicated App exact integration_id；workflow
+      `gh85/layout-benchmark/v{reporter_epoch}`设为required，并绑定dedicated App exact integration_id；workflow
       job check明确不required。fresh API/read-only UI evidence证明context/source、default-ref workflow SHA
       与ruleset准确。T3还在maintainer confirmation下实际配置required approving review、new commit时
       dismiss stale approvals，并验证CONTRIBUTING final merge authorization绑定exact head；这些是planned
@@ -227,7 +243,10 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_service_verifies_oidc_workflow_repository_and_binding_claims -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_registration_check_binds_required_status_to_verified_app_integration -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked registration_check_is_non_required_and_cannot_satisfy_benchmark_context -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked reporter_rotation_revokes_old_integration_and_rebinds_atomically -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_rotation_keeps_same_app_integration_and_versions_context -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_rotation_primes_all_open_pr_head_and_test_merge_pairs_before_switch -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_and_config_digest_bind_oidc_status_and_receipt -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked reporter_compromise_provisions_new_app_epoch_and_revokes_old_credentials -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked required_statuses_bind_current_head_and_test_merge_for_same_repo_and_fork -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked commit_status_response_and_combined_status_schema_are_exact -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked raw_upload_controller_outputs_bind_artifact_to_head_and_run -- --exact`；
@@ -241,15 +260,18 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `cargo test --test layout_snapshot_benchmark_contract --locked newest_head_concurrency_replay_and_timeout_are_fail_closed -- --exact`；
       `git diff --exit-code "$FOUNDATION_BASE" "$FOUNDATION_HEAD" -- .github/workflows/ci.yml`；
       maintainer以`GET /repos/{base_owner}/{base_repo}/rulesets/{ruleset_id}`验证
-      `required_status_checks`精确包含`(context=gh85/layout-benchmark,integration_id=verified App)`且不含
-      `gh85/reporter-registration`，并核对registration check response App identity与non-required性质；
-      external owner executes documented rotation/revocation dry run，
-      证明old installation request被拒绝、old integration evidence不满足new rule，并运行same-repo/fork audit query。
+      `required_status_checks`精确包含
+      `(context=gh85/layout-benchmark/v{reporter_epoch},integration_id=verified App)`且不含
+      `gh85/reporter-registration/v{reporter_epoch}`，并核对registration response、完整open-PR priming manifest
+      与non-required性质；external owner分别执行same-App routine rotation与compromise new-App dry run，证明
+      same-App integration id稳定、old context不再required、新App switch后old credential请求被拒绝，并运行
+      same-repo/fork audit query。
   - File ownership: repo全只读；仅maintainer执行foundation merge/ruleset/review-rule配置，external
     service owner独占repo外App/service/keys/audit configuration；不新增service source path，不修改baseline。
   - Covers: B-004, B-008, B-009。
   - Handoff: 记录trusted default-ref SHA、workflow/checker digest、service config/key version、OIDC/App/
-    installation id、registration check id/response digest/rotation epoch、head+test-merge smoke及
+    installation id、registration check id/response digest/reporter epoch、open-PR priming manifest digest、
+    active versioned contexts、head+test-merge smoke及
     status/review/ruleset evidence后
     停止；T2B必须从该exact SHA新开implementation head，不能复用foundation worktree。
 
@@ -408,7 +430,8 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
   output隔离，host-side raw_upload controller outputs绑定name/id/digest/run/attempt/PR/head。trusted validator
   以actions read取得匹配raw ZIP bytes并在extract前验证archive结构/CRC/quotas/fixed files。两个requester
   只有id-token write；external dedicated App service验证OIDC workflow/repo/run/binding、fresh head/test-merge
-  object parents与pair currentness后才双写`gh85/layout-benchmark`。repo Actions无status/check write或App
+  object parents与pair currentness后才双写active `gh85/layout-benchmark/v{reporter_epoch}`；OIDC bundle、
+  status与receipt均绑定epoch/config digest。repo Actions无status/check write或App
   secret；same-repo/fork都须smoke通过，missing/duplicate/wrong-source/stale-pair/cancel/replay/timeout均failure。
   既有`ci.yml`/八job`ci-gate`独立不变。
 - artifact 的 scenario/strategy/minimum operation matrix、closed/unknown-key schema、
