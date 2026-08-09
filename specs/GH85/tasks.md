@@ -153,6 +153,9 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_rotation_keeps_same_app_integration_and_versions_context -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_rotation_primes_all_open_pr_head_and_test_merge_pairs_before_switch -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_and_config_digest_bind_oidc_status_and_receipt -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked rotation_revocation_requires_failed_old_credential_canary_and_audit_receipt -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked reporter_rotation_revokes_old_credential_before_final_epoch_priming -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked post_revocation_pending_is_latest_new_credential_status_and_overwrites_old_success -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_compromise_provisions_new_app_epoch_and_revokes_old_credentials -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked required_statuses_bind_current_head_and_test_merge_for_same_repo_and_fork -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked commit_status_response_and_combined_status_schema_are_exact -- --exact`；
@@ -201,25 +204,32 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       service config
       digest、key version、rotation/revocation procedure、audit retention/alerting；不新增或假设service repo
       source path。首次provision及任一key/install/config/trust rotation时，external owner进入merge-locked
-      maintenance window，严格递增epoch且不复用/回退；service调用
+      maintenance window，严格递增epoch且不复用/回退；先provision/验证new credential/service config，old
+      credential此时可暂存；service用new credential调用
       `POST /repos/{base_owner}/{base_repo}/check-runs`，于current protected
       default-branch SHA创建唯一completed/success、non-required
       `gh85/reporter-registration/v{reporter_epoch}` check run，closed external_id绑定
       repo/App/installation/config/key/epoch；
       `GET /repos/{base_owner}/{base_repo}/check-runs/{check_run_id}` fresh验证check id/name/head/status/
       conclusion/external_id，并证明returned `app.id`/`app.slug`与service-held installation对应App一致后记录
-      immutable response digest。registration check不得required，也不得满足benchmark。
+      immutable response digest。registration check不得required，也不得满足benchmark。registration通过后、
+      final vN priming前必须撤销old credential/installation，以failed canary/API与provider audit receipt证明；
+      timeout、仍成功、ambiguous failure或receipt mismatch均blocked。
 
-      service完整分页枚举每个open PR，fresh验证current head/test-merge ordered pair，向每个pair两端写
-      `gh85/layout-benchmark/v{reporter_epoch}=pending`并记录closed sorted priming manifest/page/pair digest；
+      revocation证明后service才fresh完整分页枚举每个open PR，验证current head/test-merge ordered pair，
+      只用new credential向每个pair两端写或覆盖
+      `gh85/layout-benchmark/v{reporter_epoch}=pending`并记录closed sorted priming manifest/page/pair digest、
+      revocation receipt、new credential/config identity及status ids/timestamps；逐SHA fresh验证latest
+      same-context status是post-revocation pending、timestamp晚于revocation且target binding含new config digest。
+      old credential预写的任何vN success必须被覆盖，failed canary证明撤销后不能竞态；
       rule switch前再次分页与re-query，集合或pair变化就丢弃并重做。全部current pair已pending后，才原子
       切换service active epoch/config与ruleset required tuple到
       `(gh85/layout-benchmark/v{reporter_epoch},current App integration_id)`，smoke通过后解除merge lock。
       routine rotation保持同一App integration id；old context仅因不再required/context mismatch不能满足，
-      old status保持同一App source且不得改写；switch后撤销被替换key/installation但App
-      integration id不变。只有confirmed App credential compromise才
-      额外provision新App ID/integration与new epoch，完成registration/priming/switch后撤销old App credential
-      并验证请求失败。service unavailable/revoked/audit gap或任一步失败即blocked，无repo token、unversioned
+      old status保持同一App source且不得改写；revoke-before-final-priming不改变App integration id。只有
+      confirmed App credential compromise才额外provision新App ID/integration与new epoch，并同样在final
+      priming前撤销old App credential、验证failed canary+receipt，再完成new-App priming/switch。service
+      unavailable/revoked/audit gap或任一步失败即blocked，无repo token、unversioned
       context、workflow-check或双required-context fallback。
 
       reviewed T2A checkpoint合入
@@ -246,6 +256,9 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_rotation_keeps_same_app_integration_and_versions_context -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_rotation_primes_all_open_pr_head_and_test_merge_pairs_before_switch -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_and_config_digest_bind_oidc_status_and_receipt -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked rotation_revocation_requires_failed_old_credential_canary_and_audit_receipt -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked reporter_rotation_revokes_old_credential_before_final_epoch_priming -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked post_revocation_pending_is_latest_new_credential_status_and_overwrites_old_success -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_compromise_provisions_new_app_epoch_and_revokes_old_credentials -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked required_statuses_bind_current_head_and_test_merge_for_same_repo_and_fork -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked commit_status_response_and_combined_status_schema_are_exact -- --exact`；
@@ -264,13 +277,15 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `(context=gh85/layout-benchmark/v{reporter_epoch},integration_id=verified App)`且不含
       `gh85/reporter-registration/v{reporter_epoch}`，并核对registration response、完整open-PR priming manifest
       与non-required性质；external owner分别执行same-App routine rotation与compromise new-App dry run，证明
-      same-App integration id稳定、old context不再required、新App switch后old credential请求被拒绝，并运行
-      same-repo/fork audit query。
+      same-App integration id稳定、old credential在final priming前已由failed canary+receipt证明撤销、
+      post-revocation pending覆盖任何old vN success且latest status/config属于new credential、old context不再
+      required，并运行same-repo/fork audit query。
   - File ownership: repo全只读；仅maintainer执行foundation merge/ruleset/review-rule配置，external
     service owner独占repo外App/service/keys/audit configuration；不新增service source path，不修改baseline。
   - Covers: B-004, B-008, B-009。
   - Handoff: 记录trusted default-ref SHA、workflow/checker digest、service config/key version、OIDC/App/
-    installation id、registration check id/response digest/reporter epoch、open-PR priming manifest digest、
+    installation id、registration check id/response digest/reporter epoch、revocation receipt/canary digest、
+    open-PR post-revocation priming manifest/status ids/timestamps digest、
     active versioned contexts、head+test-merge smoke及
     status/review/ruleset evidence后
     停止；T2B必须从该exact SHA新开implementation head，不能复用foundation worktree。

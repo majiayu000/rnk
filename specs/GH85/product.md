@@ -86,14 +86,17 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    pair未变，stale/superseded run绝不success。
 
    T3 provisioning及任一key/install/config/trust rotation都必须进入merge-locked maintenance、递增epoch，
-   并由external service在current protected default-branch SHA创建closed、non-required
-   `gh85/reporter-registration/vN` check run，验证当前App integration identity。service必须分页枚举每个open
-   PR，fresh验证其current head/test-merge pair并向两端写new-epoch pending；规则切换前再次证明枚举完整且
-   pair current。随后才原子切换service active config与ruleset required tuple到
+   provision并验证new credential/service config，并由external service在current protected default-branch
+   SHA创建closed、non-required `gh85/reporter-registration/vN` check run；此阶段old credential可暂存，但在
+   final priming前必须撤销old key/installation，并以failed canary/API与audit receipt证明。撤销后service
+   必须fresh分页枚举每个open PR、验证current head/test-merge pair，只用new credential向两端写或覆盖
+   new-epoch pending，并验证latest status ids/timestamps/config digest均属于post-revocation new request。
+   old credential在撤销前写入的任何vN success必须被pending覆盖且撤销后不能竞态。随后才原子切换service
+   active config与ruleset required tuple到
    `(gh85/layout-benchmark/vN,current integration_id)`并完成smoke后解除merge lock。routine rotation保持
    同一App/integration id；old status仍是同一App source，但old context不再required且因context不等不能
    满足new epoch。只有实际App credential compromise才在锁内额外provision新App ID/integration与new epoch，
-   完成registration/priming/rule switch后撤销old App credentials。registration check永不required，也不能
+   并同样在final priming前撤销old App credentials。registration check永不required，也不能
    满足benchmark gate。ruleset要求
    latest evaluated SHA success，任何repo workflow/GITHUB_TOKEN都不能伪造。same-repo/fork任一路径若
    不支持双status，实施blocked，无workflow-check、单SHA或其他source fallback。
@@ -197,8 +200,8 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
       source/hash/paired-order 字段均由 schema/checker 的正负 fixture 验证，覆盖
       B-001 至 B-003。
 - [ ] base-owned workflow证明guarded PR-target/dispatch隔离、OIDC requester identity、dedicated App service、
-      versioned non-required registration、all-open-PR epoch priming、routine same-App rotation与
-      compromise new-App anti-spoof、
+      versioned non-required registration、pre-priming revocation canary/receipt、post-revocation all-open-PR
+      latest-pending overwrite、routine same-App rotation与compromise new-App anti-spoof、
       current head+test-merge pending/final status、real Statuses API/combined schema、same-repo/fork、
       sandbox/validator/requester权限与文件系统隔离、newest-pair concurrency、timeout、前置确定性门、
       container/archive/raw-controller containment、exact ancestry/merge-base、
