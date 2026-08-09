@@ -63,16 +63,22 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    相等或复用字段。每个artifact必须记录闭合role、内容/config/corpus hash、paired order与实际
    executable hash/source；setup/tree construction不得计入operation，full/incremental必须从
    等价起点测量。
-4. **B-004** 任何PR prerequisite/build/benchmark前，必须由protected default-ref拥有的单一
-   `pull_request_target` workflow在同一run执行trusted phase zero；不得执行PR head的checker/
-   workflow。phase zero必须证明当前PR base是head祖先且`merge-base(base,head) == base`，输出
-   绑定run id/attempt、PR number、base/head、raw-diff digest与trusted-policy SHA的route artifact。
-   同一workflow的benchmark job必须`needs: phase_zero`并验证job outputs与唯一artifact完全一致，
-   缺失、重复、digest/identity不匹配、跨run replay、cancel或timeout均blocked。route通过后才执行
-   不依赖wall clock的parity、work-counter与
+4. **B-004** protected default-ref拥有的单一workflow必须同时监听`pull_request_target`
+   opened/synchronize/reopened/ready_for_review与`pull_request_review` submitted/edited/dismissed，
+   从两种payload规范化PR/base/head，并以per-PR `cancel-in-progress` concurrency及每job timeout保证
+   只有newest exact head/run/attempt可满足required check。它在同一workflow/run的四个fresh
+   GitHub-hosted VM job中隔离执行：trusted `phase_zero`只读base/default policy并产生route/checker
+   artifact；零权限`untrusted_collect`以scrubbed environment从validated public owner/repo/exact SHA
+   unauthenticated git fetch/build/run PR code，只上传始终untrusted的raw measurements且永不接收
+   route/checker/auth；`trusted_validate`只执行phase-zero带来的pinned checker、以closed hostile parser
+   验证raw bytes且不执行PR binary；`benchmark_required`只信trusted validation，并在最终summary再次
+   查询current PR/reviews/permission及event head。PR代码不能访问后续trusted VM的filesystem、env或
+   outputs。缺失、重复、digest/identity不匹配、stale head、跨run replay、cancel或timeout均blocked。
+   route通过后才执行不依赖wall clock的parity、work-counter与
    allocation-correctness checks。prerequisite category必须严格按
    `{parity, work_counter, allocation_correctness}`各一次执行并绑定闭合`spec_ref`；命令只能在
-   对应exact checkout root以checker拥有的closed Cargo exact-test argv allowlist执行。
+   对应exact checkout root以base-owned workflow/checker共享的closed Cargo exact-test argv allowlist
+   执行；执行产生的raw result仍不可信，必须由后续trusted checker重验。
    absolute/traversal路径、symlink escape、额外Cargo子命令/flag、cwd fallback、缺失/重复/未知/
    失败/错序证据都必须blocked，不得开始benchmark或给出performance-green结论。
 5. **B-005** normal trusted compare必须在同一runner上从PR exact base checkout与current head
@@ -91,16 +97,20 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    base ancestry、authority attestation无效或由current head自写时必须blocked；已验证来源但
    schema/checker/config/corpus/toolchain/stable compatibility class不兼容时必须明确为
    `needs_rebaseline`。volatile CPU observation变化只诊断，不使canonical stale。
-8. **B-008** base-owned classifier必须先移除闭合safe docs/spec path set，再从剩余raw diff与
-   base-tree canonical状态选择且只选择一个route：
+8. **B-008** base-owned classifier必须按repository topology对每个regular file进行闭合分类，再从
+   raw diff与base-tree canonical状态选择且只选择一个route：
    `initial_implementation_bootstrap -> bootstrap_valid`、
    `contract_update_bootstrap -> contract_update_valid`、
    `canonical_only_promotion -> promotion_valid`、
    `normal_trusted_compare -> comparison_valid`、
-   `non_benchmark_change -> not_applicable_valid`。safe docs/spec-only成功但
-   `performance_status=not_available`；ordinary source加safe docs仍compare，initial/contract加safe
-   docs仍走各自route。unknown path、contract/source混合、symlink/submodule、mode/type、rename/copy、
-   path collision或canonical混入unsafe path一律blocked。
+   `non_benchmark_change -> not_applicable_valid`。benchmark runtime class覆盖`src/**/*.rs`、
+   `crates/*/src/**/*.rs`与exact chat bench；build/contract class覆盖root/crate Cargo manifests/lock及
+   GH85 checker/workflow/schema/config/corpus/test paths；non-benchmark class闭合覆盖examples、普通
+   tests/golden、其他benches、docs/specs/video、非GH85 `.github` paths与exact standard root metadata。
+   non-benchmark-only成功但`performance_status=not_available`；runtime加non-benchmark仍compare，
+   initial/contract加non-benchmark仍走各自route。canonical promotion raw diff必须精确只有canonical
+   path，连docs都不得混入。unknown top-level/path、symlink/submodule、mode/type、rename/copy、path
+   collision或跨不兼容class混合一律blocked，直到authorized classifier contract update明确纳入。
 
    route classification、route authorization与performance必须分开。initial/contract/promotion route
    只有在base-owned token每次从GitHub REST重新取得当前未dismiss的`APPROVED` review、review
@@ -120,11 +130,11 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
 9. **B-009** canonical authority只能由implementation或authorized contract update合入后、
    default-ref-owned受信workflow在exact merged source SHA隔离checkout重新测量。pipeline顺序必须
    为：`generate-authority-subject`只产生canonical subject与unsigned metadata；随后
-   `actions/attest@v4`签subject；最后`finalize-authority`读取action输出的exact bundle path与
+   pinned attest action签subject；最后`finalize-authority`读取action输出的exact bundle path与
    attestation id，验证subject/workflow/run/source后产生final `authority.json`。authority job
    permissions精确为`contents:read`、`id-token:write`、`attestations:write`、
    `artifact-metadata:write`，其他全部none。subject、action bundle与final envelope必须由
-   `actions/upload-artifact@v4`以闭合唯一name、禁止overwrite上传并记录artifact id/digest/run；
+   pinned upload-artifact action以闭合唯一name、禁止overwrite上传并记录artifact id/digest/run；
    缺失、过期、wrong run/id/digest/bundle均blocked。attestation必须绑定repository/workflow/
    default-ref/run/source与subject digest并验证平台签名，不能由bundle自签。implementation
    candidate不参与。promotion PR只能提交与该authority
@@ -135,19 +145,27 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    必须在执行前取得绑定各自exact head的maintainer明确授权，不能跨PR复用；未来PR只能信任已
    出现在base tree中的blob。
 
+   trust-root workflow内所有third-party actions必须固定为reviewed full SHA：checkout v4
+   `11d5960a326750d5838078e36cf38b85af677262`、upload-artifact v4
+   `ea165f8d65b6e75b540449e92b4886f43607fa02`、download-artifact v4
+   `d3f86a106a0bac45b974a628896c90dbdf5c8093`、attest v4
+   `1e69f48acb82d1966a394da916b4c1698aa569d6`；任一升级只能走authorized contract-update route。
+
 ## 验收标准
 
 - [ ] 固定六 scenario、strategy matrix、minimum operations、closed schema、artifact role、
       source/hash/paired-order 字段均由 schema/checker 的正负 fixture 验证，覆盖
       B-001 至 B-003。
-- [ ] required job 证明前置确定性门、checkout containment、exact ancestry/merge-base、
+- [ ] required workflow证明双event失效触发、四VM权限/文件系统隔离、newest-head concurrency、
+      timeout、前置确定性门、checkout containment、exact ancestry/merge-base、
       same-runner ABBA、10-sample aggregation、timing 2-of-3与allocation any-batch双阈值，覆盖
       B-004 至 B-006。
 - [ ] self/stale/untrusted/stable-class-mismatch/missing baseline 与同run observation mismatch均
       产生 non-green 结果，volatile canonical observation变化只诊断，
       覆盖 B-007。
 - [ ] 五route互斥；route/auth/performance三种status互不冒充，只有comparison passed表示无回归；
-      同一base-owned run handoff与required check identity闭合；三阶段default-ref authority重新测量，
+      topology path classes、同一base-owned run隔离handoff与required check identity闭合；三阶段
+      default-ref authority重新测量，所有actions full-SHA pinned，
       promotion CI只读验证immutable handoff，覆盖B-008、B-009。
 
 ## 边界情况清单
@@ -156,8 +174,8 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
 | --- | --- |
 | 空/缺失输入 | covered: B-001、B-002、B-007 |
 | 错误与失败路径 | covered: B-002、B-004、B-007、B-008 |
-| 授权/权限 | covered: B-008、B-009 |
-| 并发/竞态/顺序 | covered: B-005、B-009 |
+| 授权/权限 | covered: B-004、B-008、B-009 |
+| 并发/竞态/顺序 | covered: B-004、B-005、B-009 |
 | 重试/重复/幂等 | covered: B-003、B-005、B-008、B-009 |
 | 非法状态转换 | covered: B-007、B-008、B-009 |
 | 兼容/迁移 | covered: B-007、B-008；旧 baseline 不兼容时进入 `needs_rebaseline`，不默认放行 |
