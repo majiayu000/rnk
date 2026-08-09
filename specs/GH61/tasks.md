@@ -91,7 +91,6 @@ benchmark workload matrix、baseline artifact、promotion 流程与回归门已�
 
 - Writable dependency graph：`T1 -> T2 -> T3 -> T4 -> T6`。
 - T1只写root-cause fixture；T2只写snapshot core；T3接管snapshot并独占engine/parity。
-    untracked CI candidate evidence；canonical baseline由后续独立promotion PR唯一拥有。
 - T6只有在T4都停止后接管全部tests。没有两个writable lane共享同一文件。
 - read-only reviewer、CI观察或coverage审计可与writer并行，但不得修改source、resolve
   threads或写同一review artifact。
