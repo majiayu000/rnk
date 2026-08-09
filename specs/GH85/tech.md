@@ -411,15 +411,25 @@ registration manifest/audit与随后priming manifest schema都含nullable `genes
 receipt type/mode/epoch不匹配均blocked。genesis receipt只允许epoch 1且prior rule/context/integration均无；
 revocation receipt只允许rotation epoch >1且prior active evidence闭合。
 
-revocation证明完成后，service才通过GitHub REST fresh完整分页枚举base repo每个open PR；对每项fresh GET
-current base/head/mergeability/test-merge，验证test-merge ordered parents后，只用new credential向head与
-test-merge POST或覆盖
+shared priming schema另有closed tagged union：
+
+- `genesis_anchor` exact fields为mode、selected `genesis_absence_receipt` digest/verified_at、initial credential
+  activated_at、registration created_at/verified_at；禁止revocation receipt、revoked_at、failed-canary或
+  其他rotation proof。每个pending必须有new status id，且created_at严格晚于上述全部timestamps。
+- `rotation_anchor` exact fields为mode、selected `revocation_receipt` digest、revoked_at与failed_canary_at；
+  禁止genesis anchor fields。每个pending必须有new status id，且created_at严格晚于revoked_at和failed_canary_at。
+
+两种variant精确XOR并共享new credential/installation identity、service config digest、reporter epoch；wrong
+variant、forbidden field、neither/both、相等或更早timestamp均blocked。selected lifecycle anchor有效后，
+service才通过GitHub REST fresh完整分页枚举base repo每个open PR；对每项fresh GET current base/head/
+mergeability/test-merge，验证test-merge ordered parents后，只用new credential向head与test-merge POST或覆盖
 `gh85/layout-benchmark/v{reporter_epoch}=pending`。closed priming manifest记录sorted PR/pair set、page/query
-digests、epoch、service config digest、new credential/installation identity、selected lifecycle receipt与两个status
+digests、epoch、service config digest、new credential/installation identity、selected lifecycle anchor/receipt与两个status
 ids/timestamps；missing/duplicate/invalid pair均blocked。每个SHA都必须fresh list/combined-query并证明latest
-same-context status id等于post-revocation POST response、timestamp晚于revocation、state为pending、target
-binding包含new config digest。old credential在revocation前写入的任何vN success必须被该latest pending覆盖；
-revocation后canary保证其不能再竞态。原子ruleset切换前必须重新分页枚举并逐pair re-query，证明open-PR set
+same-context status id等于new-credential POST response、created_at严格晚于selected route anchor、state为pending、
+target binding包含new config digest/epoch/receipt digest。rotation中old credential在revocation前写入的任何vN
+success必须被该latest pending覆盖，revocation后canary保证其不能再竞态；genesis不含这些字段或证明。
+原子ruleset切换前必须重新分页枚举并逐pair re-query，证明open-PR set
 与pair digest仍相同；
 变化则丢弃manifest并重新priming。只有全部pair已pending，maintainer才可在同一maintenance transaction把
 service active epoch/config与ruleset required tuple原子切到
@@ -1042,6 +1052,7 @@ promotion仍需current exact-head CI、independent review、resolved review thre
 | B-004 | reporter epoch/config binding supplement | `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_and_config_digest_bind_oidc_status_and_receipt -- --exact` |
 | B-004 | revoke-before-final-priming ordering | `cargo test --test layout_snapshot_benchmark_contract --locked rotation_revocation_requires_failed_old_credential_canary_and_audit_receipt -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked reporter_rotation_revokes_old_credential_before_final_epoch_priming -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked post_revocation_pending_is_latest_new_credential_status_and_overwrites_old_success -- --exact` |
 | B-004 | genesis/rotation receipt XOR | `cargo test --test layout_snapshot_benchmark_contract --locked genesis_epoch_one_requires_audited_absence_without_revocation_canary -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked lifecycle_manifests_require_exactly_one_genesis_or_revocation_receipt -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked genesis_rejects_prior_rule_context_integration_and_rotation_rejects_epoch_one -- --exact` |
+| B-004 | route-specific priming anchors | `cargo test --test layout_snapshot_benchmark_contract --locked genesis_priming_pending_follows_absence_activation_and_registration -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked genesis_priming_rejects_revocation_fields_and_non_strict_anchor_timestamps -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked rotation_priming_rejects_pending_not_strictly_after_revocation_and_failed_canary -- --exact` |
 
 ## 数据流
 
@@ -1081,7 +1092,7 @@ sequenceDiagram
     participant S as external dedicated App service
     participant A as authority (default ref)
     participant R as promotion PR
-    S->>S: lock; genesis(absence) XOR rotation(revoke+canary); final-prime pairs; switch tuple
+    S->>S: lock; genesis/rotation anchor XOR; strict-after final-prime pairs; switch tuple
     Q->>S: OIDC pending bundle
     S->>S: verify workflow; fresh head/test-merge parents; POST pending pair
     P->>P: classify diff without reading reviews
@@ -1126,7 +1137,8 @@ sequenceDiagram
   maintainer final authorization由branch protection/CONTRIBUTING独立绑定exact head。status不能授权merge。
 - **Reporter availability/key lifecycle**：service unavailable、credential revocation或audit gap时只允许
   pending/failure并blocked；T3负责genesis absence/rotation revocation XOR、monotonic epoch、versioned
-  registration/context、pre-priming revocation canary/receipt、post-revocation all-open-PR pending overwrite、
+  registration/context、route-specific priming anchors、rotation pre-priming revocation canary/receipt与
+  latest-pending overwrite、
   atomic ruleset switch及compromise-only App replacement，禁止repo token、unversioned context或双required
   context fallback。
 - **Maintenance**：schema/support/checker/test 若复制常量会漂移；固定矩阵由一个 source
@@ -1145,7 +1157,8 @@ sequenceDiagram
 - [ ] Lifecycle：combined guarded events、five mutually-exclusive routes、external human authorization、
       route/auth/performance status separation、sandbox/validator/OIDC requester/service isolation、head+test-merge
       dedicated-App status identity、versioned registration、genesis absence/rotation revocation receipt XOR、
-      revoke-before-final-priming canary/receipt、post-revocation latest-pending overwrite、same-App routine
+      route-specific strict timestamp anchors、rotation revoke-before-final-priming canary/receipt与
+      latest-pending overwrite、same-App routine
       rotation与compromise new-App replacement、
       same-repo/fork smoke、
       real response/combined schema、raw controller handoff、

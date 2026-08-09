@@ -92,10 +92,12 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    merge lock内令epoch严格递增到`>1`，provision并验证new credential/service config；此阶段old credential
    可暂存，但在final priming前必须撤销old key/installation，并以failed canary/API及closed
    `revocation_receipt`证明。registration与priming manifest必须精确携带两种receipt之一，neither/both均
-   blocked。随后service必须fresh分页枚举每个open PR、验证current head/test-merge pair，只用new
-   credential向两端写或覆盖
-   new-epoch pending，并验证latest status ids/timestamps/config digest均属于post-revocation new request。
-   old credential在撤销前写入的任何vN success必须被pending覆盖且撤销后不能竞态。随后才原子切换service
+   blocked。shared priming使用route-specific schema union：genesis pending必须有new status id，且timestamp严格晚于verified
+   `genesis_absence_receipt`、initial credential activation与registration create/verify timestamps，且禁止任何
+   revocation field/proof；rotation pending则必须严格晚于`revocation_receipt`中的revocation与failed-canary
+   timestamps。两者都必须fresh分页枚举每个open PR、验证current head/test-merge pair，只用new credential
+   向两端写或覆盖pending，并绑定selected lifecycle receipt digest、new credential/config/epoch。rotation中
+   old credential预写的任何vN success必须被pending覆盖且撤销后不能竞态。随后才原子切换service
    active config与ruleset required tuple到
    `(gh85/layout-benchmark/vN,current integration_id)`并完成smoke后解除merge lock。routine rotation保持
    同一App/integration id；old status仍是同一App source，但old context不再required且因context不等不能
@@ -205,8 +207,8 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
       source/hash/paired-order 字段均由 schema/checker 的正负 fixture 验证，覆盖
       B-001 至 B-003。
 - [ ] base-owned workflow证明guarded PR-target/dispatch隔离、OIDC requester identity、dedicated App service、
-      versioned non-required registration、genesis absence/rotation revocation XOR、pre-priming revocation
-      canary/receipt、post-revocation all-open-PR latest-pending overwrite、routine same-App rotation与
+      versioned non-required registration、genesis absence/rotation revocation XOR、route-specific priming
+      timestamp anchors、rotation pre-priming revocation canary/receipt与latest-pending overwrite、routine same-App rotation与
       compromise new-App anti-spoof、
       current head+test-merge pending/final status、real Statuses API/combined schema、same-repo/fork、
       sandbox/validator/requester权限与文件系统隔离、newest-pair concurrency、timeout、前置确定性门、
