@@ -21,10 +21,10 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
 
 - 固定能代表聊天布局变化的 workload/strategy matrix 与最小 operation 数。
 - 生成绑定 exact base/head、环境 fingerprint、work、allocation 与 timing 的版本化 artifact。
-- 让 required gate 先执行确定性正确性检查，再以抗噪声 paired batches 判断 timing/allocation
-  回归。
+- 让base-owned required workflow先完成route classification/authorization，再执行确定性正确性
+  检查，并以抗噪声paired batches判断timing/allocation回归。
 - 只信任 PR base tree 中可验证祖先来源的 canonical baseline，并对不可比较证据 fail closed。
-- 为首次引入 benchmark 的 PR 提供非授权 bootstrap，并把 canonical baseline promotion
+- 为首次引入benchmark的PR提供non-authoritative candidate bootstrap，并把canonical baseline promotion
   保留为独立、人工授权的后续 PR。
 
 ## 非目标
@@ -63,10 +63,13 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    相等或复用字段。每个artifact必须记录闭合role、内容/config/corpus hash、paired order与实际
    executable hash/source；setup/tree construction不得计入operation，full/incremental必须从
    等价起点测量。
-4. **B-004** 任何PR prerequisite/build/benchmark前，必须由exact base或protected default-ref
-   拥有的trusted phase-zero classifier先证明route；不得执行PR head的checker/workflow。classifier
-   必须证明当前PR base是head祖先且
-   `merge-base(base,head) == base`，再通过不依赖 wall clock 的 parity、work-counter 与
+4. **B-004** 任何PR prerequisite/build/benchmark前，必须由protected default-ref拥有的单一
+   `pull_request_target` workflow在同一run执行trusted phase zero；不得执行PR head的checker/
+   workflow。phase zero必须证明当前PR base是head祖先且`merge-base(base,head) == base`，输出
+   绑定run id/attempt、PR number、base/head、raw-diff digest与trusted-policy SHA的route artifact。
+   同一workflow的benchmark job必须`needs: phase_zero`并验证job outputs与唯一artifact完全一致，
+   缺失、重复、digest/identity不匹配、跨run replay、cancel或timeout均blocked。route通过后才执行
+   不依赖wall clock的parity、work-counter与
    allocation-correctness checks。prerequisite category必须严格按
    `{parity, work_counter, allocation_correctness}`各一次执行并绑定闭合`spec_ref`；命令只能在
    对应exact checkout root以checker拥有的closed Cargo exact-test argv allowlist执行。
@@ -88,23 +91,43 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    base ancestry、authority attestation无效或由current head自写时必须blocked；已验证来源但
    schema/checker/config/corpus/toolchain/stable compatibility class不兼容时必须明确为
    `needs_rebaseline`。volatile CPU observation变化只诊断，不使canonical stale。
-8. **B-008** base-owned classifier必须从raw diff与base-tree canonical状态选择且只选择一个route：
+8. **B-008** base-owned classifier必须先移除闭合safe docs/spec path set，再从剩余raw diff与
+   base-tree canonical状态选择且只选择一个route：
    `initial_implementation_bootstrap -> bootstrap_valid`、
    `contract_update_bootstrap -> contract_update_valid`、
    `canonical_only_promotion -> promotion_valid`、
-   `normal_trusted_compare -> comparison_passed|regression|needs_rebaseline`。missing或ambiguous
-   route、mixed contract/source、spec-only、symlink、mode/type/rename异常一律blocked；只有
-   `comparison_passed`表示“无回归”。initial implementation必须先取得绑定exact head的maintainer
-   明确授权。canonical存在时，只有获得独立maintainer授权且diff严格限于checker/schema/config/
-   corpus/workflow/toolchain contract paths才可`contract_update_valid`；该decision不表示性能green，
-   合入后必须重新authority measurement并走canonical-only promotion。bootstrap CLI必须显式接收
+   `normal_trusted_compare -> comparison_valid`、
+   `non_benchmark_change -> not_applicable_valid`。safe docs/spec-only成功但
+   `performance_status=not_available`；ordinary source加safe docs仍compare，initial/contract加safe
+   docs仍走各自route。unknown path、contract/source混合、symlink/submodule、mode/type、rename/copy、
+   path collision或canonical混入unsafe path一律blocked。
+
+   route classification、route authorization与performance必须分开。initial/contract/promotion route
+   只有在base-owned token每次从GitHub REST重新取得当前未dismiss的`APPROVED` review、review
+   `commit_id`等于exact head、body含该route的exact marker、reviewer不是PR author，且API证明reviewer
+   collaborator permission为`maintain|admin`时才`authorization_status=authorized`。每个actor最新
+   decisive review为dismissed/changes-requested、head变化、wrong marker/role/head或caller传入review
+   id均不能授权；final merge authorization仍是独立人工gate。`route_status`、
+   `authorization_status`与`performance_status`均为closed enum；只有normal route同时满足
+   `route_status=comparison_valid`与`performance_status=passed`时最终decision为
+   `comparison_passed`并表示“无回归”。`bootstrap_valid`、
+   `contract_update_valid`、`promotion_valid`、`not_applicable_valid`在route/auth/artifact均有效时可让
+   required check success，但`performance_status=not_available`，不得称performance green；
+   regression、needs_rebaseline、blocked均令check失败。contract update合入后必须重新authority
+   measurement并走canonical-only promotion。bootstrap CLI必须显式接收
    repo/base/head/run/target/artifact参数，验证exact checkout、objects、ancestry、merge-base与
    diff后才生成non-authoritative candidate；candidate不可复用、不可promotion、不可声称性能通过。
 9. **B-009** canonical authority只能由implementation或authorized contract update合入后、
-   default-ref-owned的独立受信
-   workflow在exact merged implementation/contract-update source SHA隔离checkout重新测量并产生不可变canonical bytes、
-   digest与platform-backed attestation；attestation必须绑定repository/workflow/default-ref/run/
-   source与subject digest并验证平台签名，不能由bundle自签。implementation candidate不参与。promotion PR只能提交与该authority
+   default-ref-owned受信workflow在exact merged source SHA隔离checkout重新测量。pipeline顺序必须
+   为：`generate-authority-subject`只产生canonical subject与unsigned metadata；随后
+   `actions/attest@v4`签subject；最后`finalize-authority`读取action输出的exact bundle path与
+   attestation id，验证subject/workflow/run/source后产生final `authority.json`。authority job
+   permissions精确为`contents:read`、`id-token:write`、`attestations:write`、
+   `artifact-metadata:write`，其他全部none。subject、action bundle与final envelope必须由
+   `actions/upload-artifact@v4`以闭合唯一name、禁止overwrite上传并记录artifact id/digest/run；
+   缺失、过期、wrong run/id/digest/bundle均blocked。attestation必须绑定repository/workflow/
+   default-ref/run/source与subject digest并验证平台签名，不能由bundle自签。implementation
+   candidate不参与。promotion PR只能提交与该authority
    evidence逐byte/digest相同的canonical blob。promotion CI必须read-only验证committed blob与
    attestation，任何阶段都不得先生成、创建或覆盖repo canonical path再验证。只有current
    exact-head repository CI、独立review、resolved threads与maintainer对同一promotion head的
@@ -123,8 +146,9 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
 - [ ] self/stale/untrusted/stable-class-mismatch/missing baseline 与同run observation mismatch均
       产生 non-green 结果，volatile canonical observation变化只诊断，
       覆盖 B-007。
-- [ ] 四route互斥且只有comparison passed表示无回归；首次implementation只产生exact-head
-      candidate；default-ref authority重新测量且promotion CI只读验证，覆盖B-008、B-009。
+- [ ] 五route互斥；route/auth/performance三种status互不冒充，只有comparison passed表示无回归；
+      同一base-owned run handoff与required check identity闭合；三阶段default-ref authority重新测量，
+      promotion CI只读验证immutable handoff，覆盖B-008、B-009。
 
 ## 边界情况清单
 
@@ -143,7 +167,7 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
 
 ## 发布说明
 
-GH-85 新增 CI/benchmark 合同，不改变用户运行时 API。首次 implementation 的
+GH-85 新增独立base-owned required benchmark合同，不改变既有`ci.yml`或用户运行时API。首次implementation的
 `bootstrap_valid` 仅表示 candidate 结构有效，不代表性能无回归；default-ref authority必须
 独立重新测量，promotion PR只能提交并只读验证匹配的canonical bytes。只有baseline合入future
 base tree后，普通PR才能进入trusted compare并以`comparison_passed`表示无回归。
