@@ -42,76 +42,73 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    `variable_height_transcript`、`resize_invalidation`。`unchanged_frame` 只允许
    full、incremental；其余 scenario 必须同时记录 full、incremental、recovered。缺失组合或
    额外名称均为无效 artifact。
-2. **B-002** 每个允许的 scenario/strategy/batch row 必须达到固定最小 operation 数，
-   `sample_count >= 10`，并完整记录 `median_ns`、allocation count/bytes、visited/mutated nodes、
-   TextFlow recomputes、snapshot nodes 与 rebuild count。row 按
-   scenario/strategy/batch 聚合；recovered row 必须满足
-   `rebuild_count == operation_count`，非 recovered row 必须为 0。缺字段、负 counter、
-   operation/sample 未达下限、不满足各 strategy 约束或出现 schema 未声明字段时 artifact
-   无效；candidate、current-run compare artifact 与 canonical baseline 均适用 closed schema。
+2. **B-002** 每个允许的 scenario/strategy/batch row 必须从同一起点执行恰好10个隔离sample；
+   每个sample在warmup后重置target与instrumentation，再执行固定`operation_count`。timing以10个
+   observation排序后第5/第6个值的checked整数平均数作为`median_ns`；allocation count/bytes与
+   visited/mutated nodes、TextFlow recomputes、snapshot nodes、rebuild count在10个sample间必须
+   逐字段完全相同，不能求和或平均掩盖差异。每个recovered sample必须满足
+   `rebuild_count == operation_count`，非recovered sample必须为0。缺字段、负counter、reset
+   失败、sample不一致、算术溢出、operation/sample未达合同或schema未知字段都使artifact无效。
 3. **B-003** benchmark 必须固定 seed、target size、viewport 序列、message corpus、
-   toolchain、`Cargo.lock`、profile、runner fingerprint、warmup、sample/batch 数及 exact
-   head/base SHA。每个 artifact 必须记录闭合 role、`source_sha`、内容/config/corpus hash 与
-   `paired_order`，并以闭合 build provenance 记录实际 executable hash/source；hash 或 build
-   source 不匹配时不得消费。setup/tree construction 不得计入 operation；full/incremental
-   必须从等价起点对同一 target 测量。
-4. **B-004** PR required gate 必须先通过不依赖 wall clock 的 parity、work-counter 与
-   allocation-correctness contract checks。prerequisite category 必须严格且各一次覆盖
-   `{parity, work_counter, allocation_correctness}`，按该顺序执行，并以闭合 `spec_ref`
-   绑定证明目标。parity/work-counter command 从 GH-61 merged tree 的真实 exact tests
-   解析；若 GH-61 没有 allocation-correctness test，则必须先运行 GH-85 自有
-   `tests/layout_snapshot_benchmark_contract.rs` 中的 exact allocation contract test。
-   任一 category/command/spec_ref 缺失、重复、未知、失败、错序或证据不完整时，不得开始
-   benchmark 或给出 performance-green 结论。PR 外的 push 可以跳过 benchmark job，但
-   `ci-gate` 只能在 `github.event_name != 'pull_request'` 且该 job result 精确为
-   `skipped` 时接受；PR 中 benchmark 的 `failure`、`cancelled` 或 `skipped` 均必须使 gate
-   失败。
-5. **B-005** 存在 trusted canonical baseline 时，timing 比较必须在同一 runner 上从 PR
-   exact base checkout 与 current head 分别 build/run，并按每个 pair/batch 的 ABBA 顺序
-   交错采集 current-run base/head artifacts；跨 run、错序或 pair identity 不一致的 row 无效。
-   exact refs 只能来自 pull request event 的 head/base SHA；checkout merge ref、`GITHUB_SHA`
-   或未验证的 shallow object 均不得作为 head/base。push-mode 不运行 compare，也不得构造
-   虚假的 PR refs 或把 skipped benchmark 解释为 performance pass。
-   只有 `head/base > 1.20` 且
-   `head-base > 50_000ns`，并在 3 个 batch 中至少 2 个复现时才判回归；单次 outlier
-   不得阻断。base 或 head 的 `median_ns == 0` 时 timing denominator 无效，结果必须 blocked，
-   不得以无穷比率或零差值继续比较。
-6. **B-006** allocation count 相对本次 trusted compare 的 current-run base 同时超过
-   10% 与 8 allocations，或
-   allocated bytes 同时超过 10% 与 4096 bytes 时，required gate 必须判回归；相对或绝对
-   阈值仅单独超过时不得误报。base allocation denominator 为 0 时，head 也为 0 表示该 metric
-   无回归；head 大于 0 时相对条件视为满足，但仍须严格超过对应绝对阈值才判回归。
-7. **B-007** compare 的 base 只能来自 PR exact base tree 中 repo-owned canonical
-   baseline，且 source SHA 必须是 PR base 的祖先、不得等于 current head。baseline
-   missing、closed-schema/content-hash 无效、source 不在 ancestry 中或由 current head
-   self-authored 时必须 blocked；已验证来源但 schema/config/corpus/toolchain/runner
-   fingerprint 与 current compare 不兼容时必须明确为 `needs_rebaseline`。stale 与 trust
-   predicate 必须输出具体失败字段，二者均不得判 green。
-8. **B-008** 首次引入 benchmark 的 implementation PR 只能运行 bootstrap，并生成绑定 exact
-   head 的 non-authoritative candidate artifact。成功状态只能是
-   `bootstrap_valid`、`comparison_status=not_available`、
-   `promotion_required=true`；该 PR 不得新增/修改 canonical baseline、复用旧 candidate
-   或宣称“无性能回归”。中断或部分生成的 candidate 不具备任何授权效力。
-9. **B-009** canonical baseline 的唯一 writer 是 implementation 合入后的独立
-   baseline-promotion PR。promotion 必须在 exact merged implementation SHA 的隔离 checkout
-   重新测量；checker 必须验证 source worktree exact HEAD、promotion-base ancestry、dependency
-   manifest、prerequisite commands、build/config/corpus hashes 后才可写 canonical，不得只
-   改写 candidate SHA。只有 current exact-head repository CI、独立 review、resolved review
-   threads 与 maintainer 对同一 promotion head 的明确 merge authorization 全部满足后才能
-   合入。checker、feature head 与 promotion head 均不得信任
-   自身写入的 baseline；只有 baseline 成为未来 PR base-tree 内容后才可用于 compare。
+   toolchain、`Cargo.lock`、profile、warmup与sample/batch数。runner必须把跨run比较使用的稳定
+   compatibility class与仅用于本次ABBA诊断的volatile observation分开；canonical不绑定volatile
+   CPU identity，本次base/head observation则必须逐字段完全相同。canonical只记录历史source/
+   authority provenance，current-run artifact只记录当前exact base/head/run refs，二者不得要求
+   相等或复用字段。每个artifact必须记录闭合role、内容/config/corpus hash、paired order与实际
+   executable hash/source；setup/tree construction不得计入operation，full/incremental必须从
+   等价起点测量。
+4. **B-004** PR required gate 必须先证明当前PR base是head祖先且
+   `merge-base(base,head) == base`，再通过不依赖 wall clock 的 parity、work-counter 与
+   allocation-correctness checks。prerequisite category必须严格按
+   `{parity, work_counter, allocation_correctness}`各一次执行并绑定闭合`spec_ref`；命令只能在
+   对应exact checkout root以checker拥有的closed Cargo exact-test argv allowlist执行。
+   absolute/traversal路径、symlink escape、额外Cargo子命令/flag、cwd fallback、缺失/重复/未知/
+   失败/错序证据都必须blocked，不得开始benchmark或给出performance-green结论。
+5. **B-005** normal trusted compare必须在同一runner上从PR exact base checkout与current head
+   分别build/run，并按每个pair/batch的ABBA顺序采集current-run artifacts；跨run、错序、pair
+   identity不一致或base/head volatile observation不一致都无效。exact refs只能来自PR event，
+   merge ref、`GITHUB_SHA`或未验证shallow object不得使用。每个row按B-002聚合；只有
+   `head/base > 1.20`且`head-base > 50_000ns`并在3个batch至少2个复现时判timing回归；任一
+   median为0或checked arithmetic失败都blocked。
+6. **B-006** allocation count相对本次current-run base同时超过10%与8 allocations，或
+   allocated bytes同时超过10%与4096 bytes时判回归；任一paired batch对任一metric同时超过
+   两个阈值即失败，不适用timing的2-of-3规则。base为0且head为0表示无回归；base为0且head
+   大于0时相对条件视为满足，但仍须严格超过绝对阈值。
+7. **B-007** compare的baseline只能从PR exact base tree读取。canonical的历史source必须是
+   current PR base的可验证祖先，但不需要也通常不应等于current head/base；current invocation
+   refs只绑定本次run。baseline missing、closed-schema/content-hash无效、历史source不在future
+   base ancestry、authority attestation无效或由current head自写时必须blocked；已验证来源但
+   schema/checker/config/corpus/toolchain/stable compatibility class不兼容时必须明确为
+   `needs_rebaseline`。volatile CPU observation变化只诊断，不使canonical stale。
+8. **B-008** checker必须从diff与base-tree canonical状态选择且只选择一个route：
+   `initial_implementation_bootstrap -> bootstrap_valid`、
+   `canonical_only_promotion -> promotion_valid`、
+   `normal_trusted_compare -> comparison_passed|regression|needs_rebaseline`。missing或ambiguous
+   route一律blocked；只有`comparison_passed`表示“无回归”。bootstrap CLI必须显式接收
+   repo/base/head/run/target/artifact参数，验证exact checkout、objects、ancestry、merge-base与
+   diff后才生成non-authoritative candidate；candidate不可复用、不可promotion、不可声称性能通过。
+9. **B-009** canonical authority只能由implementation合入后、default-ref-owned的独立受信
+   workflow在exact merged implementation SHA隔离checkout重新测量并产生不可变canonical bytes、
+   digest与platform-backed attestation；attestation必须绑定repository/workflow/default-ref/run/
+   source与subject digest并验证平台签名，不能由bundle自签。implementation candidate不参与。promotion PR只能提交与该authority
+   evidence逐byte/digest相同的canonical blob。promotion CI必须read-only验证committed blob与
+   attestation，任何阶段都不得先生成、创建或覆盖repo canonical path再验证。只有current
+   exact-head repository CI、独立review、resolved threads与maintainer对同一promotion head的
+   明确merge authorization全部满足后才能合入；未来PR只能信任已出现在base tree中的blob。
 
 ## 验收标准
 
 - [ ] 固定六 scenario、strategy matrix、minimum operations、closed schema、artifact role、
       source/hash/paired-order 字段均由 schema/checker 的正负 fixture 验证，覆盖
       B-001 至 B-003。
-- [ ] required job 证明前置确定性门、exact-checkout same-runner ABBA、timing 2-of-3
-      双阈值、allocation 双阈值与两个 zero-denominator 分支，覆盖 B-004 至 B-006。
-- [ ] self/stale/untrusted/fingerprint-mismatch/missing baseline 均产生 non-green 结果，
+- [ ] required job 证明前置确定性门、checkout containment、exact ancestry/merge-base、
+      same-runner ABBA、10-sample aggregation、timing 2-of-3与allocation any-batch双阈值，覆盖
+      B-004 至 B-006。
+- [ ] self/stale/untrusted/stable-class-mismatch/missing baseline 与同run observation mismatch均
+      产生 non-green 结果，volatile canonical observation变化只诊断，
       覆盖 B-007。
-- [ ] 首次 implementation 只产生 exact-head candidate；独立 promotion 重新测量并保留所有
-      人工 gate，覆盖 B-008、B-009。
+- [ ] 三route互斥且只有comparison passed表示无回归；首次implementation只产生exact-head
+      candidate；default-ref authority重新测量且promotion CI只读验证，覆盖B-008、B-009。
 
 ## 边界情况清单
 
@@ -131,5 +128,6 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
 ## 发布说明
 
 GH-85 新增 CI/benchmark 合同，不改变用户运行时 API。首次 implementation 的
-`bootstrap_valid` 仅表示 candidate 结构有效，不代表性能无回归；canonical baseline 必须由
-后续独立 promotion PR 建立，之后的 PR 才能进入 trusted compare。
+`bootstrap_valid` 仅表示 candidate 结构有效，不代表性能无回归；default-ref authority必须
+独立重新测量，promotion PR只能提交并只读验证匹配的canonical bytes。只有baseline合入future
+base tree后，普通PR才能进入trusted compare并以`comparison_passed`表示无回归。

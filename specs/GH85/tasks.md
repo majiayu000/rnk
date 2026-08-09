@@ -72,9 +72,11 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       hash、三个按 closed category/spec_ref 顺序记录的 prerequisite results 与 ABBA
       trace/pair identity 完整；allocation fallback 证明 counter 的 operation 归属、计数与
       reset 语义且先于任何 benchmark；
-      `median_ns` 是唯一 timing 字段；checker CLI 只从 exact base tree 取 canonical baseline，正确返回 blocked/
-      `needs_rebaseline`/regression/bootstrap 状态；implementation bootstrap 只写 candidate，
-      zero denominators 与所有 trust/promotion 负例均 fail closed | Verify:
+      `median_ns`由exact 10 observations的checked even median产生，deterministic counters逐sample
+      相同；checker只从exact base tree取canonical，并唯一选择bootstrap/promotion/compare route；
+      只有`comparison_passed`表示无回归；bootstrap显式绑定repo/base/head/run/target/artifact，
+      promotion validation只读authority evidence与committed blob；zero denominators、containment、
+      ancestry/ref/runner/trust/promotion负例均fail closed | Verify:
       `cargo test --test layout_snapshot_benchmark_contract --locked dependency_manifest_matches_merged_gh61_and_all_strategies -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked fixed_six_scenario_matrix_has_minimum_nonzero_operations -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked recovered_rows_aggregate_one_rebuild_per_operation -- --exact`；
@@ -83,25 +85,33 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `cargo test --test layout_snapshot_benchmark_contract --locked all_roles_require_closed_build_provenance -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked candidate_canonical_and_current_run_roles_are_not_interchangeable -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked median_ns_is_the_only_timing_field -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked ten_sample_even_median_and_deterministic_counters_are_exact -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked dependency_manifest_rejects_invalid_prerequisite_command_arrays -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked dependency_manifest_requires_complete_prerequisite_category_set -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked dependency_manifest_rejects_missing_duplicate_unknown_categories_and_spec_refs -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked allocation_correctness_fallback_runs_before_benchmark -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked prerequisite_commands_execute_and_record_before_benchmark -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked prerequisite_paths_and_argv_are_contained -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked failed_prerequisite_never_reports_performance_green -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked workflow_binds_event_head_and_base_without_merge_ref -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked same_runner_abba_builds_exact_base_and_head_and_rejects_pair_mismatch -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked bootstrap_and_compare_require_base_ancestor_and_exact_merge_base -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked timing_requires_two_of_three_paired_regressions -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked zero_timing_denominator_is_blocked -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked allocation_requires_relative_and_absolute_thresholds -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked allocation_regression_fails_on_any_paired_batch -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked zero_allocation_denominator_uses_absolute_floor -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked trusted_baseline_rejects_self_stale_and_untrusted_sources -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked trust_predicates_distinguish_blocked_from_needs_rebaseline -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked fingerprint_mismatch_needs_rebaseline -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked canonical_refs_are_historical_and_current_refs_are_invocation_scoped -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked runner_compatibility_excludes_volatile_cpu_identity -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked abba_requires_identical_current_runner_observation -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked route_selection_is_mutually_exclusive_and_only_comparison_passed_is_green -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked bootstrap_requires_explicit_repo_refs_and_exact_merge_base -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked implementation_writes_candidate_but_never_canonical_baseline -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked partial_candidate_never_authorizes_promotion -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked promotion_requires_exact_source_worktree_and_revalidates_provenance -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked promotion_rerun_emits_fresh_canonical_role_and_hashes -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked promotion_validation_is_read_only_and_authority_bound -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked promotion_rejects_committed_blob_not_matching_authority -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked bootstrap_and_promotion_never_self_authorize -- --exact`。
   - File ownership: 接管 `tests/layout_snapshot_benchmark_contract.rs`；独占
     `.github/scripts/check_gh61_benchmark.py`、`benches/chat_layout.rs`、
@@ -117,14 +127,17 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       Done when: `.github/workflows/ci.yml` 的独立 `layout_benchmark` job 先运行 dependency
       wiring，再按 parity/work-counter/allocation-correctness 顺序以 `shell=false` 执行
       dependency manifest 的三个 prerequisite argv，并记录 category/spec_ref 与
-      exit/matched/passed/ignored，全部成功后才运行 bootstrap 或 trusted compare；workflow
+      exit/matched/passed/ignored，全部成功后才运行唯一选中的bootstrap、promotion validation或
+      trusted compare；workflow
       env 只绑定 `${{ github.event.pull_request.head.sha }}`/
       `${{ github.event.pull_request.base.sha }}`，checkout `ref` 是 exact head 且
       `fetch-depth: 0`，不使用 `GITHUB_SHA`/merge ref；compare 在同一
-      runner 创建 exact PR-base detached worktree，base/head 使用隔离 target dirs build，
+      runner先验证base是head祖先且exact merge-base等于base，再创建exact PR-base detached
+      worktree；prerequisite cwd固定checkout root且argv/paths通过closed containment；base/head使用隔离target dirs build，
       checker 单进程按每 pair/batch ABBA 运行并产出互补 current-run artifacts；artifact 即使
-      non-green 也上传诊断，required summary 不把 blocked/`needs_rebaseline`/bootstrap
-      解释为 performance pass；job 使用 GitHub exact base/head 与 existing concurrency
+      non-green 也上传诊断；job按diff/base canonical状态唯一选择bootstrap/promotion/compare，
+      promotion只读验证committed blob与authority，required summary不把blocked/
+      `needs_rebaseline`/`bootstrap_valid`/`promotion_valid`解释为performance pass；job使用GitHub exact base/head 与 existing concurrency
       cancellation contract；非 PR push 上该 job 精确 skipped，`ci-gate` 使用 `always()`、
       保留八个既有 required job 的 success checks，并且只允许
       `(pull_request, success)` 或 `(event_name != pull_request, skipped)` 的 benchmark
@@ -137,8 +150,11 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `git cat-file -e "${HEAD_SHA}^{commit}"`；
       `git cat-file -e "${PR_BASE_OID}^{commit}"`；
       `test "$(git rev-parse HEAD)" = "$HEAD_SHA"`；
+      `git merge-base --is-ancestor "$PR_BASE_OID" "$HEAD_SHA"`；
+      `test "$(git merge-base "$PR_BASE_OID" "$HEAD_SHA")" = "$PR_BASE_OID"`；
       `git worktree add --detach "$RUNNER_TEMP/gh85-base" "$PR_BASE_OID"`；
       `test "$(git -C "$RUNNER_TEMP/gh85-base" rev-parse HEAD)" = "$PR_BASE_OID"`；
+      `python3 .github/scripts/check_gh61_benchmark.py --mode bootstrap --repo "$GITHUB_WORKSPACE" --pr-base-oid "$PR_BASE_OID" --head-sha "$HEAD_SHA" --run-id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --target-root "$RUNNER_TEMP/gh85-targets" --artifact-dir "$RUNNER_TEMP/gh85-artifacts" --candidate-out "$RUNNER_TEMP/gh85-artifacts/candidate.json"`；
       `python3 .github/scripts/check_gh61_benchmark.py --mode compare --repo "$GITHUB_WORKSPACE" --base-worktree "$RUNNER_TEMP/gh85-base" --pr-base-oid "$PR_BASE_OID" --head-sha "$HEAD_SHA" --run-id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --target-root "$RUNNER_TEMP/gh85-targets" --artifact-dir "$RUNNER_TEMP/gh85-artifacts"`；
       `cargo test --test layout_snapshot_benchmark_contract --locked workflow_binds_event_head_and_base_without_merge_ref -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked prerequisite_commands_execute_and_record_before_benchmark -- --exact`；
@@ -146,6 +162,8 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `cargo test --test layout_snapshot_benchmark_contract --locked ci_gate_accepts_benchmark_skip_only_for_non_pr_push -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked ci_gate_rejects_pr_benchmark_failed_cancelled_or_skipped -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked ci_gate_preserves_all_existing_required_jobs -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked route_selection_is_mutually_exclusive_and_only_comparison_passed_is_green -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked promotion_validation_is_read_only_and_authority_bound -- --exact`；
       manual workflow inspection：checkout exact `ref`/`fetch-depth: 0`、benchmark job 是
       `ci-gate` required dependency，push skip/PR success result expression 精确，且
       implementation diff 不含
@@ -168,25 +186,27 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
   - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009。
   - Handoff: implementation 合入后记录 exact merged SHA；未合入不得启动 T5。
 
-- [ ] `SP85-T5` 在独立 PR 中重新测量并 promotion canonical baseline。Owner:
+- [ ] `SP85-T5` 生成default-ref authority并在独立PR promotion canonical baseline。Owner:
       `baseline-promotion-lane` | Dependencies: SP85-T4 implementation 已由人工授权并合入；
-      exact merged implementation SHA 已记录；独立 branch/PR 与新的 current exact-head
-      repository CI/independent review/resolved threads/maintainer merge authorization | Done when: 在 exact merged implementation SHA 的 detached
-      worktree fresh 运行 `--mode promote`，直接生成 canonical role 与 fresh hashes；
-      `PROMOTION_BASE` 只绑定 `${{ github.event.pull_request.base.sha }}`，不使用 branch/
-      merge ref/`GITHUB_SHA`；
-      promotion PR 只写 canonical baseline，未复制/转换旧 candidate、未只改 SHA，且 promotion
-      head 不自信任该 baseline | Verify:
-      `git worktree add --detach "$RUNNER_TEMP/gh85-promotion-source" "$IMPLEMENTATION_MERGED_SHA"`；
-      `test "$(git -C "$RUNNER_TEMP/gh85-promotion-source" rev-parse HEAD)" = "$IMPLEMENTATION_MERGED_SHA"`；
+      exact merged implementation SHA已记录；default-ref-owned authority workflow与独立
+      promotion branch/PR | Done when: authority workflow在exact merged implementation SHA的
+      detached checkout fresh测量，只向repo外immutable artifact输出canonical bytes/digest/
+      platform-backed attestation；attestation绑定repository id/workflow ref/default-ref/run/source/
+      subject digest并由promotion CI验证平台签名；不读取bootstrap candidate、不写repo canonical。promotion PR只提交authority
+      canonical bytes，required CI通过`--mode validate-promotion`只读验证committed blob，未调用
+      generator、未创建/覆盖canonical；成功decision精确为`promotion_valid`且不声称无回归 |
+      Verify:
+      `python3 .github/scripts/check_gh61_benchmark.py --mode generate-authority --repo "$AUTHORITY_REPO" --repository-id "$GITHUB_REPOSITORY_ID" --workflow-ref "$GITHUB_WORKFLOW_REF" --default-ref-sha "$DEFAULT_REF_SHA" --source-sha "$IMPLEMENTATION_MERGED_SHA" --run-id "$AUTHORITY_RUN_ID" --target-root "$RUNNER_TEMP/gh85-authority-target" --artifact-dir "$RUNNER_TEMP/gh85-authority-artifacts" --authority-out "$RUNNER_TEMP/gh85-authority-artifacts/authority.json"`；
       `git cat-file -e "${PROMOTION_BASE}^{commit}"`；
-      `git -C "$RUNNER_TEMP/gh85-promotion-source" merge-base --is-ancestor "$IMPLEMENTATION_MERGED_SHA" "$PROMOTION_BASE"`；
-      `python3 "$RUNNER_TEMP/gh85-promotion-source/.github/scripts/check_gh61_benchmark.py" --mode promote --source-worktree "$RUNNER_TEMP/gh85-promotion-source" --source-sha "$IMPLEMENTATION_MERGED_SHA" --promotion-base-oid "$PROMOTION_BASE" --dependency-manifest "$RUNNER_TEMP/gh85-promotion-source/tests/fixtures/gh85_gh61_dependency.json" --canonical-out "$GITHUB_WORKSPACE/.github/benchmarks/gh61-baseline.json"`；
-      `python3 .github/scripts/check_gh61_benchmark.py --validate-artifact .github/benchmarks/gh61-baseline.json --expected-role canonical`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked promotion_requires_exact_source_worktree_and_revalidates_provenance -- --exact`；
-      `git diff --name-only "$PROMOTION_BASE"...HEAD` 精确等于
-      `.github/benchmarks/gh61-baseline.json`；记录 independent review、current exact-head CI、
-      resolved review threads 与 maintainer 对同一 promotion head 的 separate merge authorization。
+      `git cat-file -e "${PROMOTION_HEAD}^{commit}"`；
+      `git merge-base --is-ancestor "$PROMOTION_BASE" "$PROMOTION_HEAD"`；
+      `test "$(git merge-base "$PROMOTION_BASE" "$PROMOTION_HEAD")" = "$PROMOTION_BASE"`；
+      `python3 .github/scripts/check_gh61_benchmark.py --mode validate-promotion --repo "$GITHUB_WORKSPACE" --pr-base-oid "$PROMOTION_BASE" --head-sha "$PROMOTION_HEAD" --run-id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --authority-bundle "$RUNNER_TEMP/authority.json" --committed-canonical .github/benchmarks/gh61-baseline.json`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked promotion_validation_is_read_only_and_authority_bound -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked promotion_rejects_committed_blob_not_matching_authority -- --exact`；
+      `git diff --name-only "$PROMOTION_BASE"..."$PROMOTION_HEAD"`精确等于canonical path；validation
+      前后`git status --porcelain`为空且blob digest不变；记录current exact-head CI、independent
+      review、resolved threads与maintainer对同一promotion head的separate merge authorization。
   - File ownership: 独占 `.github/benchmarks/gh61-baseline.json`；其余全仓只读。
   - Covers: B-003, B-007, B-008, B-009。
   - Handoff: 只有 promotion 合入 default branch 后，未来 PR 才可把该 baseline 当 trusted
@@ -195,8 +215,9 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
 - [ ] `SP85-T6` 在未来 PR 验证首次 trusted compare。Owner:
       `benchmark-post-promotion-verification-lane` | Dependencies: SP85-T5 promotion 已人工授权
       并合入，且该 commit 位于当前 PR base tree | Done when: fresh fixture 验证 base-tree
-      ancestry/content hash、same-runner ABBA、timing 2-of-3、allocation 双阈值和
-      zero denominators/fingerprint mismatch；证据绑定当前 exact base/head | Verify:
+      ancestry/content hash、stable compatibility/volatile observation、same-runner ABBA、
+      timing 2-of-3、allocation any-batch双阈值和zero denominators；证据绑定当前exact
+      base/head/run | Verify:
       `cargo test --test layout_snapshot_benchmark_contract --locked same_runner_abba_builds_exact_base_and_head_and_rejects_pair_mismatch -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked timing_requires_two_of_three_paired_regressions -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked zero_timing_denominator_is_blocked -- --exact`；
@@ -204,7 +225,8 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `cargo test --test layout_snapshot_benchmark_contract --locked zero_allocation_denominator_uses_absolute_floor -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked trusted_baseline_rejects_self_stale_and_untrusted_sources -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked trust_predicates_distinguish_blocked_from_needs_rebaseline -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked fingerprint_mismatch_needs_rebaseline -- --exact`。
+      `cargo test --test layout_snapshot_benchmark_contract --locked runner_compatibility_excludes_volatile_cpu_identity -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked abba_requires_identical_current_runner_observation -- --exact`。
   - File ownership: 全仓只读；只产出 current-run evidence。
   - Covers: B-005, B-006, B-007, B-009。
   - Handoff: compare 仍需普通 PR 的 current CI/review/merge authorization；本验证不授予 merge。
@@ -230,18 +252,24 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
   五个 counter fields；prerequisite commands 必须按闭合 category/spec_ref 精确覆盖
   parity、work-counter、allocation-correctness；allocation 必须先 search merged GH61 的
   correctness test，缺失时使用已规划 GH85 contract fallback。T3 未按序执行/记录任一
-  command、所选 allocation correctness command 未先于 benchmark 或 wiring test 未实际消费
-  任一 entry 时 blocked。
+  command、cwd不是exact checkout root、path absolute/traversal/symlink escape、argv不在closed
+  Cargo exact-test allowlist、所选allocation correctness command未先于benchmark或wiring test
+  未实际消费任一entry时blocked。
 - workflow contract 必须证明 `layout_benchmark` 在 PR 仅 success 可通过，在非 PR push 仅
   skipped 可通过；PR failure/cancelled/skipped、push 上意外 success/failure/cancelled 或任一
   既有 required job 非 success 均不得让 `ci-gate` green。
 - artifact 的 scenario/strategy/minimum operation matrix、closed/unknown-key schema、
   role/source/closed build/config/corpus/content/binary hashes、prerequisite results、
-  ABBA trace/pair identity、event exact head/base SHA/fingerprint、
-  zero-denominator semantics、nonnegative counter 与 recovered aggregation 必须完整；
+  historical/current refs separation、stable compatibility/volatile observation separation、
+  ABBA trace/pair identity、event exact head/base ancestry与merge-base、10-sample checked even
+  median、sample reset、deterministic counter equality、zero-denominator与recovered aggregation
+  必须完整；timing按2-of-3，allocation任一paired batch双阈值即失败；
   partial/invalid evidence non-green。
-- bootstrap 只允许 `bootstrap_valid`/`comparison_status=not_available`/
-  `promotion_required=true`，不得输出 performance pass。
+- route必须在bootstrap/promotion/normal compare中精确三选一；分别只允许`bootstrap_valid`、
+  `promotion_valid`、`comparison_passed|regression|needs_rebaseline`。只有`comparison_passed`表示
+  无回归，missing/ambiguous route blocked。
+- authority generation只在default-ref-owned workflow运行且不写repo；promotion validation只读
+  committed canonical与immutable authority bundle，validation前后blob/status必须不变。
 - fresh full commands：
 
 ```sh
@@ -264,7 +292,8 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --lock
 - checker 名称与 canonical path 沿用拆分来源：
   `.github/scripts/check_gh61_benchmark.py`、
   `.github/benchmarks/gh61-baseline.json`；如要改为 GH85 命名，必须先更新 issue/spec。
-- timing 使用 same-runner ABBA、3 batches、20%+50µs、two-of-three；allocation 使用
-  10%+8 allocations / 4096 bytes。fingerprint 不兼容是 `needs_rebaseline`，不是 green。
+- timing使用same-runner ABBA、3 batches、20%+50µs、two-of-three；allocation使用
+  10%+8 allocations / 4096 bytes且任一paired batch双阈值即失败。stable compatibility class
+  不兼容是`needs_rebaseline`；volatile CPU identity只诊断，但同次ABBA observation必须相同。
 - implementation bootstrap 与 canonical promotion 必须是两个 PR 生命周期；promotion 仍需
   independent review、current exact-head repository CI、resolved threads与maintainer merge authorization。
