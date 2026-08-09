@@ -151,8 +151,13 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_registration_check_binds_required_status_to_verified_app_integration -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked registration_check_is_non_required_and_cannot_satisfy_benchmark_context -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked genesis_epoch_one_requires_audited_absence_without_revocation_canary -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked lifecycle_manifests_require_exactly_one_genesis_or_revocation_receipt -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked lifecycle_manifests_enforce_genesis_absence_or_rotation_causal_chain -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked genesis_rejects_prior_rule_context_integration_and_rotation_rejects_epoch_one -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked rotation_intent_is_signed_non_reusable_and_precedes_registration -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked rotation_registration_binds_intent_not_future_revocation_receipt -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked revocation_receipt_finalizes_after_registration_revoke_and_failed_canary -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked rotation_priming_manifest_verifies_intent_registration_receipt_causal_chain -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked genesis_registration_binds_absence_receipt_and_rejects_rotation_intent -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked genesis_priming_pending_follows_absence_activation_and_registration -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked genesis_priming_rejects_revocation_fields_and_non_strict_anchor_timestamps -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked rotation_priming_rejects_pending_not_strictly_after_revocation_and_failed_canary -- --exact`；
@@ -215,31 +220,39 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       App/installation/key/context/rule/integration，记录closed `genesis_absence_receipt`；receipt验证后才
       provision/验证initial App/installation/key/service config，且不运行revoke/canary。
       后续key/install/config/trust rotation要求prior active evidence及next epoch >1，先provision/验证new
-      credential/service config，old credential此时可暂存；service用new credential调用
+      credential/service config，old credential此时可暂存；registration前生成signed、closed、non-reusable
+      `rotation_intent`，含唯一nonce、old/new App/installation/key refs、new epoch/context/config digest、timestamp
+      与signature，且禁止任何未来registration/revocation/canary/status字段。service用new credential调用
       `POST /repos/{base_owner}/{base_repo}/check-runs`，于current protected
       default-branch SHA创建唯一completed/success、non-required
-      `gh85/reporter-registration/v{reporter_epoch}` check run，closed external_id绑定
-      repo/App/installation/config/key/epoch；
+      `gh85/reporter-registration/v{reporter_epoch}` check run；genesis closed external_id绑定absence receipt digest与
+      new App identity，rotation closed external_id绑定`rotation_intent` digest与new App identity，绝不绑定未来
+      `revocation_receipt`；
       `GET /repos/{base_owner}/{base_repo}/check-runs/{check_run_id}` fresh验证check id/name/head/status/
       conclusion/external_id，并证明returned `app.id`/`app.slug`与service-held installation对应App一致后记录
-      immutable response digest及selected lifecycle receipt digest。registration check不得required，也不得满足benchmark。rotation registration通过后、
-      final vN priming前必须撤销old credential/installation，以failed canary/API与provider audit receipt证明；
-      timeout、仍成功、ambiguous failure或receipt mismatch均blocked；genesis明确跳过且不得伪造revocation。
-      registration manifest/audit与priming manifest必须精确XOR `genesis_absence_receipt`/
-      `revocation_receipt`：neither/
-      both均blocked；genesis receipt只允许epoch 1且无prior evidence，revocation receipt只允许epoch >1 rotation。
+      immutable response digest。registration check不得required，也不得满足benchmark。rotation registration通过后、
+      final vN priming前先撤销old credential/installation并取得provider evidence，再运行authenticated canary；只有
+      明确authentication failure后才finalize signed、closed `revocation_receipt`，其中含intent digest、registration
+      check id/response digest、revoke timestamp/provider digest、failed-canary result/digest/timestamp以及new
+      credential/config/epoch。必须验证
+      `intent.created_at < registration.created_at < registration.verified_at < revoked_at < failed_canary.observed_at < receipt.finalized_at`；
+      timeout、仍成功、ambiguous failure、提前receipt或link/digest/timestamp mismatch均blocked；genesis明确跳过
+      intent/revocation/canary且不得伪造。registration manifest是closed union：genesis只含absence receipt，rotation
+      只含intent与registration evidence且不得含未来receipt。priming lifecycle manifest是另一closed union：genesis
+      链接absence receipt+registration，rotation链接intent+registration+final receipt并验证nonce唯一与因果顺序；
+      wrong variant、neither/both或forbidden fields均blocked。
 
       shared priming是closed tagged union。genesis variant绑定`genesis_absence_receipt` digest/verified_at、
       initial credential activated_at与registration created_at/verified_at，pending必须有new status id且created_at严格晚于
       全部anchors且禁止revocation fields/proof。rotation variant绑定`revocation_receipt` digest、revoked_at与
-      failed_canary_at，pending必须有new status id且created_at严格晚于两者，并禁止genesis fields。两者精确XOR并共同绑定
+      failed_canary_at以及intent/registration/receipt chain digest，pending必须有new status id且created_at严格晚于两者，并禁止genesis fields。两者精确XOR并共同绑定
       new credential/config/epoch；wrong variant、forbidden field、neither/both、equal/earlier timestamp均blocked。
       selected route anchor验证后service才fresh完整分页枚举每个open PR，验证current head/test-merge ordered pair，
       只用new credential向每个pair两端写或覆盖
       `gh85/layout-benchmark/v{reporter_epoch}=pending`并记录closed sorted priming manifest/page/pair digest、
-      selected lifecycle anchor/receipt、new credential/config identity及status ids/timestamps；逐SHA fresh验证
+      selected lifecycle anchor/chain、new credential/config identity及status ids/timestamps；逐SHA fresh验证
       latest same-context status是new-credential pending、created_at严格晚于route anchor且target binding含new
-      config/epoch/receipt digest。rotation中old credential预写的任何vN success必须被覆盖，failed canary证明
+      config/epoch/lifecycle chain digest。rotation中old credential预写的任何vN success必须被覆盖，failed canary证明
       撤销后不能竞态；genesis不得携带这些revocation fields/proof；
       rule switch前再次分页与re-query，集合或pair变化就丢弃并重做。全部current pair已pending后，才原子
       切换service active epoch/config与ruleset required tuple到
@@ -273,8 +286,13 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_registration_check_binds_required_status_to_verified_app_integration -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked registration_check_is_non_required_and_cannot_satisfy_benchmark_context -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked genesis_epoch_one_requires_audited_absence_without_revocation_canary -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked lifecycle_manifests_require_exactly_one_genesis_or_revocation_receipt -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked lifecycle_manifests_enforce_genesis_absence_or_rotation_causal_chain -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked genesis_rejects_prior_rule_context_integration_and_rotation_rejects_epoch_one -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked rotation_intent_is_signed_non_reusable_and_precedes_registration -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked rotation_registration_binds_intent_not_future_revocation_receipt -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked revocation_receipt_finalizes_after_registration_revoke_and_failed_canary -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked rotation_priming_manifest_verifies_intent_registration_receipt_causal_chain -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked genesis_registration_binds_absence_receipt_and_rejects_rotation_intent -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked genesis_priming_pending_follows_absence_activation_and_registration -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked genesis_priming_rejects_revocation_fields_and_non_strict_anchor_timestamps -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked rotation_priming_rejects_pending_not_strictly_after_revocation_and_failed_canary -- --exact`；
@@ -312,7 +330,7 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
   - Covers: B-004, B-008, B-009。
   - Handoff: 记录trusted default-ref SHA、workflow/checker digest、service config/key version、OIDC/App/
     installation id、registration check id/response digest/reporter epoch、selected
-    `genesis_absence_receipt`或`revocation_receipt`/canary digest、
+    `genesis_absence_receipt`或`rotation_intent`/registration/`revocation_receipt`/canary chain digest、
     open-PR route-specific priming manifest/status ids/timestamps/anchor digest、
     active versioned contexts、head+test-merge smoke及
     status/review/ruleset evidence后

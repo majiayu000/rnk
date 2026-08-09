@@ -88,21 +88,26 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    T3初始genesis provisioning只允许`reporter_epoch=1`，必须先审计证明不存在任何prior reporter App/
    installation/key/context及prior rule/context/integration evidence，并记录closed
    `genesis_absence_receipt`，然后才provision并验证initial App/installation/key/service config；它没有
-   revoke/canary。任一后续key/install/config/trust rotation则必须在
+   revoke/canary，也禁止`rotation_intent`。任一后续key/install/config/trust rotation则必须在
    merge lock内令epoch严格递增到`>1`，provision并验证new credential/service config；此阶段old credential
-   可暂存，但在final priming前必须撤销old key/installation，并以failed canary/API及closed
-   `revocation_receipt`证明。registration与priming manifest必须精确携带两种receipt之一，neither/both均
-   blocked。shared priming使用route-specific schema union：genesis pending必须有new status id，且timestamp严格晚于verified
+   可暂存。registration前先生成signed、closed、不可复用且含唯一nonce的`rotation_intent`，绑定old/new
+   App/installation/key refs、new epoch/context/config digest与timestamp；registration `external_id`只绑定该
+   intent digest与new App identity，绝不前向引用尚未生成的revocation receipt。registration验证后才撤销old
+   key/installation并运行必须authentication failure的canary，随后封口`revocation_receipt`，绑定intent digest、
+   registration id/response digest、revoke timestamp、failed-canary result/digest以及new credential/config/epoch。
+   priming lifecycle manifest必须使用closed tagged union：genesis携带`genesis_absence_receipt`且无intent/
+   revocation fields；rotation携带并互相校验intent、registration和最终receipt，neither、both、断链、nonce复用或
+   非因果timestamp均blocked。shared priming使用route-specific schema union：genesis pending必须有new status id，且timestamp严格晚于verified
    `genesis_absence_receipt`、initial credential activation与registration create/verify timestamps，且禁止任何
    revocation field/proof；rotation pending则必须严格晚于`revocation_receipt`中的revocation与failed-canary
    timestamps。两者都必须fresh分页枚举每个open PR、验证current head/test-merge pair，只用new credential
-   向两端写或覆盖pending，并绑定selected lifecycle receipt digest、new credential/config/epoch。rotation中
+   向两端写或覆盖pending，并绑定selected lifecycle chain digest、new credential/config/epoch。rotation中
    old credential预写的任何vN success必须被pending覆盖且撤销后不能竞态。随后才原子切换service
    active config与ruleset required tuple到
    `(gh85/layout-benchmark/vN,current integration_id)`并完成smoke后解除merge lock。routine rotation保持
    同一App/integration id；old status仍是同一App source，但old context不再required且因context不等不能
    满足new epoch。只有实际App credential compromise才在锁内额外provision新App ID/integration与new epoch，
-   并同样在final priming前撤销old App credentials、产生`revocation_receipt`。registration check永不
+   并同样执行intent→registration→revoke→failed canary→receipt链。registration check永不
    required，也不能
    满足benchmark gate。ruleset要求
    latest evaluated SHA success，任何repo workflow/GITHUB_TOKEN都不能伪造。same-repo/fork任一路径若
@@ -207,8 +212,9 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
       source/hash/paired-order 字段均由 schema/checker 的正负 fixture 验证，覆盖
       B-001 至 B-003。
 - [ ] base-owned workflow证明guarded PR-target/dispatch隔离、OIDC requester identity、dedicated App service、
-      versioned non-required registration、genesis absence/rotation revocation XOR、route-specific priming
-      timestamp anchors、rotation pre-priming revocation canary/receipt与latest-pending overwrite、routine same-App rotation与
+      versioned non-required registration、genesis absence/rotation causal tagged union、signed one-use intent→
+      registration→revoke→failed canary→final receipt chain、route-specific priming timestamp anchors与
+      latest-pending overwrite、routine same-App rotation与
       compromise new-App anti-spoof、
       current head+test-merge pending/final status、real Statuses API/combined schema、same-repo/fork、
       sandbox/validator/requester权限与文件系统隔离、newest-pair concurrency、timeout、前置确定性门、
