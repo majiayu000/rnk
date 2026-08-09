@@ -67,22 +67,33 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
 4. **B-004** protected default-ref拥有的单一workflow只监听`pull_request_target`
    opened/synchronize/reopened/ready_for_review（另有与PR jobs权限隔离的`workflow_dispatch` authority），
    从payload规范化PR/base/head，并以per-PR `cancel-in-progress` concurrency及每job timeout保证只有
-   newest exact head/run/attempt能更新当前status。workflow job check本身不配置为required；trusted
-   reporter使用base-repository GitHub Actions App installation token，以exact `statuses:write`加必要的
-   `contents:read`/`pull-requests:read`调用Commit Statuses API，在current `HEAD_SHA`先写
-   `gh85/layout-benchmark=pending`，最终fresh重查PR/head后写`success|failure`。status记录context、
-   exact SHA、run/attempt、binding digest及expected App slug/id；ruleset要求latest commit上的该context
-   且source/integration精确匹配expected GitHub Actions App。stale run不得向新head写success；如果
-   GitHub拒绝向same-repo或fork exact head写status，实施blocked，不得退回workflow check或宽松context。
+   newest exact head/run/attempt能发出当前status request。workflow job check本身不配置为required，
+   repository/org/environment Actions secrets中不得存放reporter private key/token，Actions内也不得mint
+   reporter installation token或拥有`statuses:write`/`checks:write`。外部托管的专用GitHub App
+   `gh85-benchmark-status-reporter`只安装在base repo，权限最小为metadata/pull-request read与commit-status
+   write；private key只由service server-side持有。trusted reporter-request jobs只申请`id-token:write`，
+   以exact audience `gh85-benchmark-status-reporter`把closed pending/final bundle交给受保护的external
+   endpoint。service验证OIDC issuer/
+   audience/repository_id、reviewed protected-default workflow path/ref/SHA、event、run/attempt、PR/base/head/
+   artifact binding，拒绝PR-head workflow/OIDC与repo token spoof，然后才以专用App写status。
+
+   App每次fresh GET PR，解析current exact head与current test-merge SHA，验证test-merge object current/
+   mergeable且parents精确为base+head；没有有效test merge即保持pending或写failure并blocked。context
+   `gh85/layout-benchmark`必须同时写到head与GitHub UI/ruleset实际评估的test-merge SHA；final re-query要求
+   pair未变，stale/superseded run绝不success。ruleset将该context绑定专用App integration_id并要求
+   latest evaluated SHA success，任何repo workflow/GITHUB_TOKEN都不能伪造。same-repo/fork任一路径若
+   不支持双status，实施blocked，无workflow-check、单SHA或其他source fallback。
 
    同一workflow/run使用互不共享host filesystem/process/env的fresh hosted VM：trusted `phase_zero`
    只读base policy并产生route/checker artifact；零GITHUB_TOKEN权限的`sandbox_collect`由base-owned
    host unauthenticated fetch exact public refs，并只在固定digest的ephemeral Docker containers内
    build/run PR-controlled Cargo code；`trusted_validate`只执行phase-zero pinned checker并把raw ZIP
-   bytes经bounded archive preflight后解析，绝不执行PR binary；最终trusted reporter只信validated
+   bytes经bounded archive preflight后解析，绝不执行PR binary；最终trusted reporter request只信validated
    artifact。hostile container无network、capability、Docker socket、host workspace/Actions runtime/
    token/env挂载，base/head及每leg输出隔离且退出即销毁；host在容器结束后hash固定输出，再由host-side
-   pinned upload action上传始终untrusted的raw artifact。PR代码不能观察或持久化到trusted jobs。
+   pinned upload action上传始终untrusted的raw artifact，并由host-side controller输出exact artifact
+   name/id/digest/run/attempt/PR/head binding；PR container不能写Actions command files或job outputs。
+   PR代码不能观察或持久化到trusted jobs。
    missing/duplicate、archive/digest/identity mismatch、stale head、replay、cancel或timeout均blocked。
    route通过后才执行不依赖wall clock的parity、work-counter与
    allocation-correctness checks。prerequisite category必须严格按
@@ -128,7 +139,8 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    reviews、markers、reviewer role，也不授予merge权限；initial/contract/promotion仅输出
    `authorization_status=external_required`，normal/non-benchmark输出`not_required`。required commit
    status可在受限route的route/artifact均有效且performance unavailable时success，但branch protection
-   必须另行要求approving review并dismiss stale approvals，CONTRIBUTING所要求的maintainer final merge
+   必须由T3实际配置并验证required approving review与new-commit stale approval dismissal；
+   CONTRIBUTING所要求的maintainer final merge
    authorization必须绑定同一exact head。benchmark status永远不能授权merge。
    `route_status`、`authorization_status`与`performance_status`均为closed enum；只有normal route满足
    `route_status=comparison_valid`与`performance_status=passed`时最终decision为
@@ -146,7 +158,9 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    attestation id，验证subject/workflow/run/source后产生final `authority.json`。authority job
    permissions精确为`contents:read`、`id-token:write`、`attestations:write`、
    `artifact-metadata:write`，其他全部none。subject、action bundle与final envelope必须由
-   pinned upload-artifact action以闭合唯一name、禁止overwrite上传并记录artifact id/digest/run；
+   pinned upload-artifact action以闭合唯一name、禁止overwrite上传并记录artifact id/digest/run；整个
+   authority workflow run的event必须是`workflow_dispatch`且conclusion必须为`success`，不能只看
+   authority job或artifact存在；
    缺失、过期、wrong run/id/digest/bundle均blocked。attestation必须绑定repository/workflow/
    default-ref/run/source与subject digest并验证平台签名，不能由bundle自签。implementation
    candidate不参与。promotion PR只能提交与该authority
@@ -168,9 +182,10 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
 - [ ] 固定六 scenario、strategy matrix、minimum operations、closed schema、artifact role、
       source/hash/paired-order 字段均由 schema/checker 的正负 fixture 验证，覆盖
       B-001 至 B-003。
-- [ ] base-owned workflow证明PR-target触发、exact-head pending/final status App source、same-repo/fork、
-      sandbox/validator/reporter权限与文件系统隔离、newest-head concurrency、timeout、前置确定性门、
-      container/archive containment、exact ancestry/merge-base、
+- [ ] base-owned workflow证明guarded PR-target/dispatch隔离、OIDC requester identity、dedicated App service、
+      current head+test-merge pending/final status、real Statuses API/combined schema、same-repo/fork、
+      sandbox/validator/requester权限与文件系统隔离、newest-pair concurrency、timeout、前置确定性门、
+      container/archive/raw-controller containment、exact ancestry/merge-base、
       same-runner ABBA、10-sample aggregation、timing 2-of-3与allocation any-batch双阈值，覆盖
       B-004 至 B-006。
 - [ ] self/stale/untrusted/stable-class-mismatch/missing baseline 与同run observation mismatch均
