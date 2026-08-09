@@ -70,8 +70,10 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    newest exact head/run/attempt能发出当前status request。workflow job check本身不配置为required，
    repository/org/environment Actions secrets中不得存放reporter private key/token，Actions内也不得mint
    reporter installation token或拥有`statuses:write`/`checks:write`。外部托管的专用GitHub App
-   `gh85-benchmark-status-reporter`只安装在base repo，权限最小为metadata/pull-request read与commit-status
-   write；private key只由service server-side持有。trusted reporter-request jobs只申请`id-token:write`，
+   `gh85-benchmark-status-reporter`只安装在base repo，权限最小为metadata/pull-request read、commit-status
+   write与checks write；private key/installation token只由service server-side持有，Checks API也只能由
+   external service用于
+   registration，绝不进入Actions。trusted reporter-request jobs只申请`id-token:write`，
    以exact audience `gh85-benchmark-status-reporter`把closed pending/final bundle交给受保护的external
    endpoint。service验证OIDC issuer/
    audience/repository_id、reviewed protected-default workflow path/ref/SHA、event、run/attempt、PR/base/head/
@@ -80,7 +82,14 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    App每次fresh GET PR，解析current exact head与current test-merge SHA，验证test-merge object current/
    mergeable且parents精确为base+head；没有有效test merge即保持pending或写failure并blocked。context
    `gh85/layout-benchmark`必须同时写到head与GitHub UI/ruleset实际评估的test-merge SHA；final re-query要求
-   pair未变，stale/superseded run绝不success。ruleset将该context绑定专用App integration_id并要求
+   pair未变，stale/superseded run绝不success。
+
+   T3 provisioning或App reinstall/id rotation时，external service必须先在current protected
+   default-branch SHA创建一个closed、non-required `gh85/reporter-registration` check run，验证返回check
+   run的App integration identity，再将ruleset中的required status context绑定该integration_id；registration
+   check永不required，也不能满足`gh85/layout-benchmark`。rotation在blocked maintenance window内重新
+   registration并原子切换rule/service config、撤销old installation/key，旧integration不得再report或满足
+   gate。ruleset将该context绑定专用App integration_id并要求
    latest evaluated SHA success，任何repo workflow/GITHUB_TOKEN都不能伪造。same-repo/fork任一路径若
    不支持双status，实施blocked，无workflow-check、单SHA或其他source fallback。
 
@@ -183,6 +192,7 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
       source/hash/paired-order 字段均由 schema/checker 的正负 fixture 验证，覆盖
       B-001 至 B-003。
 - [ ] base-owned workflow证明guarded PR-target/dispatch隔离、OIDC requester identity、dedicated App service、
+      non-required registration check/integration binding/rotation anti-spoof、
       current head+test-merge pending/final status、real Statuses API/combined schema、same-repo/fork、
       sandbox/validator/requester权限与文件系统隔离、newest-pair concurrency、timeout、前置确定性门、
       container/archive/raw-controller containment、exact ancestry/merge-base、

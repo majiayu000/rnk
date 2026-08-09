@@ -147,6 +147,9 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `cargo test --test layout_snapshot_benchmark_contract --locked raw_zip_preflight_rejects_bombs_links_traversal_duplicates_crc_and_trailing_data -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked dedicated_reporter_oidc_rejects_repo_token_pr_head_workflow_and_spoofed_context -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_service_verifies_oidc_workflow_repository_and_binding_claims -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked reporter_registration_check_binds_required_status_to_verified_app_integration -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked registration_check_is_non_required_and_cannot_satisfy_benchmark_context -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked reporter_rotation_revokes_old_integration_and_rebinds_atomically -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked required_statuses_bind_current_head_and_test_merge_for_same_repo_and_fork -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked commit_status_response_and_combined_status_schema_are_exact -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked raw_upload_controller_outputs_bind_artifact_to_head_and_run -- --exact`；
@@ -186,12 +189,22 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `benchmark-trust-root-integration-lane`；External owner: `gh85-status-reporter-service-owner` |
       Dependencies: SP85-T2A signed checkpoint；T2A writer已停止；maintainer已明确授权foundation PR、
       dedicated App install、external service与ruleset/review rule变更 | Done when: external owner provision
-      `gh85-benchmark-status-reporter`，只安装base repo且permissions精确metadata/PR read、statuses write；
+      `gh85-benchmark-status-reporter`，只安装base repo且permissions精确metadata/PR read、statuses write、
+      checks write；Checks API与App credential只由external service持有，任何Actions job均不可取得；
       key/token只在server-side secret manager/HSM，repo/org/environment Actions secrets均无副本。记录并
       保护exact endpoint、固定OIDC audience `gh85-benchmark-status-reporter`、App/installation id、
       allowed workflow path/ref/SHA、service config
       digest、key version、rotation/revocation procedure、audit retention/alerting；不新增或假设service repo
-      source path。service unavailable/revoked/audit gap即blocked，无repo token/workflow-check fallback。
+      source path。首次provision、reinstall或App-id rotation时，external owner在blocked maintenance
+      window由service调用`POST /repos/{base_owner}/{base_repo}/check-runs`，于current protected
+      default-branch SHA创建唯一completed/success、non-required
+      `gh85/reporter-registration` check run，closed external_id绑定repo/App/installation/config/key/epoch；
+      `GET /repos/{base_owner}/{base_repo}/check-runs/{check_run_id}` fresh验证check id/name/head/status/
+      conclusion/external_id，并证明returned `app.id`/`app.slug`与service-held installation对应App一致后记录
+      immutable response digest。registration check不得required，也不得满足`gh85/layout-benchmark`。
+      rotation重复registration并原子切换service active config/ruleset integration_id、撤销old installation/
+      key；旧integration的新report必须失败，旧evidence不得满足新rule。service unavailable/revoked/audit gap
+      或任一步失败即blocked，无repo token/workflow-check/双integration fallback。
 
       reviewed T2A checkpoint合入
       protected default ref；GitHub branch protection/ruleset将exact commit status context
@@ -212,6 +225,9 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `cargo test --test layout_snapshot_benchmark_contract --locked phase_zero_uses_base_owned_checker_and_rejects_untrusted_head_policy -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked dedicated_reporter_oidc_rejects_repo_token_pr_head_workflow_and_spoofed_context -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_service_verifies_oidc_workflow_repository_and_binding_claims -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked reporter_registration_check_binds_required_status_to_verified_app_integration -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked registration_check_is_non_required_and_cannot_satisfy_benchmark_context -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked reporter_rotation_revokes_old_integration_and_rebinds_atomically -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked required_statuses_bind_current_head_and_test_merge_for_same_repo_and_fork -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked commit_status_response_and_combined_status_schema_are_exact -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked raw_upload_controller_outputs_bind_artifact_to_head_and_run -- --exact`；
@@ -224,13 +240,17 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `cargo test --test layout_snapshot_benchmark_contract --locked combined_workflow_event_guards_and_authority_whole_run_success_are_closed -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked newest_head_concurrency_replay_and_timeout_are_fail_closed -- --exact`；
       `git diff --exit-code "$FOUNDATION_BASE" "$FOUNDATION_HEAD" -- .github/workflows/ci.yml`；
-      maintainer verifies exact status/review rules and integration identity via GitHub API/UI；external owner
-      executes documented rotation/revocation dry run and same-repo/fork audit query。
+      maintainer以`GET /repos/{base_owner}/{base_repo}/rulesets/{ruleset_id}`验证
+      `required_status_checks`精确包含`(context=gh85/layout-benchmark,integration_id=verified App)`且不含
+      `gh85/reporter-registration`，并核对registration check response App identity与non-required性质；
+      external owner executes documented rotation/revocation dry run，
+      证明old installation request被拒绝、old integration evidence不满足new rule，并运行same-repo/fork audit query。
   - File ownership: repo全只读；仅maintainer执行foundation merge/ruleset/review-rule配置，external
     service owner独占repo外App/service/keys/audit configuration；不新增service source path，不修改baseline。
   - Covers: B-004, B-008, B-009。
   - Handoff: 记录trusted default-ref SHA、workflow/checker digest、service config/key version、OIDC/App/
-    installation id、head+test-merge smoke及status/review/ruleset evidence后
+    installation id、registration check id/response digest/rotation epoch、head+test-merge smoke及
+    status/review/ruleset evidence后
     停止；T2B必须从该exact SHA新开implementation head，不能复用foundation worktree。
 
 - [ ] `SP85-T2B` 从trusted base实现真实benchmark runner tranche。Owner:
