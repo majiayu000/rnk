@@ -150,6 +150,9 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_service_verifies_oidc_workflow_repository_and_binding_claims -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_registration_check_binds_required_status_to_verified_app_integration -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked registration_check_is_non_required_and_cannot_satisfy_benchmark_context -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked genesis_epoch_one_requires_audited_absence_without_revocation_canary -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked lifecycle_manifests_require_exactly_one_genesis_or_revocation_receipt -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked genesis_rejects_prior_rule_context_integration_and_rotation_rejects_epoch_one -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_rotation_keeps_same_app_integration_and_versions_context -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_rotation_primes_all_open_pr_head_and_test_merge_pairs_before_switch -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_and_config_digest_bind_oidc_status_and_receipt -- --exact`；
@@ -195,7 +198,8 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
 - [ ] `SP85-T3` provision专用reporter service、合入trust root并配置external gates。Owner:
       `benchmark-trust-root-integration-lane`；External owner: `gh85-status-reporter-service-owner` |
       Dependencies: SP85-T2A signed checkpoint；T2A writer已停止；maintainer已明确授权foundation PR、
-      dedicated App install、external service与ruleset/review rule变更 | Done when: external owner provision
+      dedicated App install、external service与ruleset/review rule变更 | Done when: external owner按下述
+      genesis/rotation lifecycle provision
       `gh85-benchmark-status-reporter`，只安装base repo且permissions精确metadata/PR read、statuses write、
       checks write；Checks API与App credential只由external service持有，任何Actions job均不可取得；
       key/token只在server-side secret manager/HSM，repo/org/environment Actions secrets均无副本。记录并
@@ -203,23 +207,29 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       allowed workflow path/ref/SHA、positive monotonic reporter epoch、active status/registration contexts、
       service config
       digest、key version、rotation/revocation procedure、audit retention/alerting；不新增或假设service repo
-      source path。首次provision及任一key/install/config/trust rotation时，external owner进入merge-locked
-      maintenance window，严格递增epoch且不复用/回退；先provision/验证new credential/service config，old
-      credential此时可暂存；service用new credential调用
+      source path。external owner进入merge-locked maintenance后先闭合二选一lifecycle。genesis只允许epoch
+      1，并通过GitHub App/installation、server key/config、ruleset与known context audit证明无prior reporter
+      App/installation/key/context/rule/integration，记录closed `genesis_absence_receipt`；receipt验证后才
+      provision/验证initial App/installation/key/service config，且不运行revoke/canary。
+      后续key/install/config/trust rotation要求prior active evidence及next epoch >1，先provision/验证new
+      credential/service config，old credential此时可暂存；service用new credential调用
       `POST /repos/{base_owner}/{base_repo}/check-runs`，于current protected
       default-branch SHA创建唯一completed/success、non-required
       `gh85/reporter-registration/v{reporter_epoch}` check run，closed external_id绑定
       repo/App/installation/config/key/epoch；
       `GET /repos/{base_owner}/{base_repo}/check-runs/{check_run_id}` fresh验证check id/name/head/status/
       conclusion/external_id，并证明returned `app.id`/`app.slug`与service-held installation对应App一致后记录
-      immutable response digest。registration check不得required，也不得满足benchmark。registration通过后、
+      immutable response digest及selected lifecycle receipt digest。registration check不得required，也不得满足benchmark。rotation registration通过后、
       final vN priming前必须撤销old credential/installation，以failed canary/API与provider audit receipt证明；
-      timeout、仍成功、ambiguous failure或receipt mismatch均blocked。
+      timeout、仍成功、ambiguous failure或receipt mismatch均blocked；genesis明确跳过且不得伪造revocation。
+      registration manifest/audit与priming manifest必须精确XOR `genesis_absence_receipt`/
+      `revocation_receipt`：neither/
+      both均blocked；genesis receipt只允许epoch 1且无prior evidence，revocation receipt只允许epoch >1 rotation。
 
       revocation证明后service才fresh完整分页枚举每个open PR，验证current head/test-merge ordered pair，
       只用new credential向每个pair两端写或覆盖
       `gh85/layout-benchmark/v{reporter_epoch}=pending`并记录closed sorted priming manifest/page/pair digest、
-      revocation receipt、new credential/config identity及status ids/timestamps；逐SHA fresh验证latest
+      selected lifecycle receipt、new credential/config identity及status ids/timestamps；逐SHA fresh验证latest
       same-context status是post-revocation pending、timestamp晚于revocation且target binding含new config digest。
       old credential预写的任何vN success必须被覆盖，failed canary证明撤销后不能竞态；
       rule switch前再次分页与re-query，集合或pair变化就丢弃并重做。全部current pair已pending后，才原子
@@ -253,6 +263,9 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_service_verifies_oidc_workflow_repository_and_binding_claims -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_registration_check_binds_required_status_to_verified_app_integration -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked registration_check_is_non_required_and_cannot_satisfy_benchmark_context -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked genesis_epoch_one_requires_audited_absence_without_revocation_canary -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked lifecycle_manifests_require_exactly_one_genesis_or_revocation_receipt -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked genesis_rejects_prior_rule_context_integration_and_rotation_rejects_epoch_one -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_rotation_keeps_same_app_integration_and_versions_context -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_rotation_primes_all_open_pr_head_and_test_merge_pairs_before_switch -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked reporter_epoch_and_config_digest_bind_oidc_status_and_receipt -- --exact`；
@@ -276,7 +289,8 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `required_status_checks`精确包含
       `(context=gh85/layout-benchmark/v{reporter_epoch},integration_id=verified App)`且不含
       `gh85/reporter-registration/v{reporter_epoch}`，并核对registration response、完整open-PR priming manifest
-      与non-required性质；external owner分别执行same-App routine rotation与compromise new-App dry run，证明
+      与non-required性质；initial provisioning记录live `genesis_absence_receipt`及absence query digests；
+      external owner分别执行same-App routine rotation与compromise new-App dry run，证明
       same-App integration id稳定、old credential在final priming前已由failed canary+receipt证明撤销、
       post-revocation pending覆盖任何old vN success且latest status/config属于new credential、old context不再
       required，并运行same-repo/fork audit query。
@@ -284,7 +298,8 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
     service owner独占repo外App/service/keys/audit configuration；不新增service source path，不修改baseline。
   - Covers: B-004, B-008, B-009。
   - Handoff: 记录trusted default-ref SHA、workflow/checker digest、service config/key version、OIDC/App/
-    installation id、registration check id/response digest/reporter epoch、revocation receipt/canary digest、
+    installation id、registration check id/response digest/reporter epoch、selected
+    `genesis_absence_receipt`或`revocation_receipt`/canary digest、
     open-PR post-revocation priming manifest/status ids/timestamps digest、
     active versioned contexts、head+test-merge smoke及
     status/review/ruleset evidence后
