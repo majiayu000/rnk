@@ -436,7 +436,7 @@ line 与 branch 均 100%，由既有 CI Coverage job 报告。
 | B-021 | closed typed failures/GH60 three-route source chain | `cargo test --test layout_snapshot_error_paths --locked every_snapshot_failure_variant_preserves_payload_and_source_chain -- --exact`; `cargo test --test layout_snapshot_error_paths --locked every_layout_alias_variant_preserves_payload_and_source -- --exact`; `cargo test --test layout_snapshot_error_paths --locked gh60_frame_wrapper_routes_snapshot_failures_without_fictitious_initial_variant -- --exact` |
 | B-022 | compatibility | `cargo test --test layout_snapshot_compat --locked existing_layout_engine_renderer_and_testing_surface_compiles -- --exact` |
 | B-023 | no-op alias overlay | `cargo test --test layout_snapshot_parity --locked reused_snapshot_accepts_target_exact_frame_aliases -- --exact` |
-| B-029 | exact head/coverage/docs gates | direct execution of the two exact command blocks、full Rust gates、CI/reviewThreads/`pr_gate` |
+| B-029 | exact head/coverage/docs gates | direct execution of the two exact command blocks、full Rust gates、current exact-head repository CI、independent review、resolved review threads与maintainer明确merge authorization |
 | B-030 | merged dependencies | 三次 `git merge-base --is-ancestor "$GH*_MERGED_SHA" HEAD` 与 GitHub merged evidence |
 
 ## 数据流
@@ -515,8 +515,9 @@ full/incremental/recovered 只改变 producer report，不改变 snapshot semant
       `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -A clippy::collapsible_if -A clippy::manual_is_multiple_of`；
       `cargo test --workspace --all-targets --all-features --locked`；
       `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked`。
-- [ ] GitHub：current exact head CI、independent review artifact、reviewThreads、SpecRail
-      `pr_gate`、merge authorization与三个dependency merged SHA。
+- [ ] GitHub：current exact-head repository CI、independent review artifact、resolved review
+      threads、maintainer对同一head的明确merge authorization与三个dependency merged SHA；
+      labels仅描述状态，不授权实施或合并。
 
 ## 回滚方案
 

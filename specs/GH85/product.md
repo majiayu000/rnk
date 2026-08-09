@@ -96,8 +96,9 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    baseline-promotion PR。promotion 必须在 exact merged implementation SHA 的隔离 checkout
    重新测量；checker 必须验证 source worktree exact HEAD、promotion-base ancestry、dependency
    manifest、prerequisite commands、build/config/corpus hashes 后才可写 canonical，不得只
-   改写 candidate SHA。只有独立 review、current CI、SpecRail gate 与明确 merge
-   authorization 全部满足后才能合入。checker、feature head 与 promotion head 均不得信任
+   改写 candidate SHA。只有 current exact-head repository CI、独立 review、resolved review
+   threads 与 maintainer 对同一 promotion head 的明确 merge authorization 全部满足后才能
+   合入。checker、feature head 与 promotion head 均不得信任
    自身写入的 baseline；只有 baseline 成为未来 PR base-tree 内容后才可用于 compare。
 
 ## 验收标准

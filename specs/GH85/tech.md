@@ -9,8 +9,8 @@ GH-85: https://github.com/majiayu000/rnk/issues/85
 见 [`product.md`](product.md)。
 
 GH-85 消费 GH-61 的 immutable snapshot producer、parity 与 per-frame deterministic work
-counters，不改变其 layout/recovery 语义。当前 #61 仍带 `parked`，且本写作基线尚无其生产
-实现；GH-85 implementation 必须等 #61 实现合入后，在 exact merged SHA 上重新定位测量 seam。
+counters，不改变其 layout/recovery 语义。#61 的实时label不是授权来源；GH-85 implementation
+必须等 #61 实现合入后，在 exact merged SHA 上重新定位测量 seam。
 
 ## Codebase Context
 
@@ -28,7 +28,7 @@ counters，不改变其 layout/recovery 语义。当前 #61 仍带 `parked`，�
 
 ## 计划变更清单
 
-```specrail-planned-changes
+```json
 {
   "issue": 85,
   "complete": true,
@@ -41,6 +41,7 @@ counters，不改变其 layout/recovery 语义。当前 #61 仍带 `parked`，�
     "benches/chat_layout.rs",
     "benches/support/chat_layout.rs",
     "specs/GH61/product.md",
+    "specs/GH61/tasks.md",
     "specs/GH61/tech.md",
     "specs/GH85/product.md",
     "specs/GH85/tasks.md",
@@ -73,7 +74,7 @@ implementation PR 的 diff/manifest 必须排除该路径。`target/gh61-baselin
 
 implementation 开始前必须同时满足：
 
-- #85 具有 canonical `ready_to_implement` 且 product/tech/tasks 获得人工接受；
+- maintainer 对当前 exact packet/head 明确确认可以实施；readiness label 仅描述队列状态；
 - #61 的 implementation 已合入，`GH61_MERGED_SHA` 已由 GitHub merged evidence 解析；
 - duplicate search 与 `implement` route gate 在 current checkout fresh 通过。
 
@@ -442,8 +443,9 @@ merged implementation SHA 的隔离 checkout 运行 `--mode promote`，直接生
 `artifact_role=canonical`、`source_sha=head_sha=exact merged implementation SHA`、
 `paired_order=not_applicable`、empty trace 与 fresh hashes。promotion 只能写
 `.github/benchmarks/gh61-baseline.json`，不得复制 candidate、转换 candidate role 或只改
-SHA。PR 必须通过独立 review、current exact-head CI、SpecRail gate 与单独 merge
-authorization；checker 只生成/验证文件，没有批准或 merge 权限。promotion head 自身仍不
+SHA。PR 必须通过独立 review、current exact-head repository CI、resolved review threads与
+maintainer对同一head的单独merge authorization；checker只生成/验证文件，没有批准或merge
+权限。promotion head 自身仍不
 受信，baseline 只有合入并出现在未来 PR base tree 后才可用于 compare。
 
 promotion checker 只能从显式 `--source-worktree` 解析 repo；不得退回 caller cwd 或
@@ -476,7 +478,7 @@ script-relative 猜测。`promotion_base_oid` 必须由 promotion PR
 | B-006 | allocation comparator | `cargo test --test layout_snapshot_benchmark_contract --locked allocation_requires_relative_and_absolute_thresholds -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked zero_allocation_denominator_uses_absolute_floor -- --exact` |
 | B-007 | base-tree trust/fingerprint gate | `cargo test --test layout_snapshot_benchmark_contract --locked trusted_baseline_rejects_self_stale_and_untrusted_sources -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked trust_predicates_distinguish_blocked_from_needs_rebaseline -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked fingerprint_mismatch_needs_rebaseline -- --exact` |
 | B-008 | implementation bootstrap | `cargo test --test layout_snapshot_benchmark_contract --locked implementation_writes_candidate_but_never_canonical_baseline -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked partial_candidate_never_authorizes_promotion -- --exact` |
-| B-009 | exclusive promotion lifecycle | `cargo test --test layout_snapshot_benchmark_contract --locked promotion_requires_exact_source_worktree_and_revalidates_provenance -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked promotion_rerun_emits_fresh_canonical_role_and_hashes -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked bootstrap_and_promotion_never_self_authorize -- --exact`; manual diff check: promotion PR changes only `.github/benchmarks/gh61-baseline.json` and records independent review/current CI/SpecRail/merge authorization |
+| B-009 | exclusive promotion lifecycle | `cargo test --test layout_snapshot_benchmark_contract --locked promotion_requires_exact_source_worktree_and_revalidates_provenance -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked promotion_rerun_emits_fresh_canonical_role_and_hashes -- --exact`; `cargo test --test layout_snapshot_benchmark_contract --locked bootstrap_and_promotion_never_self_authorize -- --exact`; manual diff check: promotion PR changes only `.github/benchmarks/gh61-baseline.json` and records current exact-head repository CI、independent review、resolved threads与maintainer merge authorization |
 
 ## 数据流
 
@@ -494,7 +496,7 @@ fixed corpus + target/viewport sequence
 post-implementation exact merged SHA
   -> isolated rerun
   -> independent baseline-promotion PR
-  -> human review + current CI + SpecRail gate + merge authorization
+  -> independent review + current exact-head repository CI + resolved threads + maintainer merge authorization
   -> canonical baseline in future PR base tree
 ```
 
@@ -539,8 +541,8 @@ baseline 是唯一 checked-in performance evidence。
       `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -A clippy::collapsible_if -A clippy::manual_is_multiple_of`；
       `cargo test --workspace --all-targets --all-features --locked`；
       `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked`。
-- [ ] GitHub：current exact-head required CI、independent review、resolved review threads、
-      SpecRail `pr_gate` 与 explicit merge authorization。
+- [ ] GitHub：current exact-head required repository CI、independent review、resolved review
+      threads与maintainer对同一head的explicit merge authorization；labels仅描述状态。
 
 ## 回滚方案
 

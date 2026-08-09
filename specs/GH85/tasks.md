@@ -13,15 +13,15 @@ GH-85: https://github.com/majiayu000/rnk/issues/85
 
 ## 实现前置门
 
-#85 必须具有 canonical `ready_to_implement` 且本 packet 已人工接受；#61 implementation
-必须已合入并记录 exact merged SHA。当前 #61 仍为 `parked`，本基线也没有其生产测量 seam，
-因此以下 implementation tasks 尚不可启动。不得把 spec 中的拟议 API 当成已存在实现。
+maintainer 必须对当前 exact packet/head 明确确认可以实施；readiness label 仅描述队列状态。
+#61 implementation 必须已合入并记录 exact merged SHA；在生产测量 seam 合入前不得启动以下
+implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现。
 
 ## 实现任务
 
 - [ ] `SP85-T7` 在 GH-61 合入后解析真实 measurement seam 并建立 fail-closed dependency
       manifest。Owner: `gh61-dependency-resolution-lane` | Dependencies: accepted GH85
-      packet、canonical `ready_to_implement`、#61 exact merged implementation SHA |
+      maintainer 对当前 exact packet/head 的明确实施确认、#61 exact merged implementation SHA |
       Done when: `tests/fixtures/gh85_gh61_dependency.json` 记录 real
       `SnapshotBuildReport`/`SnapshotWorkCounters` 与 full/incremental/recovered entrypoint
       path/symbol；所有 anchor 在 merged SHA 与 current HEAD 唯一解析；closed counter set
@@ -159,8 +159,9 @@ GH-85: https://github.com/majiayu000/rnk/issues/85
       `benchmark-verification-lane` | Dependencies: SP85-T2、SP85-T3 完成且所有 writers 停止 |
       Done when: 每个 exact contract test 证明 matched=1/passed=1/ignored=0；full Rust gates、
       candidate schema、implementation diff guard、current CI、independent review、
-      reviewThreads 与 SpecRail `pr_gate` 绑定同一 head；只申请 implementation merge
-      authorization，不申请 baseline promotion authorization | Verify: 重跑 SP85-T2/T3
+      resolved review threads 与 maintainer 对当前 exact head 的 merge authorization 绑定同一
+      head；只申请 implementation merge authorization，不申请 baseline promotion authorization |
+      Verify: 重跑 SP85-T2/T3
       全部命令及本文件“验证”章节的 fresh full commands。
   - File ownership: 全仓只读；发现 production/test/workflow 缺陷时退回对应 owner 新 checkpoint，
     不跨 ownership 偷改。
@@ -169,8 +170,8 @@ GH-85: https://github.com/majiayu000/rnk/issues/85
 
 - [ ] `SP85-T5` 在独立 PR 中重新测量并 promotion canonical baseline。Owner:
       `baseline-promotion-lane` | Dependencies: SP85-T4 implementation 已由人工授权并合入；
-      exact merged implementation SHA 已记录；独立 branch/PR 与新的 SpecRail/current CI/
-      review/merge authorization | Done when: 在 exact merged implementation SHA 的 detached
+      exact merged implementation SHA 已记录；独立 branch/PR 与新的 current exact-head
+      repository CI/independent review/resolved threads/maintainer merge authorization | Done when: 在 exact merged implementation SHA 的 detached
       worktree fresh 运行 `--mode promote`，直接生成 canonical role 与 fresh hashes；
       `PROMOTION_BASE` 只绑定 `${{ github.event.pull_request.base.sha }}`，不使用 branch/
       merge ref/`GITHUB_SHA`；
@@ -185,7 +186,7 @@ GH-85: https://github.com/majiayu000/rnk/issues/85
       `cargo test --test layout_snapshot_benchmark_contract --locked promotion_requires_exact_source_worktree_and_revalidates_provenance -- --exact`；
       `git diff --name-only "$PROMOTION_BASE"...HEAD` 精确等于
       `.github/benchmarks/gh61-baseline.json`；记录 independent review、current exact-head CI、
-      SpecRail gate 与 separate merge authorization。
+      resolved review threads 与 maintainer 对同一 promotion head 的 separate merge authorization。
   - File ownership: 独占 `.github/benchmarks/gh61-baseline.json`；其余全仓只读。
   - Covers: B-003, B-007, B-008, B-009。
   - Handoff: 只有 promotion 合入 default branch 后，未来 PR 才可把该 baseline 当 trusted
@@ -210,8 +211,8 @@ GH-85: https://github.com/majiayu000/rnk/issues/85
 
 ## 并行拆分
 
-- Writable dependency graph：`T7 -> T1 -> T2 -> {T3 || T4-readiness} -> T4 -> implementation merge
-  -> T5 -> promotion merge -> T6`；T4 的执行必须等 T3 完成，只有只读 readiness 收集可提前。
+- Writable dependency graph：`T7 -> T1 -> T2 -> T3 -> T4 -> implementation merge
+  -> T5 -> promotion merge -> T6`；T4 的执行必须等 T3 完成，只读证据收集可提前。
 - T7 独占 dependency manifest；T1/T2 串行接管同一 contract test；T2 独占
   bench/checker/Cargo/schema，T3 独占
   `.github/workflows/ci.yml`，没有共享 writable file。
@@ -252,20 +253,18 @@ cargo test --workspace --all-targets --all-features --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
 ```
 
-- exact-head GitHub CI、independent review、reviewThreads、SpecRail `pr_gate` 与 explicit human
+- exact-head repository CI、independent review、resolved review threads 与 maintainer explicit
   merge authorization 必须绑定同一 implementation 或 promotion head，不能跨 PR 复用。
 
 ## Handoff Notes
 
 - 当前 branch 只交付 `specs/GH85/*` 与 GH61 split-residue cleanup
-  `specs/GH61/{product,tech}.md`；不得实现、改 label、push、开 PR、merge、关闭 issue 或
-  解除 #61 的 `parked`。
-- #85 当前没有 canonical readiness label；#61 仍带 `parked`，且 #85 依赖其 snapshot/work
-  counter implementation。两项都由 human/orchestrator 决策，不能由本 packet 静默绕过。
+  `specs/GH61/{product,tech,tasks}.md`；不得实现、改 label、push、开 PR、merge、关闭 issue或
+  resolve review threads。实时label事实必须从GitHub重新读取，且不构成实施或merge授权。
 - checker 名称与 canonical path 沿用拆分来源：
   `.github/scripts/check_gh61_benchmark.py`、
   `.github/benchmarks/gh61-baseline.json`；如要改为 GH85 命名，必须先更新 issue/spec。
 - timing 使用 same-runner ABBA、3 batches、20%+50µs、two-of-three；allocation 使用
   10%+8 allocations / 4096 bytes。fingerprint 不兼容是 `needs_rebaseline`，不是 green。
 - implementation bootstrap 与 canonical promotion 必须是两个 PR 生命周期；promotion 仍需
-  独立 review/current CI/SpecRail/merge authorization。
+  independent review、current exact-head repository CI、resolved threads与maintainer merge authorization。

@@ -167,8 +167,10 @@ work counters，不重新实现三个上游合同。
       snapshot/node字段与任意-state constructors无法从crate外访问；compile-fail必须由
       独立exact trybuild测试实际执行并匹配checked-in stderr；旧wrapper最终失败fail loudly，
       覆盖 B-020、B-022、B-023。
-- [ ] exact merged dependency SHA、current-head coverage、全量 Rust、CI、independent review、
-      reviewThreads 与 SpecRail `pr_gate` 证据满足 B-029、B-030。
+- [ ] exact merged dependency SHA、current exact-head repository CI、current-head coverage、
+      全量 Rust、independent review、全部 review threads resolved，以及 maintainer 对当前
+      implementation head 的明确实施确认与 merge authorization 满足 B-029、B-030。标签只描述
+      队列状态，不构成授权。
 
 ## 边界情况清单
 
