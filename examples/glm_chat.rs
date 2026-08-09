@@ -26,6 +26,9 @@ use rnk::prelude::Box as RnkBox;
 #[path = "glm_chat/prompt_box.rs"]
 mod prompt_box;
 use prompt_box::{clear_live_prompt_box, draw_prompt_box, redraw_prompt_box};
+use rnk::components::InteractionOutcome;
+use rnk::components::chat::{ChatComposerKeyMap, ChatComposerState, handle_key};
+use rnk::hooks::Key;
 
 const API_URL: &str = "https://open.bigmodel.cn/api/anthropic/v1/messages";
 
@@ -354,11 +357,49 @@ impl Drop for RawModeGuard {
 }
 
 /// Read a line in a Claude Code style prompt box with proper CJK backspace handling.
-fn read_line_with_input_box() -> io::Result<String> {
+/// Translate a crossterm key event into the library's `Key`.
+///
+/// The example drives crossterm directly, so it has to build the value the
+/// composer expects rather than receiving one from `use_input`.
+fn to_rnk_key(code: KeyCode, modifiers: KeyModifiers) -> (String, Key) {
+    let mut key = Key {
+        ctrl: modifiers.contains(KeyModifiers::CONTROL),
+        shift: modifiers.contains(KeyModifiers::SHIFT),
+        alt: modifiers.contains(KeyModifiers::ALT),
+        ..Key::default()
+    };
     let mut input = String::new();
+
+    match code {
+        KeyCode::Enter => key.return_key = true,
+        KeyCode::Esc => key.escape = true,
+        KeyCode::Backspace => key.backspace = true,
+        KeyCode::Delete => key.delete = true,
+        KeyCode::Left => key.left_arrow = true,
+        KeyCode::Right => key.right_arrow = true,
+        KeyCode::Home => key.home = true,
+        KeyCode::End => key.end = true,
+        KeyCode::Char(c) => {
+            key.character = Some(c);
+            if !key.ctrl && !key.alt {
+                input.push(c);
+            }
+        }
+        _ => {}
+    }
+
+    (input, key)
+}
+
+fn read_line_with_input_box() -> io::Result<String> {
+    // The composer owns the draft, so backspace removes a whole grapheme
+    // cluster. Popping a `char`, as this loop used to, splits an emoji or a
+    // combining sequence into something the user cannot repair.
+    let mut composer = ChatComposerState::new();
+    let keymap = ChatComposerKeyMap::new();
     let _raw_mode = RawModeGuard::enter()?;
 
-    draw_prompt_box(&input)?;
+    draw_prompt_box(&composer)?;
 
     loop {
         if event::poll(Duration::from_millis(100))? {
@@ -366,34 +407,35 @@ fn read_line_with_input_box() -> io::Result<String> {
                 code, modifiers, ..
             }) = event::read()?
             {
-                match code {
-                    KeyCode::Enter => {
-                        break;
+                if matches!(code, KeyCode::Char('c')) && modifiers.contains(KeyModifiers::CONTROL) {
+                    // Ctrl+C - exit immediately, matching terminal conventions.
+                    terminal::disable_raw_mode()?;
+                    std::process::exit(0);
+                }
+
+                let (input, key) = to_rnk_key(code, modifiers);
+                match handle_key(&mut composer, &keymap, &input, &key) {
+                    InteractionOutcome::Submitted(text) => {
+                        // The composer keeps the draft until the send is
+                        // acknowledged; this caller takes the text and is done
+                        // with the composer, so it acknowledges immediately.
+                        if let Some(token) = composer.pending_submission().map(|p| p.token()) {
+                            let _ = composer.acknowledge_success(token);
+                        }
+                        return Ok(text);
                     }
-                    KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-                        // Ctrl+C - exit immediately, matching terminal conventions.
-                        terminal::disable_raw_mode()?;
-                        std::process::exit(0);
+                    InteractionOutcome::Cancelled => {
+                        composer = ChatComposerState::new();
+                        redraw_prompt_box(&composer)?;
                     }
-                    KeyCode::Char(c) => {
-                        input.push(c);
-                        redraw_prompt_box(&input)?;
+                    InteractionOutcome::Changed(_) | InteractionOutcome::Handled => {
+                        redraw_prompt_box(&composer)?;
                     }
-                    KeyCode::Backspace if !input.is_empty() => {
-                        input.pop();
-                        redraw_prompt_box(&input)?;
-                    }
-                    KeyCode::Esc => {
-                        input.clear();
-                        redraw_prompt_box(&input)?;
-                    }
-                    _ => {}
+                    InteractionOutcome::Ignored => {}
                 }
             }
         }
     }
-
-    Ok(input)
 }
 
 // Spinner for loading animation with ESC cancellation support

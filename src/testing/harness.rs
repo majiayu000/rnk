@@ -383,26 +383,26 @@ impl StringSnapshot {
     /// Assert that the actual output matches the golden file
     /// If UPDATE_GOLDEN=1 env var is set, updates the golden file instead
     pub fn assert_match(&self, actual: &str) {
-        let path = self.path();
+        let snapshot_path = self.path();
         let actual = actual.trim();
 
         // Check if we should update golden files
         if std::env::var("UPDATE_GOLDEN").is_ok() {
             // Create directory if needed
-            if let Some(parent) = path.parent() {
+            if let Some(parent) = snapshot_path.parent() {
                 std::fs::create_dir_all(parent).ok();
             }
-            std::fs::write(&path, actual).expect("Failed to write golden file");
+            std::fs::write(&snapshot_path, actual).expect("Failed to write golden file");
             return;
         }
 
         // Read expected content
-        let expected = match std::fs::read_to_string(&path) {
+        let expected = match std::fs::read_to_string(&snapshot_path) {
             Ok(content) => content,
             Err(_) => {
                 panic!(
                     "Golden file not found: {:?}\nRun with UPDATE_GOLDEN=1 to create it.\nActual output:\n{}",
-                    path, actual
+                    snapshot_path, actual
                 );
             }
         };
@@ -411,7 +411,7 @@ impl StringSnapshot {
         assert_eq!(
             actual, expected,
             "Golden test '{}' mismatch.\nExpected (from {:?}):\n{}\n\nActual:\n{}\n\nRun with UPDATE_GOLDEN=1 to update.",
-            self.name, path, expected, actual
+            self.name, snapshot_path, expected, actual
         );
     }
 

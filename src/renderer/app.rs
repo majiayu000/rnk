@@ -17,12 +17,19 @@ use tokio::sync::mpsc;
 
 use super::builder::{AppOptions, CancelToken};
 use super::filter::FilterChain;
-use super::pipeline::RenderPipeline;
+use super::pipeline::{PreparedDynamicFrame, RenderPipeline};
 use super::registry::{AppRuntime, AppSink, RenderHandle, register_app};
 use super::runtime::EventLoop;
 use super::runtime_bridge::RuntimeBridge;
 use super::static_content::StaticRenderer;
+use super::terminal::PreparedTerminalFrame;
 use super::terminal_controller::TerminalController;
+
+struct PreparedAppFrame {
+    terminal: PreparedTerminalFrame,
+    static_lines: Vec<String>,
+    dynamic: PreparedDynamicFrame,
+}
 
 /// Application state
 pub struct App<F>
@@ -258,33 +265,91 @@ where
             self.cmd_executor.execute(Cmd::batch(cmds));
         }
 
-        // Enable/disable mouse mode based on whether any component uses it
-        if is_mouse_enabled() {
-            self.terminal.enable_mouse()?;
-        } else {
-            self.terminal.disable_mouse()?;
-        }
+        let prepared = self
+            .try_prepare_frame_with_mouse(&root, width, height, is_mouse_enabled())
+            .map_err(crate::renderer::TransactionalFrameError::into_io)?;
+        self.commit_prepared_frame(prepared)
+    }
 
-        // Extract and commit static content
-        let new_static_lines = self.static_renderer.extract_static_content(&root, width);
-        if !new_static_lines.is_empty() {
-            self.static_renderer
-                .commit_static_content(&new_static_lines, &mut self.terminal)?;
-        }
+    #[cfg(test)]
+    fn try_prepare_frame(
+        &self,
+        root: &Element,
+        width: u16,
+        height: u16,
+    ) -> Result<PreparedAppFrame, crate::renderer::TransactionalFrameError> {
+        self.try_prepare_frame_with_mouse(root, width, height, is_mouse_enabled())
+    }
 
-        // Filter out static elements from the tree for dynamic rendering
-        let dynamic_root = self.static_renderer.filter_static_elements(&root);
-
-        let rendered = RenderPipeline::render_dynamic_frame(
+    fn try_prepare_frame_with_mouse(
+        &self,
+        root: &Element,
+        width: u16,
+        height: u16,
+        mouse_enabled: bool,
+    ) -> Result<PreparedAppFrame, crate::renderer::TransactionalFrameError> {
+        let new_static_lines = self
+            .static_renderer
+            .try_extract_static_content_checked(root, width)
+            .map_err(crate::renderer::TransactionalFrameError::Render)?;
+        let dynamic_root = self.static_renderer.filter_static_elements(root);
+        let dynamic = RenderPipeline::prepare_dynamic_frame(
             &dynamic_root,
             width,
             height,
-            &mut self.layout_engine,
-            &self.runtime_context,
-            &mut self.previous_vnode,
-        );
+            &self.layout_engine,
+            self.previous_vnode.as_ref(),
+        )?;
+        let terminal =
+            self.terminal
+                .prepare_frame(&new_static_lines, dynamic.rendered(), mouse_enabled);
+        Ok(PreparedAppFrame {
+            terminal,
+            static_lines: new_static_lines,
+            dynamic,
+        })
+    }
 
-        self.terminal.render(&rendered)
+    fn commit_prepared_frame(&mut self, prepared: PreparedAppFrame) -> std::io::Result<()> {
+        let PreparedAppFrame {
+            terminal,
+            static_lines,
+            dynamic,
+        } = prepared;
+        let dynamic = dynamic
+            .bind(&mut self.layout_engine)
+            .map_err(std::io::Error::other)?;
+        let mut runtime_context = self.runtime_context.try_borrow_mut().map_err(|_| {
+            std::io::Error::other("runtime context is borrowed during frame publication")
+        })?;
+        self.terminal.commit_prepared(terminal)?;
+        self.static_renderer.commit_prepared_lines(static_lines);
+        dynamic.commit_with_runtime(&mut runtime_context, &mut self.previous_vnode);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn commit_prepared_frame_with_writer(
+        &mut self,
+        prepared: PreparedAppFrame,
+        writer: &mut impl std::io::Write,
+    ) -> std::io::Result<()> {
+        let PreparedAppFrame {
+            terminal,
+            static_lines,
+            dynamic,
+        } = prepared;
+        let dynamic = dynamic
+            .bind(&mut self.layout_engine)
+            .map_err(std::io::Error::other)?;
+        let mut runtime_context = self.runtime_context.try_borrow_mut().map_err(|_| {
+            std::io::Error::other("runtime context is borrowed during frame publication")
+        })?;
+        self.terminal
+            .commit_prepared_with_writer(terminal, writer)?;
+        self.static_renderer.commit_prepared_lines(static_lines);
+        dynamic.commit_with_runtime(&mut runtime_context, &mut self.previous_vnode);
+        Ok(())
     }
 
     /// Request exit
@@ -294,43 +359,4 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::Element;
-    use crate::renderer::registry::{is_alt_screen, lock_test_registry, render_handle};
-
-    #[test]
-    fn test_registry_cleanup_on_drop() {
-        let _registry_guard = lock_test_registry();
-        let runtime = AppRuntime::new(false);
-
-        {
-            let _guard = register_app(runtime);
-            assert!(render_handle().is_some());
-            assert_eq!(is_alt_screen(), Some(false));
-        }
-
-        assert!(render_handle().is_none());
-        assert_eq!(is_alt_screen(), None);
-    }
-
-    #[test]
-    fn test_exit_sets_should_exit_flag() {
-        let app = App::new(|| Element::text("ok"));
-        assert!(!app.should_exit.load(Ordering::SeqCst));
-
-        app.exit();
-
-        assert!(app.should_exit.load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn test_exit_updates_runtime_context_exit_state() {
-        let app = App::new(|| Element::text("ok"));
-        assert!(!app.runtime_context.borrow().should_exit());
-
-        app.exit();
-
-        assert!(app.runtime_context.borrow().should_exit());
-    }
-}
+mod tests;

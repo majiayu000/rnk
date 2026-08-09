@@ -3,10 +3,14 @@
 //! Uses proptest to find edge cases through random input generation.
 
 use proptest::prelude::*;
+use unicode_segmentation::UnicodeSegmentation;
 
 use rnk::components::{Box as RnkBox, Text};
-use rnk::core::{Dimension, Element, FlexDirection};
-use rnk::layout::measure::measure_text_width;
+use rnk::core::{Dimension, Element, FlexDirection, Style, TextWrap};
+use rnk::layout::measure::{measure_text_width, truncate_middle, truncate_start, truncate_text};
+use rnk::layout::{
+    TextFlow, TextFlowInput, TextFlowOptions, TextFlowPlacement, TextFlowSource, TextFlowSourceKind,
+};
 use rnk::testing::{TestRenderer, display_width};
 
 // ============================================================================
@@ -39,6 +43,290 @@ proptest! {
         let cjk_width = measure_text_width(&cjk);
 
         prop_assert_eq!(combined_width, ascii_width + cjk_width);
+    }
+
+    /// Canonical source ranges cover the exact input once and only on EGC boundaries.
+    #[test]
+    fn text_flow_logical_source_round_trip(
+        scalars in proptest::collection::vec(any::<char>(), 0..80),
+        width in 0usize..20
+    ) {
+        let source: String = scalars.into_iter().collect();
+        let input = TextFlowInput::plain(
+            source.clone(),
+            TextFlowSourceKind::Exact,
+            Style::new(),
+        );
+        let flow = TextFlow::try_build(
+            &input,
+            &TextFlowOptions::new(width, TextWrap::Wrap),
+        ).expect("valid UTF-8 input must produce a complete logical map");
+
+        let grapheme_ranges: Vec<_> = source
+            .grapheme_indices(true)
+            .map(|(start, grapheme)| start..start + grapheme.len())
+            .collect();
+        let source_ranges: Vec<_> = flow
+            .tokens()
+            .iter()
+            .filter_map(|token| token.source_range())
+            .collect();
+
+        prop_assert_eq!(&source_ranges, &grapheme_ranges);
+        let mut covered = 0usize;
+        for range in source_ranges {
+            prop_assert_eq!(range.start, covered);
+            prop_assert!(source.is_char_boundary(range.start));
+            prop_assert!(source.is_char_boundary(range.end));
+            covered = range.end;
+        }
+        prop_assert_eq!(covered, source.len());
+
+        prop_assert_eq!(flow.position_map().len(), flow.tokens().len());
+        for (token_index, entry) in flow.position_map().iter().enumerate() {
+            prop_assert_eq!(entry.token_index, token_index);
+            prop_assert_eq!(&entry.source, &flow.tokens()[token_index].source);
+            prop_assert_eq!(
+                &entry.placement,
+                &flow.tokens()[token_index].placement
+            );
+            if let Some(range) = flow.tokens()[entry.token_index].source_range() {
+                prop_assert!(grapheme_ranges.contains(&range));
+                let begins_inside_another = grapheme_ranges.iter().any(|other| {
+                    other.start < range.start && range.start < other.end
+                });
+                prop_assert!(!begins_inside_another);
+            }
+        }
+
+        let expected_non_break: String = source
+            .graphemes(true)
+            .filter(|grapheme| !matches!(*grapheme, "\n" | "\r" | "\r\n"))
+            .collect();
+        for wrap_width in 1..=grapheme_ranges.len().max(1) {
+            let wrapped = TextFlow::try_build(
+                &input,
+                &TextFlowOptions::new(wrap_width, TextWrap::Wrap),
+            ).expect("every positive width must preserve row-backed source order");
+            let mut reconstructed = String::new();
+            let mut last_token_index = None;
+            for (row_index, row) in wrapped.logical_rows().iter().enumerate() {
+                prop_assert_eq!(row.index, row_index);
+                prop_assert_eq!(&wrapped.rows()[row_index], &row.text);
+                let run_text = row
+                    .runs
+                    .iter()
+                    .map(|run| run.text.as_str())
+                    .collect::<String>();
+                prop_assert_eq!(&run_text, &row.text);
+                for run in &row.runs {
+                    if let Some(previous) = last_token_index {
+                        prop_assert!(previous < run.token_index);
+                    }
+                    last_token_index = Some(run.token_index);
+                    let range = wrapped.tokens()[run.token_index]
+                        .source_range()
+                        .expect("wrap rows must contain source-backed runs");
+                    let source_grapheme = &source[range];
+                    prop_assert!(!matches!(source_grapheme, "\n" | "\r" | "\r\n"));
+                    reconstructed.push_str(source_grapheme);
+                }
+            }
+            prop_assert_eq!(&reconstructed, &expected_non_break);
+        }
+    }
+
+    /// Truncation preserves a total source map and never exceeds its cell budget.
+    #[test]
+    fn text_flow_truncate_map_is_total(
+        graphemes in proptest::collection::vec(
+            prop_oneof![
+                8 => Just("a"),
+                4 => Just("b"),
+                3 => Just(" "),
+                2 => Just("界"),
+                1 => Just("e\u{301}"),
+                1 => Just("👨‍👩‍👧‍👦"),
+                1 => Just("\n"),
+            ],
+            0..60,
+        ),
+        width in prop_oneof![Just(0usize), Just(1usize), 2usize..20],
+        wrap in prop_oneof![
+            Just(TextWrap::Truncate),
+            Just(TextWrap::TruncateStart),
+            Just(TextWrap::TruncateMiddle),
+            Just(TextWrap::TruncateEnd),
+        ],
+        ellipsis in prop::sample::select(vec!["…", "..", "界", "e\u{301}", ""])
+    ) {
+        let source = graphemes.concat();
+        let input = TextFlowInput::plain(
+            source.clone(),
+            TextFlowSourceKind::Exact,
+            Style::new(),
+        );
+        let mut options = TextFlowOptions::new(width, wrap);
+        options.ellipsis = ellipsis.to_string();
+        let flow = TextFlow::try_build(&input, &options)
+            .expect("valid UTF-8 truncation must produce a complete logical map");
+
+        let mut logical_lines: Vec<_> = source.split_terminator('\n').collect();
+        if logical_lines.is_empty() {
+            logical_lines.push("");
+        }
+        let expected_rows: Vec<_> = logical_lines
+            .iter()
+            .map(|line| match wrap {
+                TextWrap::Truncate | TextWrap::TruncateEnd => {
+                    truncate_text(line, width, ellipsis)
+                }
+                TextWrap::TruncateStart => truncate_start(line, width, ellipsis),
+                TextWrap::TruncateMiddle => truncate_middle(line, width, ellipsis),
+                TextWrap::Wrap => unreachable!("strategy only generates truncate modes"),
+            })
+            .collect();
+        prop_assert_eq!(flow.rows(), expected_rows.as_slice());
+        prop_assert_eq!(flow.logical_rows().len(), expected_rows.len());
+
+        let grapheme_ranges: Vec<_> = source
+            .grapheme_indices(true)
+            .map(|(start, grapheme)| start..start + grapheme.len())
+            .collect();
+        let source_ranges: Vec<_> = flow
+            .tokens()
+            .iter()
+            .filter_map(|token| token.source_range())
+            .collect();
+        prop_assert_eq!(source_ranges, grapheme_ranges);
+        prop_assert_eq!(flow.position_map().len(), flow.tokens().len());
+
+        let mut run_counts = vec![0usize; flow.tokens().len()];
+        let mut last_source_token = None;
+        for (row_index, row) in flow.logical_rows().iter().enumerate() {
+            prop_assert_eq!(row.index, row_index);
+            prop_assert!(row.width <= width);
+            let mut column = 0usize;
+            let mut reconstructed = String::new();
+            let mut source_before_synthetic = false;
+            let mut synthetic_seen = false;
+            let mut source_after_synthetic = false;
+
+            for run in &row.runs {
+                prop_assert!(run.token_index < flow.tokens().len());
+                prop_assert_eq!(run.row, row_index);
+                prop_assert_eq!(run.column, column);
+                prop_assert_eq!(measure_text_width(&run.text), run.width);
+                let token = &flow.tokens()[run.token_index];
+                prop_assert_eq!(run.text.as_str(), token.safe_text());
+                let placement_matches_run = match token.placement() {
+                    TextFlowPlacement::Positioned { row, column }
+                    | TextFlowPlacement::ZeroWidth { row, column }
+                    | TextFlowPlacement::SanitizedControl { row, column }
+                    | TextFlowPlacement::Synthetic { row, column } => {
+                        *row == row_index && *column == run.column
+                    }
+                    _ => false,
+                };
+                prop_assert!(placement_matches_run);
+
+                run_counts[run.token_index] += 1;
+                prop_assert_eq!(run_counts[run.token_index], 1);
+                match token.source {
+                    TextFlowSource::Source { .. } => {
+                        let range = token
+                            .source_range()
+                            .expect("source-backed run must retain its range");
+                        prop_assert_eq!(&source[range], &run.text);
+                        if synthetic_seen {
+                            source_after_synthetic = true;
+                        } else {
+                            source_before_synthetic = true;
+                        }
+                        if let Some(previous) = last_source_token {
+                            prop_assert!(previous < run.token_index);
+                        }
+                        last_source_token = Some(run.token_index);
+                    }
+                    TextFlowSource::Synthetic => {
+                        prop_assert_eq!(token.source_range(), None);
+                        prop_assert!(!source_after_synthetic);
+                        synthetic_seen = true;
+                    }
+                }
+                reconstructed.push_str(&run.text);
+                column += run.width;
+                prop_assert!(column <= width);
+            }
+
+            if synthetic_seen {
+                match wrap {
+                    TextWrap::Truncate | TextWrap::TruncateEnd => {
+                        prop_assert!(!source_after_synthetic);
+                    }
+                    TextWrap::TruncateStart => {
+                        prop_assert!(!source_before_synthetic);
+                    }
+                    TextWrap::TruncateMiddle => {}
+                    TextWrap::Wrap => unreachable!("strategy only generates truncate modes"),
+                }
+            }
+            prop_assert_eq!(&reconstructed, &row.text);
+            prop_assert_eq!(column, row.width);
+            prop_assert_eq!(measure_text_width(&row.text), row.width);
+        }
+
+        for (token_index, token) in flow.tokens().iter().enumerate() {
+            prop_assert_eq!(flow.position_map()[token_index].token_index, token_index);
+            prop_assert_eq!(&flow.position_map()[token_index].source, &token.source);
+            prop_assert_eq!(
+                &flow.position_map()[token_index].placement,
+                token.placement()
+            );
+            match token.source {
+                TextFlowSource::Synthetic => {
+                    prop_assert_eq!(token.source_range(), None);
+                    prop_assert_eq!(run_counts[token_index], 1);
+                    let synthetic_placed = matches!(
+                        token.placement(),
+                        TextFlowPlacement::Synthetic { row, .. }
+                            if *row < flow.logical_rows().len()
+                    );
+                    prop_assert!(synthetic_placed);
+                }
+                TextFlowSource::Source { .. } if run_counts[token_index] == 1 => {
+                    let range = token
+                        .source_range()
+                        .expect("source token must retain its range");
+                    let expected_row = source[..range.start].matches('\n').count();
+                    let source_placed = matches!(
+                        token.placement(),
+                        TextFlowPlacement::Positioned { row, .. }
+                            | TextFlowPlacement::ZeroWidth { row, .. }
+                            | TextFlowPlacement::SanitizedControl { row, .. }
+                            if *row == expected_row
+                    );
+                    prop_assert!(source_placed);
+                }
+                TextFlowSource::Source { .. } => {
+                    let range = token
+                        .source_range()
+                        .expect("source token must retain its range");
+                    let expected_row = source[..range.start].matches('\n').count();
+                    let source_absent_with_row = match token.placement() {
+                        TextFlowPlacement::HardBreak { row } => *row == expected_row,
+                        TextFlowPlacement::Omitted { row } if width == 0 => {
+                            *row == expected_row
+                        }
+                        TextFlowPlacement::Truncated { row } if width > 0 => {
+                            *row == expected_row
+                        }
+                        _ => false,
+                    };
+                    prop_assert!(source_absent_with_row);
+                }
+            }
+        }
     }
 }
 

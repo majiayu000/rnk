@@ -1,6 +1,7 @@
 //! UI Components
 
 mod action;
+pub mod chat;
 mod display;
 mod feedback;
 mod input;
@@ -19,6 +20,23 @@ pub(crate) use layout::capsule;
 
 // display
 pub use action::{ActionButton, ActionRole, ActionShape, ActionState, ActionStyle};
+pub use chat::{
+    AffectedMessage, AffectedMessageDisposition, AppendTextUpdate, ApplyOutcome, BlockId,
+    BlockUpdate, ChatBlockRef, ChatBlockRenderer, ChatMessage, ChatMessageMetadata,
+    ChatMessageView, ChatMessageViewOptions, ChatMessageViewStyle, ChatRenderContext,
+    ChatRenderOverride, ChatRole, CodeContent, ConversationError, ConversationEvent,
+    ConversationGuard, ConversationIdentityHistory, ConversationRevision, ConversationState,
+    ConversationStateSnapshot, ConversationUpdate, DecimalValue, DiffContent, EditMessageUpdate,
+    ErrorContent, ErrorSource, FailUpdate, FailureCause, GuardedUpdate, InsertBlockUpdate,
+    LegacyRoleConversionError, LinkContent, MessageAuthor, MessageBlock, MessageBlockEntry,
+    MessageId, MessageMutationGuard, MessageRevision, MessageStatus, MessageTimestamp,
+    MessageViewVariant, ProcessedEventRecord, PushUpdate, QuoteContent, ReplaceBlockUpdate,
+    ResendUpdate, RetentionHistory, RetentionProof, SnapshotProof, StreamingIndicatorFrame,
+    TerminalAttachmentSummary, ThinkingContent, ThinkingDisclosure, ThinkingId,
+    ThinkingIdentityHistory, ThinkingStatus, ToolArgument, ToolCallContent, ToolCallId,
+    ToolCallStatus, ToolResultContent, ToolResultLocation, ToolResultSlot, ToolResultStatus,
+    TypedField, TypedValue, UpdateId,
+};
 pub use display::text;
 pub use display::{
     Accordion, AccordionItem, Avatar, AvatarSize, Badge, BadgeVariant, Bar, BarChart,

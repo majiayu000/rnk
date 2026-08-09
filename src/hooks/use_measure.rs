@@ -74,6 +74,11 @@ pub fn measure_element(element_id: ElementId) -> Option<Dimensions> {
 ///
 /// This is a compatibility helper. Runtime storage is keyed by stable `NodeKey`
 /// and string keys are resolved through an alias map when available.
+///
+/// # Panics
+///
+/// Panics when the key matches more than one parent scope. Recoverable callers
+/// can use [`crate::runtime::RuntimeContext::try_get_measurement_by_key_dims`].
 pub fn measure_element_by_key(key: &str) -> Option<Dimensions> {
     if let Some(ctx) = crate::runtime::current_runtime() {
         ctx.borrow()
@@ -211,7 +216,7 @@ mod tests {
         let node_key = NodeKey::with_key("sidebar", TypeId::of::<i32>(), 0);
         let mut keyed = HashMap::new();
         keyed.insert(
-            node_key,
+            node_key.identity(),
             Layout {
                 x: 0.0,
                 y: 0.0,
@@ -220,7 +225,7 @@ mod tests {
             },
         );
         let mut aliases = HashMap::new();
-        aliases.insert("sidebar".to_string(), node_key);
+        aliases.insert("sidebar".to_string(), node_key.identity());
 
         ctx.borrow_mut()
             .set_measure_layouts_with_node_keys(HashMap::new(), keyed, aliases);
@@ -230,5 +235,58 @@ mod tests {
         assert_eq!(dims.map(|d| (d.width, d.height)), Some((30.0, 10.0)));
 
         set_current_runtime(None);
+    }
+
+    #[test]
+    fn measure_element_by_key_panics_on_ambiguous_runtime_alias_without_leaking_runtime() {
+        use crate::components::Box;
+        use crate::renderer::pipeline::RenderPipeline;
+        use crate::runtime::{RuntimeContext, current_runtime, with_runtime};
+        use std::cell::RefCell;
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        use std::rc::Rc;
+
+        let runtime = Rc::new(RefCell::new(RuntimeContext::new()));
+        let mut engine = LayoutEngine::new();
+        let mut previous_vnode = None;
+        let tree = Box::new()
+            .child(
+                Box::new()
+                    .key("left")
+                    .child(Box::new().key("shared").width(3.0)),
+            )
+            .child(
+                Box::new()
+                    .key("right")
+                    .child(Box::new().key("shared").width(7.0)),
+            )
+            .into_element();
+        RenderPipeline::try_render_dynamic_frame_checked(
+            &tree,
+            20,
+            4,
+            &mut engine,
+            &runtime,
+            &mut previous_vnode,
+        )
+        .expect("an ambiguous measurement alias does not reject the frame");
+        assert!(matches!(
+            runtime.borrow().try_get_measurement_by_key_dims("shared"),
+            Err(crate::layout::LayoutLookupError::AmbiguousMeasurementKey {
+                scoped_match_count: 2,
+                ..
+            })
+        ));
+
+        assert!(current_runtime().is_none());
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            with_runtime(runtime.clone(), || measure_element_by_key("shared"))
+        }));
+
+        assert!(failure.is_err());
+        assert!(
+            current_runtime().is_none(),
+            "with_runtime must restore the thread-local context after unwinding"
+        );
     }
 }

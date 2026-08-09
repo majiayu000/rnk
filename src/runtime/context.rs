@@ -27,12 +27,13 @@ use std::time::{Duration, Instant};
 
 use crate::cmd::Cmd;
 use crate::components::Theme;
-use crate::core::NodeKey;
 use crate::hooks::context::{HookContext, HookStorage};
 use crate::hooks::paste::PasteEvent;
 use crate::hooks::use_focus::FocusManager;
 use crate::hooks::use_input::Key;
 use crate::hooks::use_mouse::Mouse;
+use crate::layout::LayoutLookupError;
+use crate::reconciler::{ScopedNodeIdentity, SiblingIdentity};
 use crate::renderer::{IntoPrintable, RenderHandle, SharedFrameRateStats};
 
 /// Input handler function type
@@ -84,11 +85,20 @@ pub struct RuntimeContext {
     /// Measured element dimensions (element_id -> (width, height))
     measurements: std::collections::HashMap<crate::core::ElementId, (u16, u16)>,
     /// Measured element dimensions by stable node identity.
-    measurements_by_node_key: std::collections::HashMap<NodeKey, (u16, u16)>,
+    measurements_by_node_key: std::collections::HashMap<SiblingIdentity, (u16, u16)>,
+    /// Correctness view used by renderer-produced scoped measurements.
+    measurements_by_scoped_node: std::collections::HashMap<ScopedNodeIdentity, (u16, u16)>,
+    /// Every exact scope reachable through a raw sibling-local node identity.
+    measurement_node_candidates:
+        std::collections::HashMap<SiblingIdentity, Vec<ScopedNodeIdentity>>,
     /// Compatibility fallback for older string-keyed measurement call paths.
     measurements_by_key: std::collections::HashMap<String, (u16, u16)>,
     /// Alias map from user-provided string keys to stable node identities.
-    measurement_key_aliases: std::collections::HashMap<String, NodeKey>,
+    measurement_key_aliases: std::collections::HashMap<String, SiblingIdentity>,
+    /// All scoped candidates for a raw user string. Multiple entries are
+    /// intentionally retained so compatibility lookup can reject ambiguity.
+    scoped_measurement_aliases:
+        std::collections::HashMap<String, Vec<(ScopedNodeIdentity, SiblingIdentity)>>,
 
     /// Shared frame rate statistics
     frame_rate_stats: Option<Arc<SharedFrameRateStats>>,
@@ -117,8 +127,11 @@ impl RuntimeContext {
             last_activity: Instant::now(),
             measurements: std::collections::HashMap::new(),
             measurements_by_node_key: std::collections::HashMap::new(),
+            measurements_by_scoped_node: std::collections::HashMap::new(),
+            measurement_node_candidates: std::collections::HashMap::new(),
             measurements_by_key: std::collections::HashMap::new(),
             measurement_key_aliases: std::collections::HashMap::new(),
+            scoped_measurement_aliases: std::collections::HashMap::new(),
             frame_rate_stats: None,
             theme: Theme::dark(),
             context_values: std::collections::HashMap::new(),
@@ -141,8 +154,11 @@ impl RuntimeContext {
             last_activity: Instant::now(),
             measurements: std::collections::HashMap::new(),
             measurements_by_node_key: std::collections::HashMap::new(),
+            measurements_by_scoped_node: std::collections::HashMap::new(),
+            measurement_node_candidates: std::collections::HashMap::new(),
             measurements_by_key: std::collections::HashMap::new(),
             measurement_key_aliases: std::collections::HashMap::new(),
+            scoped_measurement_aliases: std::collections::HashMap::new(),
             frame_rate_stats: None,
             theme: Theme::dark(),
             context_values: std::collections::HashMap::new(),
@@ -395,8 +411,11 @@ impl RuntimeContext {
     ) {
         self.measurements.clear();
         self.measurements_by_node_key.clear();
+        self.measurements_by_scoped_node.clear();
+        self.measurement_node_candidates.clear();
         self.measurements_by_key.clear();
         self.measurement_key_aliases.clear();
+        self.scoped_measurement_aliases.clear();
         for (id, layout) in layouts {
             self.measurements
                 .insert(id, (layout.width as u16, layout.height as u16));
@@ -411,8 +430,11 @@ impl RuntimeContext {
     ) {
         self.measurements.clear();
         self.measurements_by_node_key.clear();
+        self.measurements_by_scoped_node.clear();
+        self.measurement_node_candidates.clear();
         self.measurements_by_key.clear();
         self.measurement_key_aliases.clear();
+        self.scoped_measurement_aliases.clear();
 
         for (id, layout) in layouts {
             self.measurements
@@ -429,13 +451,16 @@ impl RuntimeContext {
     pub fn set_measure_layouts_with_node_keys(
         &mut self,
         layouts: std::collections::HashMap<crate::core::ElementId, crate::layout::Layout>,
-        node_keyed_layouts: std::collections::HashMap<NodeKey, crate::layout::Layout>,
-        key_aliases: std::collections::HashMap<String, NodeKey>,
+        node_keyed_layouts: std::collections::HashMap<SiblingIdentity, crate::layout::Layout>,
+        key_aliases: std::collections::HashMap<String, SiblingIdentity>,
     ) {
         self.measurements.clear();
         self.measurements_by_node_key.clear();
+        self.measurements_by_scoped_node.clear();
+        self.measurement_node_candidates.clear();
         self.measurements_by_key.clear();
         self.measurement_key_aliases.clear();
+        self.scoped_measurement_aliases.clear();
 
         for (id, layout) in layouts {
             self.measurements
@@ -450,6 +475,38 @@ impl RuntimeContext {
         self.measurement_key_aliases = key_aliases;
     }
 
+    pub(crate) fn set_measure_layouts_with_scoped_keys(
+        &mut self,
+        layouts: std::collections::HashMap<crate::core::ElementId, crate::layout::Layout>,
+        scoped_layouts: std::collections::HashMap<ScopedNodeIdentity, crate::layout::Layout>,
+        composite_layouts: std::collections::HashMap<SiblingIdentity, crate::layout::Layout>,
+        node_candidates: std::collections::HashMap<SiblingIdentity, Vec<ScopedNodeIdentity>>,
+        key_aliases: std::collections::HashMap<String, Vec<(ScopedNodeIdentity, SiblingIdentity)>>,
+    ) {
+        self.measurements.clear();
+        self.measurements_by_node_key.clear();
+        self.measurements_by_scoped_node.clear();
+        self.measurement_node_candidates.clear();
+        self.measurements_by_key.clear();
+        self.measurement_key_aliases.clear();
+        self.scoped_measurement_aliases.clear();
+
+        for (id, layout) in layouts {
+            self.measurements
+                .insert(id, (layout.width as u16, layout.height as u16));
+        }
+        for (identity, layout) in scoped_layouts {
+            self.measurements_by_scoped_node
+                .insert(identity, (layout.width as u16, layout.height as u16));
+        }
+        for (identity, layout) in composite_layouts {
+            self.measurements_by_node_key
+                .insert(identity, (layout.width as u16, layout.height as u16));
+        }
+        self.measurement_node_candidates = node_candidates;
+        self.scoped_measurement_aliases = key_aliases;
+    }
+
     /// Get measurement as Dimensions (width, height as f32)
     pub fn get_measurement_dims(&self, element_id: crate::core::ElementId) -> Option<(f32, f32)> {
         self.measurements
@@ -457,27 +514,128 @@ impl RuntimeContext {
             .map(|&(w, h)| (w as f32, h as f32))
     }
 
-    /// Get measurement by stable node key as Dimensions (width, height as f32)
-    pub fn get_measurement_by_node_key_dims(&self, node_key: NodeKey) -> Option<(f32, f32)> {
-        self.measurements_by_node_key
+    /// Get measurement by stable node identity as dimensions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LayoutLookupError::AmbiguousMeasurementNodeIdentity`] when a
+    /// raw sibling-local identity matches more than one exact parent scope.
+    pub fn try_get_measurement_by_node_key_dims(
+        &self,
+        node_key: SiblingIdentity,
+    ) -> Result<Option<(f32, f32)>, LayoutLookupError> {
+        if let Some(candidates) = self.measurement_node_candidates.get(&node_key) {
+            return match candidates.as_slice() {
+                [] => Ok(None),
+                [identity] => Ok(self
+                    .measurements_by_scoped_node
+                    .get(identity)
+                    .map(|&(width, height)| (width as f32, height as f32))),
+                _ => Err(LayoutLookupError::AmbiguousMeasurementNodeIdentity {
+                    identity: node_key,
+                    scoped_match_count: candidates.len(),
+                }),
+            };
+        }
+        Ok(self
+            .measurements_by_node_key
             .get(&node_key)
-            .map(|&(w, h)| (w as f32, h as f32))
+            .map(|&(width, height)| (width as f32, height as f32)))
+    }
+
+    /// Get measurement by stable node identity as dimensions.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a raw identity is ambiguous. Use
+    /// [`try_get_measurement_by_node_key_dims`](Self::try_get_measurement_by_node_key_dims)
+    /// for a checked result.
+    pub fn get_measurement_by_node_key_dims(
+        &self,
+        node_key: SiblingIdentity,
+    ) -> Option<(f32, f32)> {
+        self.try_get_measurement_by_node_key_dims(node_key)
+            .unwrap_or_else(|error| panic!("measurement node lookup failed: {error}"))
     }
 
     /// Resolve a user-facing string alias to a stable node key.
-    pub fn resolve_measurement_key_alias(&self, key: &str) -> Option<NodeKey> {
-        self.measurement_key_aliases.get(key).copied()
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LayoutLookupError::AmbiguousMeasurementKey`] when the alias
+    /// has more than one exact scoped candidate.
+    pub fn try_resolve_measurement_key_alias(
+        &self,
+        key: &str,
+    ) -> Result<Option<SiblingIdentity>, LayoutLookupError> {
+        if let Some(candidates) = self.scoped_measurement_aliases.get(key) {
+            return match candidates.as_slice() {
+                [] => Ok(None),
+                [(_, projection)] => Ok(Some(*projection)),
+                _ => Err(LayoutLookupError::AmbiguousMeasurementKey {
+                    key_token: crate::core::NodeKey::compatibility_token(key),
+                    scoped_match_count: candidates.len(),
+                }),
+            };
+        }
+        Ok(self.measurement_key_aliases.get(key).copied())
     }
 
-    /// Get measurement by user key as Dimensions (width, height as f32)
-    pub fn get_measurement_by_key_dims(&self, key: &str) -> Option<(f32, f32)> {
-        if let Some(node_key) = self.resolve_measurement_key_alias(key) {
-            return self.get_measurement_by_node_key_dims(node_key);
+    /// Resolve a user-facing string alias.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the alias is ambiguous. Use
+    /// [`try_resolve_measurement_key_alias`](Self::try_resolve_measurement_key_alias)
+    /// for a checked result.
+    pub fn resolve_measurement_key_alias(&self, key: &str) -> Option<SiblingIdentity> {
+        self.try_resolve_measurement_key_alias(key)
+            .unwrap_or_else(|error| panic!("measurement alias lookup failed: {error}"))
+    }
+
+    /// Get measurement by user key as dimensions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LayoutLookupError::AmbiguousMeasurementKey`] when the user key
+    /// has more than one exact scoped candidate.
+    pub fn try_get_measurement_by_key_dims(
+        &self,
+        key: &str,
+    ) -> Result<Option<(f32, f32)>, LayoutLookupError> {
+        if let Some(candidates) = self.scoped_measurement_aliases.get(key) {
+            return match candidates.as_slice() {
+                [] => Ok(None),
+                [(identity, _)] => Ok(self
+                    .measurements_by_scoped_node
+                    .get(identity)
+                    .map(|&(width, height)| (width as f32, height as f32))),
+                _ => Err(LayoutLookupError::AmbiguousMeasurementKey {
+                    key_token: crate::core::NodeKey::compatibility_token(key),
+                    scoped_match_count: candidates.len(),
+                }),
+            };
+        }
+        if let Some(node_key) = self.measurement_key_aliases.get(key).copied() {
+            return self.try_get_measurement_by_node_key_dims(node_key);
         }
 
-        self.measurements_by_key
+        Ok(self
+            .measurements_by_key
             .get(key)
-            .map(|&(w, h)| (w as f32, h as f32))
+            .map(|&(width, height)| (width as f32, height as f32)))
+    }
+
+    /// Get measurement by user key as dimensions.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the user key is ambiguous. Use
+    /// [`try_get_measurement_by_key_dims`](Self::try_get_measurement_by_key_dims)
+    /// for a checked result.
+    pub fn get_measurement_by_key_dims(&self, key: &str) -> Option<(f32, f32)> {
+        self.try_get_measurement_by_key_dims(key)
+            .unwrap_or_else(|error| panic!("measurement lookup failed: {error}"))
     }
 
     // === Frame Rate Stats Methods ===

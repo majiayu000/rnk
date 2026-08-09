@@ -1,359 +1,636 @@
-//! Single source of truth for how a text block occupies terminal rows.
-//!
-//! Measurement and rendering must agree on where lines break. Before this
-//! module they did not: layout counted wrapped rows with one algorithm while
-//! [`Output::write`](crate::renderer::output::Output::write) stopped at the
-//! first newline or at the right edge, so any content past that point was
-//! silently dropped even though layout had reserved height for it.
-//!
-//! Both sides now call [`flow_text`] and consume the same rows.
+//! Canonical text flow preserves source identity separately from placement.
+use std::{error::Error, fmt, ops::Range, sync::Arc};
 
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::core::TextWrap;
+use crate::core::{Overflow, Style, TextWrap};
 
 use super::measure::grapheme_width;
 
-/// The rows a text block occupies at a given content width.
-///
-/// Row order matches source order. A block that is present but empty produces
-/// exactly one empty row, so its height is still determinate.
+mod style_normalization;
+mod truncate;
+mod wrap;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextFlowSourceKind {
+    Exact,
+    Canonical,
+    Reconstructed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TextFlow {
+pub enum TextFlowSource {
+    Source {
+        range: Range<usize>,
+        kind: TextFlowSourceKind,
+    },
+    Synthetic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextFlowPlacement {
+    Positioned { row: usize, column: usize },
+    ZeroWidth { row: usize, column: usize },
+    SanitizedControl { row: usize, column: usize },
+    HardBreak { row: usize },
+    Omitted { row: usize },
+    Truncated { row: usize },
+    Synthetic { row: usize, column: usize },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StyledTextRange {
+    pub range: Range<usize>,
+    pub style: Style,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextFlowInput {
+    pub source: String,
+    pub source_kind: TextFlowSourceKind,
+    pub default_style: Style,
+    pub styled_ranges: Vec<StyledTextRange>,
+}
+
+impl TextFlowInput {
+    pub fn plain(
+        source: impl Into<String>,
+        source_kind: TextFlowSourceKind,
+        default_style: Style,
+    ) -> Self {
+        Self {
+            source: source.into(),
+            source_kind,
+            default_style,
+            styled_ranges: Vec::new(),
+        }
+    }
+
+    pub fn with_styled_ranges(mut self, styled_ranges: Vec<StyledTextRange>) -> Self {
+        self.styled_ranges = styled_ranges;
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnicodeWidthPolicy {
+    pub revision: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextFlowOptions {
+    pub max_width: usize,
+    pub text_wrap: TextWrap,
+    pub overflow_x: Overflow,
+    pub overflow_y: Overflow,
+    pub tab_stop: usize,
+    pub ellipsis: String,
+    pub width_policy: UnicodeWidthPolicy,
+}
+
+impl TextFlowOptions {
+    /// Largest supported tab stop and single-tab expansion, in terminal cells.
+    pub const MAX_TAB_EXPANSION: usize = 4096;
+
+    pub fn new(max_width: usize, text_wrap: TextWrap) -> Self {
+        Self {
+            max_width,
+            text_wrap,
+            overflow_x: Overflow::Visible,
+            overflow_y: Overflow::Visible,
+            tab_stop: 4,
+            ellipsis: "…".to_string(),
+            width_policy: UnicodeWidthPolicy { revision: 1 },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextFlowCacheIdentity {
+    pub input: TextFlowInput,
+    pub options: TextFlowOptions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextFlowDiagnostic {
+    StyleBoundaryNormalized {
+        boundary: usize,
+        grapheme_range: Range<usize>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TokenClass {
+    Content,
+    Whitespace,
+    Tab,
+    HardBreak,
+    SanitizedControl,
+}
+
+type Tokenization = (
+    Vec<TextFlowToken>,
+    Vec<TextFlowDiagnostic>,
+    Vec<Range<usize>>,
+);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextFlowToken {
+    pub source: TextFlowSource,
+    pub safe_text: String,
+    pub style: Style,
+    pub display_width: usize,
+    pub placement: TextFlowPlacement,
+    class: TokenClass,
+}
+
+impl TextFlowToken {
+    pub fn source_range(&self) -> Option<Range<usize>> {
+        match &self.source {
+            TextFlowSource::Source { range, .. } => Some(range.clone()),
+            TextFlowSource::Synthetic => None,
+        }
+    }
+
+    pub fn safe_text(&self) -> &str {
+        &self.safe_text
+    }
+
+    pub fn placement(&self) -> &TextFlowPlacement {
+        &self.placement
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextFlowRun {
+    pub token_index: usize,
+    pub row: usize,
+    pub column: usize,
+    pub width: usize,
+    pub text: String,
+    pub style: Style,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextFlowRow {
+    pub index: usize,
+    pub width: usize,
+    pub text: String,
+    pub runs: Vec<TextFlowRun>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextFlowPositionMapEntry {
+    pub token_index: usize,
+    pub placement: TextFlowPlacement,
+    pub source: TextFlowSource,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextFlow {
     rows: Vec<String>,
+    logical_rows: Vec<TextFlowRow>,
+    tokens: Vec<TextFlowToken>,
+    position_map: Vec<TextFlowPositionMapEntry>,
+    diagnostics: Vec<TextFlowDiagnostic>,
+    cache_identity: TextFlowCacheIdentity,
 }
 
 impl TextFlow {
-    /// Rows in source order.
-    pub(crate) fn rows(&self) -> &[String] {
+    pub fn try_build(
+        input: &TextFlowInput,
+        options: &TextFlowOptions,
+    ) -> Result<Self, TextFlowError> {
+        Self::try_build_interruptible(input, options, || false)
+    }
+
+    pub fn try_build_interruptible(
+        input: &TextFlowInput,
+        options: &TextFlowOptions,
+        mut interrupted: impl FnMut() -> bool,
+    ) -> Result<Self, TextFlowError> {
+        if interrupted() {
+            return Err(TextFlowError::Interrupted);
+        }
+        if options.tab_stop == 0 {
+            return Err(TextFlowError::InvalidTabStop);
+        }
+        if options.tab_stop > TextFlowOptions::MAX_TAB_EXPANSION {
+            return Err(TextFlowError::TabExpansionTooLarge {
+                requested: options.tab_stop,
+            });
+        }
+        let validated_styles = style_normalization::validate_styled_ranges(input)?;
+        let mut plan_observer = style_normalization::NoopNormalizationObserver;
+        let styled_plan = style_normalization::build_styled_range_plan(
+            validated_styles,
+            &mut interrupted,
+            &mut plan_observer,
+        )?;
+        let (mut tokens, diagnostics, grapheme_ranges) =
+            tokenize_source(input, &styled_plan, &mut interrupted)?;
+        let logical_rows = layout_tokens(&mut tokens, options, &mut interrupted)?;
+        validate_source_coverage(&input.source, &tokens, &grapheme_ranges)?;
+        let position_map = build_position_map(&tokens);
+        let rows = logical_rows.iter().map(|row| row.text.clone()).collect();
+
+        Ok(Self {
+            rows,
+            logical_rows,
+            tokens,
+            position_map,
+            diagnostics,
+            cache_identity: TextFlowCacheIdentity {
+                input: input.clone(),
+                options: options.clone(),
+            },
+        })
+    }
+
+    pub fn rows(&self) -> &[String] {
         &self.rows
     }
 
-    /// Number of terminal rows this block occupies.
-    pub(crate) fn row_count(&self) -> usize {
+    pub fn tokens(&self) -> &[TextFlowToken] {
+        &self.tokens
+    }
+
+    pub fn logical_rows(&self) -> &[TextFlowRow] {
+        &self.logical_rows
+    }
+
+    pub fn position_map(&self) -> &[TextFlowPositionMapEntry] {
+        &self.position_map
+    }
+
+    pub fn diagnostics(&self) -> &[TextFlowDiagnostic] {
+        &self.diagnostics
+    }
+
+    pub fn cache_identity(&self) -> &TextFlowCacheIdentity {
+        &self.cache_identity
+    }
+
+    pub fn row_count(&self) -> usize {
         self.rows.len()
     }
 
-    /// Width in cells of the widest row.
-    #[cfg(test)]
-    pub(crate) fn max_row_width(&self) -> usize {
-        self.rows
+    pub fn max_row_width(&self) -> usize {
+        self.logical_rows
             .iter()
-            .map(|row| row_width(row))
+            .map(|row| row.width)
             .max()
             .unwrap_or(0)
     }
 }
 
-fn row_width(row: &str) -> usize {
-    row.graphemes(true).map(grapheme_width).sum()
+#[derive(Debug, Default)]
+pub struct TextFlowCache {
+    published: Option<Arc<TextFlow>>,
+    build_count: usize,
 }
 
-/// Split `text` into logical lines on hard breaks.
-///
-/// `\r\n` counts once. A trailing break does not produce a final empty row,
-/// which preserves the existing visible-line contract.
-fn logical_lines(text: &str) -> Vec<&str> {
-    let mut lines = Vec::new();
-    let bytes = text.as_bytes();
-    let mut start = 0usize;
-    let mut i = 0usize;
+impl TextFlowCache {
+    pub fn get_or_compute(
+        &mut self,
+        input: &TextFlowInput,
+        options: &TextFlowOptions,
+    ) -> Result<Arc<TextFlow>, TextFlowError> {
+        self.get_or_compute_interruptible(input, options, || false)
+    }
 
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\n' => {
-                lines.push(&text[start..i]);
-                i += 1;
-                start = i;
+    pub fn get_or_compute_interruptible(
+        &mut self,
+        input: &TextFlowInput,
+        options: &TextFlowOptions,
+        mut interrupted: impl FnMut() -> bool,
+    ) -> Result<Arc<TextFlow>, TextFlowError> {
+        if interrupted() {
+            return Err(TextFlowError::Interrupted);
+        }
+        if let Some(flow) = &self.published
+            && flow.cache_identity.input == *input
+            && flow.cache_identity.options == *options
+        {
+            return Ok(Arc::clone(flow));
+        }
+        let completed = Arc::new(TextFlow::try_build_interruptible(
+            input,
+            options,
+            interrupted,
+        )?);
+        self.build_count = self
+            .build_count
+            .checked_add(1)
+            .ok_or(TextFlowError::ArithmeticOverflow)?;
+        self.published = Some(Arc::clone(&completed));
+        Ok(completed)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextFlowError {
+    InvalidTabStop,
+    TabExpansionTooLarge {
+        requested: usize,
+    },
+    InvalidStyleRange {
+        range: Range<usize>,
+    },
+    OverlappingStyleRanges {
+        first: Range<usize>,
+        second: Range<usize>,
+    },
+    FinalizedRangeNotGraphemeBoundary {
+        range: Range<usize>,
+    },
+    IncompleteSourceCoverage {
+        expected: usize,
+        covered: usize,
+    },
+    ArithmeticOverflow,
+    Interrupted,
+}
+
+impl fmt::Display for TextFlowError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidTabStop => write!(f, "text flow tab stop must be greater than zero"),
+            Self::TabExpansionTooLarge { requested } => {
+                write!(
+                    f,
+                    "tab expansion {requested} exceeds supported maximum {}",
+                    TextFlowOptions::MAX_TAB_EXPANSION
+                )
             }
-            b'\r' => {
-                lines.push(&text[start..i]);
-                // CRLF is one break, not two.
-                i += if bytes.get(i + 1) == Some(&b'\n') {
-                    2
-                } else {
-                    1
-                };
-                start = i;
+            Self::InvalidStyleRange { range } => write!(f, "invalid styled range {range:?}"),
+            Self::OverlappingStyleRanges { first, second } => {
+                write!(f, "styled ranges overlap: {first:?} and {second:?}")
             }
-            _ => i += 1,
+            Self::FinalizedRangeNotGraphemeBoundary { range } => {
+                write!(f, "finalized range is not one grapheme: {range:?}")
+            }
+            Self::IncompleteSourceCoverage { expected, covered } => {
+                write!(f, "source map covers {covered} bytes, expected {expected}")
+            }
+            Self::ArithmeticOverflow => write!(f, "text flow dimensions overflowed"),
+            Self::Interrupted => write!(f, "text flow construction was interrupted"),
         }
     }
-
-    if start < bytes.len() {
-        lines.push(&text[start..]);
-    } else if lines.is_empty() {
-        lines.push("");
-    }
-
-    lines
 }
 
-/// Lay `text` out into rows at `max_width` cells under `wrap`.
-///
-/// `max_width == 0` yields one empty row per logical line: there is nowhere to
-/// place a cell, but the row count stays determinate.
-pub(crate) fn flow_text(text: &str, max_width: usize, wrap: TextWrap) -> TextFlow {
-    let lines = logical_lines(text);
+impl Error for TextFlowError {}
 
-    if max_width == 0 {
-        return TextFlow {
-            rows: vec![String::new(); lines.len()],
+fn tokenize_source(
+    input: &TextFlowInput,
+    styled_plan: &style_normalization::ValidatedStyledRanges<'_>,
+    interrupted: &mut impl FnMut() -> bool,
+) -> Result<Tokenization, TextFlowError> {
+    let mut grapheme_ranges = Vec::new();
+    let mut tokens = Vec::new();
+    for (start, grapheme) in input.source.grapheme_indices(true) {
+        if interrupted() {
+            return Err(TextFlowError::Interrupted);
+        }
+        let range = start..start + grapheme.len();
+        grapheme_ranges.push(range.clone());
+        let (safe_text, class) = classify_grapheme(grapheme);
+        let display_width = if class == TokenClass::Tab {
+            0
+        } else {
+            grapheme_width(&safe_text)
         };
+        tokens.push(TextFlowToken {
+            source: TextFlowSource::Source {
+                range,
+                kind: input.source_kind,
+            },
+            safe_text,
+            style: input.default_style.clone(),
+            display_width,
+            placement: TextFlowPlacement::Omitted { row: 0 },
+            class,
+        });
     }
-
-    let mut rows = Vec::with_capacity(lines.len());
-    for line in lines {
-        match wrap {
-            TextWrap::Wrap => wrap_line(line, max_width, &mut rows),
-            _ => rows.push(fit_single_row(line, max_width)),
-        }
-    }
-
-    TextFlow { rows }
+    let mut observer = style_normalization::NoopNormalizationObserver;
+    let normalized = style_normalization::normalize_source(
+        styled_plan,
+        &grapheme_ranges,
+        &mut tokens,
+        interrupted,
+        &mut observer,
+    )?;
+    Ok((tokens, normalized.diagnostics, grapheme_ranges))
 }
 
-/// Greedily fill rows, preferring to break at whitespace.
-///
-/// A word longer than `max_width` is broken mid-word rather than overflowing:
-/// a terminal has no horizontal scroll to escape to, and dropping the tail
-/// would lose content.
-fn wrap_line(line: &str, max_width: usize, rows: &mut Vec<String>) {
-    if line.is_empty() {
-        rows.push(String::new());
-        return;
+fn classify_grapheme(grapheme: &str) -> (String, TokenClass) {
+    if matches!(grapheme, "\n" | "\r" | "\r\n") {
+        return (String::new(), TokenClass::HardBreak);
     }
-
-    let mut current = String::new();
-    let mut current_width = 0usize;
-    // Trailing whitespace already placed on the current row. It is only
-    // materialised once a non-space follows, so a break at a space does not
-    // leave the space dangling at the edge.
-    let mut pending_space = String::new();
-    let mut pending_space_width = 0usize;
-
-    for word in split_keeping_whitespace(line) {
-        if word.chars().all(char::is_whitespace) {
-            pending_space.push_str(word);
-            pending_space_width += row_width(word);
-            continue;
-        }
-
-        let word_width = row_width(word);
-
-        if current_width + pending_space_width + word_width <= max_width {
-            current.push_str(&pending_space);
-            current_width += pending_space_width;
-            pending_space.clear();
-            pending_space_width = 0;
-            current.push_str(word);
-            current_width += word_width;
-            continue;
-        }
-
-        // Word does not fit after the pending space; start a new row.
-        if !current.is_empty() {
-            rows.push(std::mem::take(&mut current));
-            current_width = 0;
-        }
-        pending_space.clear();
-        pending_space_width = 0;
-
-        if word_width <= max_width {
-            current.push_str(word);
-            current_width = word_width;
-            continue;
-        }
-
-        // Longer than a full row: break it across rows on grapheme boundaries.
-        for grapheme in word.graphemes(true) {
-            let g_width = grapheme_width(grapheme);
-            if current_width + g_width > max_width && !current.is_empty() {
-                rows.push(std::mem::take(&mut current));
-                current_width = 0;
+    if grapheme == "\t" {
+        return (String::new(), TokenClass::Tab);
+    }
+    let mut safe = String::new();
+    let mut sanitized = false;
+    for scalar in grapheme.chars() {
+        match scalar {
+            '\u{0000}'..='\u{001f}' => {
+                safe.push(char::from_u32(0x2400 + scalar as u32).unwrap_or('\u{fffd}'));
+                sanitized = true;
             }
-            current.push_str(grapheme);
-            current_width += g_width;
-        }
-    }
-
-    // Whitespace at the very end of the line was never followed by a word, so
-    // it was never flushed. Keep it: it is content, and dropping it would
-    // change strings that deliberately pad to a fixed width.
-    current.push_str(&pending_space);
-
-    rows.push(current);
-}
-
-/// Split into alternating runs of whitespace and non-whitespace, keeping both.
-fn split_keeping_whitespace(line: &str) -> Vec<&str> {
-    let mut parts = Vec::new();
-    let mut start = 0usize;
-    let mut in_space: Option<bool> = None;
-
-    for (idx, ch) in line.char_indices() {
-        let is_space = ch.is_whitespace();
-        match in_space {
-            Some(prev) if prev == is_space => {}
-            Some(_) => {
-                parts.push(&line[start..idx]);
-                start = idx;
+            '\u{007f}' => {
+                safe.push('␡');
+                sanitized = true;
             }
-            None => {}
+            '\u{0080}'..='\u{009f}' => {
+                safe.push('\u{fffd}');
+                sanitized = true;
+            }
+            _ => safe.push(scalar),
         }
-        in_space = Some(is_space);
     }
-
-    if start < line.len() {
-        parts.push(&line[start..]);
-    }
-
-    parts
+    let class = if sanitized {
+        TokenClass::SanitizedControl
+    } else if grapheme.chars().all(char::is_whitespace) {
+        TokenClass::Whitespace
+    } else {
+        TokenClass::Content
+    };
+    (safe, class)
 }
 
-/// Take as many leading graphemes as fit in `max_width` cells.
-///
-/// A wide grapheme that would straddle the edge is dropped rather than split,
-/// so no half-character is ever emitted.
-fn fit_single_row(line: &str, max_width: usize) -> String {
-    let mut row = String::new();
-    let mut width = 0usize;
-
-    for grapheme in line.graphemes(true) {
-        let g_width = grapheme_width(grapheme);
-        if width + g_width > max_width {
-            break;
+fn layout_tokens(
+    tokens: &mut Vec<TextFlowToken>,
+    options: &TextFlowOptions,
+    interrupted: &mut impl FnMut() -> bool,
+) -> Result<Vec<TextFlowRow>, TextFlowError> {
+    let mut rows = Vec::new();
+    let mut line_start = 0;
+    let source_token_count = tokens.len();
+    for index in 0..source_token_count {
+        if tokens[index].class != TokenClass::HardBreak {
+            continue;
         }
-        row.push_str(grapheme);
-        width += g_width;
+        layout_line(tokens, line_start..index, options, &mut rows, interrupted)?;
+        tokens[index].placement = TextFlowPlacement::HardBreak {
+            row: rows.len().saturating_sub(1),
+        };
+        line_start = index + 1;
     }
+    if line_start < source_token_count || source_token_count == 0 {
+        layout_line(
+            tokens,
+            line_start..source_token_count,
+            options,
+            &mut rows,
+            interrupted,
+        )?;
+    }
+    Ok(rows)
+}
 
-    row
+fn layout_line(
+    tokens: &mut Vec<TextFlowToken>,
+    range: Range<usize>,
+    options: &TextFlowOptions,
+    rows: &mut Vec<TextFlowRow>,
+    interrupted: &mut impl FnMut() -> bool,
+) -> Result<(), TextFlowError> {
+    if options.max_width == 0 {
+        let row = rows.len();
+        for token in &mut tokens[range] {
+            finalize_tab(token, options.tab_stop)?;
+            token.placement = TextFlowPlacement::Omitted { row };
+        }
+        return place_row(tokens, &[], options.tab_stop, rows);
+    }
+    match options.text_wrap {
+        TextWrap::Wrap => wrap::wrap_line(tokens, range, options, rows, interrupted),
+        _ => truncate::truncate_line(tokens, range, options, rows, interrupted),
+    }
+}
+
+fn token_width_at(
+    token: &mut TextFlowToken,
+    column: usize,
+    tab_stop: usize,
+) -> Result<usize, TextFlowError> {
+    if token.class == TokenClass::Tab {
+        let width = tab_stop - column % tab_stop;
+        finalize_tab(token, width)?;
+        Ok(width)
+    } else {
+        Ok(token.display_width)
+    }
+}
+
+fn finalize_tab(token: &mut TextFlowToken, width: usize) -> Result<(), TextFlowError> {
+    if token.class == TokenClass::Tab {
+        let mut expanded = String::new();
+        expanded
+            .try_reserve_exact(width)
+            .map_err(|_| TextFlowError::ArithmeticOverflow)?;
+        expanded.extend(std::iter::repeat_n(' ', width));
+        token.display_width = width;
+        token.safe_text = expanded;
+    }
+    Ok(())
+}
+
+fn place_row(
+    tokens: &mut [TextFlowToken],
+    indices: &[usize],
+    tab_stop: usize,
+    rows: &mut Vec<TextFlowRow>,
+) -> Result<(), TextFlowError> {
+    let row = rows.len();
+    let mut column = 0;
+    let mut text = String::new();
+    let mut runs = Vec::with_capacity(indices.len());
+    for index in indices {
+        let width = token_width_at(&mut tokens[*index], column, tab_stop)?;
+        tokens[*index].placement = match (&tokens[*index].source, tokens[*index].class, width) {
+            (TextFlowSource::Synthetic, _, _) => TextFlowPlacement::Synthetic { row, column },
+            (_, TokenClass::SanitizedControl, _) => {
+                TextFlowPlacement::SanitizedControl { row, column }
+            }
+            (_, _, 0) => TextFlowPlacement::ZeroWidth { row, column },
+            _ => TextFlowPlacement::Positioned { row, column },
+        };
+        text.push_str(&tokens[*index].safe_text);
+        runs.push(TextFlowRun {
+            token_index: *index,
+            row,
+            column,
+            width,
+            text: tokens[*index].safe_text.clone(),
+            style: tokens[*index].style.clone(),
+        });
+        column = column
+            .checked_add(width)
+            .ok_or(TextFlowError::ArithmeticOverflow)?;
+    }
+    rows.push(TextFlowRow {
+        index: row,
+        width: column,
+        text,
+        runs,
+    });
+    Ok(())
+}
+
+fn validate_source_coverage(
+    source: &str,
+    tokens: &[TextFlowToken],
+    grapheme_ranges: &[Range<usize>],
+) -> Result<(), TextFlowError> {
+    let mut covered = 0;
+    let mut source_index = 0;
+    for token in tokens {
+        let TextFlowSource::Source { range, .. } = &token.source else {
+            continue;
+        };
+        if grapheme_ranges.get(source_index) != Some(range) {
+            return Err(TextFlowError::FinalizedRangeNotGraphemeBoundary {
+                range: range.clone(),
+            });
+        }
+        if range.start != covered {
+            return Err(TextFlowError::IncompleteSourceCoverage {
+                expected: source.len(),
+                covered,
+            });
+        }
+        source_index += 1;
+        covered = range.end;
+    }
+    if covered != source.len() || source_index != grapheme_ranges.len() {
+        return Err(TextFlowError::IncompleteSourceCoverage {
+            expected: source.len(),
+            covered,
+        });
+    }
+    Ok(())
+}
+
+fn build_position_map(tokens: &[TextFlowToken]) -> Vec<TextFlowPositionMapEntry> {
+    tokens
+        .iter()
+        .enumerate()
+        .map(|(token_index, token)| TextFlowPositionMapEntry {
+            token_index,
+            placement: token.placement.clone(),
+            source: token.source.clone(),
+        })
+        .collect()
+}
+
+/// Compatibility wrapper retained for PR #84 callers.
+pub(crate) fn flow_text(text: &str, max_width: usize, wrap: TextWrap) -> TextFlow {
+    let input = TextFlowInput::plain(text, TextFlowSourceKind::Exact, Style::new());
+    TextFlow::try_build(&input, &TextFlowOptions::new(max_width, wrap))
+        .unwrap_or_else(|error| panic!("canonical text flow failed: {error}"))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn rows(text: &str, width: usize, wrap: TextWrap) -> Vec<String> {
-        flow_text(text, width, wrap).rows().to_vec()
-    }
-
-    #[test]
-    fn wrapped_text_keeps_every_word() {
-        assert_eq!(
-            rows("aaaa bbbb cccc dddd", 10, TextWrap::Wrap),
-            vec!["aaaa bbbb", "cccc dddd"]
-        );
-    }
-
-    #[test]
-    fn measure_and_render_agree_on_row_count() {
-        let flow = flow_text("aaaa bbbb cccc dddd", 10, TextWrap::Wrap);
-        assert_eq!(flow.row_count(), flow.rows().len());
-        assert_eq!(flow.row_count(), 2);
-    }
-
-    #[test]
-    fn word_longer_than_row_is_broken_not_dropped() {
-        assert_eq!(
-            rows("abcdefghijkl", 6, TextWrap::Wrap),
-            vec!["abcdef", "ghijkl"]
-        );
-    }
-
-    #[test]
-    fn hard_breaks_split_rows_and_crlf_counts_once() {
-        assert_eq!(
-            rows("a\r\nb\nc\rd", 10, TextWrap::Wrap),
-            vec!["a", "b", "c", "d"]
-        );
-    }
-
-    #[test]
-    fn consecutive_hard_breaks_keep_the_blank_row() {
-        assert_eq!(rows("a\n\nb", 10, TextWrap::Wrap), vec!["a", "", "b"]);
-    }
-
-    #[test]
-    fn trailing_whitespace_survives() {
-        // Fixed-width padding relies on this; dropping it silently changes
-        // rendered output.
-        assert_eq!(rows("ab ", 10, TextWrap::Wrap), vec!["ab "]);
-        assert_eq!(rows("a  ", 10, TextWrap::Wrap), vec!["a  "]);
-    }
-
-    #[test]
-    fn trailing_break_does_not_add_a_final_row() {
-        assert_eq!(rows("a\nb\n", 10, TextWrap::Wrap), vec!["a", "b"]);
-    }
-
-    #[test]
-    fn empty_text_is_one_empty_row() {
-        assert_eq!(rows("", 10, TextWrap::Wrap), vec![""]);
-        assert_eq!(flow_text("", 10, TextWrap::Wrap).row_count(), 1);
-    }
-
-    #[test]
-    fn zero_width_keeps_row_count_but_places_no_cells() {
-        let flow = flow_text("a\nb", 0, TextWrap::Wrap);
-        assert_eq!(flow.row_count(), 2);
-        assert_eq!(flow.max_row_width(), 0);
-    }
-
-    #[test]
-    fn wide_graphemes_are_never_split_across_rows() {
-        // Each CJK ideograph is two cells, so three fit in a six-cell row.
-        assert_eq!(rows("你好世界", 6, TextWrap::Wrap), vec!["你好世", "界"]);
-    }
-
-    #[test]
-    fn a_wide_grapheme_straddling_the_edge_is_not_half_written() {
-        // Width 5 cannot hold a third two-cell grapheme.
-        let flow = flow_text("你好世", 5, TextWrap::Wrap);
-        assert!(flow.rows().iter().all(|row| row_width(row) <= 5));
-        assert_eq!(flow.rows().concat(), "你好世");
-    }
-
-    #[test]
-    fn truncate_keeps_one_row_per_logical_line() {
-        assert_eq!(
-            rows("aaaa bbbb cccc", 6, TextWrap::Truncate),
-            vec!["aaaa b"]
-        );
-        assert_eq!(rows("ab\ncd", 6, TextWrap::Truncate), vec!["ab", "cd"]);
-    }
-
-    #[test]
-    fn rows_exceed_the_limit_only_for_a_single_oversized_grapheme() {
-        // A two-cell grapheme has nowhere to go at width 1. Splitting it would
-        // emit half a character and dropping it would lose content, so it keeps
-        // its own row and the renderer clips at the terminal edge.
-        for text in ["aaaa bbbb cccc dddd", "abcdefghijkl", "你好世界 hello"] {
-            for width in 1..=12 {
-                let flow = flow_text(text, width, TextWrap::Wrap);
-                for row in flow.rows() {
-                    if row_width(row) <= width {
-                        continue;
-                    }
-                    assert_eq!(
-                        row.graphemes(true).count(),
-                        1,
-                        "text {text:?} at width {width} overflowed with a multi-grapheme row {row:?}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn wrapping_preserves_all_non_whitespace_content() {
-        let text = "the quick brown fox jumps over the lazy dog";
-        for width in 3..=20 {
-            let flow = flow_text(text, width, TextWrap::Wrap);
-            let flowed: String = flow.rows().concat().split_whitespace().collect();
-            let original: String = text.split_whitespace().collect();
-            assert_eq!(flowed, original, "content lost at width {width}");
-        }
-    }
-}
+mod tests;

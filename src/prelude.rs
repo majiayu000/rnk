@@ -52,6 +52,25 @@ pub use crate::components::{Box, Box as LayoutBox, Spacer, Static, Transform};
 // Display Components - Text & Content
 // =============================================================================
 
+pub use crate::components::chat::message_list::{
+    BottomFollowState, MessageAnchor, MessageList, MessageListEntry, MessageListMutation,
+    MessageListObservation, MessageListState, MessageRows, RowOffset, ViewportRows,
+    VisibleMessageRange, VisibleMessageSlice,
+};
+pub use crate::components::chat::{
+    AffectedMessage, AffectedMessageDisposition, AppendTextUpdate, ApplyOutcome, BlockId,
+    BlockUpdate, ChatMessage, ChatMessageMetadata, ChatRole, CodeContent, ConversationError,
+    ConversationEvent, ConversationGuard, ConversationIdentityHistory, ConversationRevision,
+    ConversationState, ConversationStateSnapshot, ConversationUpdate, DecimalValue, DiffContent,
+    EditMessageUpdate, ErrorContent, ErrorSource, FailUpdate, FailureCause, GuardedUpdate,
+    InsertBlockUpdate, LegacyRoleConversionError, LinkContent, MessageAuthor, MessageBlock,
+    MessageBlockEntry, MessageId, MessageMutationGuard, MessageRevision, MessageStatus,
+    MessageTimestamp, ProcessedEventRecord, PushUpdate, QuoteContent, ReplaceBlockUpdate,
+    ResendUpdate, RetentionHistory, RetentionProof, SnapshotProof, TerminalAttachmentSummary,
+    ThinkingContent, ThinkingId, ThinkingIdentityHistory, ThinkingStatus, ToolArgument,
+    ToolCallContent, ToolCallId, ToolCallStatus, ToolResultContent, ToolResultLocation,
+    ToolResultSlot, ToolResultStatus, TypedField, TypedValue, UpdateId,
+};
 pub use crate::components::{
     Cursor, CursorShape, CursorState, CursorStyle, Gradient, Hyperlink, HyperlinkBuilder, Line,
     Message, MessageRole, Newline, Span, Text, ThinkingBlock, ToolCall, set_hyperlinks_supported,
@@ -137,11 +156,17 @@ pub use crate::renderer::{
     // Types
     AppBuilder,
     AppOptions,
+    CheckedRenderError,
     IntoPrintable,
+    LayoutRenderError,
     ModeSwitch,
     Printable,
     RenderHandle,
     RenderOptions,
+    TextCoordinateError,
+    TextProjectionError,
+    TextRenderError,
+    TransactionalFrameError,
     // Alt screen control
     enter_alt_screen,
     exit_alt_screen,
@@ -162,6 +187,15 @@ pub use crate::renderer::{
     render_to_string_with_options,
     // Cross-thread APIs
     request_render,
+    try_render_element_checked,
+    try_render_element_tree_checked,
+    try_render_to_string,
+    try_render_to_string_auto,
+    try_render_to_string_checked,
+    try_render_to_string_no_trim,
+    try_render_to_string_raw,
+    try_render_to_string_with_options,
+    try_render_to_string_with_tab_stop,
 };
 
 // =============================================================================

@@ -7,9 +7,10 @@ use std::collections::HashMap;
 use unicode_width::UnicodeWidthChar;
 
 use crate::core::{Element, ElementId};
-use crate::layout::{Layout, LayoutEngine};
-use crate::renderer::Output;
-use crate::renderer::tree_renderer::render_element_tree;
+use crate::layout::{
+    FullRebuildError, Layout, LayoutEngine, RebuildFailure, TransactionalLayoutError,
+};
+use crate::renderer::TextRenderError;
 
 /// Test renderer configuration
 #[derive(Debug, Clone)]
@@ -41,23 +42,34 @@ impl TestRenderer {
 
     /// Render element and return plain text (no ANSI codes)
     pub fn render_to_plain(&self, element: &Element) -> String {
-        let ansi = self.render_to_ansi(element);
-        strip_ansi_codes(&ansi)
+        self.try_render_to_plain(element)
+            .unwrap_or_else(|error| panic!("test text render failed: {error}"))
+    }
+
+    pub fn try_render_to_plain(&self, element: &Element) -> Result<String, TextRenderError> {
+        match self.try_render_to_plain_checked(element) {
+            Ok(output) => Ok(output),
+            Err(crate::renderer::CheckedRenderError::Text(source)) => Err(source),
+            Err(other) => {
+                panic!("legacy test renderer cannot represent checked error: {other}")
+            }
+        }
     }
 
     /// Render element and return string with ANSI codes
     pub fn render_to_ansi(&self, element: &Element) -> String {
-        let engine = self.compute_layout(element);
+        self.try_render_to_ansi(element)
+            .unwrap_or_else(|error| panic!("test text render failed: {error}"))
+    }
 
-        let mut output = Output::new(self.width, self.height);
-        let clip_depth_before = output.clip_depth();
-        render_element_tree(element, &engine, &mut output, 0.0, 0.0);
-        assert_eq!(
-            output.clip_depth(),
-            clip_depth_before,
-            "test renderer left an unbalanced clip stack"
-        );
-        output.render()
+    pub fn try_render_to_ansi(&self, element: &Element) -> Result<String, TextRenderError> {
+        match self.try_render_to_ansi_checked(element) {
+            Ok(output) => Ok(output),
+            Err(crate::renderer::CheckedRenderError::Text(source)) => Err(source),
+            Err(other) => {
+                panic!("legacy test renderer cannot represent checked error: {other}")
+            }
+        }
     }
 
     /// Get computed layouts for all elements
@@ -72,9 +84,25 @@ impl TestRenderer {
 
     /// Compute layout for an element tree
     fn compute_layout(&self, element: &Element) -> LayoutEngine {
+        self.try_compute_layout(element)
+            .unwrap_or_else(|error| panic!("test text layout failed: {error}"))
+    }
+
+    fn try_compute_layout(&self, element: &Element) -> Result<LayoutEngine, TextRenderError> {
         let mut engine = LayoutEngine::new();
-        engine.compute(element, self.width, self.height);
-        engine
+        match engine.prepare_element_incremental(element, None, self.width, self.height) {
+            Ok(prepared) => {
+                prepared.commit(&mut engine);
+                Ok(engine)
+            }
+            Err(TransactionalLayoutError::InitialBuild(FullRebuildError {
+                source: RebuildFailure::TextFlow(source),
+                ..
+            })) => Err(TextRenderError::flow(element.id, source)),
+            Err(other) => {
+                panic!("legacy test layout cannot represent checked error: {other}")
+            }
+        }
     }
 
     /// Validate layout constraints

@@ -81,8 +81,8 @@ release discipline.
 `rnk` should learn these practices from WarpUI and Warp:
 
 - Treat public positioning as part of the product surface.
-- Keep issue readiness explicit with labels such as `ready-to-spec` and
-  `ready-to-implement`.
+- Require a maintainer to explicitly confirm when an issue enters the
+  specification or implementation stage.
 - Prefer component contracts that document state, events, disabled/read-only
   behavior, and test anchors.
 - Keep release automation observable and fail-fast.

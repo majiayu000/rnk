@@ -8,6 +8,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use super::Style;
+use crate::reconciler::SiblingIdentity;
 
 /// Stable node identifier that doesn't change on clone
 ///
@@ -24,12 +25,16 @@ pub struct NodeKey {
 }
 
 impl NodeKey {
-    /// Create a new NodeKey with a user-provided key
-    pub fn with_key(key: &(impl Hash + ?Sized), type_id: TypeId, index: usize) -> Self {
+    pub(crate) fn compatibility_token(key: &(impl Hash + ?Sized)) -> u64 {
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Create a new NodeKey with a user-provided key
+    pub fn with_key(key: &(impl Hash + ?Sized), type_id: TypeId, index: usize) -> Self {
         Self {
-            user_key: Some(hasher.finish()),
+            user_key: Some(Self::compatibility_token(key)),
             type_id,
             index,
         }
@@ -53,17 +58,30 @@ impl NodeKey {
         }
     }
 
-    /// Check if this key matches another for reconciliation
+    /// This key's cross-frame identity among its siblings.
     ///
-    /// Keys match if:
-    /// - Both have user keys and they're equal, OR
-    /// - Neither has user key and type_id + index match
-    pub fn matches(&self, other: &NodeKey) -> bool {
-        match (self.user_key, other.user_key) {
-            (Some(a), Some(b)) => a == b && self.type_id == other.type_id,
-            (None, None) => self.type_id == other.type_id && self.index == other.index,
-            _ => false,
+    /// `index` records where the node sits right now, which is not the same
+    /// question as which node it is. A keyed node stays itself when it moves,
+    /// so its identity omits position; an unkeyed node is only ever identified
+    /// by position. Reconciliation must use this rather than the derived
+    /// fieldwise `Eq`, which would make a moved keyed node look like a
+    /// different node.
+    pub fn identity(&self) -> SiblingIdentity {
+        match self.user_key {
+            Some(user_key) => SiblingIdentity::Keyed {
+                user_key,
+                type_id: self.type_id,
+            },
+            None => SiblingIdentity::Positional {
+                type_id: self.type_id,
+                index: self.index,
+            },
         }
+    }
+
+    /// Check if this key matches another for reconciliation
+    pub fn matches(&self, other: &NodeKey) -> bool {
+        self.identity() == other.identity()
     }
 }
 
@@ -144,7 +162,17 @@ impl Props {
 
     /// Check if props have changed (for shouldComponentUpdate)
     pub fn has_changed(&self, other: &Props) -> bool {
-        self != other
+        !self.semantically_eq(other)
+    }
+
+    pub(crate) fn semantically_eq(&self, other: &Self) -> bool {
+        self.key == other.key && self.semantically_eq_ignoring_key(other)
+    }
+
+    pub(crate) fn semantically_eq_ignoring_key(&self, other: &Self) -> bool {
+        self.scroll_offset_x == other.scroll_offset_x
+            && self.scroll_offset_y == other.scroll_offset_y
+            && self.style.semantically_eq(&other.style)
     }
 }
 
@@ -409,6 +437,10 @@ mod tests {
 
         let props3 = Props::new().key("different");
         assert!(props1.has_changed(&props3));
+
+        let mut nan_props = Props::new();
+        nan_props.style.flex_grow = f32::NAN;
+        assert!(!nan_props.has_changed(&nan_props.clone()));
     }
 
     #[test]
@@ -418,6 +450,10 @@ mod tests {
         // Different instances have different keys by default
         // but same content
         assert_eq!(node1.node_type, node2.node_type);
+
+        let mut nan_node = VNode::box_node();
+        nan_node.props.style.flex_grow = f32::NAN;
+        assert_eq!(nan_node, nan_node.clone());
     }
 
     #[test]

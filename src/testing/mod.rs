@@ -20,6 +20,7 @@
 //! ```
 
 mod assertions;
+mod checked_renderer;
 mod generators;
 mod golden;
 mod harness;

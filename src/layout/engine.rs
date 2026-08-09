@@ -1,9 +1,88 @@
 //! Layout engine using Taffy
 
-use crate::core::{Dimension, Element, ElementId, ElementType, NodeKey, Props, VNode, VNodeType};
-use crate::reconciler::{Patch, diff};
-use std::collections::HashMap;
-use taffy::{AvailableSpace, NodeId, TaffyTree};
+use crate::core::{Dimension, Element, ElementId, ElementType, NodeKey, Style, VNode};
+use crate::layout::{TextFlow, TextFlowError};
+use crate::reconciler::{ScopedNodeIdentity, plan_initial_tree};
+use std::{collections::HashMap, sync::Arc};
+use taffy::{NodeId, TaffyTree};
+
+#[derive(Clone)]
+struct CowTaffy(Arc<TaffyTree<NodeContext>>);
+
+impl CowTaffy {
+    fn new() -> Self {
+        Self(Arc::new(TaffyTree::new()))
+    }
+
+    fn clear(&mut self) {
+        self.0 = Arc::new(TaffyTree::new());
+    }
+
+    fn remove(&mut self, node: NodeId) -> taffy::TaffyResult<NodeId> {
+        let tree = Arc::make_mut(&mut self.0);
+        tree.set_node_context(node, None)?;
+        tree.remove(node)
+    }
+
+    #[cfg(test)]
+    fn shares_storage(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::ops::Deref for CowTaffy {
+    type Target = TaffyTree<NodeContext>;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+impl std::ops::DerefMut for CowTaffy {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.0)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Shared<T>(Arc<T>);
+
+impl<T> Shared<T> {
+    fn new(value: T) -> Self {
+        Self(Arc::new(value))
+    }
+
+    #[cfg(test)]
+    fn shares_storage(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl<T: Default> Default for Shared<T> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
+impl<T> std::ops::Deref for Shared<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+impl<T: Clone> std::ops::DerefMut for Shared<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.0)
+    }
+}
+
+impl<T> From<T> for Shared<T> {
+    fn from(value: T) -> Self {
+        Self::new(value)
+    }
+}
 
 /// Computed layout for an element
 #[derive(Debug, Clone, Copy, Default)]
@@ -23,43 +102,83 @@ pub struct IncrementalLayoutOutcome {
     pub patch_count: usize,
     /// Whether incremental path failed and full rebuild was used.
     pub fallback_full_rebuild: bool,
+    /// Why the patch batch was rejected, when one was.
+    ///
+    /// A fallback rebuild produces the right layout either way, so without
+    /// this the rejection is invisible and a persistent patching fault looks
+    /// like normal operation.
+    pub patch_error: Option<PatchError>,
 }
 
 /// Layout engine that computes element positions
 pub struct LayoutEngine {
-    taffy: TaffyTree<NodeContext>,
+    taffy: CowTaffy,
     node_map: HashMap<ElementId, NodeId>,
     element_keys: HashMap<ElementId, NodeKey>,
-    /// Map from NodeKey to Taffy NodeId (for VNode-based layout)
-    vnode_map: HashMap<NodeKey, NodeId>,
+    element_scopes: HashMap<ElementId, ScopedNodeIdentity>,
+    /// Correctness index. Public sibling-local identities are compatibility
+    /// projections only and never address this map directly.
+    vnode_map: Shared<HashMap<ScopedNodeIdentity, NodeId>>,
+    vnode_legacy_keys: Shared<HashMap<ScopedNodeIdentity, NodeKey>>,
     /// Root node ID for incremental updates
     root_node: Option<NodeId>,
     /// Last computed width
     last_width: u16,
     /// Last computed height
     last_height: u16,
+    flow_cache: FlowCache,
+    text_flow_policy: TextFlowPolicy,
+    current_text_flows: HashMap<ElementId, Arc<TextFlow>>,
+    current_vnode_flows: Shared<HashMap<ScopedNodeIdentity, Arc<TextFlow>>>,
+    committed_vnode: Shared<Option<VNode>>,
+    commit_epoch: Arc<()>,
 }
 
 impl LayoutEngine {
     pub fn new() -> Self {
         Self {
-            taffy: TaffyTree::new(),
+            taffy: CowTaffy::new(),
             node_map: HashMap::new(),
             element_keys: HashMap::new(),
-            vnode_map: HashMap::new(),
+            element_scopes: HashMap::new(),
+            vnode_map: Shared::default(),
+            vnode_legacy_keys: Shared::default(),
             root_node: None,
             last_width: 0,
             last_height: 0,
+            flow_cache: FlowCache::default(),
+            text_flow_policy: TextFlowPolicy::default(),
+            current_text_flows: HashMap::new(),
+            current_vnode_flows: Shared::default(),
+            committed_vnode: Shared::default(),
+            commit_epoch: Arc::new(()),
         }
+    }
+
+    fn rotate_commit_epoch(&mut self) {
+        self.commit_epoch = Arc::new(());
     }
 
     /// Build layout tree from element tree
     pub fn build_tree(&mut self, element: &Element) -> Option<NodeId> {
+        let mut candidate = self.staged_clone();
+        let root = candidate.build_tree_in_place(element)?;
+        candidate.rotate_commit_epoch();
+        *self = candidate;
+        Some(root)
+    }
+
+    fn build_tree_in_place(&mut self, element: &Element) -> Option<NodeId> {
         self.taffy.clear();
         self.node_map.clear();
         self.element_keys.clear();
+        self.element_scopes.clear();
         self.vnode_map.clear();
+        self.vnode_legacy_keys.clear();
         self.root_node = None;
+        self.current_text_flows.clear();
+        self.current_vnode_flows.clear();
+        self.committed_vnode = Shared::default();
         self.build_node(element)
     }
 
@@ -69,8 +188,7 @@ impl LayoutEngine {
             return None;
         }
 
-        let mut taffy_style = element.style.to_taffy();
-        allow_text_to_shrink(&mut taffy_style, element.is_text(), element.style.min_width);
+        let taffy_style = normalized_taffy_style(&element.style, element.is_text());
 
         // Build children first
         let child_nodes: Vec<NodeId> = element
@@ -79,7 +197,7 @@ impl LayoutEngine {
             .filter_map(|child| self.build_node(child))
             .collect();
 
-        let context = NodeContext::new(element.text_content.clone(), element.style.text_wrap);
+        let context = NodeContext::new(input_from_element(element), &self.text_flow_policy);
 
         // Create node with measure function for text
         let node_id = if element.is_text() {
@@ -100,28 +218,64 @@ impl LayoutEngine {
         Some(node_id)
     }
 
-    /// Compute layout for the tree
+    /// Compute layout for the tree.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the target has no layout root or layout computation fails.
     pub fn compute(&mut self, root: &Element, width: u16, height: u16) {
-        if let Some(root_node) = self.build_tree(root) {
-            self.root_node = Some(root_node);
-            self.last_width = width;
-            self.last_height = height;
-            let _ = self.taffy.compute_layout_with_measure(
-                root_node,
-                taffy::Size {
-                    width: AvailableSpace::Definite(width as f32),
-                    height: AvailableSpace::Definite(height as f32),
-                },
-                |known_dimensions, available_space, _node_id, node_context, _style| {
-                    measure_text_node(known_dimensions, available_space, node_context)
-                },
-            );
-        }
+        self.try_compute(root, width, height)
+            .unwrap_or_else(|error| panic!("text flow layout failed: {error}"));
+    }
+
+    /// Tries to compute layout for the tree while preserving text-flow errors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when text-flow measurement or layout fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the legacy error type cannot represent an invalid layout root.
+    pub fn try_compute(
+        &mut self,
+        root: &Element,
+        width: u16,
+        height: u16,
+    ) -> Result<(), TextFlowError> {
+        self.try_compute_interruptible(root, width, height, || false)
+    }
+
+    pub(crate) fn try_compute_interruptible(
+        &mut self,
+        root: &Element,
+        width: u16,
+        height: u16,
+        mut interrupted: impl FnMut() -> bool,
+    ) -> Result<(), TextFlowError> {
+        let mut candidate = self.staged_clone();
+        let root_node = candidate.build_tree_in_place(root).unwrap_or_else(|| {
+            panic!("legacy layout computation cannot represent an invalid layout root")
+        });
+        candidate.root_node = Some(root_node);
+        candidate.last_width = width;
+        candidate.last_height = height;
+        candidate.run_layout_and_publish(&mut interrupted)?;
+        candidate.rotate_commit_epoch();
+        *self = candidate;
+        Ok(())
     }
 
     /// Compute layout from an `Element` tree using reconciler diff/patch when possible.
     ///
     /// Returns the current frame VNode snapshot plus incremental execution metadata.
+    ///
+    /// # Panics
+    ///
+    /// Panics on any final layout failure, including identity, text-flow,
+    /// invalid-target, transaction, or recovery failure. Use
+    /// [`try_compute_element_incremental_transactional`](Self::try_compute_element_incremental_transactional)
+    /// when every failure must remain recoverable.
     pub fn compute_element_incremental(
         &mut self,
         root: &Element,
@@ -129,401 +283,217 @@ impl LayoutEngine {
         width: u16,
         height: u16,
     ) -> (VNode, IncrementalLayoutOutcome) {
-        let mut element_key_map = HashMap::new();
-        let current_vnode = self
-            .element_to_vnode(root, "root", 0, &mut element_key_map)
-            .unwrap_or_else(VNode::root);
+        self.try_compute_element_incremental(root, previous_vnode, width, height)
+            .unwrap_or_else(|error| panic!("incremental text flow layout failed: {error}"))
+    }
 
-        self.last_width = width;
-        self.last_height = height;
-
-        let mut outcome = IncrementalLayoutOutcome::default();
-
-        let can_use_incremental = previous_vnode.is_some() && self.has_tree();
-        if can_use_incremental {
-            let prev = previous_vnode.expect("checked is_some");
-            let patches = diff(prev, &current_vnode);
-            outcome.patch_count = patches.len();
-            outcome.used_reconciler = true;
-
-            if patches.is_empty() {
-                self.recompute_layout();
-                self.sync_element_node_map(&element_key_map);
-                return (current_vnode, outcome);
-            }
-
-            if self.apply_patches(&patches) {
-                self.sync_element_node_map(&element_key_map);
-                return (current_vnode, outcome);
+    /// Legacy adapter that checks text flow but panics on identity failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TextFlowError`] when text layout fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics when identity planning fails or the generalized transaction
+    /// boundary produces a failure that [`TextFlowError`] cannot represent,
+    /// including invalid-target and non-text-flow recovery failures. Use
+    /// [`try_compute_element_incremental_transactional`](Self::try_compute_element_incremental_transactional)
+    /// to handle every failure explicitly.
+    pub fn try_compute_element_incremental(
+        &mut self,
+        root: &Element,
+        previous_vnode: Option<&VNode>,
+        width: u16,
+        height: u16,
+    ) -> Result<(VNode, IncrementalLayoutOutcome), TextFlowError> {
+        match self.try_compute_element_incremental_checked(root, previous_vnode, width, height) {
+            Ok(result) => Ok(result),
+            Err(IncrementalLayoutError::TextFlow(source)) => Err(source),
+            Err(IncrementalLayoutError::Identity(source)) => {
+                panic!("incremental identity planning failed: {source}")
             }
         }
+    }
 
-        // Fallback path: no previous tree or incremental update failed.
-        self.compute_vnode(&current_vnode, width, height);
-        self.sync_element_node_map(&element_key_map);
-        outcome.fallback_full_rebuild = can_use_incremental;
-        (current_vnode, outcome)
+    /// Checked incremental layout boundary.
+    ///
+    /// Identity/metadata validation and committed-tree preflight happen before
+    /// the engine is cloned or any GH60 patch fallback can run.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IncrementalLayoutError`] for invalid identity metadata, a
+    /// caller snapshot that differs from the committed tree, or text-flow
+    /// failure. The engine remains unchanged.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the generalized transaction boundary produces a failure that
+    /// [`IncrementalLayoutError`] cannot represent, including invalid-target,
+    /// non-text-flow initial-build, transaction, or recovery failures. Use
+    /// [`try_compute_element_incremental_transactional`](Self::try_compute_element_incremental_transactional)
+    /// to handle every failure explicitly.
+    pub fn try_compute_element_incremental_checked(
+        &mut self,
+        root: &Element,
+        previous_vnode: Option<&VNode>,
+        width: u16,
+        height: u16,
+    ) -> Result<(VNode, IncrementalLayoutOutcome), IncrementalLayoutError> {
+        match self.try_compute_element_incremental_transactional(
+            root,
+            previous_vnode,
+            width,
+            height,
+        ) {
+            Ok((vnode, report)) => {
+                let outcome = match report {
+                    CheckedIncrementalLayoutReport::InitialFullBuild => {
+                        IncrementalLayoutOutcome::default()
+                    }
+                    CheckedIncrementalLayoutReport::NoChange => IncrementalLayoutOutcome {
+                        used_reconciler: true,
+                        ..IncrementalLayoutOutcome::default()
+                    },
+                    CheckedIncrementalLayoutReport::Incremental { patch_count } => {
+                        IncrementalLayoutOutcome {
+                            used_reconciler: true,
+                            patch_count,
+                            ..IncrementalLayoutOutcome::default()
+                        }
+                    }
+                    CheckedIncrementalLayoutReport::RecomputedViewport => {
+                        IncrementalLayoutOutcome {
+                            used_reconciler: true,
+                            ..IncrementalLayoutOutcome::default()
+                        }
+                    }
+                    CheckedIncrementalLayoutReport::RecoveredFullRebuild {
+                        patch_count,
+                        incremental_failure,
+                    } => IncrementalLayoutOutcome {
+                        used_reconciler: true,
+                        patch_count,
+                        fallback_full_rebuild: true,
+                        patch_error: Some(incremental_failure.legacy()),
+                    },
+                };
+                Ok((vnode, outcome))
+            }
+            Err(TransactionalLayoutError::Upstream(source)) => Err(source),
+            Err(TransactionalLayoutError::InitialBuild(FullRebuildError {
+                source: RebuildFailure::TextFlow(source),
+                ..
+            })) => Err(source.into()),
+            Err(TransactionalLayoutError::RecoveryFailed {
+                incremental,
+                rebuild,
+            }) => match (incremental.source.as_ref(), &rebuild.source) {
+                (PatchTransactionCause::TextFlow(source), RebuildFailure::TextFlow(_)) => {
+                    Err(source.clone().into())
+                }
+                _ => panic!(
+                    "transactional incremental layout failed: candidate {incremental}; \
+                         rebuild {rebuild}"
+                ),
+            },
+            Err(error) => panic!("transactional incremental layout failed: {error}"),
+        }
     }
 
     // ==================== VNode-based Layout ====================
 
     /// Build layout tree from VNode tree
     pub fn build_vnode_tree(&mut self, vnode: &VNode) -> Option<NodeId> {
-        self.taffy.clear();
-        self.node_map.clear();
-        self.element_keys.clear();
-        self.vnode_map.clear();
-        self.root_node = self.build_vnode(vnode);
+        let mut candidate = self.staged_clone();
+        let root = candidate.build_vnode_tree_in_place(vnode)?;
+        candidate.rotate_commit_epoch();
+        *self = candidate;
+        Some(root)
+    }
+
+    fn build_vnode_tree_in_place(&mut self, vnode: &VNode) -> Option<NodeId> {
+        let plan = plan_initial_tree(vnode)
+            .unwrap_or_else(|error| panic!("VNode identity validation failed: {error}"));
+        self.reset_scoped_vnode_tree();
+        self.apply_reconcile_plan(&plan)
+            .unwrap_or_else(|error| panic!("VNode tree build failed: {error}"));
+        self.committed_vnode = Shared::new(Some(vnode.clone()));
         self.root_node
-    }
-
-    fn build_vnode(&mut self, vnode: &VNode) -> Option<NodeId> {
-        let mut taffy_style = vnode.props.to_taffy();
-        allow_text_to_shrink(
-            &mut taffy_style,
-            vnode.is_text(),
-            vnode.props.style.min_width,
-        );
-
-        // Build children first
-        let child_nodes: Vec<NodeId> = vnode
-            .children
-            .iter()
-            .filter_map(|child| self.build_vnode(child))
-            .collect();
-
-        let text_content = match &vnode.node_type {
-            VNodeType::Text(s) => Some(s.clone()),
-            _ => None,
-        };
-
-        let context = NodeContext::new(text_content, vnode.props.style.text_wrap);
-
-        // Create node
-        let node_id = if vnode.is_text() {
-            self.taffy
-                .new_leaf_with_context(taffy_style, context)
-                .ok()?
-        } else {
-            let node = self
-                .taffy
-                .new_with_children(taffy_style, &child_nodes)
-                .ok()?;
-            let _ = self.taffy.set_node_context(node, Some(context));
-            node
-        };
-
-        self.vnode_map.insert(vnode.key, node_id);
-        Some(node_id)
-    }
-
-    fn element_to_vnode(
-        &self,
-        element: &Element,
-        parent_path: &str,
-        index: usize,
-        element_key_map: &mut HashMap<ElementId, NodeKey>,
-    ) -> Option<VNode> {
-        if element.element_type == ElementType::VirtualText {
-            return None;
-        }
-
-        let node_type = match element.element_type {
-            ElementType::Root => VNodeType::Root,
-            ElementType::Box => VNodeType::Box,
-            ElementType::Text => VNodeType::Text(element.text_content.clone().unwrap_or_default()),
-            ElementType::VirtualText => return None,
-        };
-
-        let mut props = Props::with_style(element.style.clone());
-        props.key = element.key.clone();
-        props.scroll_offset_x = element.scroll_offset_x;
-        props.scroll_offset_y = element.scroll_offset_y;
-
-        let mut vnode = VNode::new(node_type, props).with_index(index);
-
-        if element.element_type == ElementType::Root {
-            vnode.key = NodeKey::root();
-        } else {
-            let type_id = vnode.node_type.type_id();
-            let synthetic_key = if let Some(user_key) = &element.key {
-                format!("{parent_path}#key:{user_key}")
-            } else {
-                format!("{parent_path}@idx:{index}:type:{:?}", element.element_type)
-            };
-            vnode.key = NodeKey::with_key(&synthetic_key, type_id, index);
-        }
-
-        element_key_map.insert(element.id, vnode.key);
-
-        let node_path = format!("{parent_path}/{index}");
-        vnode.children = element
-            .children
-            .iter()
-            .enumerate()
-            .filter_map(|(child_idx, child)| {
-                self.element_to_vnode(child, &node_path, child_idx, element_key_map)
-            })
-            .collect();
-
-        Some(vnode)
-    }
-
-    fn sync_element_node_map(&mut self, element_key_map: &HashMap<ElementId, NodeKey>) {
-        self.node_map.clear();
-        self.element_keys.clear();
-        for (element_id, key) in element_key_map {
-            self.element_keys.insert(*element_id, *key);
-            if let Some(node_id) = self.vnode_map.get(key).copied() {
-                self.node_map.insert(*element_id, node_id);
-            }
-        }
     }
 
     /// Compute layout for VNode tree
     pub fn compute_vnode(&mut self, root: &VNode, width: u16, height: u16) {
-        if let Some(root_node) = self.build_vnode_tree(root) {
-            self.last_width = width;
-            self.last_height = height;
-            let _ = self.taffy.compute_layout_with_measure(
-                root_node,
-                taffy::Size {
-                    width: AvailableSpace::Definite(width as f32),
-                    height: AvailableSpace::Definite(height as f32),
-                },
-                |known_dimensions, available_space, _node_id, node_context, _style| {
-                    measure_text_node(known_dimensions, available_space, node_context)
-                },
-            );
-        }
+        self.try_compute_vnode(root, width, height)
+            .unwrap_or_else(|error| panic!("VNode text flow layout failed: {error}"));
     }
 
-    /// Apply patches incrementally instead of rebuilding the entire tree
+    pub fn try_compute_vnode(
+        &mut self,
+        root: &VNode,
+        width: u16,
+        height: u16,
+    ) -> Result<(), TextFlowError> {
+        let mut candidate = self.staged_clone();
+        if candidate.build_vnode_tree_in_place(root).is_some() {
+            candidate.last_width = width;
+            candidate.last_height = height;
+            candidate.run_layout_and_publish(&mut || false)?;
+        }
+        candidate.rotate_commit_epoch();
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Get computed layout for an element.
     ///
-    /// This is the key optimization for the reconciliation system.
-    /// Instead of rebuilding the entire Taffy tree on every render,
-    /// we apply only the changes detected by the diff algorithm.
-    pub fn apply_patches(&mut self, patches: &[Patch]) -> bool {
-        if patches.is_empty() {
-            return false;
-        }
-
-        let mut needs_recompute = false;
-
-        for patch in patches {
-            match patch {
-                Patch::Create { node, parent, .. } => {
-                    if self.create_vnode(node, *parent).is_some() {
-                        needs_recompute = true;
-                    }
-                }
-                Patch::Update { key, new_props, .. } => {
-                    if self.update_node_props(*key, new_props) {
-                        needs_recompute = true;
-                    }
-                }
-                Patch::Remove { key } => {
-                    if self.remove_node(*key) {
-                        needs_recompute = true;
-                    }
-                }
-                Patch::Replace { key, node, .. } => {
-                    if self.replace_node(*key, node) {
-                        needs_recompute = true;
-                    }
-                }
-                Patch::Reorder { parent, moves } => {
-                    if self.reorder_children(*parent, moves) {
-                        needs_recompute = true;
-                    }
-                }
-            }
-        }
-
-        // Recompute layout if any changes were made
-        if needs_recompute {
-            self.recompute_layout();
-        }
-
-        needs_recompute
-    }
-
-    /// Create a new node and add it to a parent
-    fn create_vnode(&mut self, vnode: &VNode, parent_key: NodeKey) -> Option<NodeId> {
-        // Get parent node ID first (copy it to avoid borrow issues)
-        let parent_node = *self.vnode_map.get(&parent_key)?;
-
-        // Build the new subtree
-        let new_node_id = self.build_vnode(vnode)?;
-
-        // Add to parent
-        let _ = self.taffy.add_child(parent_node, new_node_id);
-
-        Some(new_node_id)
-    }
-
-    /// Update a node's props/style
-    fn update_node_props(&mut self, key: NodeKey, props: &Props) -> bool {
-        if let Some(&node_id) = self.vnode_map.get(&key) {
-            let new_style = props.to_taffy();
-            if self.taffy.set_style(node_id, new_style).is_ok() {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Remove a node from the tree
-    fn remove_node(&mut self, key: NodeKey) -> bool {
-        if let Some(node_id) = self.vnode_map.remove(&key) {
-            // Remove from Taffy tree
-            if self.taffy.remove(node_id).is_ok() {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Replace a node with a new one
-    fn replace_node(&mut self, old_key: NodeKey, new_node: &VNode) -> bool {
-        if let Some(&old_node_id) = self.vnode_map.get(&old_key) {
-            // Get parent before removing
-            if let Some(parent_id) = self.taffy.parent(old_node_id) {
-                // Find the index of the old node in parent's children
-                let children: Vec<_> = self.taffy.children(parent_id).unwrap_or_default();
-                let index = children.iter().position(|&id| id == old_node_id);
-
-                // Remove old node
-                let _ = self.taffy.remove(old_node_id);
-                self.vnode_map.remove(&old_key);
-
-                // Build new subtree
-                if let Some(new_node_id) = self.build_vnode(new_node) {
-                    // Insert at same position if possible
-                    if let Some(idx) = index {
-                        let _ = self
-                            .taffy
-                            .insert_child_at_index(parent_id, idx, new_node_id);
-                    } else {
-                        let _ = self.taffy.add_child(parent_id, new_node_id);
-                    }
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    /// Reorder children of a node
-    fn reorder_children(&mut self, parent_key: NodeKey, moves: &[(usize, usize)]) -> bool {
-        if moves.is_empty() {
-            return false;
-        }
-
-        if let Some(&parent_id) = self.vnode_map.get(&parent_key) {
-            let old_children: Vec<_> = self.taffy.children(parent_id).unwrap_or_default();
-
-            // Build the new order by placing each old child at its target position.
-            // `moves` contains (from, to) pairs where `from` is the index in the
-            // old array and `to` is the desired index in the new array.
-            let mut new_children = old_children.clone();
-            for &(from, to) in moves {
-                if from < old_children.len() && to < new_children.len() {
-                    new_children[to] = old_children[from];
-                }
-            }
-
-            // Set new children order
-            if self.taffy.set_children(parent_id, &new_children).is_ok() {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Recompute layout after patches
-    fn recompute_layout(&mut self) {
-        if let Some(root_node) = self.root_node {
-            let _ = self.taffy.compute_layout_with_measure(
-                root_node,
-                taffy::Size {
-                    width: AvailableSpace::Definite(self.last_width as f32),
-                    height: AvailableSpace::Definite(self.last_height as f32),
-                },
-                |known_dimensions, available_space, _node_id, node_context, _style| {
-                    measure_text_node(known_dimensions, available_space, node_context)
-                },
-            );
-        }
-    }
-
-    /// Get computed layout for an element
+    /// # Panics
+    ///
+    /// Panics when a committed element alias references an invalid backend
+    /// node or a node without computed layout.
     pub fn get_layout(&self, element_id: ElementId) -> Option<Layout> {
-        let node_id = self.node_map.get(&element_id)?;
-        let layout = self.taffy.layout(*node_id).ok()?;
-
-        Some(Layout {
-            x: layout.location.x,
-            y: layout.location.y,
-            width: layout.size.width,
-            height: layout.size.height,
-        })
-    }
-
-    /// Get computed layout for a VNode by key
-    pub fn get_vnode_layout(&self, key: NodeKey) -> Option<Layout> {
-        let node_id = self.vnode_map.get(&key)?;
-        let layout = self.taffy.layout(*node_id).ok()?;
-
-        Some(Layout {
-            x: layout.location.x,
-            y: layout.location.y,
-            width: layout.size.width,
-            height: layout.size.height,
-        })
+        self.try_get_required_layout(element_id)
+            .unwrap_or_else(|error| panic!("committed element layout lookup failed: {error}"))
     }
 
     /// Get all layouts
     pub fn get_all_layouts(&self) -> HashMap<ElementId, Layout> {
-        self.node_map
-            .iter()
-            .filter_map(|(element_id, node_id)| {
-                let layout = self.taffy.layout(*node_id).ok()?;
-                Some((
-                    *element_id,
-                    Layout {
-                        x: layout.location.x,
-                        y: layout.location.y,
-                        width: layout.size.width,
-                        height: layout.size.height,
-                    },
-                ))
+        self.try_get_layout_snapshot()
+            .unwrap_or_else(|error| {
+                panic!("target-exact element layout snapshot failed: {error:?}")
             })
-            .collect()
-    }
-
-    /// Get all VNode layouts
-    pub fn get_all_vnode_layouts(&self) -> HashMap<NodeKey, Layout> {
-        self.vnode_map
-            .iter()
-            .filter_map(|(key, node_id)| {
-                let layout = self.taffy.layout(*node_id).ok()?;
-                Some((
-                    *key,
-                    Layout {
-                        x: layout.location.x,
-                        y: layout.location.y,
-                        width: layout.size.width,
-                        height: layout.size.height,
-                    },
-                ))
-            })
-            .collect()
+            .element
     }
 
     /// Get the stable node key associated with an element in the current frame.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn node_key_for_element(&self, element_id: ElementId) -> Option<NodeKey> {
         self.element_keys.get(&element_id).copied()
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn current_text_flow(&self, element_id: ElementId) -> Option<Arc<TextFlow>> {
+        self.current_text_flows.get(&element_id).cloned()
+    }
+
+    #[allow(dead_code)] // Consumed by the renderer integration lane.
+    pub(crate) fn current_vnode_text_flow(&self, key: NodeKey) -> Option<Arc<TextFlow>> {
+        let identity = self
+            .resolve_legacy_scope(key)
+            .unwrap_or_else(|error| panic!("VNode text-flow lookup failed: {error}"))?;
+        self.current_vnode_flows.get(&identity).cloned()
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn set_text_flow_policy(
+        &mut self,
+        tab_stop: usize,
+        ellipsis: impl Into<String>,
+        revision: u16,
+    ) {
+        self.text_flow_policy.set(tab_stop, ellipsis, revision);
+        self.rotate_commit_epoch();
     }
 
     /// Check if the engine has a valid tree
@@ -541,6 +511,12 @@ impl Default for LayoutEngine {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn normalized_taffy_style(style: &Style, is_text: bool) -> ::taffy::Style {
+    let mut taffy_style = style.to_taffy();
+    allow_text_to_shrink(&mut taffy_style, is_text, style.min_width);
+    taffy_style
 }
 
 /// Let a text node shrink below its own content width.
@@ -563,6 +539,133 @@ fn allow_text_to_shrink(style: &mut ::taffy::Style, is_text: bool, explicit_min_
 #[cfg(test)]
 mod tests;
 
-mod text_measure;
+#[cfg(test)]
+mod frame_flow_tests {
+    use super::*;
+    use crate::core::FlexDirection;
+    use crate::reconciler::Patch;
 
-use text_measure::{NodeContext, measure_text_node};
+    fn many_distinct_text_nodes() -> (Element, Vec<ElementId>) {
+        let mut root = Element::box_element();
+        root.style.width = Dimension::Points(16.0);
+        root.style.flex_direction = FlexDirection::Column;
+        let mut ids = Vec::new();
+        for index in 0..=FlowCache::MAX_ENTRIES {
+            let child = Element::text(format!("node-{index}")).with_key(format!("node-{index}"));
+            ids.push(child.id);
+            root.add_child(child);
+        }
+        (root, ids)
+    }
+
+    #[test]
+    fn active_frame_flows_remain_identical_beyond_history_limit() {
+        let (root, ids) = many_distinct_text_nodes();
+        let mut engine = LayoutEngine::new();
+        let (current_vnode, _) = engine
+            .try_compute_element_incremental(&root, None, 80, 200)
+            .unwrap();
+
+        let mut published = Vec::new();
+        for element_id in &ids {
+            let key = engine.node_key_for_element(*element_id).unwrap();
+            let node_id = *engine.node_map.get(element_id).unwrap();
+            let context = engine.taffy.get_node_context(node_id).unwrap();
+            let measured_flow = context.last_measured_flow().unwrap();
+            let active_flow = context.active_flow().unwrap();
+            let element_flow = engine.current_text_flow(*element_id).unwrap();
+            let vnode_flow = engine.current_vnode_text_flow(key).unwrap();
+            assert!(Arc::ptr_eq(measured_flow, active_flow));
+            assert!(Arc::ptr_eq(active_flow, &element_flow));
+            assert!(Arc::ptr_eq(&element_flow, &vnode_flow));
+            published.push((*element_id, key, node_id, element_flow));
+        }
+        assert_eq!(published.len(), FlowCache::MAX_ENTRIES + 1);
+        assert_eq!(engine.flow_cache.len(), FlowCache::MAX_ENTRIES);
+
+        engine.set_text_flow_policy(0, "…", 1);
+        let failure = engine.try_compute_element_incremental(&root, Some(&current_vnode), 80, 200);
+        assert!(matches!(failure, Err(TextFlowError::InvalidTabStop)));
+        for (element_id, key, node_id, before) in published {
+            let context = engine.taffy.get_node_context(node_id).unwrap();
+            assert!(Arc::ptr_eq(context.active_flow().unwrap(), &before));
+            assert!(Arc::ptr_eq(context.last_measured_flow().unwrap(), &before));
+            assert!(Arc::ptr_eq(
+                &engine.current_text_flow(element_id).unwrap(),
+                &before
+            ));
+            assert!(Arc::ptr_eq(
+                &engine.current_vnode_text_flow(key).unwrap(),
+                &before
+            ));
+        }
+    }
+
+    #[test]
+    fn removing_nested_vnode_purges_descendant_flow() {
+        let leaf = VNode::text("gone").with_key("leaf");
+        let leaf_key = leaf.key;
+        let branch = VNode::box_node().with_key("branch").child(leaf);
+        let branch_key = branch.key;
+        let sibling = VNode::text("keep").with_key("sibling");
+        let root = VNode::box_node().children([branch, sibling]);
+        let sibling_key = root.children[1].key;
+        let mut engine = LayoutEngine::new();
+        engine.compute_vnode(&root, 20, 4);
+        let sibling_flow = engine.current_vnode_text_flow(sibling_key).unwrap();
+
+        assert!(engine.apply_patches(&[Patch::remove(branch_key)]));
+        assert!(engine.get_vnode_layout(branch_key).is_none());
+        assert!(engine.get_vnode_layout(leaf_key).is_none());
+        assert!(engine.current_vnode_text_flow(leaf_key).is_none());
+        assert!(Arc::ptr_eq(
+            &sibling_flow,
+            &engine.current_vnode_text_flow(sibling_key).unwrap()
+        ));
+    }
+}
+
+mod context_sync;
+pub(crate) use context_sync::{CheckedLayoutSnapshot, LayoutSnapshotError};
+mod identity_index;
+mod incremental;
+mod incremental_order;
+mod invariant_error;
+pub use invariant_error::IncrementalInvariantError;
+mod patch_error;
+pub use patch_error::{
+    CheckedIncrementalLayoutReport, DirectPatchApplyReport, DirectPatchError,
+    DirectPatchPreflightCause, DirectPatchPreflightError, FullRebuildError, IncrementalLayoutError,
+    IncrementalPatchKind, InvalidLayoutTargetError, LayoutLookupError, PatchError, PatchFailure,
+    PatchKind, PatchStage, PatchTransactionCause, PatchTransactionError, RebuildFailure,
+    RebuildStage, TransactionalLayoutError,
+};
+mod patching;
+mod postcondition;
+#[cfg(test)]
+mod test_fingerprint;
+mod text_flow_bridge;
+mod transaction;
+pub use transaction::PreparedLayoutFrame;
+pub(crate) use transaction::{BoundPreparedLayoutFrame, PreparedLayoutCommitError};
+
+#[cfg(test)]
+impl LayoutEngine {
+    pub(crate) fn inject_test_compute_fault() {
+        context_sync::set_layout_compute_fault();
+    }
+
+    pub(crate) fn inject_test_postcondition_fault() {
+        postcondition::set_postcondition_fault(postcondition::PostconditionFault::MissingRoot);
+    }
+
+    pub(crate) fn inject_test_required_layout_fault(&mut self, element_id: ElementId) {
+        let node_id = self.node_map[&element_id];
+        self.taffy
+            .set_node_context(node_id, None)
+            .expect("fixture node exists in the Taffy backend");
+        self.rotate_commit_epoch();
+    }
+}
+
+use text_flow_bridge::{FlowCache, NodeContext, TextFlowPolicy, input_from_element};
