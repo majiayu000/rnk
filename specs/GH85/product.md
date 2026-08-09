@@ -21,7 +21,7 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
 
 - 固定能代表聊天布局变化的 workload/strategy matrix 与最小 operation 数。
 - 生成绑定 exact base/head、环境 fingerprint、work、allocation 与 timing 的版本化 artifact。
-- 让base-owned required workflow先完成route classification/authorization，再执行确定性正确性
+- 让base-owned workflow先完成route classification，再执行确定性正确性
   检查，并以抗噪声paired batches判断timing/allocation回归。
 - 只信任 PR base tree 中可验证祖先来源的 canonical baseline，并对不可比较证据 fail closed。
 - 为首次引入benchmark的PR提供non-authoritative candidate bootstrap，并把canonical baseline promotion
@@ -61,19 +61,29 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    合入后重新authority measurement/promotion。canonical只记录历史source/
    authority provenance，current-run artifact只记录当前exact base/head/run refs，二者不得要求
    相等或复用字段。每个artifact必须记录闭合role、内容/config/corpus hash、paired order与实际
-   executable hash/source；setup/tree construction不得计入operation，full/incremental必须从
+   executable hash/source以及pinned sandbox image/policy digest；authority/current compare必须使用
+   同一sandbox contract。setup/tree construction不得计入operation，full/incremental必须从
    等价起点测量。
-4. **B-004** protected default-ref拥有的单一workflow必须同时监听`pull_request_target`
-   opened/synchronize/reopened/ready_for_review与`pull_request_review` submitted/edited/dismissed，
-   从两种payload规范化PR/base/head，并以per-PR `cancel-in-progress` concurrency及每job timeout保证
-   只有newest exact head/run/attempt可满足required check。它在同一workflow/run的四个fresh
-   GitHub-hosted VM job中隔离执行：trusted `phase_zero`只读base/default policy并产生route/checker
-   artifact；零权限`untrusted_collect`以scrubbed environment从validated public owner/repo/exact SHA
-   unauthenticated git fetch/build/run PR code，只上传始终untrusted的raw measurements且永不接收
-   route/checker/auth；`trusted_validate`只执行phase-zero带来的pinned checker、以closed hostile parser
-   验证raw bytes且不执行PR binary；`benchmark_required`只信trusted validation，并在最终summary再次
-   查询current PR/reviews/permission及event head。PR代码不能访问后续trusted VM的filesystem、env或
-   outputs。缺失、重复、digest/identity不匹配、stale head、跨run replay、cancel或timeout均blocked。
+4. **B-004** protected default-ref拥有的单一workflow只监听`pull_request_target`
+   opened/synchronize/reopened/ready_for_review（另有与PR jobs权限隔离的`workflow_dispatch` authority），
+   从payload规范化PR/base/head，并以per-PR `cancel-in-progress` concurrency及每job timeout保证只有
+   newest exact head/run/attempt能更新当前status。workflow job check本身不配置为required；trusted
+   reporter使用base-repository GitHub Actions App installation token，以exact `statuses:write`加必要的
+   `contents:read`/`pull-requests:read`调用Commit Statuses API，在current `HEAD_SHA`先写
+   `gh85/layout-benchmark=pending`，最终fresh重查PR/head后写`success|failure`。status记录context、
+   exact SHA、run/attempt、binding digest及expected App slug/id；ruleset要求latest commit上的该context
+   且source/integration精确匹配expected GitHub Actions App。stale run不得向新head写success；如果
+   GitHub拒绝向same-repo或fork exact head写status，实施blocked，不得退回workflow check或宽松context。
+
+   同一workflow/run使用互不共享host filesystem/process/env的fresh hosted VM：trusted `phase_zero`
+   只读base policy并产生route/checker artifact；零GITHUB_TOKEN权限的`sandbox_collect`由base-owned
+   host unauthenticated fetch exact public refs，并只在固定digest的ephemeral Docker containers内
+   build/run PR-controlled Cargo code；`trusted_validate`只执行phase-zero pinned checker并把raw ZIP
+   bytes经bounded archive preflight后解析，绝不执行PR binary；最终trusted reporter只信validated
+   artifact。hostile container无network、capability、Docker socket、host workspace/Actions runtime/
+   token/env挂载，base/head及每leg输出隔离且退出即销毁；host在容器结束后hash固定输出，再由host-side
+   pinned upload action上传始终untrusted的raw artifact。PR代码不能观察或持久化到trusted jobs。
+   missing/duplicate、archive/digest/identity mismatch、stale head、replay、cancel或timeout均blocked。
    route通过后才执行不依赖wall clock的parity、work-counter与
    allocation-correctness checks。prerequisite category必须严格按
    `{parity, work_counter, allocation_correctness}`各一次执行并绑定闭合`spec_ref`；命令只能在
@@ -106,23 +116,25 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
    `non_benchmark_change -> not_applicable_valid`。benchmark runtime class覆盖`src/**/*.rs`、
    `crates/*/src/**/*.rs`与exact chat bench；build/contract class覆盖root/crate Cargo manifests/lock及
    GH85 checker/workflow/schema/config/corpus/test paths；non-benchmark class闭合覆盖examples、普通
-   tests/golden、其他benches、docs/specs/video、非GH85 `.github` paths与exact standard root metadata。
+   tests/golden、其他benches、docs/specs/video、`.claude/**`、非GH85 `.github` paths、
+   `crates/*/README.md`与包括`DESIGN_ISSUES.md`在内的exact standard root metadata。contract test必须
+   对`git ls-files -z`的每个current tracked path证明精确命中一个class；未知或新增topology仍blocked。
    non-benchmark-only成功但`performance_status=not_available`；runtime加non-benchmark仍compare，
    initial/contract加non-benchmark仍走各自route。canonical promotion raw diff必须精确只有canonical
    path，连docs都不得混入。unknown top-level/path、symlink/submodule、mode/type、rename/copy、path
    collision或跨不兼容class混合一律blocked，直到authorized classifier contract update明确纳入。
 
-   route classification、route authorization与performance必须分开。initial/contract/promotion route
-   只有在base-owned token每次从GitHub REST重新取得当前未dismiss的`APPROVED` review、review
-   `commit_id`等于exact head、body含该route的exact marker、reviewer不是PR author，且API证明reviewer
-   collaborator permission为`maintain|admin`时才`authorization_status=authorized`。每个actor最新
-   decisive review为dismissed/changes-requested、head变化、wrong marker/role/head或caller传入review
-   id均不能授权；final merge authorization仍是独立人工gate。`route_status`、
-   `authorization_status`与`performance_status`均为closed enum；只有normal route同时满足
+   route classification、external authorization与performance必须分开。classifier不查询或解释
+   reviews、markers、reviewer role，也不授予merge权限；initial/contract/promotion仅输出
+   `authorization_status=external_required`，normal/non-benchmark输出`not_required`。required commit
+   status可在受限route的route/artifact均有效且performance unavailable时success，但branch protection
+   必须另行要求approving review并dismiss stale approvals，CONTRIBUTING所要求的maintainer final merge
+   authorization必须绑定同一exact head。benchmark status永远不能授权merge。
+   `route_status`、`authorization_status`与`performance_status`均为closed enum；只有normal route满足
    `route_status=comparison_valid`与`performance_status=passed`时最终decision为
    `comparison_passed`并表示“无回归”。`bootstrap_valid`、
-   `contract_update_valid`、`promotion_valid`、`not_applicable_valid`在route/auth/artifact均有效时可让
-   required check success，但`performance_status=not_available`，不得称performance green；
+   `contract_update_valid`、`promotion_valid`、`not_applicable_valid`在route/artifact均有效时可让
+   required commit status success，但`performance_status=not_available`，不得称performance green；
    regression、needs_rebaseline、blocked均令check失败。contract update合入后必须重新authority
    measurement并走canonical-only promotion。bootstrap CLI必须显式接收
    repo/base/head/run/target/artifact参数，验证exact checkout、objects、ancestry、merge-base与
@@ -156,15 +168,16 @@ benchmark、artifact、required gate 与独立 baseline-promotion 生命周期�
 - [ ] 固定六 scenario、strategy matrix、minimum operations、closed schema、artifact role、
       source/hash/paired-order 字段均由 schema/checker 的正负 fixture 验证，覆盖
       B-001 至 B-003。
-- [ ] required workflow证明双event失效触发、四VM权限/文件系统隔离、newest-head concurrency、
-      timeout、前置确定性门、checkout containment、exact ancestry/merge-base、
+- [ ] base-owned workflow证明PR-target触发、exact-head pending/final status App source、same-repo/fork、
+      sandbox/validator/reporter权限与文件系统隔离、newest-head concurrency、timeout、前置确定性门、
+      container/archive containment、exact ancestry/merge-base、
       same-runner ABBA、10-sample aggregation、timing 2-of-3与allocation any-batch双阈值，覆盖
       B-004 至 B-006。
 - [ ] self/stale/untrusted/stable-class-mismatch/missing baseline 与同run observation mismatch均
       产生 non-green 结果，volatile canonical observation变化只诊断，
       覆盖 B-007。
 - [ ] 五route互斥；route/auth/performance三种status互不冒充，只有comparison passed表示无回归；
-      topology path classes、同一base-owned run隔离handoff与required check identity闭合；三阶段
+      full-tree topology path classes、同一base-owned run隔离handoff与required status identity闭合；三阶段
       default-ref authority重新测量，所有actions full-SHA pinned，
       promotion CI只读验证immutable handoff，覆盖B-008、B-009。
 

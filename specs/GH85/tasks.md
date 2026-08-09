@@ -42,9 +42,9 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       缺少固定 chat matrix/versioned artifact/trusted-baseline lifecycle，并列出所有
       positive/negative case 名称；dependency wiring、closed/unknown-key schema、roles/hashes、
       closed build provenance、prerequisite category/spec_ref/command/result、allocation
-      fallback-before-benchmark、four-VM phase-zero/untrusted-collect/trusted-validate/summary handoff、
-      dual-event review invalidation、exact permission/isolation/fork negatives、required-check result matrix、
-      review authorization、topology path classes/canonical-only raw diff、five-route/status separation、
+      fallback-before-benchmark、pending-status/phase-zero/sandbox/validator/final-reporter handoff、
+      exact-head same-repo/fork status source、container/permission/archive negatives、status result matrix、
+      external human authorization、full-tree topology/canonical-only raw diff、five-route/status separation、
       event exact refs、exact-checkout ABBA/pair mismatch、zero denominators、reviewed full-SHA action
       allowlist与three-stage authority/promotion handoff
       都有命名 red fixture；不得修改 test assertion 基础设施 | Verify:
@@ -76,12 +76,15 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
 - [ ] `SP85-T2A` 建立可先合入的trust-root foundation。Owner: `benchmark-trust-root-foundation-lane` |
       Dependencies: SP85-T1与SP85-T7B handoff；两者writer均停止；#61 merged counter seam已按exact
       SHA重新定位 | Done when: checker/schema/config/corpus/toolchain/contract tests与base-owned
-      `.github/workflows/layout-benchmark-authority.yml`形成闭合checkpoint；workflow同时监听规定的
-      `pull_request_target`与`pull_request_review`事件，在同一run的四个fresh hosted VM中按
-      `phase_zero -> untrusted_collect -> trusted_validate -> benchmark_required`建立依赖；per-PR
-      concurrency取消旧run且所有job有timeout。phase zero与summary都通过REST重查current head/review，
-      untrusted collect权限为空、scrubbed env下unauthenticated fetch exact public SHA且拿不到trusted
-      artifacts，trusted validate只执行base checker并以bounded parser处理hostile raw。四种trust-root
+      `.github/workflows/layout-benchmark-authority.yml`形成闭合checkpoint；PR jobs只监听规定的
+      `pull_request_target`事件，并按`status_pending -> phase_zero -> sandbox_collect ->
+      trusted_validate -> status_reporter`建立fresh-VM依赖；per-PR concurrency取消旧run且所有job有
+      timeout。两个reporter以minimal `statuses:write`把exact `gh85/layout-benchmark` pending/final status
+      写到fresh查询的current head并记录expected App slug/id/run/binding；classifier不读reviews。
+      sandbox host权限为空，unauthenticated fetch exact public SHA；PR Cargo/build/binary只在tech固定
+      digest的networkless/read-only/no-capability ephemeral containers执行，base/head/leg输出隔离，host在
+      container结束后hash并上传。trusted validate以actions read通过REST下载raw ZIP bytes，archive
+      preflight通过后才stream-extract/closed-parse且只执行base checker。四种trust-root
       action均使用tech列出的reviewed full SHA，升级只能走contract-update route；authority job实现
       subject -> pinned attest action -> finalize -> immutable upload顺序。Cargo注册的
       `chat_layout` entrypoint在本foundation仅显式返回implementation-unavailable blocked状态，不测量、
@@ -93,8 +96,8 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       reset 语义且先于任何 benchmark；
       `median_ns`由exact 10 observations的checked even median产生，deterministic counters逐sample
       相同；checker从exact base tree取canonical并实现topology-based five-route classifier，promotion
-      raw diff只允许canonical；route classification、
-      REST authorization、performance status独立；只有`comparison_passed`表示无回归；bootstrap
+      raw diff只允许canonical；`git ls-files -z`每个current tracked path精确命中一个class；route、
+      external human authorization、performance status独立；只有`comparison_passed`表示无回归；bootstrap
       显式绑定repo/base/head/run/target/artifact，
       promotion validation只读authority evidence与committed blob；zero denominators、containment、
       ancestry/ref/runner/trust/promotion负例均fail closed | Verify:
@@ -132,19 +135,22 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       `cargo test --test layout_snapshot_benchmark_contract --locked phase_zero_uses_base_owned_checker_and_rejects_untrusted_head_policy -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked phase_zero_rejects_mixed_spec_symlink_mode_and_ambiguous_diffs -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked phase_zero_same_run_handoff_is_exact_and_replay_safe -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked review_events_requery_and_invalidate_stale_head_authorization -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked pr_jobs_have_exact_permissions_and_isolated_fresh_vms -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked untrusted_collect_uses_unauthenticated_fetch_and_scrubbed_environment -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked trusted_validate_rejects_hostile_fork_raw_artifacts_without_executing_head -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked workflow_jobs_have_exact_permissions_and_isolated_fresh_vms -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked sandbox_collect_isolates_pr_code_in_pinned_networkless_containers -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked sandbox_rejects_mutable_image_network_privilege_host_mount_and_output_reuse -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked trusted_validate_preflights_raw_zip_bytes_before_extraction -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked raw_zip_preflight_rejects_bombs_links_traversal_duplicates_crc_and_trailing_data -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked exact_head_commit_status_pending_and_final_are_bound_to_expected_app -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked required_commit_status_attaches_to_latest_same_repo_and_fork_head -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked newest_head_concurrency_replay_and_timeout_are_fail_closed -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked benchmark_required_check_identity_and_outcomes_are_closed -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked route_selection_is_mutually_exclusive_and_only_comparison_passed_is_green -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked safe_docs_route_is_not_applicable_and_mixed_runtime_routes_are_closed -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked repository_path_classes_cover_legitimate_topology_and_block_unknowns -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked all_current_tracked_paths_match_exactly_one_class -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked canonical_promotion_diff_is_exactly_one_path -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked route_authorization_accepts_current_maintainer_approval -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked route_authorization_rejects_revoked_wrong_head_and_wrong_role_reviews -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked route_authorization_and_performance_status_are_independent -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked restricted_routes_require_external_authorization_without_review_interpretation -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked benchmark_status_never_grants_merge_authorization -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked external_authorization_and_performance_status_are_independent -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked authorized_contract_update_is_non_green_and_requires_rebaseline_promotion -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked bootstrap_requires_explicit_repo_refs_and_exact_merge_base -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked implementation_writes_candidate_but_never_canonical_baseline -- --exact`；
@@ -164,32 +170,38 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
     不写 canonical baseline或`.github/workflows/ci.yml`。
   - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009。
   - Handoff: 提交并冻结exact checker/workflow/schema/config/corpus/toolchain/API checkpoint后停止；
-    T3合入并配置required check前T2B不得开始。T2B不得修改任何T2A contract path。
+    T3合入并配置exact required commit status前T2B不得开始。T2B不得修改任何T2A contract path。
 
-- [ ] `SP85-T3` 合入trust-root foundation并配置exact required check。Owner:
+- [ ] `SP85-T3` 合入trust-root foundation并配置exact required status。Owner:
       `benchmark-trust-root-integration-lane` | Dependencies: SP85-T2A signed checkpoint；T2A writer
       已停止；maintainer已明确授权foundation PR与ruleset变更 | Done when: reviewed T2A checkpoint合入
-      protected default ref；GitHub branch protection/ruleset将exact
-      `layout-benchmark-authority / benchmark_required`设为required；fresh API/read-only UI evidence证明
-      check name、default-ref workflow SHA与ruleset绑定准确。`.github/workflows/ci.yml`及八job
+      protected default ref；GitHub branch protection/ruleset将exact commit status context
+      `gh85/layout-benchmark`设为required，并绑定reviewed GitHub Actions App slug/integration id；workflow
+      job check明确不required。fresh API/read-only UI evidence证明context/source、default-ref workflow SHA
+      与ruleset准确。`.github/workflows/ci.yml`及八job
       `ci-gate`保持byte-for-byte不变且独立required；不消费任何跨workflow benchmark artifact。
-      foundation workflow以PR与review两类真实event smoke run证明四个fresh VM隔离、same-run
-      artifact/output identity闭合、untrusted VM无法取得token/trusted artifact且只用unauthenticated
-      exact-SHA fetch、trusted validation不执行head代码；approval submit/edit/dismiss、stale head、
-      concurrent supersession、cancel/replay/mismatch/timeout均令summary failure；
+      foundation workflow以same-repo与fork真实PR smoke run证明pending/final status都附着到latest exact
+      head且creator App/context/run/binding正确；若fork head status被GitHub拒绝则block implementation。
+      smoke还证明sandbox container无network/token/host/Docker socket访问、base/head输出隔离、raw ZIP在
+      extraction前fail-closed preflight，stale head/wrong source/concurrent supersession/cancel/replay/
+      mismatch/timeout均不得写success；
       foundation blocked runner不能输出candidate或performance pass | Verify:
       `cargo test --test layout_snapshot_benchmark_contract --locked phase_zero_same_run_handoff_is_exact_and_replay_safe -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked benchmark_required_check_identity_and_outcomes_are_closed -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked phase_zero_uses_base_owned_checker_and_rejects_untrusted_head_policy -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked review_events_requery_and_invalidate_stale_head_authorization -- --exact`；
-      `cargo test --test layout_snapshot_benchmark_contract --locked pr_jobs_have_exact_permissions_and_isolated_fresh_vms -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked exact_head_commit_status_pending_and_final_are_bound_to_expected_app -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked required_commit_status_attaches_to_latest_same_repo_and_fork_head -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked workflow_jobs_have_exact_permissions_and_isolated_fresh_vms -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked sandbox_collect_isolates_pr_code_in_pinned_networkless_containers -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked sandbox_rejects_mutable_image_network_privilege_host_mount_and_output_reuse -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked trusted_validate_preflights_raw_zip_bytes_before_extraction -- --exact`；
+      `cargo test --test layout_snapshot_benchmark_contract --locked raw_zip_preflight_rejects_bombs_links_traversal_duplicates_crc_and_trailing_data -- --exact`；
       `cargo test --test layout_snapshot_benchmark_contract --locked newest_head_concurrency_replay_and_timeout_are_fail_closed -- --exact`；
       `git diff --exit-code "$FOUNDATION_BASE" "$FOUNDATION_HEAD" -- .github/workflows/ci.yml`；
-      maintainer verifies exact required-check identity via GitHub ruleset/branch-protection API。
+      maintainer verifies exact required-status context/integration identity via GitHub ruleset API。
   - File ownership: 全仓只读；仅maintainer执行foundation merge与external ruleset配置，不修改repo
     files、labels或baseline。
   - Covers: B-004, B-008, B-009。
-  - Handoff: 记录trusted default-ref SHA、workflow/checker digest、required-check ruleset evidence后
+  - Handoff: 记录trusted default-ref SHA、workflow/checker digest、required-status App/context/ruleset evidence后
     停止；T2B必须从该exact SHA新开implementation head，不能复用foundation worktree。
 
 - [ ] `SP85-T2B` 从trusted base实现真实benchmark runner tranche。Owner:
@@ -211,7 +223,7 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
   - File ownership: 从T2A stopped checkpoint串行接管`benches/chat_layout.rs`，并独占spec已先声明的
     该单一implementation path；所有contract paths只读。
   - Covers: B-001, B-002, B-003, B-005, B-006, B-008。
-  - Handoff: 交付exact implementation head与required workflow run；停止全部写入后T4开始。
+  - Handoff: 交付exact implementation head、workflow run与required commit-status evidence；停止全部写入后T4开始。
 
 - [ ] `SP85-T4` 完成 implementation exact-head verification 与人工 handoff。Owner:
       `benchmark-verification-lane` | Dependencies: SP85-T2B、SP85-T3完成且所有writers停止 |
@@ -233,7 +245,8 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
       evidence已记录；default-ref上的
       `.github/workflows/layout-benchmark-authority.yml`是reviewed trusted version | Done when:
       maintainer从protected default ref触发`workflow_dispatch`；workflow在exact merged source的
-      detached checkout fresh测量；`generate-authority-subject`只产生subject+unsigned metadata，
+      detached checkout以同一fixed-digest sandbox image/policy fresh测量，source-controlled Cargo/
+      binary不在token-bearing host执行；`generate-authority-subject`只产生subject+unsigned metadata，
       step id `attest`使用`actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4`，
       `finalize-authority`随后消费exact action
       `bundle-path`/`attestation-id`并输出final envelope；authority job permissions精确为contents
@@ -255,12 +268,13 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
 
 - [ ] `SP85-T5B` 在独立PR promotion authority-owned canonical bytes。Owner:
       `baseline-promotion-lane` | Dependencies: SP85-T5A authority完成；promotion PR exact head已知，
-      base-owned REST验证exact-head maintainer APPROVED review含
-      `[GH85 route: canonical_only_promotion]` | Done when: promotion PR提交authority
+      branch protection已单独要求approving review/dismiss stale approvals，且maintainer final merge
+      authorization将按CONTRIBUTING绑定exact head；automated classifier不读取review | Done when: promotion PR提交authority
       canonical bytes；base-owned phase zero判定`canonical_only_promotion`；required CI使用
       artifact id查询/download、`gh attestation verify`与trusted checker只读验证artifact
       name/id/digest/run/expiry、subject/repo/workflow/ref/source/event，未调用
-      generator、未创建/覆盖canonical；成功decision精确为`promotion_valid`且不声称无回归 |
+      generator、未创建/覆盖canonical；成功tuple精确为
+      `promotion_valid/external_required/not_available`，commit status可success但不授权merge或声称无回归 |
       Verify:
       `git cat-file -e "${PROMOTION_BASE}^{commit}"`；
       `git cat-file -e "${PROMOTION_HEAD}^{commit}"`；
@@ -302,12 +316,13 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
 ## 并行拆分
 
 - Writable dependency graph：`T7A(read-only) -> T1 -> T7B -> T2A foundation -> T3 trust-root merge
-  + required-check configuration -> fresh trusted base -> T2B runner -> T4 verification
+  + required-status configuration/same-repo+fork smoke -> fresh trusted base -> T2B runner -> T4 verification
   -> implementation merge -> T5A(authority)
   -> T5B(promotion PR) -> promotion merge -> T6`；T4必须等T3 trusted workflow/checker已在base。
 - 后续authorized contract-update PR走`contract_update_bootstrap -> contract_update_valid`，取得绑定
   exact head的独立maintainer authorization并合入后，同样进入`T5A -> T5B -> promotion merge`；
-  `route_status=contract_update_valid`与`performance_status=not_available`，required check可success但
+  `route_status=contract_update_valid`、`authorization_status=external_required`与
+  `performance_status=not_available`，required commit status可success但
   不能声称performance passed。
 - T7A全只读；T1独占contract test；T7B独占dependency manifest；T2A串行接管contract test并
   独占checker/workflow/Cargo/schema/support contract及blocked bench entrypoint。T3全仓只读完成
@@ -328,16 +343,19 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
   五个 counter fields；base-owned inline collector不得接收trusted checker artifact，prerequisite
   commands 必须按闭合 category/spec_ref 精确覆盖
   parity、work-counter、allocation-correctness；allocation 必须先 search merged GH61 的
-  correctness test，缺失时使用已规划 GH85 contract fallback。untrusted collector未按序执行/记录任一
+  correctness test，缺失时使用已规划 GH85 contract fallback。sandbox container未按序执行/记录任一
   command、cwd不是exact checkout root、path absolute/traversal/symlink escape、argv不在closed
   Cargo exact-test allowlist、所选allocation correctness command未先于benchmark或wiring test
   未实际消费任一entry时blocked。
-- workflow contract必须证明双事件规范化后base-owned
-  `phase_zero -> untrusted_collect -> trusted_validate -> benchmark_required`发生在同一run的四个
-  fresh VM；untrusted job权限为空且不能取得trusted artifact/token，trusted validator只运行base
-  checker。artifact/job outputs绑定run/attempt/PR/base/head/diff/policy且required check identity精确；
-  final summary fresh重查head/reviews，只有newest head/run/attempt可success；missing/duplicate/
-  mismatch/cancel/replay/timeout均failure。既有`ci.yml`/八job`ci-gate`独立不变。
+- workflow contract只监听PR-target事件，按
+  `status_pending -> phase_zero -> sandbox_collect -> trusted_validate -> status_reporter`隔离执行；
+  classifier不读reviews，workflow job check不required。sandbox host权限为空，PR代码只在fixed-digest、
+  networkless/read-only/no-capability containers运行且无host/Actions/Docker socket mounts；base/head/leg
+  output隔离。trusted validator以actions read取得raw ZIP bytes并在任何extract前验证archive结构/CRC/
+  quotas/fixed files。artifact/status绑定run/attempt/PR/base/head/diff/policy/App/context；reporter以minimal
+  statuses write fresh重查head，只有expected App向latest exact SHA的`gh85/layout-benchmark`可success；
+  same-repo/fork都须smoke通过，missing/duplicate/wrong-source/mismatch/cancel/replay/timeout均failure。
+  既有`ci.yml`/八job`ci-gate`独立不变。
 - artifact 的 scenario/strategy/minimum operation matrix、closed/unknown-key schema、
   role/source/closed build/config/corpus/content/binary hashes、prerequisite results、
   historical/current refs separation、stable compatibility/volatile observation separation、
@@ -346,8 +364,9 @@ implementation tasks，也不得把 spec 中的拟议 API 当成已存在实现�
   必须完整；timing按2-of-3，allocation任一paired batch双阈值即失败；
   partial/invalid evidence non-green。
 - route在initial、contract-update、canonical-only promotion、normal compare、non-benchmark中
-  精确五选一。route/authorization/performance statuses分离；三种受限route的GitHub review必须由
-  REST fresh验证exact head/marker/reviewer/maintain-or-admin/latest decisive state。只有
+  精确五选一。route/external authorization/performance statuses分离；classifier不读取review，三种
+  受限route只输出`external_required`，required approving review/stale dismissal与CONTRIBUTING final
+  merge authorization由外部GitHub gate绑定exact head，benchmark status不能授权merge。只有
   `comparison_passed -> performance_status=passed`表示无回归；四种valid control route的
   performance为not_available，regression/needs_rebaseline/blocked均check failure。
 - authority严格按generate-subject -> attest action -> finalize -> upload顺序运行；promotion按exact
