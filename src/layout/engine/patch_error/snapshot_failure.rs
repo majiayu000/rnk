@@ -2,7 +2,8 @@
 
 use std::fmt;
 
-use crate::layout::{LayoutSnapshotError, SnapshotAttemptReport, SnapshotBuildError};
+use crate::layout::snapshot::SnapshotBuildFailure;
+use crate::layout::{LayoutSnapshotError, SnapshotAttemptReport};
 
 use super::{
     DirectPatchError, FullRebuildError, IncrementalLayoutError, InvalidLayoutTargetError,
@@ -13,11 +14,11 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveredSnapshotError {
     incremental: Box<PatchTransactionError>,
-    snapshot: Box<SnapshotBuildError>,
+    snapshot: Box<SnapshotBuildFailure>,
 }
 
 impl RecoveredSnapshotError {
-    pub(crate) fn new(incremental: PatchTransactionError, snapshot: SnapshotBuildError) -> Self {
+    pub(crate) fn new(incremental: PatchTransactionError, snapshot: SnapshotBuildFailure) -> Self {
         Self {
             incremental: Box::new(incremental),
             snapshot: Box::new(snapshot),
@@ -78,8 +79,6 @@ pub enum TransactionalLayoutError {
     InvalidTarget(InvalidLayoutTargetError),
     /// Layout succeeded but immutable snapshot construction failed.
     Snapshot(LayoutSnapshotError),
-    /// Layout succeeded but checked construction failed with attempt evidence.
-    SnapshotBuild(SnapshotBuildError),
     /// Recovery layout succeeded but its immutable snapshot failed.
     RecoveredSnapshot(RecoveredSnapshotError),
     /// Incremental commit and its single fresh recovery attempt both failed.
@@ -119,7 +118,6 @@ impl fmt::Display for TransactionalLayoutError {
             Self::InitialBuild(source) => write!(formatter, "initial build failed: {source}"),
             Self::InvalidTarget(source) => source.fmt(formatter),
             Self::Snapshot(source) => write!(formatter, "snapshot failed: {source}"),
-            Self::SnapshotBuild(source) => write!(formatter, "snapshot failed: {source}"),
             Self::RecoveredSnapshot(source) => source.fmt(formatter),
             Self::RecoveryFailed {
                 incremental,
@@ -140,7 +138,6 @@ impl std::error::Error for TransactionalLayoutError {
             Self::InitialBuild(source) => Some(source),
             Self::InvalidTarget(source) => Some(source),
             Self::Snapshot(source) => Some(source),
-            Self::SnapshotBuild(source) => Some(source),
             Self::RecoveredSnapshot(source) => Some(source),
             Self::RecoveryFailed { rebuild, .. } => Some(rebuild.as_ref()),
         }

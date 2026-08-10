@@ -5,7 +5,7 @@
 use std::{error::Error, fmt};
 
 use crate::core::ElementId;
-use crate::layout::TextFlowError;
+use crate::layout::{IncrementalInvariantError, TextFlowError};
 
 use super::{CellRect, FrameRevision, SnapshotIdentity};
 
@@ -266,6 +266,13 @@ pub enum LayoutSnapshotError {
         /// Missing identity.
         identity: SnapshotIdentity,
     },
+    /// The backend rejected an exact required-layout lookup.
+    LayoutLookup {
+        /// Required identity.
+        identity: SnapshotIdentity,
+        /// Preserved GH60 invariant source.
+        source: IncrementalInvariantError,
+    },
     /// A text node had no current semantic TextFlow.
     MissingTextFlowRevision {
         /// Text node identity.
@@ -282,6 +289,13 @@ pub enum LayoutSnapshotError {
     WorkCounters {
         /// Concrete checked-add failure.
         source: SnapshotCounterError,
+    },
+    /// Cache-hit evidence could not be aggregated exactly.
+    CacheEvidenceOverflow,
+    /// A frame-local alias failed exact validation.
+    Alias {
+        /// Preserved alias cause.
+        source: LayoutAliasError,
     },
     /// The target traversal was structurally invalid.
     InvalidTree {
@@ -304,9 +318,12 @@ impl fmt::Display for LayoutSnapshotError {
             Self::MissingIdentity { .. } => "snapshot identity is missing",
             Self::DuplicateIdentity { .. } => "snapshot identity is duplicated",
             Self::MissingLayout { .. } => "snapshot layout is missing",
+            Self::LayoutLookup { .. } => "snapshot layout lookup failed",
             Self::MissingTextFlowRevision { .. } => "snapshot TextFlow revision is missing",
             Self::TextFlowRevision { .. } => "snapshot TextFlow revision failed",
             Self::WorkCounters { .. } => "snapshot work counters failed",
+            Self::CacheEvidenceOverflow => "snapshot cache evidence overflowed",
+            Self::Alias { .. } => "snapshot alias validation failed",
             Self::InvalidTree { .. } => "snapshot tree is invalid",
         })
     }
@@ -318,6 +335,8 @@ impl Error for LayoutSnapshotError {
             Self::InvalidTree { source, .. } => Some(source),
             Self::TextFlowRevision { source, .. } => Some(source),
             Self::WorkCounters { source } => Some(source),
+            Self::LayoutLookup { source, .. } => Some(source),
+            Self::Alias { source } => Some(source),
             _ => None,
         }
     }
@@ -354,7 +373,7 @@ impl SnapshotAttemptReport {
 }
 
 /// Authoritative crate-private builder failure preserving partial work.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SnapshotBuildFailure {
     source: LayoutSnapshotError,
     attempt_report: SnapshotAttemptReport,
@@ -370,6 +389,12 @@ impl SnapshotBuildFailure {
     pub(crate) fn into_parts(self) -> (LayoutSnapshotError, SnapshotAttemptReport) {
         (self.source, self.attempt_report)
     }
+    pub(crate) const fn source_error(&self) -> &LayoutSnapshotError {
+        &self.source
+    }
+    pub(crate) const fn attempt_report(&self) -> &SnapshotAttemptReport {
+        &self.attempt_report
+    }
 }
 
 impl fmt::Display for SnapshotBuildFailure {
@@ -379,55 +404,6 @@ impl fmt::Display for SnapshotBuildFailure {
 }
 
 impl Error for SnapshotBuildFailure {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.source)
-    }
-}
-
-/// Checked snapshot-construction failure with lossless attempt evidence.
-///
-/// Partial builder state remains private. Callers can inspect only the closed
-/// source algebra and the immutable work report captured at first failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SnapshotBuildError {
-    source: LayoutSnapshotError,
-    attempt_report: SnapshotAttemptReport,
-}
-
-impl SnapshotBuildError {
-    pub(crate) fn from_failure(failure: SnapshotBuildFailure) -> Self {
-        let (source, attempt_report) = failure.into_parts();
-        Self {
-            source,
-            attempt_report,
-        }
-    }
-
-    pub(crate) fn from_source(source: LayoutSnapshotError) -> Self {
-        Self {
-            source,
-            attempt_report: SnapshotAttemptReport::new(1, super::SnapshotWorkCounters::zero()),
-        }
-    }
-
-    /// Closed snapshot failure that poisoned the attempt.
-    pub const fn source_error(&self) -> &LayoutSnapshotError {
-        &self.source
-    }
-
-    /// Complete work captured before the first failure.
-    pub const fn attempt_report(&self) -> &SnapshotAttemptReport {
-        &self.attempt_report
-    }
-}
-
-impl fmt::Display for SnapshotBuildError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.source.fmt(formatter)
-    }
-}
-
-impl Error for SnapshotBuildError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.source)
     }

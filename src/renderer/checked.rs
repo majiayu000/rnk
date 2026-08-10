@@ -13,6 +13,34 @@ use crate::layout::{
 
 use super::{DynamicFrameError, Output, TextRenderError, tree_renderer};
 
+pub(crate) fn checked_output_extent(
+    identity: &SnapshotIdentity,
+    axis: crate::layout::Axis,
+    extent: i32,
+    limit: Option<u16>,
+) -> Result<u16, CheckedRenderError> {
+    if extent < 0 {
+        return Err(CheckedRenderError::Snapshot(SnapshotRenderError::Output {
+            identity: identity.clone(),
+            source: CellOutputError::NegativeAfterClip {
+                axis,
+                value: extent,
+            },
+        }));
+    }
+    let clipped = limit.map_or(extent, |value| extent.min(i32::from(value)));
+    u16::try_from(clipped).map_err(|_| {
+        CheckedRenderError::Snapshot(SnapshotRenderError::Output {
+            identity: identity.clone(),
+            source: CellOutputError::ExtentOutOfRange {
+                axis,
+                start: 0,
+                end: clipped,
+            },
+        })
+    })
+}
+
 /// Failure while rendering from an immutable layout snapshot.
 #[derive(Debug)]
 pub enum SnapshotRenderError {
@@ -114,13 +142,16 @@ impl Error for RecoveredSnapshotRenderError {
     }
 }
 
-/// A required layout was absent or its compatibility projection was invalid.
+/// A legacy compatibility projection was absent or invalid.
+///
+/// Snapshot-backed correctness entrypoints fail closed before this legacy
+/// projection when no authoritative frame has been published:
 ///
 /// ```
-/// use rnk::{core::Element, layout::LayoutEngine, renderer::{CheckedRenderError, Output, try_render_element_checked}};
+/// use rnk::{core::Element, layout::{LayoutEngine, LayoutSnapshotError}, renderer::{CheckedRenderError, Output, SnapshotRenderError, try_render_element_checked}};
 /// let element = Element::text("missing");
 /// let error = try_render_element_checked(&element, &LayoutEngine::new(), &mut Output::new(20, 4), 0.0, 0.0).expect_err("layout is required");
-/// assert!(matches!(error, CheckedRenderError::Layout(_)));
+/// assert!(matches!(error, CheckedRenderError::Snapshot(SnapshotRenderError::Snapshot { source: LayoutSnapshotError::MissingIdentity { .. } })));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LayoutRenderError {

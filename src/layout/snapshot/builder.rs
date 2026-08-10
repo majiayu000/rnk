@@ -94,12 +94,12 @@ impl LayoutSnapshotBuilder {
                 identity: input.identity,
             }));
         }
-        if self.aliases.contains_key(&input.element_id) {
-            return Err(self.poison(LayoutSnapshotError::InvalidTree {
-                identity: Some(input.identity.clone()),
-                source: SnapshotInvariantError::SnapshotTargetMismatch {
-                    identity: input.identity,
-                    reason: SnapshotTargetMismatchReason::MissingAlias,
+        if let Some(first_index) = self.aliases.get(&input.element_id).copied() {
+            return Err(self.poison(LayoutSnapshotError::Alias {
+                source: super::LayoutAliasError::DuplicateFrameAlias {
+                    element_id: input.element_id,
+                    first_identity: self.nodes[first_index.0].identity.clone(),
+                    second_identity: input.identity,
                 },
             }));
         }

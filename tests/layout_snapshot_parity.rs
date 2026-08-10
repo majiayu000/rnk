@@ -98,6 +98,20 @@ fn cold_and_cached_text_flow_revisions_are_semantically_equal() {
         cached_frame.snapshot(),
         &full_snapshot(&fresh_aliases, 14, 4)
     );
+
+    let mut fractional = Element::text("fractional width rebind").with_key("fractional");
+    fractional.style.position = rnk::core::Position::Absolute;
+    fractional.style.left = Some(0.75);
+    fractional.style.width = Dimension::Points(5.75);
+    let fractional_cold = LayoutEngine::new()
+        .prepare_element_incremental(&fractional, None, 20, 4)
+        .unwrap();
+    let node = fractional_cold.snapshot().root();
+    assert_eq!(
+        node.text_flow().unwrap().max_width(),
+        node.content_bounds().width() as usize
+    );
+    assert!(fractional_cold.snapshot_report().cache_hits() > 0);
 }
 
 #[test]
@@ -231,6 +245,15 @@ fn recovered_frame_uses_only_recovered_candidate_snapshot() {
         prepared.snapshot_report().strategy(),
         SnapshotBuildStrategy::RecoveredFull
     );
+    assert_eq!(
+        prepared.snapshot_report().work_counters().rebuild_count(),
+        1
+    );
+    assert_eq!(
+        prepared.snapshot_report().work_counters().mutated_nodes(),
+        2
+    );
+    assert!(prepared.snapshot_report().cache_hits() > 0);
     assert_eq!(prepared.snapshot(), &full_snapshot(&target, 0, 0));
 }
 

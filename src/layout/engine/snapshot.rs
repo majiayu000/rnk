@@ -1,6 +1,6 @@
 //! Target-exact snapshot adapter over a validated GH59 plan and GH60 candidate.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::{
     core::{Display, Element, ElementId, ElementType, Overflow, VNode},
@@ -17,22 +17,28 @@ use crate::{
         },
     },
     reconciler::{
-        PlannedNode, PlannedNodeAction, ReconcilePlan, ScopedIdentityArena, ScopedNodeIdentity,
-        semantically_equal_vnode_in,
+        ReconcilePlan, ScopedIdentityArena, ScopedNodeIdentity, semantically_equal_vnode_in,
     },
 };
 
-use super::{LayoutEngine, incremental::ElementVNodeSnapshot};
+use super::{LayoutEngine, incremental::ElementVNodeSnapshot, text_flow_bridge::flow_for_width};
 
 #[derive(Debug, Clone)]
 pub(super) struct SnapshotProducerEvidence {
     pub(super) strategy: SnapshotBuildStrategy,
     pub(super) patch_count: usize,
     pub(super) recovery_cause: Option<PatchTransactionError>,
-    pub(super) pre_snapshot_mutations: usize,
-    pub(super) mutate_each_visited_node: bool,
+    pub(super) pre_snapshot_mutations: [Option<u64>; 2],
     pub(super) text_flow_recomputes: [Option<u64>; 2],
+    pub(super) cache_hits: [Option<u64>; 2],
     pub(super) rebuild_count: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SnapshotAttemptEvidence {
+    pub(super) mutations: Option<u64>,
+    pub(super) text_flow_recomputes: Option<u64>,
+    pub(super) cache_hits: Option<u64>,
 }
 
 pub(super) struct SnapshotTargetPlan<'a> {
@@ -42,30 +48,35 @@ pub(super) struct SnapshotTargetPlan<'a> {
 }
 
 impl SnapshotProducerEvidence {
-    pub(super) fn initial(text_flow_recomputes: Option<u64>) -> Self {
+    pub(super) fn initial(
+        mutations: Option<u64>,
+        text_flow_recomputes: Option<u64>,
+        cache_hits: Option<u64>,
+    ) -> Self {
         Self {
             strategy: SnapshotBuildStrategy::InitialFull,
             patch_count: 0,
             recovery_cause: None,
-            pre_snapshot_mutations: 0,
-            mutate_each_visited_node: true,
+            pre_snapshot_mutations: [mutations, Some(0)],
             text_flow_recomputes: [text_flow_recomputes, Some(0)],
+            cache_hits: [cache_hits, Some(0)],
             rebuild_count: 0,
         }
     }
 
     pub(super) fn incremental(
         patch_count: usize,
-        mutations: usize,
+        mutations: Option<u64>,
         text_flow_recomputes: Option<u64>,
+        cache_hits: Option<u64>,
     ) -> Self {
         Self {
             strategy: SnapshotBuildStrategy::Incremental,
             patch_count,
             recovery_cause: None,
-            pre_snapshot_mutations: mutations,
-            mutate_each_visited_node: false,
+            pre_snapshot_mutations: [mutations, Some(0)],
             text_flow_recomputes: [text_flow_recomputes, Some(0)],
+            cache_hits: [cache_hits, Some(0)],
             rebuild_count: 0,
         }
     }
@@ -73,17 +84,16 @@ impl SnapshotProducerEvidence {
     pub(super) fn recovered(
         patch_count: usize,
         recovery_cause: PatchTransactionError,
-        failed_mutations: usize,
-        failed_text_flow_recomputes: Option<u64>,
-        recovered_text_flow_recomputes: Option<u64>,
+        failed: SnapshotAttemptEvidence,
+        recovered: SnapshotAttemptEvidence,
     ) -> Self {
         Self {
             strategy: SnapshotBuildStrategy::RecoveredFull,
             patch_count,
             recovery_cause: Some(recovery_cause),
-            pre_snapshot_mutations: failed_mutations,
-            mutate_each_visited_node: true,
-            text_flow_recomputes: [failed_text_flow_recomputes, recovered_text_flow_recomputes],
+            pre_snapshot_mutations: [failed.mutations, recovered.mutations],
+            text_flow_recomputes: [failed.text_flow_recomputes, recovered.text_flow_recomputes],
+            cache_hits: [failed.cache_hits, recovered.cache_hits],
             rebuild_count: 1,
         }
     }
@@ -134,21 +144,36 @@ impl<'a> SnapshotTargetPlan<'a> {
             .map(SnapshotIdentity::scoped)
             .ne(expected.iter())
         {
-            let child = actual
+            let mismatch = actual
                 .iter()
+                .map(SnapshotIdentity::scoped)
                 .zip(expected)
-                .find_map(|(actual, expected)| {
-                    (actual.scoped() != expected).then(|| actual.clone())
-                })
-                .or_else(|| actual.last().cloned())
-                .unwrap_or_else(|| identity.clone());
+                .position(|(actual, expected)| actual != expected)
+                .unwrap_or_else(|| actual.len().min(expected.len()));
+            let (child, actual_index, expected_index) = if let Some(child) = actual.get(mismatch) {
+                let expected_index = expected
+                    .iter()
+                    .position(|candidate| candidate == child.scoped())
+                    .unwrap_or(expected.len());
+                (child.clone(), mismatch, expected_index)
+            } else {
+                let expected_identity = expected
+                    .get(mismatch)
+                    .cloned()
+                    .unwrap_or(ScopedNodeIdentity::Root);
+                (
+                    SnapshotIdentity::from_scoped(expected_identity),
+                    actual.len(),
+                    mismatch,
+                )
+            };
             return Err(LayoutSnapshotError::InvalidTree {
                 identity: Some(child.clone()),
                 source: SnapshotInvariantError::ChildOrderMismatch {
                     parent: identity,
                     child,
-                    expected_index: expected.len(),
-                    actual_index: actual.len(),
+                    expected_index,
+                    actual_index,
                 },
             });
         }
@@ -247,6 +272,7 @@ impl LayoutEngine {
             commit_epoch: self.commit_epoch.clone(),
             published_snapshot: self.published_snapshot.clone(),
             published_snapshot_report: self.published_snapshot_report.clone(),
+            successful_mutations: self.successful_mutations,
         }
     }
 
@@ -272,37 +298,52 @@ impl LayoutEngine {
     }
 
     pub(super) fn try_build_snapshot_for(
-        &self,
-        target_plan: &SnapshotTargetPlan<'_>,
+        &mut self,
+        target: &Element,
+        element_snapshot: &ElementVNodeSnapshot,
+        reconcile_plan: &ReconcilePlan,
         evidence: &SnapshotProducerEvidence,
     ) -> Result<(PreparedSnapshotFrame, SnapshotBuildReport), SnapshotBuildFailure> {
         let mut builder = LayoutSnapshotBuilder::new(self.last_width, self.last_height, 1);
         add_pre_snapshot_work(&mut builder, evidence)?;
+        let target_plan = SnapshotTargetPlan::new(target, element_snapshot, reconcile_plan)
+            .map_err(|source| builder.fail(source))?;
+        let cache_hits_before = self.flow_cache.successful_hits();
         let viewport_clip = AxisClip::from_rect(builder.viewport());
         self.snapshot_subtree(
             target_plan.target,
-            target_plan,
-            evidence,
+            &target_plan,
             None,
             0.0,
             0.0,
             viewport_clip,
             &mut builder,
         )?;
+        let snapshot_cache_hits = self
+            .flow_cache
+            .successful_hits()
+            .checked_sub(cache_hits_before)
+            .ok_or_else(|| builder.fail(LayoutSnapshotError::CacheEvidenceOverflow))?;
+        let cache_hits = evidence
+            .cache_hits
+            .into_iter()
+            .try_fold(snapshot_cache_hits, |total, hits| {
+                total.checked_add(hits?).or(None)
+            })
+            .ok_or_else(|| builder.fail(LayoutSnapshotError::CacheEvidenceOverflow))?;
         builder.finish(
             evidence.strategy,
             evidence.patch_count,
             evidence.recovery_cause.clone(),
-            0,
+            cache_hits,
         )
     }
 
     #[allow(clippy::too_many_arguments)]
     fn snapshot_subtree(
-        &self,
+        &mut self,
         element: &Element,
         target_plan: &SnapshotTargetPlan<'_>,
-        evidence: &SnapshotProducerEvidence,
         parent: Option<SnapshotNodeIndex>,
         parent_child_x: f64,
         parent_child_y: f64,
@@ -322,17 +363,14 @@ impl LayoutEngine {
                 element_id: element.id,
             }));
         }
-        builder.add_work(SnapshotWorkCounters::from_fields(
-            1,
-            u64::from(evidence.mutate_each_visited_node),
-            0,
-            0,
-            0,
-        ))?;
+        builder.add_work(SnapshotWorkCounters::from_fields(1, 0, 0, 0, 0))?;
         match self.try_get_required_layout(element.id) {
             Ok(Some(_)) => {}
-            Ok(None) | Err(_) => {
+            Ok(None) => {
                 return Err(builder.fail(LayoutSnapshotError::MissingLayout { identity }));
+            }
+            Err(source) => {
+                return Err(builder.fail(LayoutSnapshotError::LayoutLookup { identity, source }));
             }
         }
         let node_id = self.node_map[&element.id];
@@ -392,13 +430,60 @@ impl LayoutEngine {
         let scroll_y = i32::from(element.scroll_offset_y.unwrap_or(0));
         let scroll_transform = CellVector::checked(-scroll_x, -scroll_y);
         let text_flow = if element.element_type == ElementType::Text {
-            Some(TextFlowSemanticStamp::checked(
-                self.current_text_flow(element.id).ok_or_else(|| {
+            let content_width = usize::try_from(
+                i64::from(attempted_content.right()) - i64::from(attempted_content.left()),
+            )
+            .map_err(|_| {
+                builder.fail(LayoutSnapshotError::CellSpanOverflow {
+                    identity: identity.clone(),
+                    axis: Axis::X,
+                    start: attempted_content.left(),
+                    end: attempted_content.right(),
+                })
+            })?;
+            let context = self
+                .taffy
+                .get_node_context(node_id)
+                .cloned()
+                .ok_or_else(|| {
                     builder.fail(LayoutSnapshotError::MissingTextFlowRevision {
                         identity: identity.clone(),
                     })
-                })?,
-            ))
+                })?;
+            let recomputes_before = self.flow_cache.successful_recomputes();
+            let flow = flow_for_width(
+                &context,
+                content_width,
+                &mut self.flow_cache,
+                &self.text_flow_policy,
+                &mut || false,
+            )
+            .map_err(|source| {
+                builder.fail(LayoutSnapshotError::TextFlowRevision {
+                    identity: identity.clone(),
+                    source,
+                })
+            })?
+            .ok_or_else(|| {
+                builder.fail(LayoutSnapshotError::MissingTextFlowRevision {
+                    identity: identity.clone(),
+                })
+            })?;
+            let recomputes = self
+                .flow_cache
+                .successful_recomputes()
+                .checked_sub(recomputes_before)
+                .ok_or_else(|| {
+                    builder.fail(LayoutSnapshotError::WorkCounters {
+                        source: SnapshotCounterError::Overflow {
+                            field: SnapshotWorkCounterField::TextFlowRecomputes,
+                            lhs: recomputes_before,
+                            rhs: 0,
+                        },
+                    })
+                })?;
+            builder.add_work(SnapshotWorkCounters::from_fields(0, 0, recomputes, 0, 0))?;
+            Some(TextFlowSemanticStamp::checked(flow))
         } else {
             None
         };
@@ -421,7 +506,6 @@ impl LayoutEngine {
             self.snapshot_subtree(
                 child,
                 target_plan,
-                evidence,
                 Some(index),
                 child_origin_x,
                 child_origin_y,
@@ -451,17 +535,25 @@ fn validate_committed_aliases(
     if element.style.display == Display::None || element.element_type == ElementType::VirtualText {
         return Ok(());
     }
-    let node = snapshot.node_for_element(element.id).map_err(|_| {
-        LayoutSnapshotError::MissingIdentity {
-            element_id: element.id,
-        }
-    })?;
-    let requested = requested_scopes.get(&element.id);
-    if requested != engine.element_scopes.get(&element.id)
-        || requested != Some(node.identity().scoped())
+    let requested =
+        requested_scopes
+            .get(&element.id)
+            .ok_or(LayoutSnapshotError::MissingIdentity {
+                element_id: element.id,
+            })?;
+    let expected = SnapshotIdentity::from_scoped(requested.clone());
+    let node = snapshot
+        .resolve_exact_alias(element.id, &expected, snapshot.frame_revision())
+        .map_err(|source| LayoutSnapshotError::Alias { source })?;
+    if engine.element_scopes.get(&element.id) != Some(requested)
+        || node.identity().scoped() != requested
     {
-        return Err(LayoutSnapshotError::MissingIdentity {
-            element_id: element.id,
+        return Err(LayoutSnapshotError::Alias {
+            source: crate::layout::LayoutAliasError::AliasIdentityMismatch {
+                element_id: element.id,
+                expected_identity: expected,
+                actual_identity: node.identity().clone(),
+            },
         });
     }
     for child in &element.children {
@@ -474,22 +566,25 @@ fn add_pre_snapshot_work(
     builder: &mut LayoutSnapshotBuilder,
     evidence: &SnapshotProducerEvidence,
 ) -> Result<(), SnapshotBuildFailure> {
-    let mutations = u64::try_from(evidence.pre_snapshot_mutations).map_err(|_| {
-        builder.fail(LayoutSnapshotError::WorkCounters {
-            source: SnapshotCounterError::Overflow {
-                field: SnapshotWorkCounterField::MutatedNodes,
-                lhs: 0,
-                rhs: u64::MAX,
-            },
-        })
-    })?;
     builder.add_work(SnapshotWorkCounters::from_fields(
         0,
-        mutations,
+        0,
         0,
         0,
         evidence.rebuild_count,
     ))?;
+    for mutations in evidence.pre_snapshot_mutations {
+        let mutations = mutations.ok_or_else(|| {
+            builder.fail(LayoutSnapshotError::WorkCounters {
+                source: SnapshotCounterError::Overflow {
+                    field: SnapshotWorkCounterField::MutatedNodes,
+                    lhs: u64::MAX,
+                    rhs: 1,
+                },
+            })
+        })?;
+        builder.add_work(SnapshotWorkCounters::from_fields(0, mutations, 0, 0, 0))?;
+    }
     for recomputes in evidence.text_flow_recomputes {
         let recomputes = recomputes.ok_or_else(|| {
             builder.fail(LayoutSnapshotError::WorkCounters {
@@ -611,19 +706,29 @@ pub(super) fn recomputes_since(candidate: &LayoutEngine, base: &LayoutEngine) ->
         .checked_sub(base.flow_cache.successful_recomputes())
 }
 
-pub(super) fn count_plan_mutations(plan: &ReconcilePlan) -> usize {
-    fn collect(node: &PlannedNode, identities: &mut HashSet<ScopedNodeIdentity>) {
-        if node.action != PlannedNodeAction::Reuse {
-            identities.insert(node.identity.clone());
-        }
-        for child in &node.children {
-            collect(child, identities);
-        }
-    }
-    let mut identities = HashSet::new();
-    collect(&plan.root, &mut identities);
-    for parent in &plan.parents {
-        identities.extend(parent.removals.iter().cloned());
-    }
-    identities.len()
+pub(super) fn mutations_since(candidate: &LayoutEngine, base: &LayoutEngine) -> Option<u64> {
+    candidate
+        .successful_mutations
+        .checked_sub(base.successful_mutations)
 }
+
+pub(super) fn cache_hits_since(candidate: &LayoutEngine, base: &LayoutEngine) -> Option<u64> {
+    candidate
+        .flow_cache
+        .successful_hits()
+        .checked_sub(base.flow_cache.successful_hits())
+}
+
+pub(super) fn attempt_evidence_since(
+    candidate: &LayoutEngine,
+    base: &LayoutEngine,
+) -> SnapshotAttemptEvidence {
+    SnapshotAttemptEvidence {
+        mutations: mutations_since(candidate, base),
+        text_flow_recomputes: recomputes_since(candidate, base),
+        cache_hits: cache_hits_since(candidate, base),
+    }
+}
+
+#[cfg(test)]
+mod tests;

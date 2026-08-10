@@ -1,6 +1,6 @@
 use super::*;
 use crate::components::{Box, Line, Span, Text};
-use crate::core::{BorderStyle, Color, ElementType, Overflow};
+use crate::core::{BorderStyle, Color, Dimension, ElementType, Overflow, Position};
 use crate::renderer::output::StyledChar;
 
 fn text_with_border(
@@ -730,4 +730,31 @@ fn scrolled_out_negative_rows_do_not_paint_at_top() {
     let output = render_tree_for_test(&element, 12, 1);
 
     assert_eq!(output.render(), "ok");
+}
+
+#[test]
+fn oversized_snapshot_rectangles_clip_before_terminal_extent_conversion() {
+    let child = |left: f32| {
+        let mut child = Element::box_element();
+        child.style.position = Position::Absolute;
+        child.style.left = Some(left);
+        child.style.width = Dimension::Points(70_000.0);
+        child.style.height = Dimension::Points(1.0);
+        child.style.background_color = Some(Color::Red);
+        child.style.border_style = BorderStyle::Single;
+        child.style.border_left = true;
+        child.style.border_right = true;
+        child
+    };
+
+    let mut near = Element::root();
+    near.add_child(child(0.0));
+    let near_output = render_tree_for_test(&near, 10, 2);
+    assert!(near_output.is_dirty());
+
+    let mut remote = Element::root();
+    remote.add_child(child(70_000.0));
+    let remote_output = render_tree_for_test(&remote, 10, 2);
+    assert!(!remote_output.is_dirty());
+    assert_eq!(remote_output.render(), "");
 }

@@ -134,6 +134,7 @@ pub struct LayoutEngine {
     commit_epoch: Arc<()>,
     published_snapshot: Option<crate::layout::PreparedSnapshotFrame>,
     published_snapshot_report: Option<crate::layout::SnapshotBuildReport>,
+    successful_mutations: u64,
 }
 
 impl LayoutEngine {
@@ -156,6 +157,7 @@ impl LayoutEngine {
             commit_epoch: Arc::new(()),
             published_snapshot: None,
             published_snapshot_report: None,
+            successful_mutations: 0,
         }
     }
 
@@ -185,6 +187,7 @@ impl LayoutEngine {
         self.committed_vnode = Shared::default();
         self.published_snapshot = None;
         self.published_snapshot_report = None;
+        self.successful_mutations = 0;
         self.build_node(element)
     }
 
@@ -259,15 +262,9 @@ impl LayoutEngine {
                 source: RebuildFailure::TextFlow(source),
                 ..
             })) => Err(source),
-            Err(TransactionalLayoutError::SnapshotBuild(source)) => {
-                if let crate::layout::LayoutSnapshotError::TextFlowRevision { source, .. } =
-                    source.source_error()
-                {
-                    Err(source.clone())
-                } else {
-                    panic!("legacy layout computation cannot represent snapshot failure: {source}")
-                }
-            }
+            Err(TransactionalLayoutError::Snapshot(
+                crate::layout::LayoutSnapshotError::TextFlowRevision { source, .. },
+            )) => Err(source.clone()),
             Err(error) => panic!("legacy layout computation failed: {error}"),
         }
     }

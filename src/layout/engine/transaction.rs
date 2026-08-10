@@ -18,12 +18,11 @@ use super::{
     patching,
     postcondition::{TargetAliasExpectation, TargetValidationError},
     snapshot::{
-        SnapshotProducerEvidence, SnapshotTargetPlan, count_plan_mutations, recomputes_since,
+        SnapshotAttemptEvidence, SnapshotProducerEvidence, attempt_evidence_since,
+        cache_hits_since, mutations_since, recomputes_since,
     },
 };
-use crate::layout::{
-    LayoutSnapshot, PreparedSnapshotFrame, SnapshotBuildError, SnapshotBuildReport,
-};
+use crate::layout::{LayoutSnapshot, PreparedSnapshotFrame, SnapshotBuildReport};
 
 /// A fully validated layout frame that has not changed the committed engine.
 ///
@@ -47,7 +46,7 @@ pub struct PreparedLayoutFrame {
 
 struct CandidateAttemptError {
     source: Box<PatchTransactionError>,
-    text_flow_recomputes: Option<u64>,
+    evidence: SnapshotAttemptEvidence,
 }
 
 enum PreparedLayoutState {
@@ -151,6 +150,7 @@ impl PreparedLayoutFrame {
                 committed.current_text_flows = overlay.current_text_flows;
                 committed.published_snapshot = overlay.published_snapshot;
                 committed.published_snapshot_report = overlay.published_snapshot_report;
+                committed.successful_mutations = overlay.successful_mutations;
             }
         }
         committed.rotate_commit_epoch();
@@ -276,14 +276,14 @@ impl LayoutEngine {
             let mut candidate = self
                 .try_rebuild_snapshot_fresh(&snapshot, &current_vnode, width, height)
                 .map_err(TransactionalLayoutError::InitialBuild)?;
-            let target_plan = SnapshotTargetPlan::new(root, &snapshot, &initial_plan)
-                .map_err(SnapshotBuildError::from_source)
-                .map_err(TransactionalLayoutError::SnapshotBuild)?;
-            let evidence = SnapshotProducerEvidence::initial(recomputes_since(&candidate, self));
+            let evidence = SnapshotProducerEvidence::initial(
+                mutations_since(&candidate, self),
+                recomputes_since(&candidate, self),
+                cache_hits_since(&candidate, self),
+            );
             let (prepared_snapshot, snapshot_report) = candidate
-                .try_build_snapshot_for(&target_plan, &evidence)
-                .map_err(SnapshotBuildError::from_failure)
-                .map_err(TransactionalLayoutError::SnapshotBuild)?;
+                .try_build_snapshot_for(root, &snapshot, &initial_plan, &evidence)
+                .map_err(|failure| TransactionalLayoutError::Snapshot(failure.into_parts().0))?;
             candidate.stage_prepared_snapshot(prepared_snapshot, snapshot_report);
             return Ok(PreparedLayoutFrame {
                 state: PreparedLayoutState::Replacement(candidate),
@@ -314,10 +314,6 @@ impl LayoutEngine {
             .map_err(IncrementalLayoutError::from)?;
 
         let patch_count = plan.patches().len();
-        let mutation_count = count_plan_mutations(&plan);
-        let target_plan = SnapshotTargetPlan::new(root, &snapshot, &plan)
-            .map_err(SnapshotBuildError::from_source)
-            .map_err(TransactionalLayoutError::SnapshotBuild)?;
         let viewport_changed = self.last_width != width || self.last_height != height;
         let unchanged_frame = patch_count == 0
             && !viewport_changed
@@ -332,7 +328,11 @@ impl LayoutEngine {
             )
             .map_err(|source| CandidateAttemptError {
                 source: Box::new(source),
-                text_flow_recomputes: Some(0),
+                evidence: SnapshotAttemptEvidence {
+                    mutations: Some(0),
+                    text_flow_recomputes: Some(0),
+                    cache_hits: Some(0),
+                },
             })
         } else {
             self.prepare_changed_element_candidate_with_evidence(
@@ -357,13 +357,15 @@ impl LayoutEngine {
                 };
                 let evidence = SnapshotProducerEvidence::incremental(
                     patch_count,
-                    mutation_count,
+                    mutations_since(&candidate, self),
                     recomputes_since(&candidate, self),
+                    cache_hits_since(&candidate, self),
                 );
                 let (prepared_snapshot, snapshot_report) = candidate
-                    .try_build_snapshot_for(&target_plan, &evidence)
-                    .map_err(SnapshotBuildError::from_failure)
-                    .map_err(TransactionalLayoutError::SnapshotBuild)?;
+                    .try_build_snapshot_for(root, &snapshot, &plan, &evidence)
+                    .map_err(|failure| {
+                        TransactionalLayoutError::Snapshot(failure.into_parts().0)
+                    })?;
                 candidate.stage_prepared_snapshot(prepared_snapshot, snapshot_report);
                 Ok(PreparedLayoutFrame {
                     state: if unchanged_frame {
@@ -383,17 +385,16 @@ impl LayoutEngine {
                         let evidence = SnapshotProducerEvidence::recovered(
                             patch_count,
                             incremental_failure.clone(),
-                            mutation_count,
-                            attempt_failure.text_flow_recomputes,
-                            recomputes_since(&rebuilt, self),
+                            attempt_failure.evidence,
+                            attempt_evidence_since(&rebuilt, self),
                         );
                         let (prepared_snapshot, snapshot_report) = rebuilt
-                            .try_build_snapshot_for(&target_plan, &evidence)
+                            .try_build_snapshot_for(root, &snapshot, &plan, &evidence)
                             .map_err(|snapshot| {
                                 TransactionalLayoutError::RecoveredSnapshot(
                                     RecoveredSnapshotError::new(
                                         incremental_failure.clone(),
-                                        SnapshotBuildError::from_failure(snapshot),
+                                        snapshot,
                                     ),
                                 )
                             })?;
@@ -443,6 +444,7 @@ impl LayoutEngine {
             commit_epoch: self.commit_epoch.clone(),
             published_snapshot: self.published_snapshot.clone(),
             published_snapshot_report: self.published_snapshot_report.clone(),
+            successful_mutations: self.successful_mutations,
         };
         candidate
             .try_publish_noop_element_aliases(snapshot)
@@ -525,7 +527,7 @@ impl LayoutEngine {
             Ok(()) => Ok(candidate),
             Err(source) => Err(CandidateAttemptError {
                 source: Box::new(source),
-                text_flow_recomputes: recomputes_since(&candidate, self),
+                evidence: attempt_evidence_since(&candidate, self),
             }),
         }
     }

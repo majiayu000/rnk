@@ -1,6 +1,7 @@
 {
   "layout": [
     "ArithmeticOperation",
+    "AttemptedContentBounds",
     "Axis",
     "AxisClip",
     "CellOutputError",
@@ -18,11 +19,14 @@
     "RecoveredSnapshotError",
     "SnapshotBuildReport",
     "SnapshotBuildStrategy",
+    "SnapshotAttemptReport",
+    "SnapshotCounterError",
     "SnapshotIdentity",
     "SnapshotInvariantError",
     "SnapshotNode",
     "SnapshotNodeIndex",
     "SnapshotTargetMismatchReason",
+    "SnapshotWorkCounterField",
     "SnapshotWorkCounters",
     "TextFlowSemanticStamp"
   ],

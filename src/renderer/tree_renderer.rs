@@ -4,7 +4,7 @@
 //! (runtime, render_to_string, static content, tests) use one code path.
 
 use crate::core::{Display, Element, ElementType, Overflow, Style};
-use crate::layout::{Axis, AxisClip, CellOutputError, LayoutEngine, PreparedSnapshotFrame};
+use crate::layout::{AxisClip, LayoutEngine, PreparedSnapshotFrame};
 use crate::renderer::Output;
 use crate::renderer::TextRenderError;
 use crate::renderer::output::ClipRegion;
@@ -77,24 +77,6 @@ fn clip_bound_i64(value: i64) -> u16 {
     } else {
         value as u16
     }
-}
-
-#[inline]
-fn checked_extent(value: i32, axis: Axis) -> Result<u16, ProjectionError> {
-    if value < 0 {
-        return Err(ProjectionError::Output {
-            element_id: None,
-            source: CellOutputError::NegativeAfterClip { axis, value },
-        });
-    }
-    u16::try_from(value).map_err(|_| ProjectionError::Output {
-        element_id: None,
-        source: CellOutputError::ExtentOutOfRange {
-            axis,
-            start: 0,
-            end: value,
-        },
-    })
 }
 
 /// Render an element tree into the provided output buffer.
@@ -190,17 +172,21 @@ fn render_element_subtree_staged(
         .node_for_element(element.id)
         .map_err(ProjectionError::Alias)?;
     let bounds = node.border_bounds();
-    let x = i64::from(bounds.left())
+    let x1 = i64::from(bounds.left())
         .checked_add(offset_x)
         .ok_or(ProjectionError::CoordinateOverflow(None))?;
-    let y = i64::from(bounds.top())
+    let y1 = i64::from(bounds.top())
         .checked_add(offset_y)
         .ok_or(ProjectionError::CoordinateOverflow(None))?;
-    let width = checked_extent(bounds.width(), Axis::X)?;
-    let height = checked_extent(bounds.height(), Axis::Y)?;
+    let x2 = i64::from(bounds.right())
+        .checked_add(offset_x)
+        .ok_or(ProjectionError::CoordinateOverflow(None))?;
+    let y2 = i64::from(bounds.bottom())
+        .checked_add(offset_y)
+        .ok_or(ProjectionError::CoordinateOverflow(None))?;
 
     if element.style.background_color.is_some() {
-        staged.fill_rect(x, y, width, height, &element.style)?;
+        staged.fill_rect_edges(x1, y1, x2, y2, &element.style)?;
     }
 
     let clip = ClipBounds::from_snapshot(node.effective_clip(), offset_x, offset_y);
@@ -244,7 +230,7 @@ fn render_element_subtree_staged(
     // visible overflow available through disabled sides without letting
     // content or descendants overwrite an enabled border.
     if element.style.has_border() {
-        render_border_staged(element, staged, x, y, width, height)?;
+        render_border_staged(element, staged, x1, y1, x2, y2)?;
     }
     Ok(())
 }
@@ -254,10 +240,10 @@ fn render_border_staged(
     staged: &mut StagedFrame,
     x: i64,
     y: i64,
-    width: u16,
-    height: u16,
+    x2: i64,
+    y2: i64,
 ) -> Result<(), ProjectionError> {
-    if width == 0 || height == 0 {
+    if x >= x2 || y >= y2 {
         return Ok(());
     }
 
@@ -272,37 +258,28 @@ fn render_border_staged(
     let mut style = element.style.clone();
     style.dim = element.style.border_dim;
 
-    let right_x = x
-        .checked_add(i64::from(width - 1))
-        .ok_or(ProjectionError::CoordinateOverflow(None))?;
-    let bottom_y = y
-        .checked_add(i64::from(height - 1))
-        .ok_or(ProjectionError::CoordinateOverflow(None))?;
+    let right_x = x2 - 1;
+    let bottom_y = y2 - 1;
+    let (visible_x1, visible_y1, visible_x2, visible_y2) = staged.visible_bounds();
 
     if element.style.border_top {
         style.color = element.style.get_border_top_color();
         paint_char(staged, x, y, tl, &style)?;
-        if width > 2 {
-            for col_offset in 1..(width - 1) {
-                let column = x
-                    .checked_add(i64::from(col_offset))
-                    .ok_or(ProjectionError::CoordinateOverflow(None))?;
+        if x2 - x > 2 && y >= visible_y1 && y < visible_y2 {
+            for column in (x + 1).max(visible_x1)..right_x.min(visible_x2) {
                 paint_char(staged, column, y, h, &style)?;
             }
         }
-        if width > 1 {
+        if x2 - x > 1 {
             paint_char(staged, right_x, y, tr, &style)?;
         }
     }
 
     // Horizontal rows own shared cells. On rows without a horizontal border,
     // the right side writes after the left side when width is one.
-    let first_vertical_row = u16::from(element.style.border_top);
-    let vertical_end = height.saturating_sub(u16::from(element.style.border_bottom));
-    for row_offset in first_vertical_row..vertical_end {
-        let row = y
-            .checked_add(i64::from(row_offset))
-            .ok_or(ProjectionError::CoordinateOverflow(None))?;
+    let first_vertical_row = y + i64::from(element.style.border_top);
+    let vertical_end = y2 - i64::from(element.style.border_bottom);
+    for row in first_vertical_row.max(visible_y1)..vertical_end.min(visible_y2) {
         if element.style.border_left {
             style.color = element.style.get_border_left_color();
             paint_char(staged, x, row, v, &style)?;
@@ -318,15 +295,12 @@ fn render_border_staged(
     if element.style.border_bottom {
         style.color = element.style.get_border_bottom_color();
         paint_char(staged, x, bottom_y, bl, &style)?;
-        if width > 2 {
-            for col_offset in 1..(width - 1) {
-                let column = x
-                    .checked_add(i64::from(col_offset))
-                    .ok_or(ProjectionError::CoordinateOverflow(None))?;
+        if x2 - x > 2 && bottom_y >= visible_y1 && bottom_y < visible_y2 {
+            for column in (x + 1).max(visible_x1)..right_x.min(visible_x2) {
                 paint_char(staged, column, bottom_y, h, &style)?;
             }
         }
-        if width > 1 {
+        if x2 - x > 1 {
             paint_char(staged, right_x, bottom_y, br, &style)?;
         }
     }

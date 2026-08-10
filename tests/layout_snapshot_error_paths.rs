@@ -4,8 +4,9 @@ use std::error::Error;
 
 use rnk::core::{Dimension, Element, Position, Props, VNode};
 use rnk::layout::{
-    ArithmeticOperation, Axis, CellOutputError, Edge, GeometryField, LayoutAliasError,
-    LayoutEngine, LayoutSnapshotError, SnapshotInvariantError, SnapshotTargetMismatchReason,
+    ArithmeticOperation, Axis, CellOutputError, Edge, GeometryField, IncrementalInvariantError,
+    LayoutAliasError, LayoutEngine, LayoutSnapshotError, SnapshotCounterError,
+    SnapshotInvariantError, SnapshotTargetMismatchReason, SnapshotWorkCounterField,
     TransactionalLayoutError,
 };
 use rnk::renderer::{
@@ -52,13 +53,17 @@ fn negative_and_overflow_cells_are_not_clamped_to_success() {
 
     let mut overflow = Element::box_element();
     overflow.style.width = Dimension::Points(f32::MAX);
-    assert!(matches!(
-        LayoutEngine::new().prepare_element_incremental(&overflow, None, u16::MAX, 4),
-        Err(TransactionalLayoutError::Snapshot(
+    let overflow =
+        match LayoutEngine::new().prepare_element_incremental(&overflow, None, u16::MAX, 4) {
+            Err(error) => error,
+            Ok(_) => panic!("unrepresentable cell edge must fail"),
+        };
+    assert!(
+        matches!(overflow, TransactionalLayoutError::Snapshot(source)
+        if matches!(source,
             LayoutSnapshotError::CellCoordinateOverflow { .. }
-                | LayoutSnapshotError::EdgeArithmeticOverflow { .. }
-        ))
-    ));
+                | LayoutSnapshotError::EdgeArithmeticOverflow { .. }))
+    );
 }
 
 #[test]
@@ -68,9 +73,12 @@ fn initial_snapshot_failure_never_enters_incremental_recovery() {
         Err(error) => error,
         Ok(_) => panic!("snapshot unexpectedly succeeded"),
     };
+    let TransactionalLayoutError::Snapshot(source) = error else {
+        panic!("expected source-compatible snapshot route")
+    };
     assert!(matches!(
-        error,
-        TransactionalLayoutError::Snapshot(LayoutSnapshotError::NonFiniteGeometry { .. })
+        source,
+        LayoutSnapshotError::NonFiniteGeometry { .. }
     ));
     assert!(!engine.has_tree());
 }
@@ -96,6 +104,10 @@ fn recovered_snapshot_or_render_failure_preserves_both_causes() {
         LayoutSnapshotError::NonFiniteGeometry { .. }
     ));
     assert!(source.incremental_failure().patch_index.is_none());
+    let work = source.snapshot_attempt_report().work_counters();
+    assert_eq!(source.snapshot_attempt_report().operation_count(), 1);
+    assert_eq!(work.snapshot_nodes(), 0);
+    assert_eq!(work.rebuild_count(), 1);
     assert!(source.source().is_some());
 }
 
@@ -108,6 +120,7 @@ fn snapshot_failure_publishes_nothing() {
         .unwrap();
     let (previous, _) = initial.commit(&mut engine);
     let before = engine.get_all_layouts();
+    let (before_snapshot, before_report) = engine.try_snapshot(&stable).unwrap();
 
     let invalid = non_finite_target();
     assert!(
@@ -118,13 +131,19 @@ fn snapshot_failure_publishes_nothing() {
     assert_eq!(engine.get_all_layouts().len(), before.len());
     assert!(engine.get_layout(stable.id).is_some());
     assert!(engine.get_layout(invalid.id).is_none());
+    let (after_snapshot, after_report) = engine.try_snapshot(&stable).unwrap();
+    assert_eq!(before_snapshot.snapshot(), after_snapshot.snapshot());
+    assert_eq!(
+        before_snapshot.frame_revision(),
+        after_snapshot.frame_revision()
+    );
+    assert_eq!(before_report, after_report);
 }
 
 #[test]
 fn every_snapshot_failure_variant_preserves_payload_and_source_chain() {
     let (element, prepared) = valid_frame();
     let identity = prepared.snapshot().root().identity().clone();
-    let rect = prepared.snapshot().root().border_bounds();
     let invariant = SnapshotInvariantError::SnapshotTargetMismatch {
         identity: identity.clone(),
         reason: SnapshotTargetMismatchReason::ChildOrder,
@@ -151,10 +170,11 @@ fn every_snapshot_failure_variant_preserves_payload_and_source_chain() {
             edge: Edge::Right,
             rounded_bits: f64::MAX.to_bits(),
         },
-        LayoutSnapshotError::ReversedContentBounds {
+        LayoutSnapshotError::CellSpanOverflow {
             identity: identity.clone(),
-            border_bounds: rect,
-            attempted_content_bounds: rect,
+            axis: Axis::X,
+            start: i32::MIN,
+            end: i32::MAX,
         },
         LayoutSnapshotError::MissingIdentity {
             element_id: element.id,
@@ -165,12 +185,30 @@ fn every_snapshot_failure_variant_preserves_payload_and_source_chain() {
         LayoutSnapshotError::MissingLayout {
             identity: identity.clone(),
         },
+        LayoutSnapshotError::LayoutLookup {
+            identity: identity.clone(),
+            source: IncrementalInvariantError::InvalidMappedNode,
+        },
         LayoutSnapshotError::MissingTextFlowRevision {
             identity: identity.clone(),
         },
         LayoutSnapshotError::TextFlowRevision {
             identity: identity.clone(),
             source: rnk::layout::TextFlowError::InvalidTabStop,
+        },
+        LayoutSnapshotError::WorkCounters {
+            source: SnapshotCounterError::Overflow {
+                field: SnapshotWorkCounterField::VisitedNodes,
+                lhs: u64::MAX,
+                rhs: 1,
+            },
+        },
+        LayoutSnapshotError::CacheEvidenceOverflow,
+        LayoutSnapshotError::Alias {
+            source: LayoutAliasError::AliasTargetMissing {
+                element_id: element.id,
+                identity: identity.clone(),
+            },
         },
         LayoutSnapshotError::InvalidTree {
             identity: Some(identity.clone()),
@@ -179,10 +217,25 @@ fn every_snapshot_failure_variant_preserves_payload_and_source_chain() {
     ];
     for (index, error) in variants.into_iter().enumerate() {
         assert!(!error.to_string().is_empty(), "variant {index}");
-        if matches!(
-            error,
-            LayoutSnapshotError::InvalidTree { .. } | LayoutSnapshotError::TextFlowRevision { .. }
-        ) {
+        let source_expected = match &error {
+            LayoutSnapshotError::TextFlowRevision { .. }
+            | LayoutSnapshotError::WorkCounters { .. }
+            | LayoutSnapshotError::LayoutLookup { .. }
+            | LayoutSnapshotError::Alias { .. }
+            | LayoutSnapshotError::InvalidTree { .. } => true,
+            LayoutSnapshotError::NonFiniteGeometry { .. }
+            | LayoutSnapshotError::NegativeExtent { .. }
+            | LayoutSnapshotError::EdgeArithmeticOverflow { .. }
+            | LayoutSnapshotError::CellCoordinateOverflow { .. }
+            | LayoutSnapshotError::CellSpanOverflow { .. }
+            | LayoutSnapshotError::ReversedContentBounds { .. }
+            | LayoutSnapshotError::MissingIdentity { .. }
+            | LayoutSnapshotError::DuplicateIdentity { .. }
+            | LayoutSnapshotError::MissingLayout { .. }
+            | LayoutSnapshotError::MissingTextFlowRevision { .. }
+            | LayoutSnapshotError::CacheEvidenceOverflow => false,
+        };
+        if source_expected {
             assert!(error.source().is_some());
         } else {
             assert!(error.source().is_none());

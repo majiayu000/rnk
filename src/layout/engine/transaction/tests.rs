@@ -10,7 +10,7 @@ use crate::reconciler::{Patch, ScopedIdentityArena, plan_diff_in};
 use super::super::{
     LayoutEngine,
     context_sync::set_layout_compute_fault,
-    incremental::{IncrementalFault, set_incremental_fault},
+    incremental::{IncrementalFault, set_incremental_fault, set_incremental_fault_at},
     postcondition::{PostconditionFault, set_postcondition_fault},
     test_fingerprint::EngineFingerprint,
 };
@@ -180,6 +180,34 @@ pub(crate) fn commit_failure_attempts_exactly_one_fresh_rebuild() {
             && matches!(*incremental_failure.source, crate::layout::PatchTransactionCause::Invariant(IncrementalInvariantError::MissingRoot))
     ));
     assert_eq!(super::super::patching::take_fresh_rebuild_attempts(), 1);
+}
+
+#[test]
+fn recovered_work_counts_only_successful_patch_events_before_failure() {
+    let before = Element::root();
+    let mut hidden = Element::text("hidden").with_key("hidden");
+    hidden.style.display = crate::core::Display::None;
+    let mut after = Element::root();
+    after.add_child(hidden);
+    after.add_child(Element::text("visible").with_key("visible"));
+    let mut engine = LayoutEngine::new();
+    let (previous, _) = engine
+        .try_compute_element_incremental_transactional(&before, None, 20, 4)
+        .unwrap();
+    set_incremental_fault_at(IncrementalFault::CreateText, 1);
+
+    let prepared = engine
+        .prepare_element_incremental(&after, Some(&previous), 20, 4)
+        .expect("second create failure recovers from exact executed work");
+
+    assert!(matches!(
+        prepared.report(),
+        CheckedIncrementalLayoutReport::RecoveredFullRebuild { .. }
+    ));
+    let work = prepared.snapshot_report().work_counters();
+    assert_eq!(work.snapshot_nodes(), 2);
+    assert_eq!(work.mutated_nodes(), 4);
+    assert_eq!(work.rebuild_count(), 1);
 }
 
 pub(crate) fn rebuild_success_must_pass_target_exact_postcondition() {

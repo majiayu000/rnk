@@ -261,6 +261,7 @@ impl LayoutEngine {
         self.committed_vnode = super::Shared::default();
         self.published_snapshot = None;
         self.published_snapshot_report = None;
+        self.successful_mutations = 0;
     }
 
     pub(super) fn apply_reconcile_plan(
@@ -359,6 +360,15 @@ impl LayoutEngine {
                     patch_index,
                 )
             })?;
+            self.successful_mutations =
+                self.successful_mutations.checked_add(1).ok_or_else(|| {
+                    apply_error(
+                        kind,
+                        legacy_key,
+                        PatchFailure::PostconditionViolated,
+                        PatchStage::RemoveNode,
+                    )
+                })?;
         }
 
         self.root_node = target_map.get(&ScopedNodeIdentity::Root).copied();
@@ -483,6 +493,23 @@ impl LayoutEngine {
             ));
         }
         target_legacy_keys.insert(planned.identity.clone(), planned.legacy_key);
+        if planned.action != PlannedNodeAction::Reuse {
+            let kind = match planned.action {
+                PlannedNodeAction::Update => PatchKind::Update,
+                PlannedNodeAction::Replace => PatchKind::Replace,
+                PlannedNodeAction::Create => PatchKind::Create,
+                PlannedNodeAction::Reuse => unreachable!("guarded above"),
+            };
+            self.successful_mutations =
+                self.successful_mutations.checked_add(1).ok_or_else(|| {
+                    apply_error(
+                        kind,
+                        planned.legacy_key,
+                        PatchFailure::PostconditionViolated,
+                        PatchStage::VerifyPostcondition,
+                    )
+                })?;
+        }
         let child_parent_address = planned.identity.scoped_patch_address(planned.legacy_key);
         for child in &planned.children {
             self.materialize_planned_node(

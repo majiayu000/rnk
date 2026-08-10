@@ -22,9 +22,8 @@ pub(crate) use builder::{CheckedSnapshotNodeInput, LayoutSnapshotBuilder};
 pub(crate) use error::SnapshotBuildFailure;
 pub use error::{
     ArithmeticOperation, AttemptedContentBounds, Axis, CellOutputError, Edge, GeometryField,
-    LayoutAliasError, LayoutSnapshotError, SnapshotAttemptReport, SnapshotBuildError,
-    SnapshotCounterError, SnapshotInvariantError, SnapshotTargetMismatchReason,
-    SnapshotWorkCounterField,
+    LayoutAliasError, LayoutSnapshotError, SnapshotAttemptReport, SnapshotCounterError,
+    SnapshotInvariantError, SnapshotTargetMismatchReason, SnapshotWorkCounterField,
 };
 pub(crate) use quantize::{
     add as checked_add, edge as quantize_edge, extent as checked_extent, finite as checked_finite,
@@ -509,6 +508,36 @@ impl PreparedSnapshotFrame {
         Ok(self.snapshot.node(index))
     }
 
+    pub(crate) fn resolve_exact_alias(
+        &self,
+        element_id: ElementId,
+        expected_identity: &SnapshotIdentity,
+        expected_revision: FrameRevision,
+    ) -> Result<&SnapshotNode, LayoutAliasError> {
+        if self.frame_aliases.revision != expected_revision {
+            return Err(LayoutAliasError::StaleFrameAlias {
+                element_id,
+                expected_frame_revision: expected_revision,
+                actual_frame_revision: self.frame_aliases.revision,
+            });
+        }
+        if self.snapshot.get(expected_identity).is_none() {
+            return Err(LayoutAliasError::AliasTargetMissing {
+                element_id,
+                identity: expected_identity.clone(),
+            });
+        }
+        let node = self.node_for_element(element_id)?;
+        if node.identity() != expected_identity {
+            return Err(LayoutAliasError::AliasIdentityMismatch {
+                element_id,
+                expected_identity: expected_identity.clone(),
+                actual_identity: node.identity().clone(),
+            });
+        }
+        Ok(node)
+    }
+
     pub(crate) fn element_nodes(&self) -> impl Iterator<Item = (ElementId, &SnapshotNode)> + '_ {
         self.frame_aliases
             .elements
@@ -666,84 +695,4 @@ impl SnapshotBuildReport {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::components::{Box as RnkBox, Text};
-    use crate::core::{Dimension, FlexDirection, Overflow};
-    use crate::layout::LayoutEngine;
-
-    fn target() -> crate::core::Element {
-        RnkBox::new()
-            .width(10)
-            .flex_direction(FlexDirection::Column)
-            .child(Text::new("first").into_element().with_key("first"))
-            .child(Text::new("second").into_element().with_key("second"))
-            .into_element()
-            .with_key("root")
-    }
-
-    #[test]
-    fn semantic_identity_and_final_order() {
-        let target = target();
-        let engine = LayoutEngine::new();
-        let frame = engine
-            .prepare_element_incremental(&target, None, 10, 4)
-            .unwrap();
-        let snapshot = frame.snapshot();
-        let children = snapshot.root().children();
-        assert_eq!(children.len(), 2);
-        let first = snapshot.nodes().nth(children[0].as_usize()).unwrap();
-        let second = snapshot.nodes().nth(children[1].as_usize()).unwrap();
-        assert_ne!(first.identity(), second.identity());
-        assert_eq!(first.parent(), Some(SnapshotNodeIndex::checked(0)));
-        assert_eq!(second.parent(), Some(SnapshotNodeIndex::checked(0)));
-    }
-
-    #[test]
-    fn mixed_axis_overflow_clips_only_selected_axis() {
-        let mut target = target();
-        target.style.width = Dimension::Points(6.0);
-        target.style.height = Dimension::Points(2.0);
-        target.style.overflow_x = Overflow::Hidden;
-        target.style.overflow_y = Overflow::Visible;
-        let engine = LayoutEngine::new();
-        let frame = engine
-            .prepare_element_incremental(&target, None, 20, 8)
-            .unwrap();
-        assert_eq!(frame.snapshot().root().effective_clip().x().end(), 6);
-        assert_eq!(frame.snapshot().root().effective_clip().y().end(), 8);
-    }
-
-    #[test]
-    fn producer_report_does_not_change_semantic_equality() {
-        let first_target = target();
-        let mut engine = LayoutEngine::new();
-        let first = engine
-            .prepare_element_incremental(&first_target, None, 10, 4)
-            .unwrap();
-        let first_snapshot = first.snapshot().clone();
-        let (previous, _) = first.commit(&mut engine);
-        let second_target = target();
-        let second = engine
-            .prepare_element_incremental(&second_target, Some(&previous), 10, 4)
-            .unwrap();
-        assert_eq!(&first_snapshot, second.snapshot());
-        assert_ne!(
-            SnapshotBuildStrategy::InitialFull,
-            second.snapshot_report().strategy()
-        );
-    }
-
-    #[test]
-    fn cancelled_builder_is_hidden_and_published_snapshot_is_immutable() {
-        let target = target();
-        let engine = LayoutEngine::new();
-        let frame = engine
-            .prepare_element_incremental(&target, None, 10, 4)
-            .unwrap();
-        let published = frame.snapshot().clone();
-        drop(frame);
-        assert_eq!(published.nodes().len(), 3);
-        assert_eq!(published.root().children().len(), 2);
-    }
-}
+mod tests;

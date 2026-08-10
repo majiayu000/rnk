@@ -4,10 +4,11 @@
 //! which are elements that persist in the terminal history (like Ink's `<Static>`).
 
 use crate::core::{Display, Element, ElementType};
-use crate::layout::{LayoutEngine, TransactionalLayoutError};
+use crate::layout::{Axis, LayoutEngine, TransactionalLayoutError};
+use crate::renderer::render_to_string::try_prepare_auto_height_checked;
 use crate::renderer::{
-    CheckedRenderError, Output, TextRenderError, legacy_snapshot_coordinate_error,
-    try_render_element_snapshot_checked,
+    CheckedRenderError, Output, TextRenderError, checked_output_extent,
+    legacy_snapshot_coordinate_error, try_render_element_snapshot_checked,
 };
 
 /// Static content renderer for inline mode
@@ -50,12 +51,6 @@ impl StaticRenderer {
                         panic!("legacy static renderer cannot represent snapshot error: {source}")
                     })
                 }
-                CheckedRenderError::LayoutBuild(TransactionalLayoutError::SnapshotBuild(
-                    source,
-                )) => legacy_snapshot_coordinate_error(element, source.source_error())
-                    .unwrap_or_else(|| {
-                        panic!("legacy static renderer cannot represent snapshot error: {source}")
-                    }),
                 CheckedRenderError::LayoutBuild(TransactionalLayoutError::RecoveredSnapshot(
                     source,
                 )) => legacy_snapshot_coordinate_error(element, source.snapshot_failure())
@@ -93,11 +88,14 @@ impl StaticRenderer {
             // Empty Static elements mean all items have already been rendered
             if !element.children.is_empty() {
                 // Render static element to get its content
-                let prepared =
-                    LayoutEngine::new().prepare_element_incremental(element, None, width, 100)?;
+                let engine = LayoutEngine::new();
+                let prepared = try_prepare_auto_height_checked(element, width, &engine)?;
                 let bounds = prepared.snapshot().root().border_bounds();
-                let render_width = u16::try_from(bounds.width().max(1)).unwrap_or(width);
-                let render_height = u16::try_from(bounds.height().max(1)).unwrap_or(100);
+                let identity = prepared.snapshot().root().identity();
+                let render_width =
+                    checked_output_extent(identity, Axis::X, bounds.width(), Some(width))?;
+                let render_height =
+                    checked_output_extent(identity, Axis::Y, bounds.height(), None)?;
                 let mut output = Output::new(render_width, render_height);
                 let clip_depth_before = output.clip_depth();
                 try_render_element_snapshot_checked(
