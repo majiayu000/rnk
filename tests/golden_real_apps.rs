@@ -24,6 +24,8 @@ use std::num::NonZeroUsize;
 #[path = "../examples/glm_chat.rs"]
 #[allow(dead_code)]
 mod gh68_glm;
+#[path = "../benches/render.rs"]
+mod gh68_render;
 
 struct Gh68TempDir(std::path::PathBuf);
 
@@ -711,11 +713,9 @@ fn strip_sgr(input: &str) -> String {
         if bytes[index] != 0x1b { output.push(bytes[index]); index += 1; continue; }
         assert_eq!(bytes.get(index + 1), Some(&b'['), "golden contains a non-SGR escape"); index += 2;
         while index < bytes.len() && !(0x40..=0x7e).contains(&bytes[index]) { index += 1; }
-        assert!(index < bytes.len(), "golden contains an unterminated SGR escape"); index += 1;
-    }
+        assert!(index < bytes.len(), "golden contains an unterminated SGR escape"); index += 1; }
     String::from_utf8(output).expect("removing ASCII escapes preserves UTF-8")
 }
-
 #[test]
 #[rustfmt::skip]
 fn gh68_example_convergence_contract() {
@@ -729,7 +729,6 @@ fn gh68_example_convergence_contract() {
         assert!(source.contains(seam), "example is missing its shared seam: {seam}");
     }
 }
-
 #[test]
 #[rustfmt::skip]
 fn gh68_example_index_contract() {
@@ -742,7 +741,6 @@ fn gh68_example_index_contract() {
     assert!(!names.contains(&"glm_chat/prompt_box.rs"));
     assert!(!std::path::Path::new("examples/glm_chat/prompt_box.rs").exists());
 }
-
 #[test]
 #[rustfmt::skip]
 fn gh68_message_compatibility_contract() {
@@ -751,7 +749,6 @@ fn gh68_message_compatibility_contract() {
     let typed = rnk::render_to_string(&ChatMessageView::new(&text_message(9, 9, ChatRole::User, "typed conversation")).into_element(), 40);
     assert!(legacy.contains("legacy notification")); assert!(typed.contains("typed conversation"));
 }
-
 #[test]
 #[rustfmt::skip]
 fn gh68_public_docs_contract() {
@@ -761,7 +758,6 @@ fn gh68_public_docs_contract() {
     let state = apply_adapter_fixture(&[AdapterDelta { event_id: "docs", text: "documented", terminal: true }]);
     assert!(rnk::render_to_string(&conversation_view(&state), 40).contains("documented"));
 }
-
 #[test]
 #[rustfmt::skip]
 fn gh68_compatibility_matrix_contract() {
@@ -771,4 +767,34 @@ fn gh68_compatibility_matrix_contract() {
     let evidence = HarnessEvidence { head: "0123456789abcdef0123456789abcdef01234567", evidence: &["plain/ANSI golden"], environment: "ubuntu-24.04", expected_environment: "ubuntu-24.04", verified: true, api_key: None, commit_observation: CommitObservation::Fixed, retries: 0, exact_test_ignored: false, benchmark: BenchmarkEvidence::CorrectnessOracle };
     assert_eq!(validate_harness_evidence(&evidence, evidence.head), Ok(()));
     assert_eq!(strip_sgr(include_str!("golden/real_app_chat.ansi.txt")), include_str!("golden/real_app_chat.txt"));
+}
+#[test]
+#[rustfmt::skip]
+fn gh68_stress_correctness_contract() {
+    let first=gh68_render::gh68_workload_oracles(); let replay=gh68_render::gh68_workload_oracles(); assert_eq!(first,replay);
+    assert_eq!(first.iter().map(|item|item.name).collect::<Vec<_>>(), ["gh68_long_conversation","gh68_high_frequency_streaming","gh68_variable_height_prepend","gh68_continuous_resize","gh68_inline_commit_churn"]);
+    assert_eq!(first[0].message_order, (1..=128).collect::<Vec<_>>()); assert_eq!(first[1].message_order,[1,2]);
+    assert_eq!(first[2].message_order.first(),Some(&1)); assert_eq!(first[2].message_order.last(),Some(&131)); assert!(first[2].anchor.is_some()); assert!(!first[2].bottom_follow);
+    assert!(first[3].semantic_checksum!=0); assert_eq!(first[4].commit_count,64); assert_eq!(first[4].message_order,(1..=64).collect::<Vec<_>>());
+}
+#[test]
+#[rustfmt::skip]
+fn gh68_benchmark_metadata_contract() {
+    assert!(gh68_render::gh68_sha256_contract());
+    match std::env::var("GH68_BENCHMARK_MODE").as_deref() { Ok("produce")=>gh68_render::gh68_benchmark_metadata_contract().unwrap(), _=>assert_eq!(gh68_render::gh68_benchmark_metadata_contract(),Err(gh68_render::Gh68EvidenceError("mode is not produce"))) }
+}
+#[test]
+#[rustfmt::skip]
+fn gh68_benchmark_comparison_contract() {
+    match std::env::var("GH68_BENCHMARK_MODE").as_deref() { Ok("validate")=>gh68_render::gh68_benchmark_comparison_contract().unwrap(), _=>assert_eq!(gh68_render::gh68_benchmark_comparison_contract(),Err(gh68_render::Gh68EvidenceError("mode is not validate"))) }
+}
+
+#[test]
+#[rustfmt::skip]
+fn gh68_current_head_coverage_contract() {
+    let tasks=include_str!("../specs/GH68/tasks.md"); let source=include_str!("golden_real_apps.rs");
+    let line=tasks.split("gh68-critical-paths-v1").nth(1).unwrap().lines().find(|line|line.starts_with('{')).unwrap(); let manifest:serde_json::Value=serde_json::from_str(line).unwrap(); let paths=manifest["critical_paths"].as_array().unwrap(); assert_eq!(paths.len(),15);
+    let mut names=paths.iter().map(|item|{assert_eq!(item["file"],"tests/golden_real_apps.rs");item["name"].as_str().unwrap()}).collect::<Vec<_>>(); let before=names.len(); names.sort_unstable(); names.dedup(); assert_eq!(names.len(),before);
+    for name in &names { let count=source.matches(&format!("fn {name}()" )).count(); if *name=="gh68_ci_public_examples_contract" { assert!(count<=1); } else { assert_eq!(count,1,"critical selector missing/duplicate: {name}"); } }
+    if let Some(path)=std::env::var_os("GH68_COVERAGE_EVIDENCE") { let evidence:serde_json::Value=serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap(); assert_eq!(evidence["head_sha"],std::env::var("GH68_IMPLEMENTATION_HEAD").unwrap()); let changed=&evidence["changed_executable"]; assert!(changed["total"].as_u64().unwrap()>0&&changed["percent"].as_f64().unwrap()>=80.0); let critical=evidence["critical"].as_array().unwrap(); assert_eq!(critical.len(),15); let mut reported=critical.iter().map(|item|item["name"].as_str().unwrap()).collect::<Vec<_>>(); reported.sort_unstable(); assert_eq!(reported,names); for item in critical { assert_eq!(item["file"],"tests/golden_real_apps.rs"); let lt=item["line_total"].as_u64().unwrap(); let bt=item["branch_total"].as_u64().unwrap(); assert!(lt>0&&bt>0); assert_eq!(item["line_covered"].as_u64(),Some(lt)); assert_eq!(item["branch_covered"].as_u64(),Some(bt)); } }
 }

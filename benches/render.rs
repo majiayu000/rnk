@@ -1,8 +1,22 @@
+#![allow(dead_code)] // Evidence helpers are called when this target is included by the GH68 integration gate.
 //! Renderer benchmarks
 
 use rnk::Style;
+use rnk::components::chat::message_list::{
+    BottomFollowState, HorizontalInsets, MessageCompositeMeasureConfig, MessageExpansionKey,
+    MessageListEntry, MessageListState, MessageMeasureOutcome, MessageRows,
+    MessageShellMeasureConfig, MessageVariantKey, RowOffset, ViewportRows,
+};
+use rnk::components::chat::scrollback::NativeTerminalSink;
+use rnk::components::chat::{
+    BlockId, ChatMessage, ChatMessageView, ChatRole, ConversationEvent, ConversationGuard,
+    ConversationState, ConversationUpdate, InlineChatShell, InlineCommitReport, MessageBlock,
+    MessageBlockEntry, MessageId, MessageMutationGuard, MessageRevision, ProjectionContext,
+    ScrollbackNamespace, ThemeIdentity, UpdateId,
+};
 use rnk::core::{Color, Dimension, Element, FlexDirection};
 use rnk::renderer::{ClipRegion, Output, render_to_string};
+use std::num::NonZeroUsize;
 
 fn main() {
     divan::main();
@@ -230,4 +244,554 @@ fn render_full_screen(size: (u16, u16)) {
     }
 
     divan::black_box(render_to_string(&root, size.0));
+}
+
+const GH68_WORKLOAD_NAMES: [&str; 5] = [
+    "gh68_long_conversation",
+    "gh68_high_frequency_streaming",
+    "gh68_variable_height_prepend",
+    "gh68_continuous_resize",
+    "gh68_inline_commit_churn",
+];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Gh68Oracle {
+    pub(crate) name: &'static str,
+    pub(crate) message_order: Vec<u64>,
+    pub(crate) anchor: Option<(u64, u64)>,
+    pub(crate) bottom_follow: bool,
+    pub(crate) commit_count: usize,
+    pub(crate) character_count: usize,
+    pub(crate) semantic_checksum: u64,
+}
+
+fn gh68_text_message(id: u64, role: ChatRole, text: String) -> ChatMessage {
+    ChatMessage::new(
+        MessageId::new(id),
+        role,
+        vec![MessageBlockEntry::new(
+            BlockId::new(id),
+            MessageBlock::Text(text),
+        )],
+    )
+    .expect("GH68 fixture message is valid")
+}
+
+fn gh68_apply(state: &mut ConversationState, id: String, update: ConversationUpdate) {
+    state
+        .apply_event(ConversationEvent::new(
+            UpdateId::new(id).expect("GH68 event identity is non-empty"),
+            state.expected_sequence(),
+            update,
+        ))
+        .expect("GH68 fixture update is valid");
+}
+
+fn gh68_conversation(count: usize) -> ConversationState {
+    let mut state = ConversationState::new(0, NonZeroUsize::new(4096).unwrap());
+    for index in 0..count {
+        let id = u64::try_from(index + 1).unwrap();
+        let text = format!(
+            "message {index:04}: {}",
+            "chat workload ".repeat(index % 7 + 1)
+        );
+        let push = ConversationUpdate::push(
+            ConversationGuard::new(state.revision()),
+            gh68_text_message(
+                id,
+                if index % 2 == 0 {
+                    ChatRole::User
+                } else {
+                    ChatRole::Assistant
+                },
+                text,
+            ),
+        );
+        gh68_apply(&mut state, format!("push-{index}"), push);
+        let complete = ConversationUpdate::complete(MessageMutationGuard::new(
+            ConversationGuard::new(state.revision()),
+            MessageId::new(id),
+            MessageRevision::INITIAL,
+        ));
+        gh68_apply(&mut state, format!("complete-{index}"), complete);
+    }
+    state
+}
+
+fn gh68_checksum(bytes: impl IntoIterator<Item = u8>) -> u64 {
+    bytes.into_iter().fold(0xcbf29ce484222325, |hash, byte| {
+        hash.wrapping_mul(0x100000001b3) ^ u64::from(byte)
+    })
+}
+
+fn gh68_conversation_oracle(
+    name: &'static str,
+    state: &ConversationState,
+    widths: &[u16],
+) -> Gh68Oracle {
+    let mut rendered = Vec::new();
+    let mut characters = 0;
+    for width in widths {
+        let mut root = Element::root();
+        root.style.flex_direction = FlexDirection::Column;
+        for message in state.messages() {
+            for block in message.blocks() {
+                if let MessageBlock::Text(text) = block.block() {
+                    characters += text.chars().count();
+                }
+            }
+            root.add_child(ChatMessageView::new(message).into_element());
+        }
+        rendered.extend_from_slice(render_to_string(&root, *width).as_bytes());
+    }
+    Gh68Oracle {
+        name,
+        message_order: state
+            .messages()
+            .iter()
+            .map(|message| message.id().get())
+            .collect(),
+        anchor: None,
+        bottom_follow: true,
+        commit_count: 0,
+        character_count: characters,
+        semantic_checksum: gh68_checksum(rendered),
+    }
+}
+
+pub(crate) fn run_gh68_long_conversation() -> Gh68Oracle {
+    gh68_conversation_oracle(GH68_WORKLOAD_NAMES[0], &gh68_conversation(128), &[80])
+}
+
+pub(crate) fn run_gh68_high_frequency_streaming() -> Gh68Oracle {
+    let mut state = gh68_conversation(1);
+    let push = ConversationUpdate::push(
+        ConversationGuard::new(state.revision()),
+        gh68_text_message(2, ChatRole::Assistant, String::new()),
+    );
+    gh68_apply(&mut state, "stream-push".to_owned(), push);
+    for index in 0..256 {
+        let message = state.message(MessageId::new(2)).unwrap();
+        let append = ConversationUpdate::append_text(
+            MessageMutationGuard::new(
+                ConversationGuard::new(state.revision()),
+                MessageId::new(2),
+                message.revision(),
+            ),
+            BlockId::new(2),
+            if index % 9 == 0 { "界" } else { "x" },
+        )
+        .unwrap();
+        gh68_apply(&mut state, format!("delta-{index}"), append);
+    }
+    let message = state.message(MessageId::new(2)).unwrap();
+    let complete = ConversationUpdate::complete(MessageMutationGuard::new(
+        ConversationGuard::new(state.revision()),
+        MessageId::new(2),
+        message.revision(),
+    ));
+    gh68_apply(&mut state, "stream-complete".to_owned(), complete);
+    gh68_conversation_oracle(GH68_WORKLOAD_NAMES[1], &state, &[80])
+}
+
+fn gh68_list_entry(id: u64, width: u16) -> MessageListEntry {
+    let shell =
+        MessageShellMeasureConfig::try_new(width, HorizontalInsets::new(0, 0), vec![]).unwrap();
+    MessageListEntry::new(
+        MessageId::new(id),
+        MessageRevision::INITIAL,
+        MessageVariantKey::new(0),
+        MessageExpansionKey::new(0),
+        MessageCompositeMeasureConfig::try_new(vec![], shell).unwrap(),
+    )
+}
+
+pub(crate) fn run_gh68_variable_height_prepend() -> Gh68Oracle {
+    let current = (100..132)
+        .map(|id| gh68_list_entry(id, 40))
+        .collect::<Vec<_>>();
+    let measure = |request: rnk::components::chat::message_list::MessageMeasureRequest<'_>| {
+        MessageMeasureOutcome::<(), ()>::Measured(
+            MessageRows::try_new(request.entry.message_id().get() % 11 + 1).unwrap(),
+        )
+    };
+    let mut state =
+        MessageListState::try_new(&current, 40, ViewportRows::new(12), 16, measure).unwrap();
+    state
+        .try_scroll_to(state.revision(), RowOffset::new(20))
+        .unwrap();
+    let anchor = state.stored_anchor().unwrap();
+    let older = (1..17)
+        .map(|id| gh68_list_entry(id, 40))
+        .collect::<Vec<_>>();
+    state
+        .try_prepend(state.revision(), &older, measure)
+        .unwrap();
+    assert_eq!(state.stored_anchor(), Some(anchor));
+    let range = state.visible_range().unwrap();
+    Gh68Oracle {
+        name: GH68_WORKLOAD_NAMES[2],
+        message_order: older
+            .iter()
+            .chain(current.iter())
+            .map(|entry| entry.message_id().get())
+            .collect(),
+        anchor: state
+            .stored_anchor()
+            .map(|value| (value.message_id().get(), value.intra_message_row().get())),
+        bottom_follow: matches!(state.follow_state(), BottomFollowState::Following),
+        commit_count: 0,
+        character_count: range.total_rows as usize,
+        semantic_checksum: gh68_checksum(
+            range
+                .slices
+                .iter()
+                .flat_map(|slice| slice.message_id.get().to_le_bytes()),
+        ),
+    }
+}
+
+pub(crate) fn run_gh68_continuous_resize() -> Gh68Oracle {
+    gh68_conversation_oracle(
+        GH68_WORKLOAD_NAMES[3],
+        &gh68_conversation(48),
+        &[32, 80, 41, 120, 24, 96],
+    )
+}
+
+pub(crate) fn run_gh68_inline_commit_churn() -> Gh68Oracle {
+    let mut shell = InlineChatShell::new(
+        ScrollbackNamespace::new("gh68.benchmark").unwrap(),
+        NativeTerminalSink::new(Vec::<u8>::new()),
+    );
+    let mut character_count = 0;
+    for id in 1..=64_u64 {
+        let content = format!("line {id}");
+        character_count += content.chars().count();
+        shell.stream(MessageId::new(id)).unwrap();
+        let report = shell
+            .finish(
+                MessageId::new(id),
+                MessageRevision::INITIAL,
+                &content,
+                ProjectionContext::new(80, ThemeIdentity::new(1)).unwrap(),
+            )
+            .unwrap();
+        assert!(matches!(report, InlineCommitReport::Fixed { .. }));
+    }
+    let count = shell.sink().ledger().len();
+    Gh68Oracle {
+        name: GH68_WORKLOAD_NAMES[4],
+        message_order: (1..=64).collect(),
+        anchor: None,
+        bottom_follow: true,
+        commit_count: count,
+        character_count,
+        semantic_checksum: gh68_checksum((1..=64).flat_map(u64::to_le_bytes)),
+    }
+}
+
+#[allow(dead_code)] // Shared by the integration correctness gate when this file is included as a module.
+pub(crate) fn gh68_workload_oracles() -> Vec<Gh68Oracle> {
+    vec![
+        run_gh68_long_conversation(),
+        run_gh68_high_frequency_streaming(),
+        run_gh68_variable_height_prepend(),
+        run_gh68_continuous_resize(),
+        run_gh68_inline_commit_churn(),
+    ]
+}
+
+#[divan::bench]
+fn gh68_long_conversation() {
+    divan::black_box(run_gh68_long_conversation());
+}
+#[divan::bench]
+fn gh68_high_frequency_streaming() {
+    divan::black_box(run_gh68_high_frequency_streaming());
+}
+#[divan::bench]
+fn gh68_variable_height_prepend() {
+    divan::black_box(run_gh68_variable_height_prepend());
+}
+#[divan::bench]
+fn gh68_continuous_resize() {
+    divan::black_box(run_gh68_continuous_resize());
+}
+#[divan::bench]
+fn gh68_inline_commit_churn() {
+    divan::black_box(run_gh68_inline_commit_churn());
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Gh68EvidenceError(pub(crate) &'static str);
+
+fn gh68_run(name: &str) -> Gh68Oracle {
+    match name {
+        "gh68_long_conversation" => run_gh68_long_conversation(),
+        "gh68_high_frequency_streaming" => run_gh68_high_frequency_streaming(),
+        "gh68_variable_height_prepend" => run_gh68_variable_height_prepend(),
+        "gh68_continuous_resize" => run_gh68_continuous_resize(),
+        "gh68_inline_commit_churn" => run_gh68_inline_commit_churn(),
+        _ => panic!("closed GH68 workload name"),
+    }
+}
+
+fn gh68_median(samples: &[u64]) -> Result<u64, Gh68EvidenceError> {
+    if samples.len() < 15 || samples.contains(&0) {
+        return Err(Gh68EvidenceError("invalid samples"));
+    }
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    Ok(sorted[sorted.len() / 2])
+}
+
+fn gh68_mad(samples: &[u64], median: u64) -> u64 {
+    let mut deviations = samples
+        .iter()
+        .map(|sample| sample.abs_diff(median))
+        .collect::<Vec<_>>();
+    deviations.sort_unstable();
+    deviations[deviations.len() / 2]
+}
+
+fn gh68_workload_json(name: &'static str) -> serde_json::Value {
+    for _ in 0..3 {
+        divan::black_box(gh68_run(name));
+    }
+    let samples = (0..15)
+        .map(|_| {
+            let started = std::time::Instant::now();
+            divan::black_box(gh68_run(name));
+            u64::try_from(started.elapsed().as_nanos())
+                .unwrap_or(u64::MAX)
+                .max(1)
+        })
+        .collect::<Vec<_>>();
+    let median = gh68_median(&samples).unwrap();
+    serde_json::json!({"name":name,"warmup_samples":3,"measured_samples_ns":samples,
+        "median_ns":median,"mad_ns":gh68_mad(&samples, median),"unit":"ns"})
+}
+
+fn gh68_hex(value: &str, len: usize) -> bool {
+    value.len() == len && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+#[rustfmt::skip]
+fn gh68_environment() -> Result<serde_json::Value, Gh68EvidenceError> {
+    let output = std::process::Command::new("rustc").arg("-Vv").output().map_err(|_| Gh68EvidenceError("rustc unavailable"))?;
+    if !output.status.success() { return Err(Gh68EvidenceError("rustc failed")); }
+    let rustc = String::from_utf8(output.stdout).map_err(|_| Gh68EvidenceError("rustc output"))?;
+    if rustc.trim().is_empty() { return Err(Gh68EvidenceError("rustc output")); }
+    Ok(serde_json::json!({"rustc_vv":rustc.trim(),"os":std::env::consts::OS,"arch":std::env::consts::ARCH}))
+}
+
+#[rustfmt::skip]
+fn gh68_rfc3339_now() -> Result<String, Gh68EvidenceError> {
+    let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_| Gh68EvidenceError("clock before epoch"))?.as_secs();
+    let days = i64::try_from(seconds / 86_400).map_err(|_| Gh68EvidenceError("clock range"))?;
+    let z = days + 719_468; let era = if z >= 0 { z } else { z - 146_096 } / 146_097; let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let mut year = yoe + era * 400; let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1; let month = mp + if mp < 10 { 3 } else { -9 }; year += i64::from(month <= 2);
+    let day_seconds = seconds % 86_400;
+    Ok(format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", day_seconds / 3_600, day_seconds % 3_600 / 60, day_seconds % 60))
+}
+
+#[rustfmt::skip]
+fn gh68_sha256(bytes: &[u8]) -> String {
+    const K: [u32; 64] = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+    let mut data=bytes.to_vec(); let bits=(data.len() as u64).wrapping_mul(8); data.push(0x80); while data.len()%64!=56 { data.push(0); } data.extend_from_slice(&bits.to_be_bytes());
+    let mut h=[0x6a09e667_u32,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+    for chunk in data.chunks_exact(64) { let mut w=[0_u32;64]; for (i,word) in w[..16].iter_mut().enumerate(){*word=u32::from_be_bytes(chunk[i*4..i*4+4].try_into().unwrap());} for i in 16..64 { let s0=w[i-15].rotate_right(7)^w[i-15].rotate_right(18)^(w[i-15]>>3); let s1=w[i-2].rotate_right(17)^w[i-2].rotate_right(19)^(w[i-2]>>10); w[i]=w[i-16].wrapping_add(s0).wrapping_add(w[i-7]).wrapping_add(s1); } let [mut a,mut b,mut c,mut d,mut e,mut f,mut g,mut hh]=h; for i in 0..64 { let s1=e.rotate_right(6)^e.rotate_right(11)^e.rotate_right(25); let ch=(e&f)^(!e&g); let t1=hh.wrapping_add(s1).wrapping_add(ch).wrapping_add(K[i]).wrapping_add(w[i]); let s0=a.rotate_right(2)^a.rotate_right(13)^a.rotate_right(22); let maj=(a&b)^(a&c)^(b&c); let t2=s0.wrapping_add(maj); hh=g;g=f;f=e;e=d.wrapping_add(t1);d=c;c=b;b=a;a=t1.wrapping_add(t2); } for (slot,value) in h.iter_mut().zip([a,b,c,d,e,f,g,hh]) {*slot=slot.wrapping_add(value);} }
+    h.iter().map(|word| format!("{word:08x}")).collect()
+}
+
+fn gh68_validate_workloads(value: &serde_json::Value) -> Result<(), Gh68EvidenceError> {
+    let list = value
+        .as_array()
+        .ok_or(Gh68EvidenceError("workloads type"))?;
+    if list.len() != GH68_WORKLOAD_NAMES.len() {
+        return Err(Gh68EvidenceError("workload count"));
+    }
+    for (item, expected) in list.iter().zip(GH68_WORKLOAD_NAMES) {
+        if item["name"] != expected
+            || item["unit"] != "ns"
+            || item["warmup_samples"].as_u64().unwrap_or(0) < 3
+        {
+            return Err(Gh68EvidenceError("workload identity"));
+        }
+        let samples = item["measured_samples_ns"]
+            .as_array()
+            .ok_or(Gh68EvidenceError("samples type"))?
+            .iter()
+            .map(|sample| sample.as_u64().ok_or(Gh68EvidenceError("sample value")))
+            .collect::<Result<Vec<_>, _>>()?;
+        let median = gh68_median(&samples)?;
+        if item["median_ns"] != median || item["mad_ns"] != gh68_mad(&samples, median) {
+            return Err(Gh68EvidenceError("aggregate mismatch"));
+        }
+    }
+    Ok(())
+}
+
+fn gh68_env_path(name: &str) -> Result<std::path::PathBuf, Gh68EvidenceError> {
+    let path =
+        std::path::PathBuf::from(std::env::var_os(name).ok_or(Gh68EvidenceError("missing path"))?);
+    if !path.is_absolute() {
+        return Err(Gh68EvidenceError("path not absolute"));
+    }
+    Ok(path)
+}
+
+pub(crate) fn gh68_benchmark_metadata_contract() -> Result<(), Gh68EvidenceError> {
+    if std::env::var("GH68_BENCHMARK_MODE").as_deref() != Ok("produce") {
+        return Err(Gh68EvidenceError("mode is not produce"));
+    }
+    let baseline_path = gh68_env_path("GH68_BENCHMARK_BASELINE")?;
+    let evidence_path = gh68_env_path("GH68_BENCHMARK_EVIDENCE")?;
+    let head =
+        std::env::var("GH68_IMPLEMENTATION_HEAD").map_err(|_| Gh68EvidenceError("missing head"))?;
+    let base =
+        std::env::var("GH68_BASE_MAIN_SHA").map_err(|_| Gh68EvidenceError("missing base"))?;
+    if !gh68_hex(&head, 40) || !gh68_hex(&base, 40) {
+        return Err(Gh68EvidenceError("invalid sha"));
+    }
+    let bytes =
+        std::fs::read(&baseline_path).map_err(|_| Gh68EvidenceError("baseline unreadable"))?;
+    let baseline: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| Gh68EvidenceError("baseline json"))?;
+    if baseline["schema"] != "gh68-benchmark-v1"
+        || baseline["head_sha"] == head
+        || !gh68_hex(baseline["head_sha"].as_str().unwrap_or(""), 40)
+    {
+        return Err(Gh68EvidenceError("baseline identity"));
+    }
+    let environment = gh68_environment()?;
+    if baseline["environment"] != environment
+        || baseline["fixture"]["version"] != "gh68-chat-workloads-v1"
+        || baseline["fixture"]["seed"] != 68
+    {
+        return Err(Gh68EvidenceError("baseline compatibility"));
+    }
+    gh68_validate_workloads(&baseline["workloads"])?;
+    let coordinate = &baseline["coordinate"];
+    if coordinate["repository"] != "majiayu000/rnk"
+        || coordinate["workflow"].as_str().unwrap_or("").is_empty()
+        || coordinate["run_id"].as_u64().unwrap_or(0) == 0
+        || coordinate["artifact_name"]
+            .as_str()
+            .unwrap_or("")
+            .is_empty()
+    {
+        return Err(Gh68EvidenceError("baseline coordinate"));
+    }
+    let oracles = gh68_workload_oracles();
+    let workloads = GH68_WORKLOAD_NAMES.map(gh68_workload_json);
+    let fixture = serde_json::json!({"version":"gh68-chat-workloads-v1","seed":68,
+        "message_count":oracles.iter().map(|v|v.message_order.len()).sum::<usize>(),"block_count":oracles.iter().map(|v|v.message_order.len()).sum::<usize>(),
+        "character_count":oracles.iter().map(|v|v.character_count).sum::<usize>(),"width_height_sequence":[[80,24],[32,12],[120,40]]});
+    if baseline["fixture"] != fixture {
+        return Err(Gh68EvidenceError("baseline fixture mismatch"));
+    }
+    let results = workloads.iter().zip(baseline["workloads"].as_array().unwrap()).map(|(candidate, prior)| {
+        let candidate_median=candidate["median_ns"].as_u64().unwrap(); let baseline_median=prior["median_ns"].as_u64().unwrap(); let mad=prior["mad_ns"].as_u64().unwrap();
+        serde_json::json!({"name":candidate["name"],"candidate_median_ns":candidate_median,"baseline_median_ns":baseline_median,
+            "regression":candidate_median > baseline_median.saturating_mul(12)/10 && candidate_median.saturating_sub(baseline_median) > mad.saturating_mul(3).max(1_000_000)})
+    }).collect::<Vec<_>>();
+    let artifact = serde_json::json!({"schema":"gh68-benchmark-v1","head_sha":head,"base_main_sha":base,"generated_at":gh68_rfc3339_now()?,
+        "environment":environment,"fixture":fixture,"workloads":workloads,"baseline":{"coordinate":coordinate,"source_sha256":gh68_sha256(&bytes),
+        "head_sha":baseline["head_sha"],"environment":baseline["environment"],"fixture":baseline["fixture"],"workloads":baseline["workloads"]},
+        "comparison":{"environment_equal":true,"fixture_equal":true,"relative_threshold":1.2,"absolute_floor_ns":1_000_000,"results":results}});
+    let output = serde_json::to_vec_pretty(&artifact)
+        .map_err(|_| Gh68EvidenceError("evidence serialization"))?;
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(evidence_path)
+        .map_err(|_| Gh68EvidenceError("evidence create"))?;
+    file.write_all(&output)
+        .and_then(|_| file.sync_all())
+        .map_err(|_| Gh68EvidenceError("evidence write"))
+}
+
+pub(crate) fn gh68_benchmark_comparison_contract() -> Result<(), Gh68EvidenceError> {
+    if std::env::var("GH68_BENCHMARK_MODE").as_deref() != Ok("validate") {
+        return Err(Gh68EvidenceError("mode is not validate"));
+    }
+    let evidence = std::fs::read(gh68_env_path("GH68_BENCHMARK_EVIDENCE")?)
+        .map_err(|_| Gh68EvidenceError("evidence unreadable"))?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&evidence).map_err(|_| Gh68EvidenceError("evidence json"))?;
+    let head =
+        std::env::var("GH68_IMPLEMENTATION_HEAD").map_err(|_| Gh68EvidenceError("missing head"))?;
+    let base =
+        std::env::var("GH68_BASE_MAIN_SHA").map_err(|_| Gh68EvidenceError("missing base"))?;
+    if !gh68_hex(&head, 40)
+        || !gh68_hex(&base, 40)
+        || value["schema"] != "gh68-benchmark-v1"
+        || value["head_sha"] != head
+        || value["base_main_sha"] != base
+        || value["environment"] != gh68_environment()?
+    {
+        return Err(Gh68EvidenceError("evidence identity"));
+    }
+    gh68_validate_workloads(&value["workloads"])?;
+    gh68_validate_workloads(&value["baseline"]["workloads"])?;
+    let baseline_bytes = std::fs::read(gh68_env_path("GH68_BENCHMARK_BASELINE")?)
+        .map_err(|_| Gh68EvidenceError("baseline unreadable"))?;
+    let baseline_source: serde_json::Value =
+        serde_json::from_slice(&baseline_bytes).map_err(|_| Gh68EvidenceError("baseline json"))?;
+    if value["baseline"]["source_sha256"] != gh68_sha256(&baseline_bytes)
+        || !gh68_hex(
+            value["baseline"]["source_sha256"].as_str().unwrap_or(""),
+            64,
+        )
+    {
+        return Err(Gh68EvidenceError("baseline digest"));
+    }
+    if baseline_source["head_sha"] == head
+        || value["baseline"]["head_sha"] != baseline_source["head_sha"]
+        || value["baseline"]["environment"] != baseline_source["environment"]
+        || value["baseline"]["fixture"] != baseline_source["fixture"]
+        || value["baseline"]["workloads"] != baseline_source["workloads"]
+        || value["baseline"]["coordinate"] != baseline_source["coordinate"]
+    {
+        return Err(Gh68EvidenceError("baseline binding"));
+    }
+    let candidates = value["workloads"].as_array().unwrap();
+    let priors = value["baseline"]["workloads"].as_array().unwrap();
+    let results = value["comparison"]["results"]
+        .as_array()
+        .ok_or(Gh68EvidenceError("results type"))?;
+    if results.len() != 5
+        || value["fixture"] != value["baseline"]["fixture"]
+        || value["comparison"]["environment_equal"] != true
+        || value["comparison"]["fixture_equal"] != true
+        || value["comparison"]["relative_threshold"] != 1.2
+        || value["comparison"]["absolute_floor_ns"] != 1_000_000
+    {
+        return Err(Gh68EvidenceError("comparison contract"));
+    }
+    for ((candidate, prior), result) in candidates.iter().zip(priors).zip(results) {
+        let cm = candidate["median_ns"].as_u64().unwrap();
+        let bm = prior["median_ns"].as_u64().unwrap();
+        let mad = prior["mad_ns"].as_u64().unwrap();
+        let regression = cm > bm.saturating_mul(12) / 10
+            && cm.saturating_sub(bm) > mad.saturating_mul(3).max(1_000_000);
+        if result["name"] != candidate["name"]
+            || result["candidate_median_ns"] != cm
+            || result["baseline_median_ns"] != bm
+            || result["regression"] != regression
+        {
+            return Err(Gh68EvidenceError("comparison result"));
+        }
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub(crate) fn gh68_sha256_contract() -> bool {
+    gh68_sha256(b"abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 }
