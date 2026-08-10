@@ -626,7 +626,7 @@ mod frame_flow_tests {
 }
 
 mod context_sync;
-pub(crate) use context_sync::{CheckedLayoutSnapshot, LayoutSnapshotError};
+pub(crate) use context_sync::{CheckedLayoutSnapshot, LegacyLayoutSnapshotError};
 mod identity_index;
 mod incremental;
 mod incremental_order;
@@ -638,10 +638,11 @@ pub use patch_error::{
     DirectPatchPreflightCause, DirectPatchPreflightError, FullRebuildError, IncrementalLayoutError,
     IncrementalPatchKind, InvalidLayoutTargetError, LayoutLookupError, PatchError, PatchFailure,
     PatchKind, PatchStage, PatchTransactionCause, PatchTransactionError, RebuildFailure,
-    RebuildStage, TransactionalLayoutError,
+    RebuildStage, RecoveredSnapshotError, TransactionalLayoutError,
 };
 mod patching;
 mod postcondition;
+mod snapshot;
 #[cfg(test)]
 mod test_fingerprint;
 mod text_flow_bridge;

@@ -6,10 +6,113 @@ use std::{error::Error, fmt, io};
 
 use crate::core::{Display, Element, ElementId, ElementType};
 use crate::layout::{
-    IncrementalInvariantError, LayoutEngine, LayoutLookupError, TransactionalLayoutError,
+    CellOutputError, IncrementalInvariantError, LayoutAliasError, LayoutEngine, LayoutLookupError,
+    LayoutSnapshotError, PatchTransactionError, PreparedSnapshotFrame, SnapshotIdentity,
+    TransactionalLayoutError,
 };
 
 use super::{DynamicFrameError, Output, TextRenderError, tree_renderer};
+
+/// Failure while rendering from an immutable layout snapshot.
+#[derive(Debug)]
+pub enum SnapshotRenderError {
+    /// Snapshot construction failed.
+    Snapshot {
+        /// Concrete snapshot failure.
+        source: LayoutSnapshotError,
+    },
+    /// A frame-local element alias failed.
+    Alias {
+        /// Concrete alias failure.
+        source: LayoutAliasError,
+    },
+    /// A clipped cell could not be represented by terminal output.
+    Output {
+        /// Semantic node identity.
+        identity: SnapshotIdentity,
+        /// Concrete cell conversion failure.
+        source: CellOutputError,
+    },
+    /// Text projection failed for a semantic node.
+    Text {
+        /// Semantic node identity.
+        identity: SnapshotIdentity,
+        /// Concrete text rendering failure.
+        source: TextRenderError,
+    },
+}
+
+impl fmt::Display for SnapshotRenderError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Snapshot { source } => write!(formatter, "snapshot failed: {source}"),
+            Self::Alias { source } => write!(formatter, "snapshot alias failed: {source}"),
+            Self::Output { identity, source } => write!(
+                formatter,
+                "snapshot output failed for {}: {source}",
+                identity.diagnostic()
+            ),
+            Self::Text { identity, source } => write!(
+                formatter,
+                "snapshot text failed for {}: {source}",
+                identity.diagnostic()
+            ),
+        }
+    }
+}
+
+impl Error for SnapshotRenderError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Snapshot { source } => Some(source),
+            Self::Alias { source } => Some(source),
+            Self::Output { source, .. } => Some(source),
+            Self::Text { source, .. } => Some(source),
+        }
+    }
+}
+
+/// A recovered layout whose final snapshot rendering failed.
+#[derive(Debug)]
+pub struct RecoveredSnapshotRenderError {
+    incremental: Box<PatchTransactionError>,
+    render: Box<SnapshotRenderError>,
+}
+
+impl RecoveredSnapshotRenderError {
+    pub(crate) fn new(incremental: PatchTransactionError, render: SnapshotRenderError) -> Self {
+        Self {
+            incremental: Box::new(incremental),
+            render: Box::new(render),
+        }
+    }
+
+    /// Original incremental transaction failure.
+    pub fn incremental_failure(&self) -> &PatchTransactionError {
+        &self.incremental
+    }
+
+    /// Final snapshot rendering failure.
+    pub fn render_failure(&self) -> &SnapshotRenderError {
+        &self.render
+    }
+}
+
+impl fmt::Display for RecoveredSnapshotRenderError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "incremental layout failed ({}); recovered snapshot render failed ({})",
+            self.incremental, self.render
+        )
+    }
+}
+
+impl Error for RecoveredSnapshotRenderError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.render.as_ref())
+    }
+}
 
 /// A required layout was absent or its compatibility projection was invalid.
 ///
@@ -92,6 +195,10 @@ pub enum CheckedRenderError {
     Text(TextRenderError),
     /// A required layout lookup failed.
     Layout(LayoutRenderError),
+    /// Immutable snapshot construction or rendering failed.
+    Snapshot(SnapshotRenderError),
+    /// Recovered layout rendering failed while retaining the incremental cause.
+    RecoveredSnapshot(RecoveredSnapshotRenderError),
 }
 
 impl fmt::Display for CheckedRenderError {
@@ -100,6 +207,8 @@ impl fmt::Display for CheckedRenderError {
             Self::LayoutBuild(source) => write!(formatter, "checked layout build failed: {source}"),
             Self::Text(source) => write!(formatter, "checked text render failed: {source}"),
             Self::Layout(source) => write!(formatter, "checked layout render failed: {source}"),
+            Self::Snapshot(source) => write!(formatter, "checked snapshot render failed: {source}"),
+            Self::RecoveredSnapshot(source) => source.fmt(formatter),
         }
     }
 }
@@ -110,6 +219,8 @@ impl Error for CheckedRenderError {
             Self::LayoutBuild(source) => Some(source),
             Self::Text(source) => Some(source),
             Self::Layout(source) => Some(source),
+            Self::Snapshot(source) => Some(source),
+            Self::RecoveredSnapshot(source) => Some(source),
         }
     }
 }
@@ -226,9 +337,90 @@ pub fn try_render_element_tree_checked(
     offset_x: f32,
     offset_y: f32,
 ) -> Result<(), CheckedRenderError> {
+    if element.style.display == Display::None || element.element_type == ElementType::VirtualText {
+        return Ok(());
+    }
     validate_required_layouts(element, layout_engine, true)?;
-    tree_renderer::try_render_element_tree(element, layout_engine, output, offset_x, offset_y)?;
-    Ok(())
+    let (snapshot, _) = layout_engine.try_snapshot(element).map_err(|source| {
+        legacy_snapshot_coordinate_error(element, &source).map_or_else(
+            || CheckedRenderError::Snapshot(SnapshotRenderError::Snapshot { source }),
+            CheckedRenderError::Text,
+        )
+    })?;
+    try_render_element_snapshot_checked(element, &snapshot, output, offset_x, offset_y)
+}
+
+pub(crate) fn try_render_element_snapshot_checked(
+    element: &Element,
+    snapshot: &PreparedSnapshotFrame,
+    output: &mut Output,
+    offset_x: f32,
+    offset_y: f32,
+) -> Result<(), CheckedRenderError> {
+    tree_renderer::try_render_element_snapshot(element, snapshot, output, offset_x, offset_y)
+        .map_err(|error| {
+            let identity = snapshot.snapshot().root().identity().clone();
+            let source = match error {
+                tree_renderer::ProjectionError::Snapshot(source) => {
+                    SnapshotRenderError::Snapshot { source }
+                }
+                tree_renderer::ProjectionError::Alias(source) => {
+                    SnapshotRenderError::Alias { source }
+                }
+                tree_renderer::ProjectionError::Output { element_id, source } => {
+                    let identity = element_id
+                        .and_then(|element_id| snapshot.node_for_element(element_id).ok())
+                        .map(|node| node.identity().clone())
+                        .unwrap_or(identity);
+                    SnapshotRenderError::Output { identity, source }
+                }
+                other => SnapshotRenderError::Text {
+                    identity,
+                    source: other.into_text_render_error(element.id),
+                },
+            };
+            CheckedRenderError::Snapshot(source)
+        })
+}
+
+pub(crate) fn legacy_snapshot_coordinate_error(
+    element: &Element,
+    source: &LayoutSnapshotError,
+) -> Option<TextRenderError> {
+    if let LayoutSnapshotError::TextFlowRevision { identity, source } = source {
+        let element_id =
+            LayoutEngine::element_id_for_snapshot_identity(element, identity).unwrap_or(element.id);
+        return Some(TextRenderError::flow(element_id, source.clone()));
+    }
+    let (identity, coordinate) = match source {
+        LayoutSnapshotError::NonFiniteGeometry { identity, .. } => {
+            (identity, super::TextCoordinateError::NonFinite)
+        }
+        LayoutSnapshotError::NegativeExtent { identity, .. }
+        | LayoutSnapshotError::EdgeArithmeticOverflow { identity, .. }
+        | LayoutSnapshotError::CellCoordinateOverflow { identity, .. }
+        | LayoutSnapshotError::ReversedContentBounds { identity, .. } => {
+            (identity, super::TextCoordinateError::Overflow)
+        }
+        _ => return None,
+    };
+    let element_id = legacy_coordinate_source_element(element)
+        .or_else(|| LayoutEngine::element_id_for_snapshot_identity(element, identity))
+        .unwrap_or(element.id);
+    Some(TextRenderError::coordinate(element_id, coordinate))
+}
+
+fn legacy_coordinate_source_element(element: &Element) -> Option<ElementId> {
+    for child in &element.children {
+        if let Some(element_id) = legacy_coordinate_source_element(child) {
+            return Some(element_id);
+        }
+    }
+    let padding = &element.style.padding;
+    [padding.left, padding.top, padding.right, padding.bottom]
+        .into_iter()
+        .any(|value| !value.is_finite() || value.abs() >= i32::MAX as f32)
+        .then_some(element.id)
 }
 
 /// Render one Element entrypoint with generalized checked errors.

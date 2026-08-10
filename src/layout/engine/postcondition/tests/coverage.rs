@@ -246,6 +246,7 @@ fn planned_node_validator_covers_style_projection_context_and_non_text_failures(
             planned,
             node_id,
             TargetAliasExpectation::RawVNode,
+            false,
             &mut HashSet::new(),
             &mut HashSet::new(),
         )
@@ -264,6 +265,7 @@ fn planned_node_validator_covers_style_projection_context_and_non_text_failures(
             planned,
             node_id,
             TargetAliasExpectation::RawVNode,
+            false,
             &mut projections,
             &mut HashSet::new(),
         )
@@ -273,6 +275,7 @@ fn planned_node_validator_covers_style_projection_context_and_non_text_failures(
             planned,
             node_id,
             TargetAliasExpectation::RawVNode,
+            false,
             &mut projections,
             &mut HashSet::new(),
         )
@@ -302,6 +305,7 @@ fn planned_node_validator_covers_style_projection_context_and_non_text_failures(
             planned,
             node_id,
             TargetAliasExpectation::RawVNode,
+            false,
             &mut HashSet::new(),
             &mut HashSet::new(),
         )
@@ -338,6 +342,7 @@ fn planned_node_validator_covers_style_projection_context_and_non_text_failures(
             planned,
             node_id,
             TargetAliasExpectation::RawVNode,
+            false,
             &mut HashSet::new(),
             &mut HashSet::new(),
         )

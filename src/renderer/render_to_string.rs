@@ -5,12 +5,12 @@
 
 use crate::core::{Display, Element, ElementType};
 use crate::layout::{
-    FullRebuildError, IncrementalLayoutError, LayoutEngine, RebuildFailure,
+    FullRebuildError, IncrementalLayoutError, LayoutEngine, PreparedLayoutFrame, RebuildFailure,
     TransactionalLayoutError,
 };
 use crate::renderer::{
-    CheckedRenderError, LayoutRenderError, Output, Terminal, TextRenderError,
-    try_render_element_tree_checked,
+    CheckedRenderError, Output, Terminal, TextRenderError, legacy_snapshot_coordinate_error,
+    try_render_element_snapshot_checked,
 };
 
 const DEFAULT_TEXT_FLOW_TAB_STOP: usize = 4;
@@ -121,6 +121,16 @@ fn legacy_string_error(element: &Element, error: CheckedRenderError) -> TextRend
                 ..
             },
         )) => TextRenderError::flow(element.id, source),
+        CheckedRenderError::LayoutBuild(TransactionalLayoutError::Snapshot(source)) => {
+            legacy_snapshot_coordinate_error(element, &source).unwrap_or_else(|| {
+                panic!("legacy string renderer cannot represent snapshot error: {source}")
+            })
+        }
+        CheckedRenderError::LayoutBuild(TransactionalLayoutError::RecoveredSnapshot(source)) => {
+            legacy_snapshot_coordinate_error(element, source.snapshot_failure()).unwrap_or_else(
+                || panic!("legacy string renderer cannot represent snapshot error: {source}"),
+            )
+        }
         other => panic!("legacy string renderer cannot represent checked error: {other}"),
     }
 }
@@ -226,16 +236,29 @@ impl RenderHelper {
         width: u16,
         tab_stop: usize,
     ) -> Result<String, CheckedRenderError> {
+        if element.element_type == ElementType::VirtualText
+            || element.style.display == Display::None
+        {
+            return Ok(String::new());
+        }
         let mut engine = LayoutEngine::new();
         engine.set_text_flow_policy(tab_stop, "…", 1);
         let layout_width = width;
+        let prepared = self.try_resolve_render_height_checked(element, layout_width, &engine)?;
         let content_height =
-            self.try_resolve_render_height_checked(element, layout_width, &mut engine)?;
+            u16::try_from(prepared.snapshot().root().border_bounds().height().max(1))
+                .unwrap_or(u16::MAX);
         let render_width = layout_width;
 
         let mut output = Output::new(render_width, content_height);
         let clip_depth_before = output.clip_depth();
-        try_render_element_tree_checked(element, &engine, &mut output, 0.0, 0.0)?;
+        try_render_element_snapshot_checked(
+            element,
+            prepared.prepared_snapshot(),
+            &mut output,
+            0.0,
+            0.0,
+        )?;
         debug_assert_eq!(
             output.clip_depth(),
             clip_depth_before,
@@ -249,35 +272,18 @@ impl RenderHelper {
         &self,
         element: &Element,
         width: u16,
-        engine: &mut LayoutEngine,
-    ) -> Result<u16, CheckedRenderError> {
-        if element.element_type == ElementType::VirtualText
-            || element.style.display == Display::None
-        {
-            return Ok(1);
-        }
-
-        let initial_guess = self.calculate_element_height(element, width, engine).max(1);
-        let mut probe_height = initial_guess.max(64);
-        let mut measured_height = initial_guess;
+        engine: &LayoutEngine,
+    ) -> Result<PreparedLayoutFrame, CheckedRenderError> {
+        let mut probe_height = 64;
+        let mut measured_height = 1;
 
         for _ in 0..6 {
             let prepared = engine
                 .prepare_element_incremental(element, None, width, probe_height)
                 .map_err(CheckedRenderError::LayoutBuild)?;
-            measured_height = prepared
-                .engine()
-                .try_get_required_layout(element.id)
-                .map_err(|source| CheckedRenderError::Layout(LayoutRenderError::Invariant(source)))?
-                .ok_or({
-                    CheckedRenderError::Layout(LayoutRenderError::MissingRootLayout {
-                        element_id: element.id,
-                    })
-                })?
-                .height
-                .ceil()
-                .max(1.0) as u16;
-            prepared.commit(engine);
+            measured_height =
+                u16::try_from(prepared.snapshot().root().border_bounds().height().max(1))
+                    .unwrap_or(u16::MAX);
 
             // We have headroom; current probe height is enough.
             if measured_height.saturating_add(1) < probe_height {
@@ -294,80 +300,9 @@ impl RenderHelper {
         }
 
         let resolved_height = measured_height.max(1);
-        // Recompute using resolved height so final layout and output height align.
         engine
             .prepare_element_incremental(element, None, width, resolved_height)
-            .map_err(CheckedRenderError::LayoutBuild)?
-            .commit(engine);
-        Ok(resolved_height)
-    }
-
-    fn calculate_element_height(
-        &self,
-        element: &Element,
-        max_width: u16,
-        _engine: &mut LayoutEngine,
-    ) -> u16 {
-        let mut height = 1u16;
-
-        // Calculate available width for text
-        let available_width = if element.style.has_border() {
-            max_width.saturating_sub(2)
-        } else {
-            max_width
-        };
-        let padding_h = (element.style.padding.left + element.style.padding.right) as u16;
-        let available_width = available_width.saturating_sub(padding_h).max(1);
-
-        // Check for multiline spans with wrapping
-        if let Some(lines) = &element.spans {
-            let mut total_lines = 0usize;
-            for line in lines {
-                let line_text: String = line.spans.iter().map(|s| s.content.as_str()).collect();
-                total_lines += crate::layout::measure::count_wrapped_lines_by_width(
-                    &line_text,
-                    available_width as usize,
-                );
-            }
-            height = height.max(total_lines as u16);
-        }
-
-        // Check text_content with wrapping
-        if let Some(text) = &element.text_content {
-            let wrapped_lines = crate::layout::measure::count_wrapped_lines_by_width(
-                text,
-                available_width as usize,
-            );
-            height = height.max(wrapped_lines as u16);
-        }
-
-        // Add border height
-        if element.style.has_border() {
-            height = height.saturating_add(2);
-        }
-
-        // Add padding height
-        let padding_v = (element.style.padding.top + element.style.padding.bottom) as u16;
-        height = height.saturating_add(padding_v);
-
-        // Recursively check children and accumulate height based on layout direction
-        if !element.children.is_empty() {
-            let mut child_height_sum = 0u16;
-            let mut child_height_max = 0u16;
-            for child in &element.children {
-                let child_height = self.calculate_element_height(child, max_width, _engine);
-                child_height_sum = child_height_sum.saturating_add(child_height);
-                child_height_max = child_height_max.max(child_height);
-            }
-            // Column layout: sum heights; Row layout: take max height
-            if element.style.flex_direction == crate::core::FlexDirection::Column {
-                height = height.saturating_add(child_height_sum);
-            } else {
-                height = height.max(child_height_max);
-            }
-        }
-
-        height
+            .map_err(CheckedRenderError::LayoutBuild)
     }
 }
 

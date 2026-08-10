@@ -138,6 +138,8 @@ impl LayoutEngine {
         let mut mapped_nodes = HashSet::new();
         let mut planned_nodes = Vec::new();
         collect_planned_nodes(&plan.root, &mut planned_nodes);
+        let mut hidden_identities = HashSet::new();
+        collect_hidden_identities(&plan.root, false, &mut hidden_identities);
         if self.vnode_map.len() != planned_nodes.len()
             || self.vnode_legacy_keys.len() != planned_nodes.len()
         {
@@ -214,6 +216,7 @@ impl LayoutEngine {
                 planned,
                 node_id,
                 aliases,
+                hidden_identities.contains(&planned.identity),
                 &mut compatibility_projections,
                 &mut expected_text_identities,
             )?;
@@ -261,6 +264,7 @@ impl LayoutEngine {
         planned: &PlannedNode,
         node_id: NodeId,
         aliases: TargetAliasExpectation<'_>,
+        hidden: bool,
         compatibility_projections: &mut HashSet<crate::reconciler::SiblingIdentity>,
         expected_text_identities: &mut HashSet<ScopedNodeIdentity>,
     ) -> Result<(), TargetValidationError> {
@@ -277,20 +281,6 @@ impl LayoutEngine {
                 IncrementalInvariantError::CurrentFrameContextMismatch,
             ));
         }
-        if self
-            .taffy
-            .dirty(node_id)
-            .map_err(|source| TargetValidationError::taffy(key, source))?
-        {
-            return Err(TargetValidationError::invariant(
-                key,
-                IncrementalInvariantError::MissingComputedLayout,
-            ));
-        }
-        let layout = self
-            .taffy
-            .layout(node_id)
-            .map_err(|source| TargetValidationError::taffy(key, source))?;
         let expected_children: Vec<_> = planned
             .children
             .iter()
@@ -314,6 +304,26 @@ impl LayoutEngine {
                 IncrementalInvariantError::CompatibilityMapMismatch,
             ));
         }
+        if hidden {
+            if self.current_vnode_flows.contains_key(&planned.identity) {
+                expected_text_identities.insert(planned.identity.clone());
+            }
+            return Ok(());
+        }
+        if self
+            .taffy
+            .dirty(node_id)
+            .map_err(|source| TargetValidationError::taffy(key, source))?
+        {
+            return Err(TargetValidationError::invariant(
+                key,
+                IncrementalInvariantError::MissingComputedLayout,
+            ));
+        }
+        let layout = self
+            .taffy
+            .layout(node_id)
+            .map_err(|source| TargetValidationError::taffy(key, source))?;
 
         let expected_input = match aliases {
             TargetAliasExpectation::RawVNode => input_from_vnode(&planned.vnode),
@@ -411,13 +421,11 @@ impl LayoutEngine {
                         return Err(fail(IncrementalInvariantError::ElementMapMismatch));
                     }
                 }
-                if self.current_text_flows.len() != snapshot.text_inputs.len()
-                    || snapshot.text_inputs.len() != expected_text_identities.len()
-                {
+                if self.current_text_flows.len() != expected_text_identities.len() {
                     return Err(fail(IncrementalInvariantError::CurrentFrameContextMismatch));
                 }
                 for (element_id, identity) in &snapshot.element_scopes {
-                    let is_text = snapshot.text_inputs.contains_key(identity);
+                    let is_text = expected_text_identities.contains(identity);
                     match (
                         is_text,
                         self.current_text_flows.get(element_id),
@@ -442,6 +450,20 @@ fn collect_planned_nodes<'a>(planned: &'a PlannedNode, output: &mut Vec<&'a Plan
     output.push(planned);
     for child in &planned.children {
         collect_planned_nodes(child, output);
+    }
+}
+
+fn collect_hidden_identities(
+    planned: &PlannedNode,
+    ancestor_hidden: bool,
+    output: &mut HashSet<ScopedNodeIdentity>,
+) {
+    let hidden = ancestor_hidden || planned.vnode.props.style.display == crate::core::Display::None;
+    if hidden {
+        output.insert(planned.identity.clone());
+    }
+    for child in &planned.children {
+        collect_hidden_identities(child, hidden, output);
     }
 }
 
