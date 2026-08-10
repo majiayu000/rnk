@@ -26,6 +26,13 @@ fn first_snapshot_difference(
     full: &LayoutSnapshot,
     incremental: &LayoutSnapshot,
 ) -> Option<String> {
+    if full.viewport() != incremental.viewport() {
+        return Some(format!(
+            "identity=snapshot:<viewport> field=viewport full={:?} incremental={:?}",
+            full.viewport(),
+            incremental.viewport()
+        ));
+    }
     let full_nodes: Vec<_> = full.nodes().collect();
     let incremental_nodes: Vec<_> = incremental.nodes().collect();
     for index in 0..full_nodes.len().max(incremental_nodes.len()) {
@@ -94,16 +101,26 @@ fn first_snapshot_difference(
             full_node.scroll_transform(),
             incremental_node.scroll_transform()
         );
-        let flow = |node: &rnk::layout::SnapshotNode| {
-            node.text_flow().map(|flow| {
-                (
-                    flow.max_width(),
-                    flow.width_policy_revision(),
-                    flow.logical_row_count(),
-                )
-            })
-        };
-        compare_field!("text_flow", flow(full_node), flow(incremental_node));
+        if full_node.text_flow() != incremental_node.text_flow() {
+            let (full_value, incremental_value) = match (
+                full_node.text_flow().is_some(),
+                incremental_node.text_flow().is_some(),
+            ) {
+                (true, true) => (
+                    "semantic:<redacted-full>",
+                    "semantic:<redacted-incremental>",
+                ),
+                (true, false) => ("present", "missing"),
+                (false, true) => ("missing", "present"),
+                (false, false) => unreachable!("equal missing TextFlow values were filtered"),
+            };
+            return Some(format!(
+                "identity={} field=text_flow full={} incremental={}",
+                full_node.identity().diagnostic(),
+                full_value,
+                incremental_value
+            ));
+        }
     }
     None
 }
@@ -477,13 +494,16 @@ fn snapshot_divergence_diagnostic_names_first_identity_field_and_values() {
         padded: false,
         scroll_x: 0,
     }];
+    let full_target = target(&messages, 12);
+    let mut narrower_target = target(&messages, 12);
+    narrower_target.style.width = Dimension::Points(8.0);
     let full = LayoutEngine::new()
-        .prepare_element_incremental(&target(&messages, 12), None, 12, 4)
+        .prepare_element_incremental(&full_target, None, 12, 4)
         .unwrap()
         .snapshot()
         .clone();
     let incremental = LayoutEngine::new()
-        .prepare_element_incremental(&target(&messages, 8), None, 8, 4)
+        .prepare_element_incremental(&narrower_target, None, 12, 4)
         .unwrap()
         .snapshot()
         .clone();
@@ -493,4 +513,47 @@ fn snapshot_divergence_diagnostic_names_first_identity_field_and_values() {
     assert!(diagnostic.contains("field=border_bounds"));
     assert!(diagnostic.contains("full=CellRect"));
     assert!(diagnostic.contains("incremental=CellRect"));
+
+    let source_a = vec![Message {
+        text: "same-size-A".to_owned(),
+        ..messages[0].clone()
+    }];
+    let source_b = vec![Message {
+        text: "same-size-B".to_owned(),
+        ..messages[0].clone()
+    }];
+    let source_a = full_snapshot_for_diagnostic(&target(&source_a, 20), 20, 4);
+    let source_b = full_snapshot_for_diagnostic(&target(&source_b, 20), 20, 4);
+    let flow_a = source_a
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("first fixture has a text flow");
+    let flow_b = source_b
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("second fixture has a text flow");
+    assert_eq!(flow_a.max_width(), flow_b.max_width());
+    assert_eq!(
+        flow_a.width_policy_revision(),
+        flow_b.width_policy_revision()
+    );
+    assert_eq!(flow_a.logical_row_count(), flow_b.logical_row_count());
+    assert_ne!(flow_a, flow_b, "complete TextFlow semantics must differ");
+    let flow_diagnostic = first_snapshot_difference(&source_a, &source_b)
+        .expect("complete TextFlow equality must detect a source-only change");
+    assert!(flow_diagnostic.contains("identity=snapshot:"));
+    assert!(flow_diagnostic.contains("field=text_flow"));
+    assert!(flow_diagnostic.contains("full=semantic:<redacted-full>"));
+    assert!(flow_diagnostic.contains("incremental=semantic:<redacted-incremental>"));
+    assert!(!flow_diagnostic.contains("same-size-A"));
+    assert!(!flow_diagnostic.contains("same-size-B"));
+    assert!(flow_diagnostic.len() <= 192);
+}
+
+fn full_snapshot_for_diagnostic(target: &Element, width: u16, height: u16) -> LayoutSnapshot {
+    LayoutEngine::new()
+        .prepare_element_incremental(target, None, width, height)
+        .expect("diagnostic fixture builds")
+        .snapshot()
+        .clone()
 }

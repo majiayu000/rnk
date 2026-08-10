@@ -3,7 +3,7 @@ use rnk::core::{Dimension, Display, Element, FlexDirection, Overflow, Props, VNo
 use rnk::layout::{
     CheckedIncrementalLayoutReport, LayoutEngine, LayoutSnapshot, SnapshotBuildStrategy,
 };
-use rnk::renderer::try_render_to_string_checked;
+use rnk::renderer::{Output, try_render_element_tree_checked, try_render_to_string_checked};
 use rnk::testing::TestRenderer;
 
 fn chat_target(messages: &[(&str, &str)], width: u16) -> Element {
@@ -25,6 +25,13 @@ fn full_snapshot(target: &Element, width: u16, height: u16) -> LayoutSnapshot {
         .expect("full snapshot")
         .snapshot()
         .clone()
+}
+
+fn render_published(target: &Element, engine: &LayoutEngine, width: u16, height: u16) -> String {
+    let mut output = Output::new(width, height);
+    try_render_element_tree_checked(target, engine, &mut output, 0.0, 0.0)
+        .expect("published exact snapshot renders");
+    output.render()
 }
 
 #[test]
@@ -147,15 +154,30 @@ fn chat_mutation_matrix_matches_full() {
     let mut entries: Vec<_> = (0..1_000)
         .map(|index| {
             let key = (index % 2 == 0).then(|| format!("message-{index}"));
-            let payload = match index % 4 {
-                0 => format!("ascii {index}"),
-                1 => format!("中\nvariable row {index}"),
-                2 => format!("👩‍💻 {index}"),
-                _ => format!("e\u{301} {index}"),
-            };
+            let logical_height = (index % 12) + 1;
+            let payload = (0..logical_height)
+                .map(|row| match index % 4 {
+                    0 => format!("ascii {index}:{row}"),
+                    1 => format!("中 {index}:{row}"),
+                    2 => format!("👩‍💻 {index}:{row}"),
+                    _ => format!("e\u{301} {index}:{row}"),
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
             (key, payload)
         })
         .collect();
+    let declared_heights = entries
+        .iter()
+        .map(|(_, payload)| payload.lines().count())
+        .fold([0_usize; 12], |mut counts, height| {
+            counts[height - 1] += 1;
+            counts
+        });
+    assert_eq!(
+        declared_heights,
+        [84, 84, 84, 84, 83, 83, 83, 83, 83, 83, 83, 83]
+    );
     let mut large_engine = LayoutEngine::new();
     let mut large_previous = None;
     for operation in 0..6 {
@@ -175,6 +197,22 @@ fn chat_mutation_matrix_matches_full() {
         let prepared = large_engine
             .prepare_element_incremental(&target, large_previous.as_ref(), 40, 2_000)
             .unwrap_or_else(|error| panic!("large mutation operation {operation}: {error}"));
+        if operation == 0 {
+            let actual_heights = prepared
+                .snapshot()
+                .nodes()
+                .filter_map(|node| node.text_flow())
+                .map(|flow| flow.logical_row_count())
+                .fold([0_usize; 12], |mut counts, height| {
+                    counts[height - 1] += 1;
+                    counts
+                });
+            assert_eq!(actual_heights, declared_heights);
+            assert_eq!(
+                actual_heights.iter().filter(|count| **count > 0).count(),
+                12
+            );
+        }
         assert_eq!(
             prepared.snapshot(),
             &full_snapshot(&target, 40, 2_000),
@@ -303,7 +341,7 @@ fn snapshot_target_adapter_uses_gh59_order_and_gh60_lookup_contract() {
 }
 
 #[test]
-fn nested_mixed_axis_overflow_matches_all_strategies() {
+fn nested_mixed_axis_overflow_full_and_incremental_cells_match() {
     let mut inner = chat_target(&[("text", "abcdefgh\n第二行")], 9);
     inner.style.height = Dimension::Points(2.0);
     inner.style.overflow_x = Overflow::Visible;
@@ -314,17 +352,38 @@ fn nested_mixed_axis_overflow_matches_all_strategies() {
     target.style.overflow_x = Overflow::Hidden;
     target.style.overflow_y = Overflow::Visible;
 
-    let full = full_snapshot(&target, 20, 8);
-    let mut engine = LayoutEngine::new();
-    let initial = engine
+    let mut full_engine = LayoutEngine::new();
+    let full_frame = full_engine
         .prepare_element_incremental(&target, None, 20, 8)
         .unwrap();
-    let (previous, _) = initial.commit(&mut engine);
+    assert_eq!(
+        full_frame.snapshot_report().strategy(),
+        SnapshotBuildStrategy::InitialFull
+    );
+    let full = full_frame.snapshot().clone();
+    full_frame.commit(&mut full_engine);
+    let full_output = render_published(&target, &full_engine, 20, 8);
+
+    let mut incremental_engine = LayoutEngine::new();
+    let initial = incremental_engine
+        .prepare_element_incremental(&target, None, 20, 8)
+        .unwrap();
+    let (previous, _) = initial.commit(&mut incremental_engine);
     let fresh_aliases = target.clone();
-    let incremental = engine
+    let incremental = incremental_engine
         .prepare_element_incremental(&fresh_aliases, Some(&previous), 20, 8)
         .unwrap();
+    assert_eq!(
+        incremental.snapshot_report().strategy(),
+        SnapshotBuildStrategy::Incremental
+    );
     assert_eq!(incremental.snapshot(), &full);
+    incremental.commit(&mut incremental_engine);
+    let incremental_output = render_published(&fresh_aliases, &incremental_engine, 20, 8);
+
+    assert_eq!(incremental_output, full_output);
+    assert_eq!(full_output, "abcdef\r\n第二行");
+
     let child_index = full.root().children()[0];
     let child = full.nodes().nth(child_index.as_usize()).unwrap();
     assert_eq!(child.effective_clip().x().end(), 6);

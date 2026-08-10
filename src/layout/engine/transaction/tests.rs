@@ -1,11 +1,13 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use crate::core::{Dimension, Element, ElementType, VNode};
+use crate::core::{Dimension, Element, ElementType, FlexDirection, Overflow, VNode};
 use crate::layout::{
     CheckedIncrementalLayoutReport, IncrementalInvariantError, IncrementalPatchKind, PatchStage,
-    PatchTransactionCause, RebuildFailure, RebuildStage, TransactionalLayoutError,
+    PatchTransactionCause, RebuildFailure, RebuildStage, SnapshotBuildStrategy,
+    TransactionalLayoutError,
 };
 use crate::reconciler::{Patch, ScopedIdentityArena, plan_diff_in};
+use crate::renderer::{Output, try_render_element_snapshot_checked};
 
 use super::super::{
     LayoutEngine,
@@ -30,6 +32,69 @@ fn frame(branch_is_text: bool, extra: bool) -> Element {
         root.add_child(Element::text("extra").with_key("extra"));
     }
     root
+}
+
+fn nested_mixed_axis_target() -> Element {
+    let mut inner = Element::box_element().with_key("inner");
+    inner.style.flex_direction = FlexDirection::Column;
+    inner.style.width = Dimension::Points(9.0);
+    inner.style.height = Dimension::Points(2.0);
+    inner.style.overflow_x = Overflow::Visible;
+    inner.style.overflow_y = Overflow::Hidden;
+    inner.add_child(Element::text("abcdefgh\n第二行").with_key("text"));
+
+    let mut outer = Element::box_element().with_key("outer");
+    outer.style.width = Dimension::Points(6.0);
+    outer.style.height = Dimension::Points(4.0);
+    outer.style.overflow_x = Overflow::Hidden;
+    outer.style.overflow_y = Overflow::Visible;
+    outer.add_child(inner);
+    outer
+}
+
+fn render_prepared_snapshot(target: &Element, frame: &super::PreparedLayoutFrame) -> String {
+    let mut output = Output::new(20, 8);
+    try_render_element_snapshot_checked(target, frame.prepared_snapshot(), &mut output, 0.0, 0.0)
+        .expect("private snapshot renderer accepts the validated frame");
+    output.render()
+}
+
+#[test]
+fn nested_mixed_axis_overflow_recovery_snapshot_and_cells_match() {
+    let full_target = nested_mixed_axis_target();
+    let full = LayoutEngine::new()
+        .prepare_element_incremental(&full_target, None, 20, 8)
+        .expect("fresh full mixed-axis frame");
+    let full_snapshot = full.snapshot().clone();
+    let full_cells = render_prepared_snapshot(&full_target, &full);
+    assert_eq!(full_cells, "abcdef\r\n第二行");
+
+    let mut recovered_engine = LayoutEngine::new();
+    let initial_target = nested_mixed_axis_target();
+    let initial = recovered_engine
+        .prepare_element_incremental(&initial_target, None, 20, 8)
+        .expect("initial committed frame");
+    let (previous, _) = initial.commit(&mut recovered_engine);
+    let recovered_target = nested_mixed_axis_target();
+    set_postcondition_fault(PostconditionFault::CurrentFrameContextMismatch);
+    let recovered = recovered_engine
+        .prepare_element_incremental(&recovered_target, Some(&previous), 20, 8)
+        .expect("one-shot GH60 transaction failure recovers once");
+    assert!(matches!(
+        recovered.report(),
+        CheckedIncrementalLayoutReport::RecoveredFullRebuild { patch_count: 0, .. }
+    ));
+    assert_eq!(
+        recovered.snapshot_report().strategy(),
+        SnapshotBuildStrategy::RecoveredFull
+    );
+    assert_eq!(
+        recovered.snapshot_report().work_counters().rebuild_count(),
+        1
+    );
+    assert_eq!(recovered.snapshot(), &full_snapshot);
+    let recovered_cells = render_prepared_snapshot(&recovered_target, &recovered);
+    assert_eq!(recovered_cells, full_cells);
 }
 
 #[test]

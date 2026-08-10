@@ -16,7 +16,8 @@ transaction/recovery/prepared commit 是强依赖，不在本 issue 内复制或
 
 以下锚点在 stacked base `spec/GH60-transactional-patching`
 `f67f973ed6903edb0cb76b5cb45c977ce92be851` 上通过 Read/grep 核实。该 base 尚未包含
-GH-58 至 GH-60 的生产实现；GH-61 implementation 必须在三个真实 merge SHA 上重新定位。
+GH-58 至 GH-60 的生产实现，因此本表只保留为root-cause历史基线；当前GH-61实现已在三项
+dependency合入后的生产模块重新定位，不能再把“尚未实现”当作当前事实或兼容性假设。
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
@@ -311,8 +312,11 @@ cell_bottom = checked_floor(absolute_bottom)
   Visible轴保持继承span。`Hidden/Visible`与`Visible/Hidden`都不能构造完整content rect clip。
 - renderer只把 x/y均位于`effective_clip ∩ viewport`内的非负cell checked-convert为`u16`。
   `mixed_axis_overflow_clips_only_selected_axis`与
-  `nested_mixed_axis_overflow_matches_all_strategies`覆盖两种方向、两层嵌套、空单轴span，
-  并比较full/incremental/recovered及renderer最终cells。
+  `nested_mixed_axis_overflow_full_and_incremental_cells_match`覆盖两种方向、两层嵌套、
+  空单轴span及nonzero full/incremental最终cells；crate-private
+  `nested_mixed_axis_overflow_recovery_snapshot_and_cells_match`在既有GH60 one-shot
+  postcondition fault boundary强制真实recovery，并比较fresh full/recovered exact snapshot和
+  private snapshot renderer最终cells。
 
 Taffy 0.7 自带 pixel rounding，但 GH-61 不在 renderer 二次猜测其局部 float。merged lock
 确认 `layout()` 默认返回 final rounded relative layout，而 `unrounded_layout()` 返回 canonical
@@ -353,7 +357,7 @@ try_build_snapshot(candidate, target, viewport, aliases)
 
 `initial_snapshot_failure_never_enters_incremental_recovery`必须用recovery spy断言
 incremental/recovered调用数均为0、`rebuild_count=0`、source chain为
-`Transaction -> Snapshot -> LayoutSnapshotError`且所有
+`Transaction -> Snapshot -> SnapshotBuildFailure -> LayoutSnapshotError`且所有
 published slots未变；`recovered_frame_uses_only_recovered_candidate_snapshot`只覆盖已有
 committed state的incremental fault；`recovered_snapshot_or_render_failure_preserves_both_causes`
 逐项断言aggregate accessors/source chain和零发布。
@@ -467,7 +471,7 @@ line 与 branch 均 100%，由既有 CI Coverage job 报告。
 | B-005 | absolute edge quantizer | `cargo test --test layout_snapshot_root_cause --locked nested_fractional_edges_need_one_cell_snapshot -- --exact`; `cargo test --test layout_snapshot_parity --locked nested_shared_edges_do_not_gain_overlap -- --exact` |
 | B-006 | content/border quantization | `cargo test --workspace --lib --locked layout::snapshot::quantize::tests::content_border_and_gap_error_are_bounded -- --exact` |
 | B-007 | signed coordinates/output conversion | `cargo test --test layout_snapshot_error_paths --locked negative_and_overflow_cells_are_not_clamped_to_success -- --exact` |
-| B-008 | axis-independent effective clip | `cargo test --workspace --lib --locked layout::snapshot::tests::mixed_axis_overflow_clips_only_selected_axis -- --exact`; `cargo test --test layout_snapshot_parity --locked nested_mixed_axis_overflow_matches_all_strategies -- --exact` |
+| B-008 | axis-independent effective clip | `cargo test --workspace --lib --locked layout::snapshot::tests::mixed_axis_overflow_clips_only_selected_axis -- --exact`; `cargo test --test layout_snapshot_parity --locked nested_mixed_axis_overflow_full_and_incremental_cells_match -- --exact`; `cargo test --workspace --lib --locked layout::engine::transaction::tests::nested_mixed_axis_overflow_recovery_snapshot_and_cells_match -- --exact` |
 | B-009 | scroll projection | `cargo test --test layout_snapshot_parity --locked scroll_changes_descendant_projection_only -- --exact` |
 | B-010 | TextFlow semantic stamp | `cargo test --test layout_snapshot_parity --locked cold_and_cached_text_flow_revisions_are_semantically_equal -- --exact` |
 | B-011 | build/failed-attempt report separation | `cargo test --workspace --lib --locked layout::snapshot::tests::producer_report_does_not_change_semantic_equality -- --exact`; `cargo test --test layout_snapshot_error_paths --locked initial_snapshot_failure_never_enters_incremental_recovery -- --exact`; `cargo test --test layout_snapshot_error_paths --locked ordinary_incremental_snapshot_failure_preserves_partial_attempt_report -- --exact` |
@@ -525,9 +529,9 @@ full/incremental/recovered 只改变 producer report，不改变 snapshot semant
 
 - **Security**：identity 或 error payload 可能含 terminal controls。沿用 GH-58
   sanitization；诊断不暴露 public `Any`、arbitrary closure 或不受控执行 seam。
-- **Compatibility**：GH-58至GH-60尚未实现，真实module/public enum可能变化。implementation
-  只在merged SHA重定位后开始；GH-61 semantic error set首版closed，只有GH-60既有公开outer
-  wrapper可保持`#[non_exhaustive]`；旧`Layout`/wrappers保留。
+- **Compatibility**：GH-58至GH-60已是当前生产依赖；GH-61只以合入后的真实module/public
+  enum为边界。GH-61 semantic error set首版closed，只有GH-60既有公开outer wrapper保持
+  `#[non_exhaustive]`；旧`Layout`/wrappers保留。
 - **Correctness**：Taffy 0.7默认rounding与unrounded layout细节可能与写作时假设不同。只选
   一个canonical source，并用nested cumulative edge fixtures锁定；禁止double rounding。
 - **Identity**：ElementId alias与semantic identity混放会破坏no-op reuse/parity。aliases放在

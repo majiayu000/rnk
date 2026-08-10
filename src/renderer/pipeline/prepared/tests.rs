@@ -229,38 +229,49 @@ pub(crate) fn oversized_measurement_fails_before_atomic_publication() {
 }
 
 pub(crate) fn all_correctness_consumers_use_authoritative_snapshot() {
+    const EXPECTED_TEXT: &str = "consumer parity";
+    const EXPECTED_WIDTH: i32 = 15;
     let runtime = Rc::new(RefCell::new(RuntimeContext::new()));
     let mut engine = LayoutEngine::new();
     let mut previous = None;
     let target = Element::text("consumer parity").with_key("child");
     let prepared = RenderPipeline::prepare_dynamic_frame(&target, 20, 4, &engine, None)
         .expect("dynamic consumer prepares from the authoritative snapshot");
-    assert!(prepared.rendered().contains("consumer parity"));
+    assert_eq!(prepared.rendered(), EXPECTED_TEXT);
     prepared.commit(&mut engine, &runtime, &mut previous);
     let (published, _) = engine.try_snapshot(&target).unwrap();
     let expected_bounds = published.snapshot().root().border_bounds();
     assert_eq!(
+        (
+            expected_bounds.left(),
+            expected_bounds.top(),
+            expected_bounds.right(),
+            expected_bounds.bottom(),
+        ),
+        (0, 0, EXPECTED_WIDTH, 1)
+    );
+    assert_eq!(
         runtime.borrow().get_measurement_by_key_dims("child"),
-        Some((
-            expected_bounds.width() as f32,
-            expected_bounds.height() as f32
-        ))
+        Some((EXPECTED_WIDTH as f32, 1.0))
     );
 
     let mut checked_output = Output::new(20, 4);
     try_render_element_tree_checked(&target, &engine, &mut checked_output, 0.0, 0.0)
         .expect("public checked helper consumes the published exact snapshot");
-    assert!(checked_output.render().contains("consumer parity"));
-    assert!(
-        try_render_to_string_checked(&target, 20)
-            .unwrap()
-            .contains("consumer parity")
+    assert_eq!(checked_output.render(), EXPECTED_TEXT);
+    let checked_cells: String = (0..20)
+        .map(|column| checked_output.cell_at(column, 0).unwrap().ch)
+        .collect();
+    assert_eq!(checked_cells, format!("{EXPECTED_TEXT}     "));
+    assert_eq!(
+        try_render_to_string_checked(&target, 20).unwrap(),
+        EXPECTED_TEXT
     );
-    assert!(
+    assert_eq!(
         TestRenderer::new(20, 4)
             .try_render_to_plain_checked(&target)
-            .unwrap()
-            .contains("consumer parity")
+            .unwrap(),
+        EXPECTED_TEXT
     );
 
     let mut static_root = Element::box_element();
@@ -269,5 +280,5 @@ pub(crate) fn all_correctness_consumers_use_authoritative_snapshot() {
     let static_lines = StaticRenderer::new()
         .try_extract_static_content_checked(&static_root, 20)
         .expect("static consumer uses its prepared authoritative snapshot");
-    assert!(static_lines.join("\n").contains("consumer parity"));
+    assert_eq!(static_lines, vec![EXPECTED_TEXT.to_owned()]);
 }

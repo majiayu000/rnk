@@ -175,10 +175,15 @@ impl LayoutEngine {
     ///
     /// Returns [`TransactionalLayoutError::Upstream`] for preflight failures,
     /// [`TransactionalLayoutError::InitialBuild`] for an initial-frame failure,
+    /// [`TransactionalLayoutError::Snapshot`] when the checked snapshot builder
+    /// rejects an initial or ordinary candidate while preserving its partial
+    /// attempt report,
     /// [`TransactionalLayoutError::InvalidTarget`] when a committed engine is
     /// given a target that cannot form a layout tree,
-    /// or [`TransactionalLayoutError::RecoveryFailed`] when both the candidate
-    /// and its single fresh rebuild fail.
+    /// [`TransactionalLayoutError::RecoveredSnapshot`] when the one permitted
+    /// recovery candidate reaches snapshot construction but fails there,
+    /// or [`TransactionalLayoutError::RecoveryFailed`] when both layout
+    /// candidates fail before snapshot construction.
     ///
     /// ```
     /// use rnk::core::Element;
@@ -219,10 +224,15 @@ impl LayoutEngine {
     ///
     /// Returns [`TransactionalLayoutError::Upstream`] for preflight failures,
     /// [`TransactionalLayoutError::InitialBuild`] for an initial-frame failure,
+    /// [`TransactionalLayoutError::Snapshot`] when the checked snapshot builder
+    /// rejects an initial or ordinary candidate while preserving its partial
+    /// attempt report,
     /// [`TransactionalLayoutError::InvalidTarget`] when a committed engine is
     /// given a target that cannot form a layout tree,
-    /// or [`TransactionalLayoutError::RecoveryFailed`] when both the candidate
-    /// and its single fresh rebuild fail.
+    /// [`TransactionalLayoutError::RecoveredSnapshot`] when the one permitted
+    /// recovery candidate reaches snapshot construction but fails there,
+    /// or [`TransactionalLayoutError::RecoveryFailed`] when both layout
+    /// candidates fail before snapshot construction.
     ///
     /// ```
     /// use rnk::{core::{Element, ElementType}, layout::{LayoutEngine, TransactionalLayoutError}};
