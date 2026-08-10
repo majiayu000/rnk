@@ -3,17 +3,22 @@ use rnk::components::chat::message_list::{
     MessageListEntry, MessageListState, MessageMeasureOutcome, MessageRows,
     MessageShellMeasureConfig, MessageVariantKey, ViewportRows,
 };
+use rnk::components::chat::scrollback::NativeTerminalSink;
 use rnk::components::chat::{
     BlockId, ChatComposerState, ChatMessage, ChatMessageView, ChatRole, ConversationEvent,
-    ConversationGuard, ConversationState, ConversationUpdate, FullscreenChatShell, MessageBlock,
-    MessageBlockEntry, MessageId, MessageMutationGuard, MessageRevision, UpdateId,
+    ConversationGuard, ConversationState, ConversationUpdate, FullscreenChatShell, InlineChatShell,
+    InlineCommitReport, InlineKeyOutcome, LiveState, MessageBlock, MessageBlockEntry, MessageId,
+    MessageMutationGuard, MessageRevision, ProjectionContext, ScrollbackNamespace, ThemeIdentity,
+    UpdateId,
 };
 use rnk::components::{
     Badge, BadgeVariant, Box as RnkBox, Confirm, ConfirmState, Message, Progress, ProgressSymbols,
     SelectInput, SelectItem, Stat, Text, TextArea, TextAreaState,
 };
 use rnk::core::{Color, Element, FlexDirection};
+use rnk::hooks::Key;
 use rnk::testing::GoldenTest;
+use std::io::{self, Write};
 use std::num::NonZeroUsize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -633,5 +638,152 @@ fn gh68_fullscreen_example_contract() {
     assert_eq!(
         entries[0].content_revision(),
         MessageRevision::new(1).unwrap()
+    );
+}
+
+#[derive(Debug, Default)]
+struct Gh68BudgetedWriter {
+    accepted: Vec<u8>,
+    budget: Option<usize>,
+}
+
+impl Gh68BudgetedWriter {
+    const fn unlimited() -> Self {
+        Self {
+            accepted: Vec::new(),
+            budget: None,
+        }
+    }
+
+    const fn accepting(budget: usize) -> Self {
+        Self {
+            accepted: Vec::new(),
+            budget: Some(budget),
+        }
+    }
+}
+
+impl Write for Gh68BudgetedWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let Some(budget) = self.budget else {
+            self.accepted.extend_from_slice(bytes);
+            return Ok(bytes.len());
+        };
+        let room = budget.saturating_sub(self.accepted.len());
+        if room == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "budget exhausted",
+            ));
+        }
+        let count = room.min(bytes.len());
+        self.accepted.extend_from_slice(&bytes[..count]);
+        Ok(count)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn inline_report(
+    writer: Gh68BudgetedWriter,
+) -> (
+    InlineCommitReport,
+    InlineChatShell<NativeTerminalSink<Gh68BudgetedWriter>>,
+    rnk::components::chat::SubmissionToken,
+) {
+    let mut shell = InlineChatShell::new(
+        ScrollbackNamespace::new("gh68.inline").unwrap(),
+        NativeTerminalSink::new(writer),
+    );
+    assert!(matches!(
+        shell.handle_key(
+            &rnk::components::chat::ChatComposerKeyMap::new(),
+            "draft",
+            &Key::default()
+        ),
+        InlineKeyOutcome::Changed(_)
+    ));
+    let enter = Key {
+        return_key: true,
+        ..Key::default()
+    };
+    assert_eq!(
+        shell.handle_key(
+            &rnk::components::chat::ChatComposerKeyMap::new(),
+            "",
+            &enter
+        ),
+        InlineKeyOutcome::Submitted("draft".to_owned())
+    );
+    let token = shell.composer().pending_submission().unwrap().token();
+    let id = MessageId::new(1);
+    shell.stream(id).unwrap();
+    let report = shell
+        .finish(
+            id,
+            MessageRevision::INITIAL,
+            "You: draft",
+            ProjectionContext::new(40, ThemeIdentity::new(1)).unwrap(),
+        )
+        .unwrap();
+    (report, shell, token)
+}
+
+#[test]
+fn gh68_inline_example_contract() {
+    let source = include_str!("../examples/claude_input_box.rs");
+    for required in [
+        "InlineChatShell::new",
+        "InlineCommitReport::Fixed",
+        "InlineCommitReport::Retained",
+        "InlineCommitReport::Latched",
+        "acknowledge_success(token)",
+        "acknowledge_failure(token)",
+        "LiveState::AwaitingResolution",
+    ] {
+        assert!(source.contains(required), "missing inline seam: {required}");
+    }
+    for forbidden in ["app.println(", "println!(", "submitted_count", "wrap_text("] {
+        assert!(
+            !source.contains(forbidden),
+            "inline example retained a direct publication ledger: {forbidden}"
+        );
+    }
+
+    let (fixed, mut fixed_shell, fixed_token) = inline_report(Gh68BudgetedWriter::unlimited());
+    assert!(matches!(fixed, InlineCommitReport::Fixed { .. }));
+    fixed_shell
+        .composer_mut()
+        .acknowledge_success(fixed_token)
+        .unwrap();
+    assert_eq!(fixed_shell.composer().text(), "");
+    assert!(fixed_shell.live_messages().is_empty());
+
+    let (retained, mut retained_shell, retained_token) =
+        inline_report(Gh68BudgetedWriter::accepting(0));
+    assert!(matches!(retained, InlineCommitReport::Retained { .. }));
+    retained_shell
+        .composer_mut()
+        .acknowledge_failure(retained_token)
+        .unwrap();
+    assert_eq!(retained_shell.composer().text(), "draft");
+    assert_eq!(
+        retained_shell.live_state(MessageId::new(1)),
+        Some(LiveState::AwaitingRetry)
+    );
+
+    let (latched, mut latched_shell, latched_token) =
+        inline_report(Gh68BudgetedWriter::accepting(3));
+    assert!(matches!(latched, InlineCommitReport::Latched { .. }));
+    latched_shell
+        .composer_mut()
+        .acknowledge_failure(latched_token)
+        .unwrap();
+    assert_eq!(latched_shell.composer().text(), "draft");
+    assert_eq!(
+        latched_shell.live_state(MessageId::new(1)),
+        Some(LiveState::AwaitingResolution)
     );
 }
