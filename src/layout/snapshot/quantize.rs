@@ -129,11 +129,8 @@ pub(crate) fn rect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Element;
-    use crate::layout::snapshot::{
-        AxisClip, CellVector, CheckedSnapshotNodeInput, LayoutSnapshotBuilder,
-        SnapshotBuildStrategy,
-    };
+    use crate::core::{BorderStyle, Dimension, Element, FlexDirection, Overflow};
+    use crate::layout::{LayoutEngine, SnapshotBuildStrategy};
     use crate::reconciler::ScopedNodeIdentity;
 
     fn identity() -> SnapshotIdentity {
@@ -150,66 +147,56 @@ mod tests {
 
     #[test]
     fn content_border_and_gap_error_are_bounded() {
-        let identity = identity();
-        let border = rect(&identity, 0.1, 0.1, 8.2, 4.8).unwrap();
-        let raw_content = rect(&identity, 1.2, 1.1, 7.9, 3.7).unwrap();
-        let content = raw_content.intersect(border);
-        assert_eq!(
-            (border.left(), border.top(), border.right(), border.bottom()),
-            (0, 0, 8, 4)
-        );
-        assert_eq!(
-            (
-                content.left(),
-                content.top(),
-                content.right(),
-                content.bottom()
-            ),
-            (1, 1, 7, 3)
-        );
-        assert!(border.contains(content));
+        const RAW_GAP: f64 = 1.25;
+        let bordered_child = |key: &str, text: &str| {
+            let mut child = Element::box_element().with_key(key);
+            child.style.width = Dimension::Points(7.5);
+            child.style.height = Dimension::Points(4.0);
+            child.style.padding.left = 0.75;
+            child.style.padding.right = 0.75;
+            child.style.border_style = BorderStyle::Single;
+            child.style.border_top = true;
+            child.style.border_right = true;
+            child.style.border_bottom = true;
+            child.style.border_left = true;
+            child.style.overflow_x = Overflow::Hidden;
+            child.add_child(Element::text(text));
+            child
+        };
+        let mut target = Element::box_element().with_key("root");
+        target.style.width = Dimension::Points(30.0);
+        target.style.height = Dimension::Points(4.0);
+        target.style.flex_direction = FlexDirection::Row;
+        target.style.column_gap = Some(RAW_GAP as f32);
+        target.add_child(bordered_child("left", "left-content"));
+        target.add_child(bordered_child("right", "right-content"));
 
-        let outside = rect(&identity, 30.0, 2.0, 35.0, 3.0).unwrap();
-        let canonical_empty = outside.intersect(border);
+        let frame = LayoutEngine::new()
+            .prepare_element_incremental(&target, None, 30, 6)
+            .expect("real Element border/padding/gap path builds a checked snapshot");
         assert_eq!(
-            (
-                canonical_empty.left(),
-                canonical_empty.top(),
-                canonical_empty.right(),
-                canonical_empty.bottom()
-            ),
-            (8, 2, 8, 3)
+            frame.snapshot_report().strategy(),
+            SnapshotBuildStrategy::InitialFull
         );
-        assert!(border.contains(canonical_empty));
-
-        let root = Element::root();
-        let mut builder = LayoutSnapshotBuilder::new(8, 4, 1);
-        builder
-            .push_ordered(CheckedSnapshotNodeInput {
-                element_id: root.id,
-                identity: identity.clone(),
-                parent: None,
-                border_bounds: border,
-                content_bounds: content,
-                text_origin: raw_content.origin(),
-                effective_clip: AxisClip::from_rect(content),
-                scroll_transform: CellVector::checked(0, 0),
-                text_flow: None,
-            })
-            .unwrap();
-        let (published, _) = builder
-            .finish(SnapshotBuildStrategy::InitialFull, 0, None)
-            .unwrap();
-        assert_eq!(published.snapshot().root().border_bounds(), border);
-        assert_eq!(published.snapshot().root().content_bounds(), content);
-
-        let left = rect(&identity, 0.1, 0.0, 3.9, 1.0).unwrap();
-        let right = rect(&identity, 3.9, 0.0, 8.2, 1.0).unwrap();
-        assert_eq!(left.right(), right.left());
-        assert!(left.right() <= right.left());
-        assert_eq!(left.width(), 3);
-        assert_eq!(right.width(), 5);
-        let shared_edge_error = (3.9_f64 - f64::from(left.right())).abs();
-        assert!(shared_edge_error < 1.0);
+        let snapshot = frame.snapshot();
+        assert_eq!(
+            frame.snapshot_report().work_counters().snapshot_nodes(),
+            snapshot.nodes().len() as u64
+        );
+        let children = snapshot.root().children();
+        assert_eq!(children.len(), 2);
+        let left = snapshot.node(children[0]);
+        let right = snapshot.node(children[1]);
+        for child in [left, right] {
+            let border = child.border_bounds();
+            let content = child.content_bounds();
+            assert!(border.contains(content));
+            assert!(content.left() > border.left());
+            assert!(content.right() < border.right());
+            assert!(!content.is_empty());
+        }
+        let cell_gap = right.border_bounds().left() - left.border_bounds().right();
+        assert_eq!(cell_gap, 1);
+        assert!((RAW_GAP - f64::from(cell_gap)).abs() < 1.0);
     }
 }

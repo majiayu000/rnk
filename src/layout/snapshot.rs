@@ -311,15 +311,35 @@ pub struct TextFlowSemanticStamp {
     flow: Arc<TextFlow>,
 }
 
+struct TextFlowFingerprintWriter(std::collections::hash_map::DefaultHasher);
+
+impl fmt::Write for TextFlowFingerprintWriter {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        self.0.write(value.as_bytes());
+        Ok(())
+    }
+}
+
 impl fmt::Debug for TextFlowSemanticStamp {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("TextFlowSemanticStamp(<semantic>)")
+        let fingerprint = self.semantic_fingerprint()?;
+        write!(
+            formatter,
+            "TextFlowSemanticStamp(<semantic:{fingerprint:016x}>)"
+        )
     }
 }
 
 impl TextFlowSemanticStamp {
     pub(crate) fn checked(flow: Arc<TextFlow>) -> Self {
         Self { flow }
+    }
+    fn semantic_fingerprint(&self) -> Result<u64, fmt::Error> {
+        let mut writer =
+            TextFlowFingerprintWriter(std::collections::hash_map::DefaultHasher::new());
+        writer.0.write(b"rnk.snapshot.text-flow.semantic.v1");
+        fmt::write(&mut writer, format_args!("{:?}", self.flow.as_ref()))?;
+        Ok(writer.0.finish())
     }
     /// Maximum content width used to build the flow.
     pub fn max_width(&self) -> usize {

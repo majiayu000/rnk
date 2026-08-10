@@ -102,18 +102,12 @@ fn first_snapshot_difference(
             incremental_node.scroll_transform()
         );
         if full_node.text_flow() != incremental_node.text_flow() {
-            let (full_value, incremental_value) = match (
-                full_node.text_flow().is_some(),
-                incremental_node.text_flow().is_some(),
-            ) {
-                (true, true) => (
-                    "semantic:<redacted-full>",
-                    "semantic:<redacted-incremental>",
-                ),
-                (true, false) => ("present", "missing"),
-                (false, true) => ("missing", "present"),
-                (false, false) => unreachable!("equal missing TextFlow values were filtered"),
-            };
+            let mut full_value = format!("{:?}", full_node.text_flow());
+            let mut incremental_value = format!("{:?}", incremental_node.text_flow());
+            if full_value == incremental_value {
+                full_value.push_str(":full-collision");
+                incremental_value.push_str(":incremental-collision");
+            }
             return Some(format!(
                 "identity={} field=text_flow full={} incremental={}",
                 full_node.identity().diagnostic(),
@@ -515,15 +509,28 @@ fn snapshot_divergence_diagnostic_names_first_identity_field_and_values() {
     assert!(diagnostic.contains("incremental=CellRect"));
 
     let source_a = vec![Message {
-        text: "same-size-A".to_owned(),
+        text: "same-size-A\u{1b}\u{85}".to_owned(),
         ..messages[0].clone()
     }];
     let source_b = vec![Message {
-        text: "same-size-B".to_owned(),
+        text: "same-size-B\u{1b}\u{85}".to_owned(),
         ..messages[0].clone()
     }];
-    let source_a = full_snapshot_for_diagnostic(&target(&source_a, 20), 20, 4);
-    let source_b = full_snapshot_for_diagnostic(&target(&source_b, 20), 20, 4);
+    let source_a_target = target(&source_a, 20);
+    let mut source_b_target = target(&source_b, 20);
+    source_b_target
+        .children
+        .iter_mut()
+        .next()
+        .expect("diagnostic branch")
+        .children
+        .iter_mut()
+        .next()
+        .expect("diagnostic text")
+        .style
+        .bold = true;
+    let source_a = full_snapshot_for_diagnostic(&source_a_target, 20, 4);
+    let source_b = full_snapshot_for_diagnostic(&source_b_target, 20, 4);
     let flow_a = source_a
         .nodes()
         .find_map(|node| node.text_flow())
@@ -539,14 +546,24 @@ fn snapshot_divergence_diagnostic_names_first_identity_field_and_values() {
     );
     assert_eq!(flow_a.logical_row_count(), flow_b.logical_row_count());
     assert_ne!(flow_a, flow_b, "complete TextFlow semantics must differ");
+    let full_fingerprint = format!("{flow_a:?}");
+    let incremental_fingerprint = format!("{flow_b:?}");
+    assert_ne!(full_fingerprint, incremental_fingerprint);
+    assert!(full_fingerprint.starts_with("TextFlowSemanticStamp(<semantic:"));
+    assert!(incremental_fingerprint.starts_with("TextFlowSemanticStamp(<semantic:"));
+    assert!(full_fingerprint.ends_with(">)"));
+    assert!(incremental_fingerprint.ends_with(">)"));
+    assert!(full_fingerprint.len() <= 64);
+    assert!(incremental_fingerprint.len() <= 64);
     let flow_diagnostic = first_snapshot_difference(&source_a, &source_b)
         .expect("complete TextFlow equality must detect a source-only change");
     assert!(flow_diagnostic.contains("identity=snapshot:"));
     assert!(flow_diagnostic.contains("field=text_flow"));
-    assert!(flow_diagnostic.contains("full=semantic:<redacted-full>"));
-    assert!(flow_diagnostic.contains("incremental=semantic:<redacted-incremental>"));
+    assert!(flow_diagnostic.contains(&format!("full=Some({full_fingerprint})")));
+    assert!(flow_diagnostic.contains(&format!("incremental=Some({incremental_fingerprint})")));
     assert!(!flow_diagnostic.contains("same-size-A"));
     assert!(!flow_diagnostic.contains("same-size-B"));
+    assert!(!flow_diagnostic.chars().any(char::is_control));
     assert!(flow_diagnostic.len() <= 192);
 }
 

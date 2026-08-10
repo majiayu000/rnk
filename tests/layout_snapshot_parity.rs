@@ -138,12 +138,13 @@ fn chat_mutation_matrix_matches_full() {
         previous = Some(next);
     }
 
-    let build_large = |entries: &[(Option<String>, String)]| {
+    let build_large = |entries: &[(Option<String>, String, bool)]| {
         let mut root = Element::box_element().with_key("large-root");
         root.style.flex_direction = FlexDirection::Column;
         root.style.width = Dimension::Points(40.0);
-        for (key, text) in entries {
+        for (key, text, padded) in entries {
             let mut child = Element::text(text.clone());
+            child.style.padding.left = if *padded { 1.25 } else { 0.0 };
             if let Some(key) = key {
                 child = child.with_key(key.clone());
             }
@@ -164,12 +165,12 @@ fn chat_mutation_matrix_matches_full() {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            (key, payload)
+            (key, payload, false)
         })
         .collect();
     let declared_heights = entries
         .iter()
-        .map(|(_, payload)| payload.lines().count())
+        .map(|(_, payload, _)| payload.lines().count())
         .fold([0_usize; 12], |mut counts, height| {
             counts[height - 1] += 1;
             counts
@@ -180,16 +181,27 @@ fn chat_mutation_matrix_matches_full() {
     );
     let mut large_engine = LayoutEngine::new();
     let mut large_previous = None;
-    for operation in 0..6 {
+    for operation in 0..7 {
         match operation {
-            1 => entries.insert(0, (Some("front".to_owned()), "前🙂".to_owned())),
-            2 => entries.insert(entries.len() / 2, (None, "middle 👩‍💻\ne\u{301}".to_owned())),
-            3 => entries.push((Some("tail".to_owned()), "尾 中".to_owned())),
+            1 => entries.insert(0, (Some("front".to_owned()), "前🙂".to_owned(), false)),
+            2 => entries.insert(
+                entries.len() / 2,
+                (None, "middle 👩‍💻\ne\u{301}".to_owned(), false),
+            ),
+            3 => entries.push((Some("tail".to_owned()), "尾 中".to_owned(), false)),
             4 => entries[501].1.push_str(" streamed🙂中e\u{301}"),
             5 => {
                 entries.remove(1);
                 let moved = entries.remove(entries.len() / 2);
                 entries.insert(2, moved);
+            }
+            6 => {
+                let styled = entries
+                    .iter_mut()
+                    .find(|(key, _, _)| key.as_deref() == Some("message-500"))
+                    .expect("stable keyed message survives prior mutations");
+                assert!(!styled.2);
+                styled.2 = true;
             }
             _ => {}
         }
@@ -212,6 +224,13 @@ fn chat_mutation_matrix_matches_full() {
                 actual_heights.iter().filter(|count| **count > 0).count(),
                 12
             );
+        }
+        if operation == 6 {
+            assert!(matches!(
+                prepared.report(),
+                CheckedIncrementalLayoutReport::Incremental { patch_count }
+                    if *patch_count > 0
+            ));
         }
         assert_eq!(
             prepared.snapshot(),

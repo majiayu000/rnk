@@ -2,9 +2,10 @@ use std::hash::Hasher;
 
 use super::*;
 use crate::components::{Box as RnkBox, Text};
-use crate::core::{Dimension, FlexDirection, Overflow};
+use crate::core::{Dimension, Element, FlexDirection, Overflow, Position};
 use crate::layout::LayoutEngine;
 use crate::reconciler::ScopedNodeIdentity;
+use crate::renderer::{Output, try_render_element_snapshot_checked};
 
 #[derive(Default)]
 struct RecordingHasher(Vec<u8>);
@@ -98,6 +99,54 @@ fn mixed_axis_overflow_clips_only_selected_axis() {
         .unwrap();
     assert_eq!(frame.snapshot().root().effective_clip().x().end(), 6);
     assert_eq!(frame.snapshot().root().effective_clip().y().end(), 8);
+
+    for empty_axis in [Axis::X, Axis::Y] {
+        let mut root = Element::box_element().with_key("empty-axis-root");
+        root.style.width = Dimension::Points(6.0);
+        root.style.height = Dimension::Points(3.0);
+        let mut outside = Element::box_element().with_key("outside");
+        outside.style.position = Position::Absolute;
+        outside.style.width = Dimension::Points(2.0);
+        outside.style.height = Dimension::Points(1.0);
+        outside.add_child(Element::text("must-not-render"));
+        match empty_axis {
+            Axis::X => {
+                root.style.overflow_x = Overflow::Hidden;
+                outside.style.overflow_x = Overflow::Hidden;
+                outside.style.left = Some(10.0);
+            }
+            Axis::Y => {
+                root.style.overflow_y = Overflow::Hidden;
+                outside.style.overflow_y = Overflow::Hidden;
+                outside.style.top = Some(10.0);
+            }
+        }
+        root.add_child(outside);
+        let frame = LayoutEngine::new()
+            .prepare_element_incremental(&root, None, 6, 3)
+            .expect("an empty single-axis intersection is a valid snapshot");
+        let child = frame.snapshot().node(frame.snapshot().root().children()[0]);
+        match empty_axis {
+            Axis::X => {
+                assert!(child.effective_clip().x().is_empty());
+                assert!(!child.effective_clip().y().is_empty());
+            }
+            Axis::Y => {
+                assert!(!child.effective_clip().x().is_empty());
+                assert!(child.effective_clip().y().is_empty());
+            }
+        }
+        let mut output = Output::new(6, 3);
+        try_render_element_snapshot_checked(
+            &root,
+            frame.prepared_snapshot(),
+            &mut output,
+            0.0,
+            0.0,
+        )
+        .expect("empty single-axis clip renders invisibly instead of failing");
+        assert_eq!(output.render(), "");
+    }
 }
 
 #[test]
