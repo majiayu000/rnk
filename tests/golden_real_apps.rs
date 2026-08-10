@@ -28,38 +28,28 @@ mod gh68_glm;
 mod gh68_render;
 
 struct Gh68TempDir(std::path::PathBuf);
-
+#[rustfmt::skip]
 impl Gh68TempDir {
     fn new() -> Self {
         for nonce in 0..1000_u32 {
-            let path =
-                std::env::temp_dir().join(format!("rnk-gh68-{}-{nonce}", std::process::id()));
+            let path = std::env::temp_dir().join(format!("rnk-gh68-{}-{nonce}", std::process::id()));
             match std::fs::create_dir(&path) {
                 Ok(()) => return Self(path),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => panic!("cannot create GH68 temp directory: {error}"),
-            }
+                Err(error) => panic!("cannot create GH68 temp directory: {error}"), }
         }
         panic!("cannot allocate a collision-free GH68 temp directory")
     }
-
-    fn path(&self) -> &std::path::Path {
-        &self.0
-    }
+    fn path(&self) -> &std::path::Path { &self.0 }
 }
-
+#[rustfmt::skip]
 impl Drop for Gh68TempDir {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.0).expect("GH68 temp directory cleanup must succeed");
-    }
+    fn drop(&mut self) { std::fs::remove_dir_all(&self.0).expect("GH68 temp directory cleanup must succeed"); }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CommitObservation {
-    Fixed,
-    Retained,
-    Unknown,
-}
+#[rustfmt::skip]
+enum CommitObservation { Fixed, Retained, Unknown }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BenchmarkEvidence {
@@ -791,10 +781,18 @@ fn gh68_benchmark_comparison_contract() {
 
 #[test]
 #[rustfmt::skip]
-fn gh68_current_head_coverage_contract() {
+fn gh68_current_head_coverage_contract() { validate_gh68_coverage_evidence(); }
+#[rustfmt::skip]
+fn validate_gh68_coverage_evidence() {
     let tasks=include_str!("../specs/GH68/tasks.md"); let source=include_str!("golden_real_apps.rs");
     let line=tasks.split("gh68-critical-paths-v1").nth(1).unwrap().lines().find(|line|line.starts_with('{')).unwrap(); let manifest:serde_json::Value=serde_json::from_str(line).unwrap(); let paths=manifest["critical_paths"].as_array().unwrap(); assert_eq!(paths.len(),15);
     let mut names=paths.iter().map(|item|{assert_eq!(item["file"],"tests/golden_real_apps.rs");item["name"].as_str().unwrap()}).collect::<Vec<_>>(); let before=names.len(); names.sort_unstable(); names.dedup(); assert_eq!(names.len(),before);
-    for name in &names { let count=source.matches(&format!("fn {name}()" )).count(); if *name=="gh68_ci_public_examples_contract" { assert!(count<=1); } else { assert_eq!(count,1,"critical selector missing/duplicate: {name}"); } }
-    if let Some(path)=std::env::var_os("GH68_COVERAGE_EVIDENCE") { let evidence:serde_json::Value=serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap(); assert_eq!(evidence["head_sha"],std::env::var("GH68_IMPLEMENTATION_HEAD").unwrap()); let changed=&evidence["changed_executable"]; assert!(changed["total"].as_u64().unwrap()>0&&changed["percent"].as_f64().unwrap()>=80.0); let critical=evidence["critical"].as_array().unwrap(); assert_eq!(critical.len(),15); let mut reported=critical.iter().map(|item|item["name"].as_str().unwrap()).collect::<Vec<_>>(); reported.sort_unstable(); assert_eq!(reported,names); for item in critical { assert_eq!(item["file"],"tests/golden_real_apps.rs"); let lt=item["line_total"].as_u64().unwrap(); let bt=item["branch_total"].as_u64().unwrap(); assert!(lt>0&&bt>0); assert_eq!(item["line_covered"].as_u64(),Some(lt)); assert_eq!(item["branch_covered"].as_u64(),Some(bt)); } }
+    for name in &names { assert_eq!(source.matches(&format!("fn {name}()" )).count(),1,"critical selector missing/duplicate: {name}"); }
+    if let Some(path)=std::env::var_os("GH68_COVERAGE_EVIDENCE") { let path=std::path::PathBuf::from(path); assert!(path.is_absolute()); let evidence:serde_json::Value=serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap(); assert_eq!(evidence["head_sha"],std::env::var("GH68_IMPLEMENTATION_HEAD").unwrap()); let changed=&evidence["changed_executable"]; for kind in ["line","branch"] { assert!(changed[format!("{kind}_total")].as_u64().unwrap()>0&&changed[format!("{kind}_percent")].as_f64().unwrap()>=80.0); } let critical=evidence["critical"].as_array().unwrap(); assert_eq!(critical.len(),15); let mut reported=critical.iter().map(|item|item["name"].as_str().unwrap()).collect::<Vec<_>>(); reported.sort_unstable(); assert_eq!(reported,names); for item in critical { assert_eq!(item["file"],"tests/golden_real_apps.rs"); let lt=item["line_total"].as_u64().unwrap(); let bt=item["branch_total"].as_u64().unwrap(); assert!(lt>0); assert_eq!(item["line_covered"].as_u64(),Some(lt)); if bt==0 { assert_eq!(item["branch_status"],"not_applicable"); assert_eq!(item["branch_covered"],0); } else { assert_eq!(item["branch_status"],"covered"); assert_eq!(item["branch_covered"].as_u64(),Some(bt)); } } }
+}
+#[test]
+#[rustfmt::skip]
+fn gh68_ci_public_examples_contract() {
+    let index=include_str!("../examples/README.md"); let mut indexed=public_example_names(index).into_iter().filter(|name|name.ends_with(".rs")).collect::<Vec<_>>(); let count=indexed.len(); indexed.sort_unstable(); indexed.dedup(); assert_eq!(indexed.len(),count); let mut actual=std::fs::read_dir("examples").unwrap().map(|entry|entry.unwrap().path()).filter(|path|path.extension().is_some_and(|ext|ext=="rs")).map(|path|path.file_name().unwrap().to_str().unwrap().to_owned()).collect::<Vec<_>>(); actual.sort_unstable(); assert_eq!(indexed,actual);
+    let workflow=include_str!("../.github/workflows/ci.yml"); for required in ["gh68:","github.event.pull_request.head.sha || github.sha","persist-credentials: false","nightly-2026-01-18","cargo +nightly-2026-01-18 llvm-cov","gh68 --test","GH68_COVERAGE_EVIDENCE","actions/upload-artifact@v4","      - gh68"] { assert!(workflow.contains(required),"missing GH68 CI contract: {required}"); } let job=workflow.split("  gh68:").nth(1).unwrap().split("  ci-gate:").next().unwrap(); assert!(!job.contains("continue-on-error"));
 }

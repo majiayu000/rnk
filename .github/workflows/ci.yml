@@ -267,6 +267,260 @@ jobs:
       - name: Run focused Miri tests
         run: cargo miri test --lib -- layout::measure
 
+  gh68:
+    name: GH68 Current Head
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      GH68_BASE_MAIN_SHA: e1d987447141b35d8049f8bd8ff89b2015ae87b9
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Install pinned branch-coverage Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-01-18
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Bind exact head and ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_head='${{ github.event.pull_request.head.sha || github.sha }}'
+          actual_head="$(git rev-parse HEAD)"
+          test "$actual_head" = "$expected_head"
+          git merge-base --is-ancestor "$GH68_BASE_MAIN_SHA" "$actual_head"
+          printf 'GH68_IMPLEMENTATION_HEAD=%s\n' "$actual_head" >> "$GITHUB_ENV"
+
+      - name: Discover and build every indexed public example
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/gh68-examples.txt" <<'PY'
+          import re, sys
+          from pathlib import Path
+          source = Path("examples/README.md").read_text(encoding="utf-8")
+          names = re.findall(r"^- `([^`]+\.rs)`(?::|$)", source, re.MULTILINE)
+          if len(names) != len(set(names)):
+              raise SystemExit("duplicate public example classification")
+          actual = sorted(path.name for path in Path("examples").glob("*.rs"))
+          if sorted(names) != actual:
+              raise SystemExit(f"example index drift: indexed={sorted(names)!r} actual={actual!r}")
+          if "glm_chat.rs" not in names:
+              raise SystemExit("glm_chat.rs is not in the public example ledger")
+          Path(sys.argv[1]).write_text("\n".join(names) + "\n", encoding="utf-8")
+          PY
+          while IFS= read -r file; do
+            cargo build --locked --all-features --example "${file%.rs}"
+          done < "$RUNNER_TEMP/gh68-examples.txt"
+
+      - name: Produce pinned-nightly current-head branch coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +nightly-2026-01-18 llvm-cov --test golden_real_apps \
+            --all-features --locked --branch --json \
+            --output-path "$RUNNER_TEMP/gh68-coverage-raw.json"
+
+      - name: Derive closed GH68 coverage summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/gh68-coverage-raw.json" \
+            "$RUNNER_TEMP/gh68-coverage.json" "$GH68_IMPLEMENTATION_HEAD" \
+            "$GH68_BASE_MAIN_SHA" <<'PY'
+          import hashlib, json, os, re, subprocess, sys
+          from pathlib import Path
+
+          raw_path, output_path, head, base = map(Path, sys.argv[1:])
+          head, base = str(head), str(base)
+          if not re.fullmatch(r"[0-9a-f]{40}", head) or not re.fullmatch(r"[0-9a-f]{40}", base):
+              raise SystemExit("invalid head/base binding")
+          raw_bytes = raw_path.read_bytes()
+          report = json.loads(raw_bytes)["data"]
+          if len(report) != 1:
+              raise SystemExit("ambiguous llvm-cov report")
+          functions = report[0]["functions"]
+          root = Path.cwd().resolve()
+          test_file = "tests/golden_real_apps.rs"
+          tasks = Path("specs/GH68/tasks.md").read_text(encoding="utf-8")
+          manifest_line = next(line for line in tasks.split("gh68-critical-paths-v1", 1)[1].splitlines() if line.startswith("{"))
+          critical_manifest = json.loads(manifest_line)["critical_paths"]
+          names = [item["name"] for item in critical_manifest]
+          if len(names) != 15 or len(set(names)) != 15 or any(item["file"] != test_file for item in critical_manifest):
+              raise SystemExit("critical manifest is not the closed 15-item set")
+
+          def normalized_files(function):
+              return [os.path.relpath(os.path.normpath(path), root) for path in function.get("filenames", [])]
+
+          def line_totals(function):
+              lines = {}
+              for region in function.get("regions", []):
+                  if len(region) < 6 or region[5] != 0:
+                      continue
+                  for line in range(region[0], region[2] + 1):
+                      lines[line] = max(lines.get(line, 0), region[4])
+              return sum(value > 0 for value in lines.values()), len(lines)
+
+          critical = []
+          for name in names:
+              matches = [function for function in functions if test_file in normalized_files(function) and function["name"].endswith(name)]
+              if len(matches) != 1 or matches[0].get("count") != 1:
+                  raise SystemExit(f"missing/ambiguous/unexecuted critical selector: {name}")
+              line_covered, line_total = line_totals(matches[0])
+              if line_total == 0 or line_covered != line_total:
+                  raise SystemExit(f"critical line coverage is not 100%: {name}")
+              branches = matches[0].get("branches", [])
+              branch_total = len(branches) * 2
+              branch_covered = sum(int(branch[4] > 0) + int(branch[5] > 0) for branch in branches)
+              if branch_total and branch_covered != branch_total:
+                  raise SystemExit(f"critical branch coverage is not 100%: {name}")
+              critical.append({"file": test_file, "name": name,
+                  "line_covered": line_covered, "line_total": line_total,
+                  "branch_covered": branch_covered, "branch_total": branch_total,
+                  "branch_status": "covered" if branch_total else "not_applicable"})
+
+          diff = subprocess.check_output(["git", "diff", "--unified=0", f"{base}..{head}", "--", test_file], text=True)
+          changed, current = set(), None
+          for line in diff.splitlines():
+              if line.startswith("+++ b/"):
+                  current = line[6:]
+              elif current == test_file and line.startswith("@@"):
+                  match = re.search(r"\+(\d+)(?:,(\d+))?", line)
+                  start, count = int(match.group(1)), int(match.group(2) or 1)
+                  changed.update(range(start, start + count))
+          executable, covered = set(), set()
+          branch_total = branch_covered = 0
+          for function in functions:
+              if test_file not in normalized_files(function):
+                  continue
+              local_covered, local_total = line_totals(function)
+              del local_covered, local_total
+              for region in function.get("regions", []):
+                  if len(region) >= 6 and region[5] == 0:
+                      for line in range(region[0], region[2] + 1):
+                          executable.add(line)
+                          if region[4] > 0:
+                              covered.add(line)
+              if "validate_gh68_coverage_evidence" not in function["name"]:
+                  branches = function.get("branches", [])
+                  branch_total += len(branches) * 2
+                  branch_covered += sum(int(branch[4] > 0) + int(branch[5] > 0) for branch in branches)
+          line_total = len(changed & executable)
+          line_covered = len(changed & covered)
+          if not line_total or not branch_total:
+              raise SystemExit("changed executable coverage denominator is zero")
+          line_percent = 100.0 * line_covered / line_total
+          branch_percent = 100.0 * branch_covered / branch_total
+          if line_percent < 80.0 or branch_percent < 80.0:
+              raise SystemExit(f"changed executable coverage below 80%: line={line_percent:.2f} branch={branch_percent:.2f}")
+          summary = {"schema":"gh68-coverage-v1", "head_sha":head, "base_main_sha":base,
+              "toolchain":"nightly-2026-01-18", "branch_collection":True,
+              "raw_sha256":hashlib.sha256(raw_bytes).hexdigest(),
+              "changed_executable":{"file":test_file,"line_covered":line_covered,"line_total":line_total,
+                  "line_percent":line_percent,"branch_covered":branch_covered,"branch_total":branch_total,
+                  "branch_percent":branch_percent}, "critical":critical}
+          Path(output_path).write_text(json.dumps(summary, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Run all fifteen exact GH68 selectors
+        shell: bash
+        env:
+          GH68_COVERAGE_EVIDENCE: ${{ runner.temp }}/gh68-coverage.json
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/gh68-selectors.txt" <<'PY'
+          import json, sys
+          from pathlib import Path
+          source = Path("specs/GH68/tasks.md").read_text(encoding="utf-8")
+          line = next(line for line in source.split("gh68-critical-paths-v1", 1)[1].splitlines() if line.startswith("{"))
+          items = json.loads(line)["critical_paths"]
+          names = [item["name"] for item in items]
+          if len(names) != 15 or len(set(names)) != 15:
+              raise SystemExit("critical selector set is not exactly 15 unique names")
+          Path(sys.argv[1]).write_text("\n".join(names) + "\n", encoding="utf-8")
+          PY
+          : > "$RUNNER_TEMP/gh68-exact-results.log"
+          while IFS= read -r selector; do
+            listed="$(cargo test --test golden_real_apps --all-features --locked "$selector" -- --list --exact)"
+            test "$(printf '%s\n' "$listed" | grep -Fxc "$selector: test")" -eq 1
+            output="$(cargo test --test golden_real_apps --all-features --locked "$selector" -- --exact 2>&1)"
+            printf '%s\n' "$output"
+            printf '%s\n' "$output" | grep -F "test result: ok. 1 passed; 0 failed; 0 ignored;"
+            printf '%s matched=1 passed=1 ignored=0\n' "$selector" >> "$RUNNER_TEMP/gh68-exact-results.log"
+          done < "$RUNNER_TEMP/gh68-selectors.txt"
+
+      - name: Run complete GH68 target and documentation links
+        shell: bash
+        env:
+          GH68_COVERAGE_EVIDENCE: ${{ runner.temp }}/gh68-coverage.json
+        run: |
+          set -euo pipefail
+          cargo test --test golden_real_apps --all-features --locked
+          python3 .github/scripts/check_markdown_links.py \
+            examples/README.md docs/API_STABILITY.md docs/CHAT_QUICKSTART.md \
+            docs/TERMINAL_COMPATIBILITY.md specs/GH68
+
+      - name: Run deterministic GH68 benchmark smoke
+        run: |
+          set -euo pipefail
+          cargo bench --bench render --no-run --locked
+          cargo bench --bench render --locked -- gh68 --test
+          echo "GH68 benchmark smoke completed; this is not a performance pass."
+
+      - name: Bind evidence digests after all required checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'head_sha=%s\nbase_main_sha=%s\n' \
+            "$GH68_IMPLEMENTATION_HEAD" "$GH68_BASE_MAIN_SHA" \
+            > "$RUNNER_TEMP/gh68-head-binding.txt"
+          sha256sum "$RUNNER_TEMP/gh68-coverage-raw.json" \
+            "$RUNNER_TEMP/gh68-coverage.json" \
+            "$RUNNER_TEMP/gh68-exact-results.log" \
+            "$RUNNER_TEMP/gh68-head-binding.txt" \
+            > "$RUNNER_TEMP/gh68-evidence-sha256.txt"
+
+      - name: Upload validated GH68 evidence
+        id: gh68_upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: gh68-current-head-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          overwrite: false
+          path: |
+            ${{ runner.temp }}/gh68-coverage-raw.json
+            ${{ runner.temp }}/gh68-coverage.json
+            ${{ runner.temp }}/gh68-exact-results.log
+            ${{ runner.temp }}/gh68-head-binding.txt
+            ${{ runner.temp }}/gh68-evidence-sha256.txt
+
+      - name: Verify immutable artifact receipt
+        env:
+          GH68_ARTIFACT_ID: ${{ steps.gh68_upload.outputs.artifact-id }}
+          GH68_ARTIFACT_DIGEST: ${{ steps.gh68_upload.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          test -n "$GH68_ARTIFACT_ID"
+          printf '%s\n' "$GH68_ARTIFACT_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+
   ci-gate:
     name: CI Gate
     runs-on: ubuntu-latest
@@ -280,6 +534,7 @@ jobs:
       - fmt
       - docs
       - doc-tests
+      - gh68
     steps:
       - name: Required checks passed
         run: echo "Required CI checks passed"
