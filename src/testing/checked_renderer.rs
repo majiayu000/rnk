@@ -3,8 +3,8 @@
 //! Generalized checked entrypoints for [`TestRenderer`].
 
 use crate::core::{Display, Element, ElementType};
-use crate::layout::LayoutEngine;
-use crate::renderer::{CheckedRenderError, Output, try_render_element_tree_checked};
+use crate::layout::{LayoutEngine, PreparedSnapshotFrame};
+use crate::renderer::{CheckedRenderError, Output, try_render_element_snapshot_checked};
 
 use super::renderer::{TestRenderer, strip_ansi_codes};
 
@@ -33,16 +33,16 @@ impl TestRenderer {
         &self,
         element: &Element,
     ) -> Result<String, CheckedRenderError> {
-        let committed = LayoutEngine::new();
         if element.style.display == Display::None
             || element.element_type == ElementType::VirtualText
         {
-            return render_candidate(self, element, &committed);
+            return Ok(String::new());
         }
+        let committed = LayoutEngine::new();
         let prepared = committed
             .prepare_element_incremental(element, None, self.width(), self.height())
             .map_err(CheckedRenderError::LayoutBuild)?;
-        render_candidate(self, element, prepared.engine())
+        render_candidate(self, element, prepared.prepared_snapshot())
     }
 
     /// Render checked test output and strip ANSI styling after complete success.
@@ -74,11 +74,11 @@ impl TestRenderer {
 fn render_candidate(
     renderer: &TestRenderer,
     element: &Element,
-    engine: &LayoutEngine,
+    snapshot: &PreparedSnapshotFrame,
 ) -> Result<String, CheckedRenderError> {
     let mut output = Output::new(renderer.width(), renderer.height());
     let clip_depth_before = output.clip_depth();
-    try_render_element_tree_checked(element, engine, &mut output, 0.0, 0.0)?;
+    try_render_element_snapshot_checked(element, snapshot, &mut output, 0.0, 0.0)?;
     debug_assert_eq!(
         output.clip_depth(),
         clip_depth_before,

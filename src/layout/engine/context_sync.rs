@@ -12,7 +12,9 @@ use super::{
     text_flow_bridge::{NodeContext, flow_for_width, measure_text_node},
 };
 use crate::core::NodeKey;
-use crate::layout::{Layout, LayoutLookupError, TextFlow, TextFlowError, TextFlowInput};
+use crate::layout::{
+    Layout, LayoutLookupError, PreparedSnapshotFrame, TextFlow, TextFlowError, TextFlowInput,
+};
 use crate::reconciler::{ScopedNodeIdentity, SiblingIdentity};
 
 pub(crate) struct CheckedLayoutSnapshot {
@@ -22,7 +24,7 @@ pub(crate) struct CheckedLayoutSnapshot {
 }
 
 #[derive(Debug)]
-pub(crate) enum LayoutSnapshotError {
+pub(crate) enum LegacyLayoutSnapshotError {
     Lookup(LayoutLookupError),
     Invariant(IncrementalInvariantError),
 }
@@ -254,6 +256,52 @@ impl TextContextKey for NodeKey {
 }
 
 impl LayoutEngine {
+    pub(crate) fn try_get_snapshot_measurements(
+        &self,
+        frame: &PreparedSnapshotFrame,
+    ) -> Result<CheckedLayoutSnapshot, LegacyLayoutSnapshotError> {
+        let mut element = HashMap::new();
+        let mut scoped_vnode = HashMap::new();
+        let mut vnode = HashMap::new();
+        let mut projected_scopes = HashMap::new();
+
+        for (element_id, node) in frame.element_nodes() {
+            let bounds = node.border_bounds();
+            let layout = Layout {
+                x: bounds.left() as f32,
+                y: bounds.top() as f32,
+                width: bounds.width() as f32,
+                height: bounds.height() as f32,
+            };
+            element.insert(element_id, layout);
+
+            let scoped = node.identity().scoped().clone();
+            let legacy_key = self.vnode_legacy_keys.get(&scoped).copied().ok_or(
+                LegacyLayoutSnapshotError::Invariant(
+                    IncrementalInvariantError::CompatibilityMapMismatch,
+                ),
+            )?;
+            let projected = scoped.composite_identity(legacy_key);
+            if let Some(existing) = projected_scopes.insert(projected, scoped.clone())
+                && existing != scoped
+            {
+                return Err(LegacyLayoutSnapshotError::Lookup(
+                    LayoutLookupError::CompositeIdentityCollision {
+                        identity: projected,
+                    },
+                ));
+            }
+            scoped_vnode.insert(scoped, layout);
+            vnode.insert(projected, layout);
+        }
+
+        Ok(CheckedLayoutSnapshot {
+            element,
+            scoped_vnode,
+            vnode,
+        })
+    }
+
     pub(crate) fn try_get_required_layout(
         &self,
         element_id: crate::core::ElementId,
@@ -355,8 +403,8 @@ impl LayoutEngine {
     ) -> Result<HashMap<SiblingIdentity, Layout>, LayoutLookupError> {
         match self.try_get_layout_snapshot() {
             Ok(snapshot) => Ok(snapshot.vnode),
-            Err(LayoutSnapshotError::Lookup(source)) => Err(source),
-            Err(LayoutSnapshotError::Invariant(source)) => {
+            Err(LegacyLayoutSnapshotError::Lookup(source)) => Err(source),
+            Err(LegacyLayoutSnapshotError::Invariant(source)) => {
                 panic!("target-exact VNode layout snapshot failed: {source}")
             }
         }
@@ -364,16 +412,18 @@ impl LayoutEngine {
 
     pub(crate) fn try_get_layout_snapshot(
         &self,
-    ) -> Result<CheckedLayoutSnapshot, LayoutSnapshotError> {
+    ) -> Result<CheckedLayoutSnapshot, LegacyLayoutSnapshotError> {
         let mut element = HashMap::with_capacity(self.node_map.len());
         for (element_id, node_id) in &self.node_map {
             if self.taffy.get_node_context(*node_id).is_none() {
-                return Err(LayoutSnapshotError::Invariant(
+                return Err(LegacyLayoutSnapshotError::Invariant(
                     IncrementalInvariantError::InvalidMappedNode,
                 ));
             }
             let layout = self.taffy.layout(*node_id).map_err(|_| {
-                LayoutSnapshotError::Invariant(IncrementalInvariantError::MissingComputedLayout)
+                LegacyLayoutSnapshotError::Invariant(
+                    IncrementalInvariantError::MissingComputedLayout,
+                )
             })?;
             element.insert(*element_id, public_layout(layout));
         }
@@ -383,32 +433,36 @@ impl LayoutEngine {
         let mut projected_scopes = HashMap::with_capacity(self.vnode_map.len());
         for (identity, node_id) in self.vnode_map.iter() {
             if self.taffy.get_node_context(*node_id).is_none() {
-                return Err(LayoutSnapshotError::Invariant(
+                return Err(LegacyLayoutSnapshotError::Invariant(
                     IncrementalInvariantError::InvalidMappedNode,
                 ));
             }
             let legacy_key = self.vnode_legacy_keys.get(identity).copied().ok_or(
-                LayoutSnapshotError::Invariant(IncrementalInvariantError::CompatibilityMapMismatch),
+                LegacyLayoutSnapshotError::Invariant(
+                    IncrementalInvariantError::CompatibilityMapMismatch,
+                ),
             )?;
             let projected = identity.composite_identity(legacy_key);
             if let Some(existing) = projected_scopes.insert(projected, identity)
                 && existing != identity
             {
-                return Err(LayoutSnapshotError::Lookup(
+                return Err(LegacyLayoutSnapshotError::Lookup(
                     LayoutLookupError::CompositeIdentityCollision {
                         identity: projected,
                     },
                 ));
             }
             let layout = self.taffy.layout(*node_id).map_err(|_| {
-                LayoutSnapshotError::Invariant(IncrementalInvariantError::MissingComputedLayout)
+                LegacyLayoutSnapshotError::Invariant(
+                    IncrementalInvariantError::MissingComputedLayout,
+                )
             })?;
             let layout = public_layout(layout);
             scoped_vnode.insert(identity.clone(), layout);
             layouts.insert(projected, layout);
         }
         if self.vnode_legacy_keys.len() != self.vnode_map.len() {
-            return Err(LayoutSnapshotError::Invariant(
+            return Err(LegacyLayoutSnapshotError::Invariant(
                 IncrementalInvariantError::CompatibilityMapMismatch,
             ));
         }

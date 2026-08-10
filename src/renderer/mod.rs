@@ -58,9 +58,11 @@ pub use app::App;
 // Builder and options
 pub use builder::{AppBuilder, AppOptions, CancelToken, render, render_fullscreen, render_inline};
 pub use checked::{
-    CheckedRenderError, LayoutRenderError, TransactionalFrameError, try_render_element_checked,
-    try_render_element_tree_checked, try_render_to_string_checked,
+    CheckedRenderError, LayoutRenderError, RecoveredSnapshotRenderError, SnapshotRenderError,
+    TransactionalFrameError, try_render_element_checked, try_render_element_tree_checked,
+    try_render_to_string_checked,
 };
+pub(crate) use checked::{legacy_snapshot_coordinate_error, try_render_element_snapshot_checked};
 pub use error::{DynamicFrameError, TextCoordinateError, TextProjectionError, TextRenderError};
 
 // Registry APIs

@@ -131,6 +131,7 @@ fn validate_text_child(
             planned,
             engine.vnode_map[&planned.identity],
             TargetAliasExpectation::RawVNode,
+            false,
             &mut HashSet::new(),
             &mut HashSet::new(),
         )
@@ -282,6 +283,7 @@ fn non_text_active_flow_and_element_alias_matrix_are_exhaustive() {
                 planned,
                 node_id,
                 TargetAliasExpectation::RawVNode,
+                false,
                 &mut HashSet::new(),
                 &mut HashSet::new(),
             )

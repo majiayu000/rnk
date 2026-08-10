@@ -87,6 +87,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 proptest = "1.4"  # Property-based testing
 divan = "0.1"     # Benchmarking
+trybuild = "1"    # Compile-fail contracts for immutable public APIs
 
 [[bench]]
 name = "layout"

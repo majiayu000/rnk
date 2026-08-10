@@ -236,6 +236,29 @@ fn terminal_error_drops_prepared_layout_frame() {
 }
 
 #[test]
+fn snapshot_commits_only_with_prepared_app_frame() {
+    let mut app = App::new(|| Element::text("app"));
+    let (target, target_id) = dynamic_tree("snapshot");
+    let prepared = app
+        .try_prepare_frame_with_mouse(&target, 20, 4, false)
+        .expect("whole frame prepares");
+    let candidate_snapshot = prepared.dynamic.layout().snapshot().clone();
+
+    assert!(app.layout_engine.get_layout(target_id).is_none());
+    assert!(candidate_snapshot.root().border_bounds().width() > 0);
+
+    app.commit_prepared_frame_with_writer(prepared, &mut RecordingWriter::default())
+        .expect("whole frame commits");
+    assert!(app.layout_engine.get_layout(target_id).is_some());
+    assert!(
+        app.runtime_context
+            .borrow()
+            .get_measurement_dims(target_id)
+            .is_some()
+    );
+}
+
+#[test]
 fn stale_prepared_app_frame_fails_before_terminal_io() {
     let mut app = App::new(|| Element::text("app"));
     let (before, _) = dynamic_tree("before");

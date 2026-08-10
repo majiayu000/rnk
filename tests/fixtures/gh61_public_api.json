@@ -1,0 +1,33 @@
+{
+  "layout": [
+    "ArithmeticOperation",
+    "Axis",
+    "AxisClip",
+    "CellOutputError",
+    "CellPoint",
+    "CellRect",
+    "CellSpan",
+    "CellVector",
+    "Edge",
+    "FrameRevision",
+    "GeometryField",
+    "LayoutAliasError",
+    "LayoutSnapshot",
+    "LayoutSnapshotError",
+    "PreparedSnapshotFrame",
+    "RecoveredSnapshotError",
+    "SnapshotBuildReport",
+    "SnapshotBuildStrategy",
+    "SnapshotIdentity",
+    "SnapshotInvariantError",
+    "SnapshotNode",
+    "SnapshotNodeIndex",
+    "SnapshotTargetMismatchReason",
+    "SnapshotWorkCounters",
+    "TextFlowSemanticStamp"
+  ],
+  "renderer": [
+    "RecoveredSnapshotRenderError",
+    "SnapshotRenderError"
+  ]
+}

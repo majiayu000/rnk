@@ -2,11 +2,13 @@
 
 mod engine;
 pub mod measure;
+mod snapshot;
 pub mod text_flow;
 mod utils;
 
 pub(crate) use engine::{
-    BoundPreparedLayoutFrame, CheckedLayoutSnapshot, LayoutSnapshotError, PreparedLayoutCommitError,
+    BoundPreparedLayoutFrame, CheckedLayoutSnapshot, LegacyLayoutSnapshotError,
+    PreparedLayoutCommitError,
 };
 pub use engine::{
     CheckedIncrementalLayoutReport, DirectPatchApplyReport, DirectPatchError,
@@ -14,11 +16,23 @@ pub use engine::{
     IncrementalInvariantError, IncrementalLayoutError, IncrementalLayoutOutcome,
     IncrementalPatchKind, InvalidLayoutTargetError, Layout, LayoutEngine, LayoutLookupError,
     PatchError, PatchFailure, PatchKind, PatchStage, PatchTransactionCause, PatchTransactionError,
-    PreparedLayoutFrame, RebuildFailure, RebuildStage, TransactionalLayoutError,
+    PreparedLayoutFrame, RebuildFailure, RebuildStage, RecoveredSnapshotError,
+    TransactionalLayoutError,
 };
 pub use measure::{
     TextAlign, display_width, measure_text, measure_text_width, pad_text, truncate_middle,
     truncate_start, truncate_text, wrap_text,
+};
+pub use snapshot::{
+    ArithmeticOperation, Axis, AxisClip, CellOutputError, CellPoint, CellRect, CellSpan,
+    CellVector, Edge, FrameRevision, GeometryField, LayoutAliasError, LayoutSnapshot,
+    LayoutSnapshotError, PreparedSnapshotFrame, SnapshotBuildReport, SnapshotBuildStrategy,
+    SnapshotIdentity, SnapshotInvariantError, SnapshotNode, SnapshotNodeIndex,
+    SnapshotTargetMismatchReason, SnapshotWorkCounters, TextFlowSemanticStamp,
+};
+pub(crate) use snapshot::{
+    LayoutSnapshotBuilder, checked_add, checked_extent, checked_finite, checked_subtract,
+    quantize_rect,
 };
 pub use text_flow::{
     StyledTextRange, TextFlow, TextFlowCache, TextFlowDiagnostic, TextFlowError, TextFlowInput,

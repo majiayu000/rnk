@@ -4,8 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::core::{Element, VNode};
-use crate::layout::{IncrementalLayoutError, LayoutEngine};
-use crate::renderer::element_renderer::try_render_element;
+use crate::layout::{IncrementalLayoutError, LayoutEngine, PreparedSnapshotFrame};
 use crate::renderer::{DynamicFrameError, Output, TextRenderError};
 use crate::runtime::RuntimeContext;
 
@@ -74,15 +73,15 @@ impl RenderPipeline {
         runtime_context: &Rc<RefCell<RuntimeContext>>,
         previous_vnode: &mut Option<VNode>,
     ) -> Result<String, DynamicFrameError> {
-        Self::try_render_dynamic_frame_with_renderer_checked(
+        let prepared = Self::prepare_dynamic_frame(
             dynamic_root,
             width,
             height,
             layout_engine,
-            runtime_context,
-            previous_vnode,
-            try_render_element,
+            previous_vnode.as_ref(),
         )
+        .map_err(|source| prepared::legacy_dynamic_error(source, dynamic_root.id))?;
+        Ok(prepared.commit(layout_engine, runtime_context, previous_vnode))
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -95,7 +94,7 @@ impl RenderPipeline {
         previous_vnode: &mut Option<VNode>,
         renderer: impl FnOnce(
             &Element,
-            &LayoutEngine,
+            &PreparedSnapshotFrame,
             &mut Output,
             f32,
             f32,
@@ -133,7 +132,7 @@ impl RenderPipeline {
         previous_vnode: &mut Option<VNode>,
         renderer: impl FnOnce(
             &Element,
-            &LayoutEngine,
+            &PreparedSnapshotFrame,
             &mut Output,
             f32,
             f32,
@@ -150,7 +149,7 @@ impl RenderPipeline {
                     .map_err(crate::renderer::CheckedRenderError::from)
             },
         )
-        .map_err(prepared::legacy_dynamic_error)?;
+        .map_err(|source| prepared::legacy_dynamic_error(source, dynamic_root.id))?;
         Ok(prepared.commit(layout_engine, runtime_context, previous_vnode))
     }
 }

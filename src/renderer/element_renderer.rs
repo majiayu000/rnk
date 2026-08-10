@@ -25,6 +25,7 @@ pub(crate) fn render_element(
     );
 }
 
+#[allow(dead_code)]
 pub(crate) fn try_render_element(
     element: &Element,
     layout_engine: &LayoutEngine,

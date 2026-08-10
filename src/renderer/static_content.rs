@@ -4,9 +4,10 @@
 //! which are elements that persist in the terminal history (like Ink's `<Static>`).
 
 use crate::core::{Display, Element, ElementType};
-use crate::layout::LayoutEngine;
+use crate::layout::{LayoutEngine, TransactionalLayoutError};
 use crate::renderer::{
-    CheckedRenderError, LayoutRenderError, Output, TextRenderError, try_render_element_tree_checked,
+    CheckedRenderError, Output, TextRenderError, legacy_snapshot_coordinate_error,
+    try_render_element_snapshot_checked,
 };
 
 /// Static content renderer for inline mode
@@ -44,6 +45,17 @@ impl StaticRenderer {
         self.try_extract_static_content_checked(element, width)
             .map_err(|error| match error {
                 CheckedRenderError::Text(source) => source,
+                CheckedRenderError::LayoutBuild(TransactionalLayoutError::Snapshot(source)) => {
+                    legacy_snapshot_coordinate_error(element, &source).unwrap_or_else(|| {
+                        panic!("legacy static renderer cannot represent snapshot error: {source}")
+                    })
+                }
+                CheckedRenderError::LayoutBuild(TransactionalLayoutError::RecoveredSnapshot(
+                    source,
+                )) => legacy_snapshot_coordinate_error(element, source.snapshot_failure())
+                    .unwrap_or_else(|| {
+                        panic!("legacy static renderer cannot represent snapshot error: {source}")
+                    }),
                 other => panic!("legacy static renderer cannot represent checked error: {other}"),
             })
     }
@@ -77,24 +89,18 @@ impl StaticRenderer {
                 // Render static element to get its content
                 let prepared =
                     LayoutEngine::new().prepare_element_incremental(element, None, width, 100)?;
-                let engine = prepared.engine();
-
-                let layout = engine
-                    .try_get_required_layout(element.id)
-                    .map_err(|source| {
-                        CheckedRenderError::Layout(LayoutRenderError::Invariant(source))
-                    })?
-                    .ok_or({
-                        CheckedRenderError::Layout(LayoutRenderError::MissingRootLayout {
-                            element_id: element.id,
-                        })
-                    })?;
-                // Ensure we have valid dimensions
-                let render_width = (layout.width as u16).max(1);
-                let render_height = (layout.height as u16).max(1);
+                let bounds = prepared.snapshot().root().border_bounds();
+                let render_width = u16::try_from(bounds.width().max(1)).unwrap_or(width);
+                let render_height = u16::try_from(bounds.height().max(1)).unwrap_or(100);
                 let mut output = Output::new(render_width, render_height);
                 let clip_depth_before = output.clip_depth();
-                try_render_element_tree_checked(element, engine, &mut output, 0.0, 0.0)?;
+                try_render_element_snapshot_checked(
+                    element,
+                    prepared.prepared_snapshot(),
+                    &mut output,
+                    0.0,
+                    0.0,
+                )?;
                 debug_assert_eq!(
                     output.clip_depth(),
                     clip_depth_before,

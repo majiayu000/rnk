@@ -53,8 +53,9 @@ work counters，不重新实现三个上游合同。
    不可变的 `LayoutSnapshot`；renderer、measurement 与 TextFlow projection 只能读取该
    snapshot，不得再次从 live `LayoutEngine` 解释浮点 geometry。
 2. **B-002** snapshot 必须按 GH-59 target final child order 保存每个 layout node，并使用
-   GH-59 scoped semantic identity 作为跨 full/incremental 路径的主身份；Taffy `NodeId`、
-   frame-local `ElementId` 或遍历地址不得成为 semantic equality 的唯一依据。
+   公开但不可构造的 opaque `SnapshotIdentity` 包装 GH-59 exact scoped semantic identity，
+   作为跨 full/incremental 路径的主身份；不得公开 crate-private reconciler storage，Taffy
+   `NodeId`、frame-local `ElementId` 或遍历地址也不得成为 semantic equality 的依据。
 3. **B-003** GH-61不得假设GH-59/GH-60存在未声明的“committed visible plan”。engine侧只依赖
    GH-59 `ReconcilePlan` / `ResolvedParentPlan::final_children`与GH-60
    `PreparedLayoutFrame`、target-exact postcondition和required-layout lookup；不得改变其
