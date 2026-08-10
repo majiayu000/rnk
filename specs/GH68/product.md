@@ -137,9 +137,14 @@ public-example discovery。当前 follow-up 从 exact main
     前显式失败。Tool Call 展示不授予执行权限，example 业务动作不得因模型输出自动提升权限；
     核心 Chat UI、golden 与离线 tests 不得需要真实网络、真实密钥或工具副作用。
 25. **B-025** GH-68 current-head coverage 必须以本 follow-up 实际执行的 coverage 输出绑定
-    exact head/base 与 task plan 中唯一 critical `file + name` set：changed executable lines
-    至少 80%，critical tests 逐项 100% 且 denominator 非零。CI 中 `continue-on-error`、旧
-    artifact、只编译、视觉录屏或其他 task coverage 不构成证明。
+    exact head/base 与 task plan 中唯一 critical `file + name` set：changed executable line
+    与 branch coverage 均至少 80%且各自 denominator 非零；15个critical selector都必须
+    `matched=1`、`passed=1`、`ignored=0`，并逐项达到100% executable line coverage且line
+    denominator非零。只有coverage producer报告真实branch denominator非零的selector才要求
+    逐项branch 100%；真实zero-branch selector必须显式记录`not_applicable`与denominator=0，
+    不能把缺artifact/未收集伪装成N/A。branch evidence固定由`nightly-2026-01-18`的
+    `cargo llvm-cov --branch`生成；stable gate只验证构建/测试，不声称产生branch evidence。
+    CI 中`continue-on-error`、旧artifact、只编译、视觉录屏或其他task coverage不构成证明。
 26. **B-026** current base必须包含GH-61、GH-66、GH-67的merged implementation ancestry与
     PR #166 partial implementation；#68必须保持canonical `ready_to_implement`且无parked/
     冲突readiness label。follow-up只接受本packet 17-path closed scope和DCO checkpoint chain；

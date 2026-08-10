@@ -274,8 +274,23 @@ results 与 schema；只测试内嵌正负 fixtures 不算通过。两个 benchm
 `cargo llvm-cov` raw/summary只写runner-local或外部evidence目录，不提交生成物。
 `gh68_current_head_coverage_contract`读取tasks中的唯一`gh68-critical-paths-v1` block，要求15个
 `file + name`恰好都位于`tests/golden_real_apps.rs`且各定义一次。最终current-head run要求
-changed executable line coverage >=80%，15项critical逐项line/branch 100%且denominator非零。
-缺工具、空结果、旧head/base、unknown/duplicate/extra critical项或`continue-on-error`均失败。
+changed executable line/branch coverage各>=80%且各自denominator非零。15项critical都必须
+matched=1/passed=1/ignored=0、executable line 100%且line denominator非零；对LLVM实际报告
+branch denominator非零的critical selector要求branch 100%，对真实零分支selector记录闭集状态
+`not_applicable`与`branch_total=0`。N/A必须来自同一完整raw coverage中的函数记录，缺函数、缺
+branch collection或缺artifact不能解释为N/A。branch producer固定使用
+`nightly-2026-01-18`、`llvm-tools-preview`与`cargo llvm-cov --branch --json`；stable job继续运行
+稳定构建/测试但不得声称branch evidence。raw JSON、派生summary和exact head/base/command/
+toolchain digest按先raw、后summary、最后exact selector的顺序写入runner temp；summary SHA-256
+绑定raw bytes，selector只读验证。缺工具、空结果、旧head/base、unknown/duplicate/extra critical
+项、顺序错误或`continue-on-error`均失败。
+
+固定producer命令为：
+
+```sh
+cargo +nightly-2026-01-18 llvm-cov --test golden_real_apps --all-features --locked \
+  --branch --json --output-path "$RUNNER_TEMP/gh68-coverage-raw.json"
+```
 
 ### 8. CI gates
 
@@ -283,7 +298,10 @@ required GH68 job保留现有workspace gates，并从`examples/README.md`唯一p
 和逐个`cargo check --example`，防止手写列表遗漏。它逐名运行15个统一target exact selectors、
 full `golden_real_apps`、docs link checker与`render` GH68 benchmark smoke；任一零匹配、ignored、
 example/index drift或`continue-on-error`失败。smoke只证明workload可运行，不是performance pass；
-固定环境baseline若缺失则明确blocked，不得用hosted时序伪造比较结论。
+固定环境baseline若缺失则明确blocked，不得用hosted时序伪造比较结论。coverage raw/summary先于
+coverage exact selector生成，artifact上传只发生在所有GH68验证成功后，并记录exact checkout
+SHA、raw/summary SHA-256、nightly版本和15项matched/passed/ignored结果；stable job不复用或冒充
+该nightly branch artifact。
 
 ## Product-to-Test Mapping
 
@@ -357,7 +375,8 @@ CI和本地验证从tasks critical manifest读取literal names；对每个name�
 
 最终current head额外运行workspace all-target tests、no-default-features、Rust 1.88 MSRV、全部
 examples、15 exact selectors、plain/ANSI golden、docs links、render benchmark no-run/smoke、
-fresh llvm-cov与workflow YAML/required graph检查。任何修正产生新head后重跑受影响证据。
+fresh pinned-nightly llvm-cov line/branch producer与workflow YAML/required graph检查。stable
+coverage只作补充且不得替代branch artifact。任何修正产生新head后重跑受影响证据。
 
 ## Risks and Mitigations
 

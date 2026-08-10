@@ -118,15 +118,18 @@ cargo test --test golden_real_apps --all-features --locked <name> -- --exact
   `cargo bench --bench render --no-run --locked`；`cargo bench --bench render --locked -- gh68 --test`。
   - File ownership: `benches/render.rs`、`tests/golden_real_apps.rs`。
   - Covers: B-015, B-016, B-017, B-021, B-022, B-025, B-028。
-  - Handoff: 向F9移交workload/oracle/test manifest；F8停止写bench。
+  - Handoff: 向F9移交workload/oracle、15项critical manifest与coverage summary只读validator；
+    F9拥有pinned-nightly raw/summary producer、exact-head ordering与artifact上传，F8停止写bench。
 
 - [ ] `SP68-F9` 接入 required CI gate。Owner: `ci-owner` | Done when: CI从
   `examples/README.md`唯一public ledger自动发现并逐个构建examples；逐名运行15 exact tests、
-  full golden target和render benchmark smoke；保留原workspace gates，禁止`continue-on-error`
-  或把smoke称为performance pass | Verify:
+  full golden target和render benchmark smoke；`nightly-2026-01-18` branch producer先生成并
+  digest-bind raw/summary，changed executable line/branch各>=80%且denominator非零，critical
+  逐项line 100%，真实有branch项branch 100%，真实零分支项显式N/A；保留原workspace gates，
+  禁止`continue-on-error`、stable branch claim或把smoke称为performance pass | Verify:
   `cargo test --test golden_real_apps --all-features --locked gh68_ci_public_examples_contract -- --exact`；
-  YAML parse；fresh运行fmt/check/clippy/workspace/all-target/no-default/MSRV/examples/docs links/
-  benchmark smoke和全部15 selectors。
+  YAML parse；执行tech固定nightly coverage命令；fresh运行fmt/check/clippy/workspace/all-target/
+  no-default/MSRV/examples/docs links/benchmark smoke和全部15 selectors。
   - File ownership: `.github/workflows/ci.yml`、`tests/golden_real_apps.rs`。
   - Covers: B-003, B-016, B-017, B-019, B-020, B-021, B-025, B-026, B-028。
   - Handoff: exact-head independent review和最终merge仍是独立human gate。
@@ -149,4 +152,6 @@ Product、Tech mapping、task `Covers:` union 的expected set均为：
 `{B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009, B-010, B-011, B-012, B-013, B-014, B-015, B-016, B-017, B-018, B-019, B-020, B-021, B-022, B-023, B-024, B-025, B-026, B-027, B-028}`
 
 critical manifest必须恰好15项、全部位于`tests/golden_real_apps.rs`，且每个name在Rust文件中
-恰好定义一次。任一缺失时GH-68保持未完成。
+恰好定义一次。coverage summary必须对相同15项逐项给出line denominator/covered、branch
+denominator/covered与闭集branch状态`covered|not_applicable`；`not_applicable`只允许
+`branch_total=0`且raw LLVM函数记录存在。任一缺失时GH-68保持未完成。
