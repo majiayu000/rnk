@@ -145,7 +145,8 @@ fn a_failed_coordinate_commits_no_partial_frame() {
     };
     assert!(matches!(
         error,
-        TransactionalLayoutError::Snapshot(LayoutSnapshotError::NonFiniteGeometry { .. })
+        TransactionalLayoutError::Snapshot(source)
+            if matches!(source.source_error(), LayoutSnapshotError::NonFiniteGeometry { .. })
     ));
 
     let (after, after_report) = engine.try_snapshot(&stable).unwrap();

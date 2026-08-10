@@ -19,11 +19,11 @@ mod error;
 mod quantize;
 
 pub(crate) use builder::{CheckedSnapshotNodeInput, LayoutSnapshotBuilder};
-pub(crate) use error::SnapshotBuildFailure;
 pub use error::{
     ArithmeticOperation, AttemptedContentBounds, Axis, CellOutputError, Edge, GeometryField,
-    LayoutAliasError, LayoutSnapshotError, SnapshotAttemptReport, SnapshotCounterError,
-    SnapshotInvariantError, SnapshotTargetMismatchReason, SnapshotWorkCounterField,
+    LayoutAliasError, LayoutSnapshotError, SnapshotAttemptReport, SnapshotBuildFailure,
+    SnapshotCounterError, SnapshotInvariantError, SnapshotTargetMismatchReason,
+    SnapshotWorkCounterField,
 };
 pub(crate) use quantize::{
     add as checked_add, edge as quantize_edge, extent as checked_extent, finite as checked_finite,
@@ -512,15 +512,7 @@ impl PreparedSnapshotFrame {
         &self,
         element_id: ElementId,
         expected_identity: &SnapshotIdentity,
-        expected_revision: FrameRevision,
     ) -> Result<&SnapshotNode, LayoutAliasError> {
-        if self.frame_aliases.revision != expected_revision {
-            return Err(LayoutAliasError::StaleFrameAlias {
-                element_id,
-                expected_frame_revision: expected_revision,
-                actual_frame_revision: self.frame_aliases.revision,
-            });
-        }
         if self.snapshot.get(expected_identity).is_none() {
             return Err(LayoutAliasError::AliasTargetMissing {
                 element_id,

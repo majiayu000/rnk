@@ -22,6 +22,92 @@ struct StepEvidence {
     cache_hits: u64,
 }
 
+fn first_snapshot_difference(
+    full: &LayoutSnapshot,
+    incremental: &LayoutSnapshot,
+) -> Option<String> {
+    let full_nodes: Vec<_> = full.nodes().collect();
+    let incremental_nodes: Vec<_> = incremental.nodes().collect();
+    for index in 0..full_nodes.len().max(incremental_nodes.len()) {
+        let Some(full_node) = full_nodes.get(index) else {
+            let incremental_node = incremental_nodes[index];
+            return Some(format!(
+                "identity={} field=node_presence full=missing incremental=present",
+                incremental_node.identity().diagnostic()
+            ));
+        };
+        let Some(incremental_node) = incremental_nodes.get(index) else {
+            return Some(format!(
+                "identity={} field=node_presence full=present incremental=missing",
+                full_node.identity().diagnostic()
+            ));
+        };
+        if full_node.identity() != incremental_node.identity() {
+            return Some(format!(
+                "identity={} field=identity full={} incremental={}",
+                full_node.identity().diagnostic(),
+                full_node.identity().diagnostic(),
+                incremental_node.identity().diagnostic()
+            ));
+        }
+        macro_rules! compare_field {
+            ($name:literal, $full:expr, $incremental:expr) => {
+                if $full != $incremental {
+                    return Some(format!(
+                        "identity={} field={} full={:?} incremental={:?}",
+                        full_node.identity().diagnostic(),
+                        $name,
+                        $full,
+                        $incremental
+                    ));
+                }
+            };
+        }
+        compare_field!("parent", full_node.parent(), incremental_node.parent());
+        compare_field!(
+            "children",
+            full_node.children(),
+            incremental_node.children()
+        );
+        compare_field!(
+            "border_bounds",
+            full_node.border_bounds(),
+            incremental_node.border_bounds()
+        );
+        compare_field!(
+            "content_bounds",
+            full_node.content_bounds(),
+            incremental_node.content_bounds()
+        );
+        compare_field!(
+            "text_origin",
+            full_node.text_origin(),
+            incremental_node.text_origin()
+        );
+        compare_field!(
+            "effective_clip",
+            full_node.effective_clip(),
+            incremental_node.effective_clip()
+        );
+        compare_field!(
+            "scroll_transform",
+            full_node.scroll_transform(),
+            incremental_node.scroll_transform()
+        );
+        let flow = |node: &rnk::layout::SnapshotNode| {
+            node.text_flow().map(|flow| {
+                (
+                    flow.max_width(),
+                    flow.width_policy_revision(),
+                    flow.logical_row_count(),
+                )
+            })
+        };
+        compare_field!("text_flow", flow(full_node), flow(incremental_node));
+    }
+    None
+}
+
 fn target(messages: &[Message], width: u16) -> Element {
     fn add_children(parent_id: u64, parent: &mut Element, messages: &[Message]) {
         let mut children: Vec<_> = messages
@@ -297,11 +383,11 @@ fn run_seed(seed: u64) -> Vec<StepEvidence> {
         let full = LayoutEngine::new()
             .prepare_element_incremental(&current, None, viewport.0, viewport.1)
             .unwrap_or_else(|error| panic!("full seed={seed:#018x} state={random:#018x} step={step} raw={raw:?} normalized={operation}: {error}"));
-        assert_eq!(
-            prepared.snapshot(),
-            full.snapshot(),
-            "seed={seed:#018x} state={random:#018x} step={step} raw={raw:?} normalized={operation}"
-        );
+        if let Some(difference) = first_snapshot_difference(full.snapshot(), prepared.snapshot()) {
+            panic!(
+                "seed={seed:#018x} state={random:#018x} step={step} raw={raw:?} normalized={operation} {difference}"
+            );
+        }
         let report = prepared.snapshot_report();
         assert_eq!(
             report.work_counters().snapshot_nodes(),
@@ -364,7 +450,7 @@ fn seeded_operations_match_after_every_step() {
                 || expected.cache_hits != actual.cache_hits
             {
                 panic!(
-                    "replay first difference seed={seed:#018x} step={step} expected_state={:#018x} actual_state={:#018x} expected_raw={:?} actual_raw={:?} expected_operation={} actual_operation={} expected_work={:?} actual_work={:?}",
+                    "replay first difference seed={seed:#018x} step={step} expected_state={:#018x} actual_state={:#018x} expected_raw={:?} actual_raw={:?} expected_operation={} actual_operation={} expected_work={:?} actual_work={:?} snapshot_difference={}",
                     expected.state_after,
                     actual.state_after,
                     expected.raw,
@@ -372,9 +458,39 @@ fn seeded_operations_match_after_every_step() {
                     expected.operation,
                     actual.operation,
                     expected.work,
-                    actual.work
+                    actual.work,
+                    first_snapshot_difference(&expected.snapshot, &actual.snapshot)
+                        .unwrap_or_else(|| "none".to_owned())
                 );
             }
         }
     }
+}
+
+#[test]
+fn snapshot_divergence_diagnostic_names_first_identity_field_and_values() {
+    let messages = vec![Message {
+        id: 1,
+        parent: 0,
+        order: 0,
+        text: "diagnostic".to_owned(),
+        padded: false,
+        scroll_x: 0,
+    }];
+    let full = LayoutEngine::new()
+        .prepare_element_incremental(&target(&messages, 12), None, 12, 4)
+        .unwrap()
+        .snapshot()
+        .clone();
+    let incremental = LayoutEngine::new()
+        .prepare_element_incremental(&target(&messages, 8), None, 8, 4)
+        .unwrap()
+        .snapshot()
+        .clone();
+    let diagnostic = first_snapshot_difference(&full, &incremental)
+        .expect("different cell snapshots must report the first exact field");
+    assert!(diagnostic.contains("identity="));
+    assert!(diagnostic.contains("field=border_bounds"));
+    assert!(diagnostic.contains("full=CellRect"));
+    assert!(diagnostic.contains("incremental=CellRect"));
 }

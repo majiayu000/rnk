@@ -114,6 +114,7 @@ fn gh61_public_snapshot_surface_is_documented_and_compiles() {
         std::any::type_name::<LayoutSnapshotError>(),
         std::any::type_name::<RecoveredSnapshotError>(),
         std::any::type_name::<SnapshotAttemptReport>(),
+        std::any::type_name::<SnapshotBuildFailure>(),
         std::any::type_name::<SnapshotCounterError>(),
         std::any::type_name::<SnapshotInvariantError>(),
         std::any::type_name::<SnapshotTargetMismatchReason>(),

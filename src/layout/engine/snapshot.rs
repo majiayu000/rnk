@@ -17,7 +17,8 @@ use crate::{
         },
     },
     reconciler::{
-        ReconcilePlan, ScopedIdentityArena, ScopedNodeIdentity, semantically_equal_vnode_in,
+        ReconcilePlan, ScopedIdentityArena, ScopedNodeIdentity, plan_initial_tree_in,
+        semantically_equal_vnode_in,
     },
 };
 
@@ -225,17 +226,17 @@ impl LayoutEngine {
         snapshot: &PreparedSnapshotFrame,
     ) -> Result<(), LayoutSnapshotError> {
         let mut arena = ScopedIdentityArena::seeded(self.vnode_map.keys());
-        let requested = ElementVNodeSnapshot::from_element(target, &mut arena).map_err(|_| {
-            LayoutSnapshotError::MissingIdentity {
-                element_id: target.id,
-            }
-        })?;
+        let requested = ElementVNodeSnapshot::from_element(target, &mut arena)
+            .map_err(|source| LayoutSnapshotError::TargetPlanning { source })?;
+        plan_initial_tree_in(&requested.vnode, &mut arena)
+            .map_err(|source| LayoutSnapshotError::TargetPlanning { source })?;
         let requested_visible = visible_vnode(&requested.vnode);
         let committed_visible = self.committed_vnode.as_ref().and_then(visible_vnode);
         let exact = requested.has_layout_root
             && match (committed_visible, requested_visible) {
                 (Some(committed), Some(requested)) => {
-                    semantically_equal_vnode_in(&committed, &requested, &mut arena).unwrap_or(false)
+                    semantically_equal_vnode_in(&committed, &requested, &mut arena)
+                        .map_err(|source| LayoutSnapshotError::TargetPlanning { source })?
                 }
                 (None, None) => true,
                 _ => false,
@@ -306,9 +307,14 @@ impl LayoutEngine {
     ) -> Result<(PreparedSnapshotFrame, SnapshotBuildReport), SnapshotBuildFailure> {
         let mut builder = LayoutSnapshotBuilder::new(self.last_width, self.last_height, 1);
         add_pre_snapshot_work(&mut builder, evidence)?;
+        let prior_cache_hits = evidence
+            .cache_hits
+            .into_iter()
+            .try_fold(0_u64, |total, hits| total.checked_add(hits?))
+            .ok_or_else(|| builder.fail(LayoutSnapshotError::CacheEvidenceOverflow))?;
+        builder.add_cache_hits(prior_cache_hits)?;
         let target_plan = SnapshotTargetPlan::new(target, element_snapshot, reconcile_plan)
             .map_err(|source| builder.fail(source))?;
-        let cache_hits_before = self.flow_cache.successful_hits();
         let viewport_clip = AxisClip::from_rect(builder.viewport());
         self.snapshot_subtree(
             target_plan.target,
@@ -319,23 +325,10 @@ impl LayoutEngine {
             viewport_clip,
             &mut builder,
         )?;
-        let snapshot_cache_hits = self
-            .flow_cache
-            .successful_hits()
-            .checked_sub(cache_hits_before)
-            .ok_or_else(|| builder.fail(LayoutSnapshotError::CacheEvidenceOverflow))?;
-        let cache_hits = evidence
-            .cache_hits
-            .into_iter()
-            .try_fold(snapshot_cache_hits, |total, hits| {
-                total.checked_add(hits?).or(None)
-            })
-            .ok_or_else(|| builder.fail(LayoutSnapshotError::CacheEvidenceOverflow))?;
         builder.finish(
             evidence.strategy,
             evidence.patch_count,
             evidence.recovery_cause.clone(),
-            cache_hits,
         )
     }
 
@@ -451,6 +444,7 @@ impl LayoutEngine {
                     })
                 })?;
             let recomputes_before = self.flow_cache.successful_recomputes();
+            let cache_hits_before = self.flow_cache.successful_hits();
             let flow = flow_for_width(
                 &context,
                 content_width,
@@ -482,6 +476,12 @@ impl LayoutEngine {
                         },
                     })
                 })?;
+            let cache_hits = self
+                .flow_cache
+                .successful_hits()
+                .checked_sub(cache_hits_before)
+                .ok_or_else(|| builder.fail(LayoutSnapshotError::CacheEvidenceOverflow))?;
+            builder.add_cache_hits(cache_hits)?;
             builder.add_work(SnapshotWorkCounters::from_fields(0, 0, recomputes, 0, 0))?;
             Some(TextFlowSemanticStamp::checked(flow))
         } else {
@@ -543,7 +543,7 @@ fn validate_committed_aliases(
             })?;
     let expected = SnapshotIdentity::from_scoped(requested.clone());
     let node = snapshot
-        .resolve_exact_alias(element.id, &expected, snapshot.frame_revision())
+        .resolve_exact_alias(element.id, &expected)
         .map_err(|source| LayoutSnapshotError::Alias { source })?;
     if engine.element_scopes.get(&element.id) != Some(requested)
         || node.identity().scoped() != requested

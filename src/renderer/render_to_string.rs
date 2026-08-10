@@ -122,7 +122,7 @@ fn legacy_string_error(element: &Element, error: CheckedRenderError) -> TextRend
             },
         )) => TextRenderError::flow(element.id, source),
         CheckedRenderError::LayoutBuild(TransactionalLayoutError::Snapshot(source)) => {
-            legacy_snapshot_coordinate_error(element, &source).unwrap_or_else(|| {
+            legacy_snapshot_coordinate_error(element, source.source_error()).unwrap_or_else(|| {
                 panic!("legacy string renderer cannot represent snapshot error: {source}")
             })
         }

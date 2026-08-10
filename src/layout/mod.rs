@@ -7,7 +7,7 @@ pub mod text_flow;
 mod utils;
 
 pub(crate) use engine::{
-    BoundPreparedLayoutFrame, CheckedLayoutSnapshot, LegacyLayoutSnapshotError,
+    BoundPreparedLayoutFrame, CheckedMeasurementSnapshot, LegacyLayoutSnapshotError,
     PreparedLayoutCommitError,
 };
 pub use engine::{
@@ -27,9 +27,10 @@ pub use snapshot::{
     ArithmeticOperation, AttemptedContentBounds, Axis, AxisClip, CellOutputError, CellPoint,
     CellRect, CellSpan, CellVector, Edge, FrameRevision, GeometryField, LayoutAliasError,
     LayoutSnapshot, LayoutSnapshotError, PreparedSnapshotFrame, SnapshotAttemptReport,
-    SnapshotBuildReport, SnapshotBuildStrategy, SnapshotCounterError, SnapshotIdentity,
-    SnapshotInvariantError, SnapshotNode, SnapshotNodeIndex, SnapshotTargetMismatchReason,
-    SnapshotWorkCounterField, SnapshotWorkCounters, TextFlowSemanticStamp,
+    SnapshotBuildFailure, SnapshotBuildReport, SnapshotBuildStrategy, SnapshotCounterError,
+    SnapshotIdentity, SnapshotInvariantError, SnapshotNode, SnapshotNodeIndex,
+    SnapshotTargetMismatchReason, SnapshotWorkCounterField, SnapshotWorkCounters,
+    TextFlowSemanticStamp,
 };
 pub use text_flow::{
     StyledTextRange, TextFlow, TextFlowCache, TextFlowDiagnostic, TextFlowError, TextFlowInput,

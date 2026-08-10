@@ -171,7 +171,7 @@ fn cancelled_builder_is_hidden_and_published_snapshot_is_immutable() {
         .expect_err("ignored first error cannot resume construction");
     assert_eq!(first.into_parts(), continued.into_parts());
     let terminal = poisoned
-        .finish(SnapshotBuildStrategy::InitialFull, 0, None, 0)
+        .finish(SnapshotBuildStrategy::InitialFull, 0, None)
         .expect_err("poisoned builder cannot publish");
     assert!(matches!(
         terminal.into_parts().0,
@@ -182,5 +182,86 @@ fn cancelled_builder_is_hidden_and_published_snapshot_is_immutable() {
                 rhs: 1,
             }
         }
+    ));
+}
+
+#[test]
+fn layout_alias_variants_are_reached_through_checked_production_seams() {
+    let target = target();
+    let frame = LayoutEngine::new()
+        .prepare_element_incremental(&target, None, 10, 4)
+        .unwrap();
+    let prepared = frame.prepared_snapshot();
+    let snapshot = prepared.snapshot();
+    let root = snapshot.root();
+    let first = snapshot.node(root.children()[0]);
+    let second = snapshot.node(root.children()[1]);
+    let first_element_id = target.children.iter().next().unwrap().id;
+
+    let missing_id = crate::core::Element::text("not in frame").id;
+    assert!(matches!(
+        prepared.node_for_element(missing_id),
+        Err(LayoutAliasError::MissingFrameAlias { element_id, .. }) if element_id == missing_id
+    ));
+    assert!(matches!(
+        prepared.resolve_exact_alias(first_element_id, second.identity()),
+        Err(LayoutAliasError::AliasIdentityMismatch {
+            element_id,
+            expected_identity,
+            actual_identity,
+        }) if element_id == first_element_id
+            && expected_identity == *second.identity()
+            && actual_identity == *first.identity()
+    ));
+
+    let other = RnkBox::new()
+        .child(Text::new("other").into_element().with_key("other"))
+        .into_element();
+    let other_frame = LayoutEngine::new()
+        .prepare_element_incremental(&other, None, 10, 4)
+        .unwrap();
+    let absent = other_frame
+        .snapshot()
+        .node(other_frame.snapshot().root().children()[0])
+        .identity()
+        .clone();
+    assert!(matches!(
+        prepared.resolve_exact_alias(first_element_id, &absent),
+        Err(LayoutAliasError::AliasTargetMissing { element_id, identity })
+            if element_id == first_element_id && identity == absent
+    ));
+
+    let mut builder = LayoutSnapshotBuilder::new(10, 4, 1);
+    let root_index = builder
+        .push_ordered(CheckedSnapshotNodeInput {
+            element_id: target.id,
+            identity: root.identity().clone(),
+            parent: None,
+            border_bounds: root.border_bounds(),
+            content_bounds: root.content_bounds(),
+            text_origin: root.text_origin(),
+            effective_clip: root.effective_clip(),
+            scroll_transform: root.scroll_transform(),
+            text_flow: root.text_flow().cloned(),
+        })
+        .unwrap();
+    let duplicate = builder
+        .push_ordered(CheckedSnapshotNodeInput {
+            element_id: target.id,
+            identity: first.identity().clone(),
+            parent: Some(root_index),
+            border_bounds: first.border_bounds(),
+            content_bounds: first.content_bounds(),
+            text_origin: first.text_origin(),
+            effective_clip: first.effective_clip(),
+            scroll_transform: first.scroll_transform(),
+            text_flow: first.text_flow().cloned(),
+        })
+        .expect_err("duplicate frame alias must poison the real checked builder");
+    assert!(matches!(
+        duplicate.source_error(),
+        LayoutSnapshotError::Alias {
+            source: LayoutAliasError::DuplicateFrameAlias { element_id, .. },
+        } if *element_id == target.id
     ));
 }

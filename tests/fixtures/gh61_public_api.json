@@ -18,6 +18,7 @@
     "PreparedSnapshotFrame",
     "RecoveredSnapshotError",
     "SnapshotBuildReport",
+    "SnapshotBuildFailure",
     "SnapshotBuildStrategy",
     "SnapshotAttemptReport",
     "SnapshotCounterError",

@@ -47,9 +47,13 @@ impl StaticRenderer {
             .map_err(|error| match error {
                 CheckedRenderError::Text(source) => source,
                 CheckedRenderError::LayoutBuild(TransactionalLayoutError::Snapshot(source)) => {
-                    legacy_snapshot_coordinate_error(element, &source).unwrap_or_else(|| {
-                        panic!("legacy static renderer cannot represent snapshot error: {source}")
-                    })
+                    legacy_snapshot_coordinate_error(element, source.source_error()).unwrap_or_else(
+                        || {
+                            panic!(
+                                "legacy static renderer cannot represent snapshot error: {source}"
+                            )
+                        },
+                    )
                 }
                 CheckedRenderError::LayoutBuild(TransactionalLayoutError::RecoveredSnapshot(
                     source,

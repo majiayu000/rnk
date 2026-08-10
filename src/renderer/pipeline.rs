@@ -679,4 +679,14 @@ mod tests {
     fn failed_unchanged_frame_keeps_previous_aliases() {
         super::prepared::tests::failed_unchanged_frame_keeps_previous_aliases();
     }
+
+    #[test]
+    fn oversized_measurement_fails_before_atomic_publication() {
+        super::prepared::tests::oversized_measurement_fails_before_atomic_publication();
+    }
+
+    #[test]
+    fn all_correctness_consumers_use_authoritative_snapshot() {
+        super::prepared::tests::all_correctness_consumers_use_authoritative_snapshot();
+    }
 }

@@ -2,8 +2,7 @@
 
 use std::fmt;
 
-use crate::layout::snapshot::SnapshotBuildFailure;
-use crate::layout::{LayoutSnapshotError, SnapshotAttemptReport};
+use crate::layout::{LayoutSnapshotError, SnapshotAttemptReport, SnapshotBuildFailure};
 
 use super::{
     DirectPatchError, FullRebuildError, IncrementalLayoutError, InvalidLayoutTargetError,
@@ -33,6 +32,11 @@ impl RecoveredSnapshotError {
     /// Final snapshot construction failure.
     pub fn snapshot_failure(&self) -> &LayoutSnapshotError {
         self.snapshot.source_error()
+    }
+
+    /// Complete final snapshot-attempt failure envelope.
+    pub fn snapshot_build_failure(&self) -> &SnapshotBuildFailure {
+        &self.snapshot
     }
 
     /// Complete work captured by the failed recovery snapshot attempt.
@@ -78,7 +82,7 @@ pub enum TransactionalLayoutError {
     /// The target was invalid before transaction or recovery work began.
     InvalidTarget(InvalidLayoutTargetError),
     /// Layout succeeded but immutable snapshot construction failed.
-    Snapshot(LayoutSnapshotError),
+    Snapshot(SnapshotBuildFailure),
     /// Recovery layout succeeded but its immutable snapshot failed.
     RecoveredSnapshot(RecoveredSnapshotError),
     /// Incremental commit and its single fresh recovery attempt both failed.

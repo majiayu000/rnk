@@ -283,7 +283,7 @@ impl LayoutEngine {
             );
             let (prepared_snapshot, snapshot_report) = candidate
                 .try_build_snapshot_for(root, &snapshot, &initial_plan, &evidence)
-                .map_err(|failure| TransactionalLayoutError::Snapshot(failure.into_parts().0))?;
+                .map_err(TransactionalLayoutError::Snapshot)?;
             candidate.stage_prepared_snapshot(prepared_snapshot, snapshot_report);
             return Ok(PreparedLayoutFrame {
                 state: PreparedLayoutState::Replacement(candidate),
@@ -363,9 +363,7 @@ impl LayoutEngine {
                 );
                 let (prepared_snapshot, snapshot_report) = candidate
                     .try_build_snapshot_for(root, &snapshot, &plan, &evidence)
-                    .map_err(|failure| {
-                        TransactionalLayoutError::Snapshot(failure.into_parts().0)
-                    })?;
+                    .map_err(TransactionalLayoutError::Snapshot)?;
                 candidate.stage_prepared_snapshot(prepared_snapshot, snapshot_report);
                 Ok(PreparedLayoutFrame {
                     state: if unchanged_frame {

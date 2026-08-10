@@ -262,9 +262,12 @@ impl LayoutEngine {
                 source: RebuildFailure::TextFlow(source),
                 ..
             })) => Err(source),
-            Err(TransactionalLayoutError::Snapshot(
-                crate::layout::LayoutSnapshotError::TextFlowRevision { source, .. },
-            )) => Err(source.clone()),
+            Err(TransactionalLayoutError::Snapshot(failure)) => match failure.source_error() {
+                crate::layout::LayoutSnapshotError::TextFlowRevision { source, .. } => {
+                    Err(source.clone())
+                }
+                _ => panic!("legacy layout computation failed: {failure}"),
+            },
             Err(error) => panic!("legacy layout computation failed: {error}"),
         }
     }
@@ -652,7 +655,7 @@ mod frame_flow_tests {
 }
 
 mod context_sync;
-pub(crate) use context_sync::{CheckedLayoutSnapshot, LegacyLayoutSnapshotError};
+pub(crate) use context_sync::{CheckedMeasurementSnapshot, LegacyLayoutSnapshotError};
 mod identity_index;
 mod incremental;
 mod incremental_order;

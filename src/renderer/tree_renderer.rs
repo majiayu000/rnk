@@ -75,7 +75,10 @@ fn clip_bound_i64(value: i64) -> u16 {
     } else if value >= i64::from(u16::MAX) {
         u16::MAX
     } else {
-        value as u16
+        match u16::try_from(value) {
+            Ok(value) => value,
+            Err(_) => unreachable!("clip bound was checked as a terminal coordinate"),
+        }
     }
 }
 
@@ -102,30 +105,9 @@ pub(crate) fn try_render_element_tree(
     if element.style.display == Display::None || element.element_type == ElementType::VirtualText {
         return Ok(());
     }
-    validate_legacy_tree_flows(element, layout_engine)?;
     projection::try_render_tree(element, layout_engine, output, offset_x, offset_y)
         .map(|_| ())
         .map_err(|error| error.into_text_render_error(element.id))
-}
-
-fn validate_legacy_tree_flows(
-    element: &Element,
-    layout_engine: &LayoutEngine,
-) -> Result<(), TextRenderError> {
-    if element.style.display == Display::None || element.element_type == ElementType::VirtualText {
-        return Ok(());
-    }
-    if (element.spans.is_some() || element.text_content.is_some())
-        && layout_engine.current_text_flow(element.id).is_none()
-    {
-        return Err(TextRenderError::MissingCurrentFlow {
-            element_id: element.id,
-        });
-    }
-    for child in &element.children {
-        validate_legacy_tree_flows(child, layout_engine)?;
-    }
-    Ok(())
 }
 
 pub(crate) fn try_render_element_snapshot(
@@ -451,7 +433,6 @@ mod typed_error_tests {
         let mut engine = LayoutEngine::new();
         engine.try_compute(&tree, 10, 2).unwrap();
         let missing = Text::new("missing").into_element();
-        let missing_id = missing.id;
         tree.add_child(missing);
 
         let mut output = Output::new(10, 2);
@@ -460,8 +441,10 @@ mod typed_error_tests {
         let failure = try_render_element_tree(&tree, &engine, &mut output, 0.0, 0.0);
         assert!(matches!(
             failure,
-            Err(TextRenderError::MissingCurrentFlow { element_id })
-                if element_id == missing_id
+            Err(TextRenderError::Projection {
+                element_id,
+                source: TextProjectionError::MissingLayout,
+            }) if element_id == tree.id
         ));
         assert_eq!(output.render(), before);
         assert!(!output.render().starts_with("first"));

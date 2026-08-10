@@ -70,6 +70,19 @@ impl LayoutSnapshotBuilder {
         Ok(())
     }
 
+    pub(crate) fn add_cache_hits(&mut self, delta: u64) -> Result<(), SnapshotBuildFailure> {
+        if let Some(failure) = self.poisoned_failure() {
+            return Err(failure);
+        }
+        let next = self
+            .attempt_report
+            .cache_hits()
+            .checked_add(delta)
+            .ok_or_else(|| self.poison(LayoutSnapshotError::CacheEvidenceOverflow))?;
+        self.attempt_report.set_cache_hits(next);
+        Ok(())
+    }
+
     pub(crate) fn push_ordered(
         &mut self,
         input: CheckedSnapshotNodeInput,
@@ -176,7 +189,6 @@ impl LayoutSnapshotBuilder {
         strategy: SnapshotBuildStrategy,
         patch_count: usize,
         recovery_cause: Option<PatchTransactionError>,
-        cache_hits: u64,
     ) -> Result<(PreparedSnapshotFrame, SnapshotBuildReport), SnapshotBuildFailure> {
         if let Some(failure) = self.poisoned_failure() {
             return Err(failure);
@@ -203,6 +215,7 @@ impl LayoutSnapshotBuilder {
         })?;
         self.add_work(SnapshotWorkCounters::from_fields(0, 0, 0, node_count, 0))?;
         let work = self.attempt_report.work_counters();
+        let cache_hits = self.attempt_report.cache_hits();
         let snapshot = Arc::new(LayoutSnapshot {
             viewport: self.viewport,
             nodes: self.nodes.into(),

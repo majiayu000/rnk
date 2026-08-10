@@ -29,25 +29,85 @@ fn full_snapshot(target: &Element, width: u16, height: u16) -> LayoutSnapshot {
 
 #[test]
 fn full_incremental_and_recovered_are_semantically_equal() {
-    let initial = chat_target(&[("a", "hello"), ("b", "世界")], 12);
-    let updated = chat_target(
-        &[("b", "世界🙂"), ("a", "hello streamed"), ("c", "e\u{301}")],
-        12,
+    let (target, incomplete_previous) = recovered_target();
+    let full = LayoutEngine::new()
+        .prepare_element_incremental(&target, None, 0, 0)
+        .unwrap();
+    assert_eq!(
+        full.snapshot_report().strategy(),
+        SnapshotBuildStrategy::InitialFull
     );
+
     let mut incremental = LayoutEngine::new();
     let first = incremental
-        .prepare_element_incremental(&initial, None, 20, 8)
+        .prepare_element_incremental(&target, None, 0, 0)
         .unwrap();
     let (previous, _) = first.commit(&mut incremental);
-    let candidate = incremental
-        .prepare_element_incremental(&updated, Some(&previous), 20, 8)
+    let incremental_target = recovered_target().0;
+    let incremental_frame = incremental
+        .prepare_element_incremental(&incremental_target, Some(&previous), 0, 0)
         .unwrap();
-
-    assert_eq!(candidate.snapshot(), &full_snapshot(&updated, 20, 8));
     assert_eq!(
-        candidate.snapshot_report().strategy(),
+        incremental_frame.snapshot_report().strategy(),
         SnapshotBuildStrategy::Incremental
     );
+
+    let mut recovered = LayoutEngine::new();
+    recovered.build_vnode_tree(&incomplete_previous).unwrap();
+    let recovered_frame = recovered
+        .prepare_element_incremental(&target, Some(&incomplete_previous), 0, 0)
+        .unwrap();
+    assert!(matches!(
+        recovered_frame.report(),
+        CheckedIncrementalLayoutReport::RecoveredFullRebuild { .. }
+    ));
+    assert_eq!(
+        recovered_frame.snapshot_report().strategy(),
+        SnapshotBuildStrategy::RecoveredFull
+    );
+    assert_eq!(full.snapshot(), incremental_frame.snapshot());
+    assert_eq!(full.snapshot(), recovered_frame.snapshot());
+    let full_cells: Vec<_> = full
+        .snapshot()
+        .nodes()
+        .map(|node| {
+            (
+                node.identity().clone(),
+                node.border_bounds(),
+                node.content_bounds(),
+                node.effective_clip(),
+                node.scroll_transform(),
+            )
+        })
+        .collect();
+    let incremental_cells: Vec<_> = incremental_frame
+        .snapshot()
+        .nodes()
+        .map(|node| {
+            (
+                node.identity().clone(),
+                node.border_bounds(),
+                node.content_bounds(),
+                node.effective_clip(),
+                node.scroll_transform(),
+            )
+        })
+        .collect();
+    let recovered_cells: Vec<_> = recovered_frame
+        .snapshot()
+        .nodes()
+        .map(|node| {
+            (
+                node.identity().clone(),
+                node.border_bounds(),
+                node.content_bounds(),
+                node.effective_clip(),
+                node.scroll_transform(),
+            )
+        })
+        .collect();
+    assert_eq!(full_cells, incremental_cells);
+    assert_eq!(full_cells, recovered_cells);
 }
 
 #[test]
@@ -69,6 +129,59 @@ fn chat_mutation_matrix_matches_full() {
         assert_eq!(prepared.snapshot(), &full_snapshot(&target, 16, 6));
         let (next, _) = prepared.commit(&mut engine);
         previous = Some(next);
+    }
+
+    let build_large = |entries: &[(Option<String>, String)]| {
+        let mut root = Element::box_element().with_key("large-root");
+        root.style.flex_direction = FlexDirection::Column;
+        root.style.width = Dimension::Points(40.0);
+        for (key, text) in entries {
+            let mut child = Element::text(text.clone());
+            if let Some(key) = key {
+                child = child.with_key(key.clone());
+            }
+            root.add_child(child);
+        }
+        root
+    };
+    let mut entries: Vec<_> = (0..1_000)
+        .map(|index| {
+            let key = (index % 2 == 0).then(|| format!("message-{index}"));
+            let payload = match index % 4 {
+                0 => format!("ascii {index}"),
+                1 => format!("中\nvariable row {index}"),
+                2 => format!("👩‍💻 {index}"),
+                _ => format!("e\u{301} {index}"),
+            };
+            (key, payload)
+        })
+        .collect();
+    let mut large_engine = LayoutEngine::new();
+    let mut large_previous = None;
+    for operation in 0..6 {
+        match operation {
+            1 => entries.insert(0, (Some("front".to_owned()), "前🙂".to_owned())),
+            2 => entries.insert(entries.len() / 2, (None, "middle 👩‍💻\ne\u{301}".to_owned())),
+            3 => entries.push((Some("tail".to_owned()), "尾 中".to_owned())),
+            4 => entries[501].1.push_str(" streamed🙂中e\u{301}"),
+            5 => {
+                entries.remove(1);
+                let moved = entries.remove(entries.len() / 2);
+                entries.insert(2, moved);
+            }
+            _ => {}
+        }
+        let target = build_large(&entries);
+        let prepared = large_engine
+            .prepare_element_incremental(&target, large_previous.as_ref(), 40, 2_000)
+            .unwrap_or_else(|error| panic!("large mutation operation {operation}: {error}"));
+        assert_eq!(
+            prepared.snapshot(),
+            &full_snapshot(&target, 40, 2_000),
+            "large mutation operation {operation}"
+        );
+        let (next, _) = prepared.commit(&mut large_engine);
+        large_previous = Some(next);
     }
 }
 
@@ -157,7 +270,7 @@ fn mixed_axis_overflow_clips_only_selected_axis() {
 }
 
 #[test]
-fn dynamic_static_testing_and_string_share_cell_contract() {
+fn string_snapshot_cell_contract_is_supplemental() {
     let target = chat_target(&[("text", "共享🙂")], 8);
     let rendered = try_render_to_string_checked(&target, 8).unwrap();
     let snapshot = full_snapshot(&target, 8, 4);
@@ -281,7 +394,7 @@ fn reused_snapshot_accepts_target_exact_frame_aliases() {
 }
 
 #[test]
-fn all_render_consumers_use_one_snapshot() {
+fn string_and_testing_output_parity_is_supplemental() {
     let target = chat_target(&[("text", "consumer parity")], 20);
     let checked = try_render_to_string_checked(&target, 20).unwrap();
     let testing = TestRenderer::new(20, 4)

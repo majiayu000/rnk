@@ -6,6 +6,7 @@ use std::{error::Error, fmt};
 
 use crate::core::ElementId;
 use crate::layout::{IncrementalInvariantError, TextFlowError};
+use crate::reconciler::ReconcilePlanError;
 
 use super::{CellRect, FrameRevision, SnapshotIdentity};
 
@@ -95,7 +96,7 @@ pub enum Edge {
 pub enum SnapshotWorkCounterField {
     /// Target nodes accepted for checked lookup.
     VisitedNodes,
-    /// Distinct planned mutations and removals.
+    /// Distinct mutation or removal events completed by the producer.
     MutatedNodes,
     /// Successful TextFlow cache misses.
     TextFlowRecomputes,
@@ -141,8 +142,6 @@ pub enum ArithmeticOperation {
 pub enum SnapshotTargetMismatchReason {
     /// The target had no renderable root.
     MissingRoot,
-    /// A target node had no prepared element alias.
-    MissingAlias,
     /// The prepared child order differed from the target traversal.
     ChildOrder,
 }
@@ -304,6 +303,11 @@ pub enum LayoutSnapshotError {
         /// Concrete invariant failure.
         source: SnapshotInvariantError,
     },
+    /// Exact target reconstruction or semantic comparison failed.
+    TargetPlanning {
+        /// Preserved GH59 planning/identity cause.
+        source: ReconcilePlanError,
+    },
 }
 
 impl fmt::Display for LayoutSnapshotError {
@@ -325,6 +329,7 @@ impl fmt::Display for LayoutSnapshotError {
             Self::CacheEvidenceOverflow => "snapshot cache evidence overflowed",
             Self::Alias { .. } => "snapshot alias validation failed",
             Self::InvalidTree { .. } => "snapshot tree is invalid",
+            Self::TargetPlanning { .. } => "snapshot target planning failed",
         })
     }
 }
@@ -337,6 +342,7 @@ impl Error for LayoutSnapshotError {
             Self::WorkCounters { source } => Some(source),
             Self::LayoutLookup { source, .. } => Some(source),
             Self::Alias { source } => Some(source),
+            Self::TargetPlanning { source } => Some(source),
             _ => None,
         }
     }
@@ -346,6 +352,7 @@ impl Error for LayoutSnapshotError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotAttemptReport {
     operation_count: u64,
+    cache_hits: u64,
     work_counters: super::SnapshotWorkCounters,
 }
 
@@ -356,6 +363,7 @@ impl SnapshotAttemptReport {
     ) -> Self {
         Self {
             operation_count,
+            cache_hits: 0,
             work_counters,
         }
     }
@@ -367,32 +375,45 @@ impl SnapshotAttemptReport {
     pub const fn work_counters(&self) -> super::SnapshotWorkCounters {
         self.work_counters
     }
+    /// Exact successful TextFlow cache hits observed before termination.
+    pub const fn cache_hits(&self) -> u64 {
+        self.cache_hits
+    }
+    pub(crate) fn set_cache_hits(&mut self, cache_hits: u64) {
+        self.cache_hits = cache_hits;
+    }
     pub(crate) fn set_work_counters(&mut self, work_counters: super::SnapshotWorkCounters) {
         self.work_counters = work_counters;
     }
 }
 
-/// Authoritative crate-private builder failure preserving partial work.
+/// Authoritative snapshot-attempt failure preserving partial work.
+///
+/// This public envelope lets checked transaction callers inspect work
+/// completed before failure without allowing snapshot construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SnapshotBuildFailure {
-    source: LayoutSnapshotError,
+pub struct SnapshotBuildFailure {
+    source: Box<LayoutSnapshotError>,
     attempt_report: SnapshotAttemptReport,
 }
 
 impl SnapshotBuildFailure {
     pub(crate) fn new(source: LayoutSnapshotError, attempt_report: SnapshotAttemptReport) -> Self {
         Self {
-            source,
+            source: Box::new(source),
             attempt_report,
         }
     }
+    #[cfg(test)]
     pub(crate) fn into_parts(self) -> (LayoutSnapshotError, SnapshotAttemptReport) {
-        (self.source, self.attempt_report)
+        (*self.source, self.attempt_report)
     }
-    pub(crate) const fn source_error(&self) -> &LayoutSnapshotError {
+    /// Concrete snapshot construction failure.
+    pub const fn source_error(&self) -> &LayoutSnapshotError {
         &self.source
     }
-    pub(crate) const fn attempt_report(&self) -> &SnapshotAttemptReport {
+    /// Complete work captured before the terminal failure.
+    pub const fn attempt_report(&self) -> &SnapshotAttemptReport {
         &self.attempt_report
     }
 }
@@ -405,7 +426,7 @@ impl fmt::Display for SnapshotBuildFailure {
 
 impl Error for SnapshotBuildFailure {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.source)
+        Some(self.source.as_ref())
     }
 }
 
@@ -435,15 +456,6 @@ pub enum LayoutAliasError {
         /// Missing semantic identity.
         identity: SnapshotIdentity,
     },
-    /// An alias overlay came from another frame.
-    StaleFrameAlias {
-        /// Frame-local element.
-        element_id: ElementId,
-        /// Expected revision.
-        expected_frame_revision: FrameRevision,
-        /// Actual revision.
-        actual_frame_revision: FrameRevision,
-    },
     /// An alias resolved to a different semantic node.
     AliasIdentityMismatch {
         /// Frame-local element.
@@ -471,13 +483,6 @@ pub enum CellOutputError {
         /// Failed axis.
         axis: Axis,
         /// Negative value.
-        value: i32,
-    },
-    /// A coordinate exceeded the terminal cell type.
-    CoordinateOutOfRange {
-        /// Failed axis.
-        axis: Axis,
-        /// Invalid value.
         value: i32,
     },
     /// A half-open extent exceeded the terminal cell type.
