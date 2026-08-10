@@ -1,4 +1,4 @@
-# Task Plan：LayoutSnapshot、Cell 量化与聊天布局基准
+# Task Plan：LayoutSnapshot、Cell 量化与 producer parity
 
 ## Linked Issue
 
@@ -23,8 +23,8 @@ benchmark workload matrix、baseline artifact、promotion 流程与回归门已�
 ## 实现任务
 
 - [ ] `SP61-T1`（lane alias: `GH61-T1`）建立旧实现可重复失败的snapshot/parity根因fixture。Owner: `root-cause-test-lane` | Done when: 只使用GH60 merged public API的fixture证明nested fractional bounds/scroll入口仍由renderer独立解释，且full/incremental/static/testing/string尚无共同immutable snapshot；fixture在新API出现前可编译并产生预期red assertion，最终head通过 | Verify: `cargo test --test layout_snapshot_root_cause --locked nested_fractional_edges_need_one_cell_snapshot -- --exact`; `cargo test --test layout_snapshot_root_cause --locked render_entrypoints_must_share_snapshot_contract -- --exact`。
-  - Dependencies: canonical `ready_to_implement`；fresh duplicate evidence；三个merged SHA
-    ancestry gate。
+  - Dependencies: maintainer 对当前 packet/head 的明确实施确认；fresh duplicate evidence；
+    三个 merged SHA ancestry gate。readiness label 只描述队列状态，不授予实施权限。
   - File ownership: 独占 `tests/layout_snapshot_root_cause.rs`；不写production、spec、
     其他tests。
   - Covers: B-001, B-004, B-005, B-012, B-016。
@@ -69,9 +69,9 @@ benchmark workload matrix、baseline artifact、promotion 流程与回归门已�
     `tests/layout_snapshot_error_paths.rs`只补renderer/runtime cases，不写layout files。
   - Covers: B-001, B-003, B-007, B-008, B-009, B-010, B-016, B-017, B-018, B-019, B-020, B-021, B-022, B-023。
   - Handoff: 向T6交付全部renderer/public surface与error fixtures。
-    workflow/Cargo paths。
+    不写benchmark、checker、workflow或baseline路径。
 
-- [ ] `SP61-T6`（lane alias: `GH61-T6`）完成root-cause、compatibility、compile immutability、coverage、full gates与exact-head GitHub/SpecRail evidence。Owner: `quality-evidence-lane` | Done when: 全部invariants exact test均由tech helper证明matched=1、passed=1、ignored=0；重跑T3两条明确quantizer integration tests、五seed/64-step generator、GH60真实wrapper/recovered aggregate；trybuild匹配stderr且`Cargo.toml`/`Cargo.lock`包含依赖；docs/coverage、三dependency ancestry、full Rust、CI、reviewThreads与pr_gate绑定同一head | Verify: 重新运行T1-T4全部exact commands，包括`nested_shared_edges_do_not_gain_overlap`、`negative_and_overflow_cells_are_not_clamped_to_success`、`public_snapshot_mutation_surface_is_compile_fail`、GH60 wrapper/aggregate与seed generator tests；断言每个helper为`1 passed/0 ignored`；运行`cargo metadata --locked` trybuild断言、tech docs/coverage完整命令块及所有full commands。
+- [ ] `SP61-T6`（lane alias: `GH61-T6`）完成root-cause、compatibility、public API manifest、compile immutability、coverage、full gates与exact-head GitHub evidence。Owner: `quality-evidence-lane` | Done when: 全部invariants exact test均由tech helper证明matched=1、passed=1、ignored=0；重跑T3两条明确quantizer integration tests、五seed/64-step generator、GH60真实wrapper/recovered aggregate；public API manifest双向匹配，trybuild匹配stderr且`Cargo.toml`/`Cargo.lock`包含依赖；docs/coverage、三dependency ancestry、full Rust、current repository CI、independent review与resolved review threads绑定同一head，并取得maintainer对当前head的明确merge authorization | Verify: 重新运行T1-T4全部exact commands，包括`nested_shared_edges_do_not_gain_overlap`、`negative_and_overflow_cells_are_not_clamped_to_success`、`public_snapshot_mutation_surface_is_compile_fail`、GH60 wrapper/aggregate与seed generator tests；断言每个helper为`1 passed/0 ignored`；运行public API manifest checker、`cargo metadata --locked` trybuild断言、tech docs/coverage完整命令块及所有full commands。
   - Dependencies: GH61-T1至T4全部完成并显式handoff；T4 writers停止；
     implementation PR exact base/head已知。
   - File ownership: 接管 `tests/layout_snapshot_root_cause.rs`、
@@ -84,14 +84,13 @@ benchmark workload matrix、baseline artifact、promotion 流程与回归门已�
     退回对应owner新checkpoint，不在T6跨ownership偷改。
   - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009, B-010, B-011, B-012, B-013, B-014, B-015, B-016, B-017, B-018, B-019, B-020, B-021, B-022, B-023, B-029, B-030。
   - Handoff: independent reviewer必须与T1-T6 writers分离；只有current exact head的
-    non-blocking review artifact、全部resolved threads、green CI、allowed `pr_gate`与当前
-    `implx auto` authorization可进入merge step。
+    non-blocking review artifact、全部resolved threads、green repository CI，以及maintainer
+    对同一head的明确merge authorization可进入merge step。标签和自动化状态不构成授权。
 
 ## 并行拆分
 
 - Writable dependency graph：`T1 -> T2 -> T3 -> T4 -> T6`。
 - T1只写root-cause fixture；T2只写snapshot core；T3接管snapshot并独占engine/parity。
-    untracked CI candidate evidence；canonical baseline由后续独立promotion PR唯一拥有。
 - T6只有在T4都停止后接管全部tests。没有两个writable lane共享同一文件。
 - read-only reviewer、CI观察或coverage审计可与writer并行，但不得修改source、resolve
   threads或写同一review artifact。
@@ -99,9 +98,12 @@ benchmark workload matrix、baseline artifact、promotion 流程与回归门已�
 
 ## 验证
 
-- Product invariant集合与tasks `Covers:` union均为 B-001 至 B-030，无遗漏。
+- Product invariant集合与tasks `Covers:` union均精确为
+  B-001..B-023、B-029、B-030；中间已拆分给GH85的五个编号不属于本packet，也不得用连续
+  区间断言代替。
 - planned-changes只允许GH61 packet、snapshot/quantizer、GH60 candidate接入、renderer/
-  measurement迁移、明确tests/bench/checker/workflow/public docs；TextFlow算法、identity
+  measurement迁移、明确tests/public API manifest/trybuild/coverage/public docs；benchmark、
+  checker、workflow、baseline和promotion属于GH85；TextFlow算法、identity
   planner、transaction recovery策略、chat components或MessageList必须先更新spec。
 - production renderer correctness paths不得出现未reviewed
   `get_layout(`、`get_all_layouts(`、`unwrap_or_default()` required layout、
@@ -128,22 +130,21 @@ cargo test --workspace --all-targets --all-features --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
 ```
 
-- exact-head CI、public docs、coverage、independent review
-  manifest/resolver map、reviewThreads与SpecRail `pr_gate`必须绑定同一head。
+- exact-head repository CI、public docs、coverage、independent review
+  manifest/resolver map、resolved review threads与maintainer明确merge authorization必须绑定
+  同一head；readiness labels仅描述状态。
 
 ## Handoff Notes
 
-- 当前stacked PR只交付`specs/GH61/*`，base必须是PR #77 exact reviewed head；不得实现、
-  改label、merge、关闭issue或resolve review threads。
-- implementation前重新运行fresh duplicate evidence与implement route gate，并记录三个
-  dependency merged SHAs。GH-60 spec/implementation open head不解锁本issue。
+- 当前事实应从GitHub issue/PR与exact checkout重新读取，不把历史label或stacked base冻结成
+  授权。implementation前由maintainer明确确认当前packet/head，重新运行fresh duplicate
+  evidence并记录三个dependency merged SHAs；未合入的dependency head不解锁本issue。
 - snapshot semantic equality不包含producer/recovery/timing counters；frame-local ElementId
   aliases不得污染semantic identity。
 - cell合同是signed absolute half-open edges；terminal clip后才checked-convert为`u16`。
 - GH-60 exactly-once recovery不可因snapshot error增加第二次rebuild；snapshot只在candidate
   内构建并随PreparedAppFrame一次提交。
-- timing gate采用same-runner ABBA、3 batches、20%+50µs、two-of-three；allocation使用
-  10%+8 allocations / 4096 bytes；fingerprint不兼容为`needs_rebaseline`，不是green；
-  canonical baseline只能由implementation合入后的独立issue/spec/reviewed promotion PR作为
-  唯一writer，重新测量exact merged SHA，并在成为未来PR base-tree内容后受信。
+- benchmark workload、checker、workflow、aggregation、baseline与promotion全部由GH85定义；
+  GH61 tasks仅拥有snapshot/parity、deterministic work counters、public API manifest、
+  trybuild、coverage与full verification责任。
 - GH-61完成后只解锁GH-68对应dependency；不直接完成任何chat shell或message list。
