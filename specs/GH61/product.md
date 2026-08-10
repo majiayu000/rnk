@@ -57,7 +57,7 @@ work counters，不重新实现三个上游合同。
    作为跨 full/incremental 路径的主身份；不得公开 crate-private reconciler storage，Taffy
    `NodeId`、frame-local `ElementId` 或遍历地址也不得成为 semantic equality 的依据。
 3. **B-003** GH-61不得假设GH-59/GH-60存在未声明的“committed visible plan”。engine侧只依赖
-   GH-59 `ReconcilePlan` / `ResolvedParentPlan::final_children`与GH-60
+   GH-59 crate-private `ReconcilePlan.parents` / `ParentPlan.final_children`与GH-60
    `PreparedLayoutFrame`、target-exact postcondition和required-layout lookup；不得改变其
    tree/map/layout集合。render-required snapshot target由GH-61新增且唯一拥有的crate-private
    adapter从target Element tree按GH-60 B-014既有规则派生：`Display::None`在required-layout
@@ -89,28 +89,36 @@ work counters，不重新实现三个上游合同。
     snapshot 产生伪不等。
 11. **B-011** frame producer strategy、patch count、incremental cause、rebuild count、
     cache-hit、visited/mutated nodes、TextFlow recomputes 与 snapshot nodes 必须位于独立
-    build/report evidence 中；它们不得进入 `LayoutSnapshot` semantic equality。
+    build/report evidence 中；它们不得进入 `LayoutSnapshot` semantic equality。失败也必须
+    通过公开只读 `SnapshotBuildFailure::attempt_report()` 保留截至首个失败的 exact 五字段与
+    cache hits：`mutated_nodes`只计 producer 已完成的 distinct mutation/removal events，不计
+    planned、skipped或失败前尚未执行的操作。
 12. **B-012** 对同一 target tree、viewport 和 TextFlow policy，initial/full、
     successful incremental 与 GH-60 `RecoveredFullRebuild` snapshot 必须逐节点语义等价：
     identity、order、bounds、clip、scroll 与 TextFlow semantic revision 全部一致。
 13. **B-013** parity 必须覆盖 unchanged、text/style update、streaming delta、append、
     front/middle insert、remove、replace、keyed reorder、mixed keyed/unkeyed、CJK、emoji ZWJ、
-    combining sequence 与 variable-height transcript；只验证单一静态树不算完成。
+    combining sequence 与至少1000条 variable-height transcript；只验证单一静态树不算完成。
 14. **B-014** 状态机必须使用tech spec公开的exact seed列表、SplitMix64算法、每步固定draw
     数与operation权重；每个seed执行64步，并在每次合法操作后分别从committed
     incremental 与 fresh full 路径生成 snapshot 并比较；失败时必须报告 seed、step、
-    operation 与首个 differing identity/field，禁止只输出“snapshot 不相等”。
+    operation 与首个 differing `SnapshotIdentity`、exact field、full value、incremental value，
+    并用负向self-test证明诊断选中首个差异；禁止只输出“snapshot 不相等”。
 15. **B-015** resize 改变 width 时必须在同一 frame 反映 TextFlow reflow、cell bounds 与
     clip；只改变 height/scroll/clip 时 logical TextFlow 可复用，但 snapshot projection 必须
     更新。resize 往返后，相同 target/viewport 必须恢复相同 semantic snapshot。
 16. **B-016** dynamic、static、testing、`render_to_string()` 与 public checked render helper
-    必须从同一 snapshot contract 得到 bounds；任何入口都不得保留第二套
-    `as u16` / default-layout / recursive float-offset 语义。
+    必须真实执行并从同一 snapshot contract 得到 exact bounds/cells/output；RuntimeContext
+    measurement也必须在commit前由同一snapshot完成checked conversion并作为完整publication
+    artifact原子发布。任何入口都不得保留第二套`as u16` / default-layout / recursive
+    float-offset 语义。
 17. **B-017** dynamic App 的 snapshot 必须作为 GH-60 `PreparedAppFrame` 的不可见 candidate
     构建；只有 layout、snapshot、render、static/dynamic output 与 terminal commit 全部成功
     后，才可与 engine、previous VNode、aliases 和 measurements 一次发布。
 18. **B-018** snapshot 构建、quantization、required lookup、TextFlow revision 或 renderer
-    失败时必须返回保留原 source chain 的 typed error；candidate snapshot、output、
+    失败时必须返回保留原 source chain 的 typed error；initial/ordinary transaction的
+    `SnapshotBuildFailure`和recovered aggregate都必须保留partial attempt report，且source
+    chain必须到达`LayoutSnapshotError`。candidate snapshot、output、
     measurements、aliases、static lines 与 previous VNode 均不得部分发布。
 19. **B-019** 没有previous committed state的initial checked build只能执行一次
     `InitialFullBuild`。GH-60已有initial layout failure必须保持
@@ -131,6 +139,7 @@ work counters，不重新实现三个上游合同。
     content bounds、missing/duplicate identity、missing layout/TextFlow revision、snapshot
     target/tree contract、frame alias与renderer cell conversion必须分别返回可穷举的
     closed semantic variant，并携带identity、field/axis/operation、frame/alias与原始值。
+    `AttemptedContentBounds`必须是不能转换/传回builder的只读raw diagnostic；
     `LayoutSnapshotError`、`LayoutAliasError`与`SnapshotRenderError`均须定义完整
     variant/payload；跨snapshot、renderer和GH-60实际
     `Upstream`/`Transaction`/`Render` wrapper的`From` / `Error::source()`必须保留concrete
@@ -194,4 +203,7 @@ GH-61 将新增公开但不可变的 snapshot/cell/checked error surface，并�
 到这一边界。现有 float `Layout` 与旧 render/testing helper 保留；它们成为 snapshot 或
 checked producer 的 compatibility projection/wrapper。发布说明必须列出 signed half-open
 cell 语义、semantic parity 与 typed overflow behavior，并明确
-它不交付聊天组件、虚拟列表或新的 Taffy 算法。
+它不交付聊天组件、虚拟列表或新的 Taffy 算法。`rnk 0.19.x`尚未稳定的GH61 checked
+transaction surface有一项有意的pre-release修正：`TransactionalLayoutError::Snapshot`从裸
+`LayoutSnapshotError`改为公开只读`SnapshotBuildFailure`，以免丢失失败前work/cache证据；
+旧 exhaustive `CheckedRenderError`不新增variant，既有legacy measurement setter signatures保留。

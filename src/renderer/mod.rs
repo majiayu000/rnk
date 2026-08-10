@@ -62,7 +62,9 @@ pub use checked::{
     TransactionalFrameError, try_render_element_checked, try_render_element_tree_checked,
     try_render_to_string_checked,
 };
-pub(crate) use checked::{legacy_snapshot_coordinate_error, try_render_element_snapshot_checked};
+pub(crate) use checked::{
+    checked_output_extent, legacy_snapshot_coordinate_error, try_render_element_snapshot_checked,
+};
 pub use error::{DynamicFrameError, TextCoordinateError, TextProjectionError, TextRenderError};
 
 // Registry APIs

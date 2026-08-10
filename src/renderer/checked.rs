@@ -13,6 +13,34 @@ use crate::layout::{
 
 use super::{DynamicFrameError, Output, TextRenderError, tree_renderer};
 
+pub(crate) fn checked_output_extent(
+    identity: &SnapshotIdentity,
+    axis: crate::layout::Axis,
+    extent: i32,
+    limit: Option<u16>,
+) -> Result<u16, CheckedRenderError> {
+    if extent < 0 {
+        return Err(CheckedRenderError::Snapshot(SnapshotRenderError::Output {
+            identity: identity.clone(),
+            source: CellOutputError::NegativeAfterClip {
+                axis,
+                value: extent,
+            },
+        }));
+    }
+    let clipped = limit.map_or(extent, |value| extent.min(i32::from(value)));
+    u16::try_from(clipped).map_err(|_| {
+        CheckedRenderError::Snapshot(SnapshotRenderError::Output {
+            identity: identity.clone(),
+            source: CellOutputError::ExtentOutOfRange {
+                axis,
+                start: 0,
+                end: clipped,
+            },
+        })
+    })
+}
+
 /// Failure while rendering from an immutable layout snapshot.
 #[derive(Debug)]
 pub enum SnapshotRenderError {
@@ -114,13 +142,16 @@ impl Error for RecoveredSnapshotRenderError {
     }
 }
 
-/// A required layout was absent or its compatibility projection was invalid.
+/// A legacy compatibility projection was absent or invalid.
+///
+/// Snapshot-backed correctness entrypoints fail closed before this legacy
+/// projection when no authoritative frame has been published:
 ///
 /// ```
-/// use rnk::{core::Element, layout::LayoutEngine, renderer::{CheckedRenderError, Output, try_render_element_checked}};
+/// use rnk::{core::Element, layout::{LayoutEngine, LayoutSnapshotError}, renderer::{CheckedRenderError, Output, SnapshotRenderError, try_render_element_checked}};
 /// let element = Element::text("missing");
 /// let error = try_render_element_checked(&element, &LayoutEngine::new(), &mut Output::new(20, 4), 0.0, 0.0).expect_err("layout is required");
-/// assert!(matches!(error, CheckedRenderError::Layout(_)));
+/// assert!(matches!(error, CheckedRenderError::Snapshot(SnapshotRenderError::Snapshot { source: LayoutSnapshotError::MissingIdentity { .. } })));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LayoutRenderError {
@@ -340,7 +371,6 @@ pub fn try_render_element_tree_checked(
     if element.style.display == Display::None || element.element_type == ElementType::VirtualText {
         return Ok(());
     }
-    validate_required_layouts(element, layout_engine, true)?;
     let (snapshot, _) = layout_engine.try_snapshot(element).map_err(|source| {
         legacy_snapshot_coordinate_error(element, &source).map_or_else(
             || CheckedRenderError::Snapshot(SnapshotRenderError::Snapshot { source }),
@@ -387,12 +417,15 @@ pub(crate) fn legacy_snapshot_coordinate_error(
     element: &Element,
     source: &LayoutSnapshotError,
 ) -> Option<TextRenderError> {
-    if let LayoutSnapshotError::TextFlowRevision { identity, source } = source {
-        let element_id =
-            LayoutEngine::element_id_for_snapshot_identity(element, identity).unwrap_or(element.id);
+    if let LayoutSnapshotError::TextFlowRevision {
+        identity: _,
+        source,
+    } = source
+    {
+        let element_id = element.id;
         return Some(TextRenderError::flow(element_id, source.clone()));
     }
-    let (identity, coordinate) = match source {
+    let (_identity, coordinate) = match source {
         LayoutSnapshotError::NonFiniteGeometry { identity, .. } => {
             (identity, super::TextCoordinateError::NonFinite)
         }
@@ -404,9 +437,7 @@ pub(crate) fn legacy_snapshot_coordinate_error(
         }
         _ => return None,
     };
-    let element_id = legacy_coordinate_source_element(element)
-        .or_else(|| LayoutEngine::element_id_for_snapshot_identity(element, identity))
-        .unwrap_or(element.id);
+    let element_id = legacy_coordinate_source_element(element).unwrap_or(element.id);
     Some(TextRenderError::coordinate(element_id, coordinate))
 }
 
@@ -483,35 +514,6 @@ pub fn try_render_to_string_checked(
         &super::render_to_string::RenderOptions::default(),
         4,
     )
-}
-
-fn validate_required_layouts(
-    element: &Element,
-    layout_engine: &LayoutEngine,
-    is_root: bool,
-) -> Result<(), LayoutRenderError> {
-    if element.style.display == Display::None || element.element_type == ElementType::VirtualText {
-        return Ok(());
-    }
-    if layout_engine
-        .try_get_required_layout(element.id)
-        .map_err(LayoutRenderError::Invariant)?
-        .is_none()
-    {
-        return Err(if is_root {
-            LayoutRenderError::MissingRootLayout {
-                element_id: element.id,
-            }
-        } else {
-            LayoutRenderError::MissingElementLayout {
-                element_id: element.id,
-            }
-        });
-    }
-    for child in &element.children {
-        validate_required_layouts(child, layout_engine, false)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

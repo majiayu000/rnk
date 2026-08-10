@@ -1,8 +1,10 @@
 use crate::core::{Display, Element, ElementType};
-use crate::layout::{IncrementalInvariantError, LayoutEngine};
+use crate::layout::{
+    LayoutEngine, LayoutSnapshotError, SnapshotInvariantError, SnapshotTargetMismatchReason,
+};
 use crate::renderer::Output;
 
-use super::{CheckedRenderError, LayoutRenderError, try_render_element_tree_checked};
+use super::{CheckedRenderError, SnapshotRenderError, try_render_element_tree_checked};
 
 #[test]
 fn missing_root_layout_is_typed_and_commits_no_output() {
@@ -14,11 +16,11 @@ fn missing_root_layout_is_typed_and_commits_no_output() {
     let error = try_render_element_tree_checked(&element, &engine, &mut output, 0.0, 0.0)
         .expect_err("visible root requires layout");
 
-    assert!(matches!(
-        error,
-        CheckedRenderError::Layout(LayoutRenderError::MissingRootLayout { element_id })
-            if element_id == element.id
-    ));
+    assert!(matches!(error, CheckedRenderError::Snapshot(
+        SnapshotRenderError::Snapshot {
+            source: LayoutSnapshotError::MissingIdentity { element_id }
+        }
+    ) if element_id == element.id));
     assert_eq!(output.render(), before);
 }
 
@@ -37,9 +39,17 @@ fn missing_descendant_layout_is_typed_before_projection() {
 
     assert!(matches!(
         error,
-        CheckedRenderError::Layout(LayoutRenderError::MissingElementLayout { element_id })
-            if element_id == child_id
+        CheckedRenderError::Snapshot(SnapshotRenderError::Snapshot {
+            source: LayoutSnapshotError::InvalidTree {
+                source: SnapshotInvariantError::SnapshotTargetMismatch {
+                    reason: SnapshotTargetMismatchReason::ChildOrder,
+                    ..
+                },
+                ..
+            }
+        })
     ));
+    assert!(engine.get_layout(child_id).is_none());
     assert_eq!(output.render(), Output::new(20, 4).render());
 }
 
@@ -54,12 +64,11 @@ fn invalid_mapped_layout_is_not_degraded_to_missing() {
     let error = try_render_element_tree_checked(&element, &engine, &mut output, 0.0, 0.0)
         .expect_err("invalid mapped node is a checked invariant failure");
 
-    assert!(matches!(
-        error,
-        CheckedRenderError::Layout(LayoutRenderError::Invariant(
-            IncrementalInvariantError::InvalidMappedNode
-        ))
-    ));
+    assert!(matches!(error, CheckedRenderError::Snapshot(
+        SnapshotRenderError::Snapshot {
+            source: LayoutSnapshotError::MissingIdentity { element_id }
+        }
+    ) if element_id == element.id));
     assert_eq!(output.render(), Output::new(20, 4).render());
 }
 

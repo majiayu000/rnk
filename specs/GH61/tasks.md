@@ -33,40 +33,63 @@ benchmark workload matrix、baseline artifact、promotion 流程与回归门已�
 
 - [ ] `SP61-T2`（lane alias: `GH61-T2`）实现强制immutable snapshot types、semantic identity/index、absolute half-open quantizer、axis clip/scroll/TextFlow stamp与closed errors。Owner: `snapshot-core-lane` | Done when: snapshot/node字段private且只有crate-private checked builder能构造；public surface只有read-only accessors；aliases结构上位于PreparedSnapshotFrame；core builder只接受T3提供的ordered checked inputs，不发明GH59/GH60未声明接口、不读或改engine map/layout；x/y overflow独立组合；所有finite/range/node检查返回具体closed variant并保留source chain | Verify: `cargo test --workspace --lib --locked layout::snapshot::tests::semantic_identity_and_final_order -- --exact`; `cargo test --workspace --lib --locked layout::snapshot::quantize::tests::half_open_bounds_derive_extent_from_edges -- --exact`; `cargo test --workspace --lib --locked layout::snapshot::quantize::tests::content_border_and_gap_error_are_bounded -- --exact`; `cargo test --workspace --lib --locked layout::snapshot::tests::mixed_axis_overflow_clips_only_selected_axis -- --exact`; `cargo test --workspace --lib --locked layout::snapshot::tests::producer_report_does_not_change_semantic_equality -- --exact`; `cargo test --workspace --lib --locked layout::snapshot::tests::cancelled_builder_is_hidden_and_published_snapshot_is_immutable -- --exact`。
   - Dependencies: GH61-T1 root-cause checkpoint/handoff。
-  - File ownership: 独占 `src/layout/snapshot.rs`、
+  - File ownership: 独占 `Cargo.toml`、`Cargo.lock`、`src/layout/mod.rs`、
+    `src/layout/snapshot.rs`、`src/layout/snapshot/builder.rs`、
     `src/layout/snapshot/error.rs`、`src/layout/snapshot/quantize.rs`、
-    `src/layout/mod.rs`；不写engine、renderer、runtime、bench或integration tests。
+    `src/layout/snapshot/tests.rs`；不写engine、renderer、runtime、bench或integration tests。
   - Covers: B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009, B-010, B-011, B-020, B-021。
   - Handoff: 向T3交付private-storage/read-only API、documented ordered builder input/output、
     semantic equality、closed typed error/source composition与axis clip；T2不声明任何上游
     target adapter，T2 writer停止后T3才可修改snapshot core。
 
-- [ ] `SP61-T3`（lane alias: `GH61-T3`）把snapshot builder接入GH60 initial/incremental/recovered candidate与prepared commit，并建立全矩阵parity/state machine。Owner: `snapshot-producer-lane` | Done when: 新增并唯一拥有crate-private `SnapshotTargetPlan` adapter，只组合GH59 `final_children`、GH60 `PreparedLayoutFrame`/postcondition/checked lookup与B-014 renderer filter，不改变engine集合；initial snapshot error走GH60真实`Transaction -> Snapshot`且`rebuild_count=0`；recovered snapshot/render error aggregate保留incremental与final cause；snapshot失败无第二次rebuild且零发布；五个固定seed各64步严格使用tech SplitMix64/8 draws/权重 | Verify: `cargo test --test layout_snapshot_parity --locked full_incremental_and_recovered_are_semantically_equal -- --exact`; `cargo test --test layout_snapshot_parity --locked chat_mutation_matrix_matches_full -- --exact`; `cargo test --test layout_snapshot_state_machine --locked seeded_operations_match_after_every_step -- --exact`; `cargo test --test layout_snapshot_parity --locked resize_round_trip_restores_semantic_snapshot -- --exact`; `cargo test --test layout_snapshot_parity --locked cold_and_cached_text_flow_revisions_are_semantically_equal -- --exact`; `cargo test --test layout_snapshot_parity --locked snapshot_target_adapter_uses_gh59_order_and_gh60_lookup_contract -- --exact`; `cargo test --test layout_snapshot_parity --locked display_none_prunes_only_snapshot_render_traversal -- --exact`; `cargo test --test layout_snapshot_parity --locked nested_shared_edges_do_not_gain_overlap -- --exact`; `cargo test --test layout_snapshot_parity --locked nested_mixed_axis_overflow_matches_all_strategies -- --exact`; `cargo test --test layout_snapshot_parity --locked recovered_frame_uses_only_recovered_candidate_snapshot -- --exact`; `cargo test --test layout_snapshot_parity --locked reused_snapshot_accepts_target_exact_frame_aliases -- --exact`; `cargo test --test layout_snapshot_error_paths --locked negative_and_overflow_cells_are_not_clamped_to_success -- --exact`; `cargo test --test layout_snapshot_error_paths --locked initial_snapshot_failure_never_enters_incremental_recovery -- --exact`; `cargo test --test layout_snapshot_error_paths --locked recovered_snapshot_or_render_failure_preserves_both_causes -- --exact`; `cargo test --test layout_snapshot_error_paths --locked snapshot_failure_publishes_nothing -- --exact`; `cargo test --test layout_snapshot_error_paths --locked every_snapshot_failure_variant_preserves_payload_and_source_chain -- --exact`; `cargo test --test layout_snapshot_error_paths --locked gh60_frame_wrapper_routes_snapshot_failures_without_fictitious_initial_variant -- --exact`。
+- [ ] `SP61-T3`（lane alias: `GH61-T3`）把snapshot builder接入GH60 initial/incremental/recovered candidate与prepared commit，并建立全矩阵parity/state machine。Owner: `snapshot-producer-lane` | Done when: crate-private `SnapshotTargetPlan`保留GH59 planning/identity typed cause；public `SnapshotBuildFailure`为initial/ordinary/recovered失败保留exact partial work/cache report和到`LayoutSnapshotError`的source chain；`mutated_nodes`只计完成事件；三strategy测试强制真实recovery，1000-message矩阵与五seed×64状态机报告首个exact差异 | Verify: `cargo test --test layout_snapshot_parity --locked full_incremental_and_recovered_are_semantically_equal -- --exact`; `cargo test --test layout_snapshot_parity --locked chat_mutation_matrix_matches_full -- --exact`; `cargo test --test layout_snapshot_state_machine --locked seeded_operations_match_after_every_step -- --exact`; `cargo test --test layout_snapshot_state_machine --locked snapshot_divergence_diagnostic_names_first_identity_field_and_values -- --exact`; `cargo test --test layout_snapshot_parity --locked resize_round_trip_restores_semantic_snapshot -- --exact`; `cargo test --test layout_snapshot_parity --locked cold_and_cached_text_flow_revisions_are_semantically_equal -- --exact`; `cargo test --test layout_snapshot_parity --locked snapshot_target_adapter_uses_gh59_order_and_gh60_lookup_contract -- --exact`; `cargo test --test layout_snapshot_parity --locked display_none_prunes_only_snapshot_render_traversal -- --exact`; `cargo test --test layout_snapshot_parity --locked nested_shared_edges_do_not_gain_overlap -- --exact`; `cargo test --test layout_snapshot_parity --locked nested_mixed_axis_overflow_full_and_incremental_cells_match -- --exact`; `cargo test --workspace --lib --locked layout::engine::transaction::tests::nested_mixed_axis_overflow_recovery_snapshot_and_cells_match -- --exact`; `cargo test --test layout_snapshot_parity --locked recovered_frame_uses_only_recovered_candidate_snapshot -- --exact`; `cargo test --test layout_snapshot_parity --locked reused_snapshot_accepts_target_exact_frame_aliases -- --exact`; `cargo test --test layout_snapshot_error_paths --locked negative_and_overflow_cells_are_not_clamped_to_success -- --exact`; `cargo test --test layout_snapshot_error_paths --locked initial_snapshot_failure_never_enters_incremental_recovery -- --exact`; `cargo test --test layout_snapshot_error_paths --locked ordinary_incremental_snapshot_failure_preserves_partial_attempt_report -- --exact`; `cargo test --test layout_snapshot_error_paths --locked recovered_snapshot_or_render_failure_preserves_both_causes -- --exact`; `cargo test --test layout_snapshot_error_paths --locked snapshot_failure_publishes_nothing -- --exact`; `cargo test --test layout_snapshot_error_paths --locked published_target_validation_preserves_hostile_planning_cause -- --exact`; `cargo test --workspace --lib --locked layout::snapshot::tests::layout_alias_variants_are_reached_through_checked_production_seams -- --exact`; `cargo test --test layout_snapshot_error_paths --locked gh60_frame_wrapper_routes_snapshot_failures_without_fictitious_initial_variant -- --exact`。
   - Dependencies: GH61-T2 concrete handoff；T2 writer停止。
-  - File ownership: 接管T2 snapshot files；独占 `src/layout/engine.rs`、
-    `src/layout/engine/snapshot.rs`、`src/layout/engine/transaction.rs`、
-    `src/layout/engine/rebuild.rs`、`src/layout/engine/postcondition.rs`、
-    `src/layout/engine/tests.rs`、`tests/layout_snapshot_parity.rs`、
-    `tests/layout_snapshot_state_machine.rs`；为layout-only error fixtures初建并独占
-    `tests/layout_snapshot_error_paths.rs`。不写renderer/runtime/bench。
+  - File ownership: 接管T2的全部`src/layout/snapshot*`与`src/layout/mod.rs`；独占
+    `src/layout/engine.rs`、`src/layout/engine/context_sync.rs`、
+    `src/layout/engine/context_sync/measurements.rs`、`src/layout/engine/incremental.rs`、
+    `src/layout/engine/incremental/tests.rs`、`src/layout/engine/patch_error.rs`、
+    `src/layout/engine/patch_error/snapshot_failure.rs`、`src/layout/engine/patching.rs`、
+    `src/layout/engine/snapshot.rs`、`src/layout/engine/snapshot/tests.rs`、
+    `src/layout/engine/text_flow_bridge.rs`、`src/layout/engine/text_flow_bridge/tests.rs`、
+    `src/layout/text_flow.rs`、`src/layout/text_flow/semantic_difference.rs`、
+    `src/layout/engine/transaction.rs`、`src/layout/engine/transaction/tests.rs`、
+    `tests/coordinate_identity.rs`、`tests/layout_error_paths.rs`、
+    `tests/layout_snapshot_parity.rs`、`tests/layout_snapshot_state_machine.rs`；初建并独占
+    `tests/layout_snapshot_error_paths.rs`。这些是`59993965..HEAD`实际layout/supporting delta；
+    不写renderer/runtime/bench。
+  - GH-58 boundary/handoff exception: T3只因B-014 exact diagnostic需要，在上述两个
+    `text_flow`路径增加基于既有完整`TextFlow`语义的crate-private逐字段诊断；不修改GH-58
+    public layout/measurement、构建、cache或Unicode语义，也不取得GH-58的一般ownership。
+    T3 checkpoint后这两个路径冻结，不向T4/T6移交写权限。
   - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009, B-010, B-011, B-012, B-013, B-014, B-015, B-017, B-018, B-019, B-020, B-021, B-023。
   - Handoff: 向T4交付真实GH60 wrapper组合、prepared snapshot/report/error与current-frame
     alias API；产出 per-frame read-only deterministic work counters
     requirements；T3停止写所有
     production和integration files。
 
-- [ ] `SP61-T4`（lane alias: `GH61-T4`）让dynamic/static/testing/string renderer、TextFlow projection与measurement只消费snapshot，并完成checked/public compatibility、compile immutability与rustdoc。Owner: `snapshot-render-lane` | Done when: renderer correctness paths不存在live engine lookup、default layout、float-to-u16或独立recursive offset；renderer消费T3 `SnapshotTargetPlan`结果，不发明上游未声明接口；GH60 whole App frame只在terminal success后提交snapshot/runtime/static state；旧surface与read-only accessor fixture编译，独立exact trybuild test无条件执行compile-fail并匹配checked-in stderr；`LayoutAliasError`/renderer error closed，并严格走GH60既有`Render(CheckedRenderError)`wrapper；新public items全部documented且exact doctest真实执行 | Verify: `cargo test --test layout_snapshot_parity --locked all_render_consumers_use_one_snapshot -- --exact`; `cargo test --test layout_snapshot_parity --locked dynamic_static_testing_and_string_share_cell_contract -- --exact`; `cargo test --test layout_snapshot_parity --locked scroll_changes_descendant_projection_only -- --exact`; `cargo test --workspace --lib --locked renderer::app::tests::snapshot_commits_only_with_prepared_app_frame -- --exact`; `cargo test --test layout_snapshot_compat --locked existing_layout_engine_renderer_and_testing_surface_compiles -- --exact`; `cargo test --test layout_snapshot_immutability --locked public_snapshot_read_only_accessors_compile -- --exact`; `cargo test --test layout_snapshot_immutability --locked public_snapshot_mutation_surface_is_compile_fail -- --exact`; `cargo test --test layout_snapshot_error_paths --locked every_layout_alias_variant_preserves_payload_and_source -- --exact`; `cargo test --test layout_snapshot_error_paths --locked gh60_frame_wrapper_routes_snapshot_failures_without_fictitious_initial_variant -- --exact`; `cargo test --test gh61_public_docs --locked gh61_public_snapshot_surface_is_documented_and_compiles -- --exact`；`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked`。
+- [ ] `SP61-T4`（lane alias: `GH61-T4`）让dynamic/static/testing/string renderer、TextFlow projection与measurement只消费snapshot，并完成checked/public compatibility、compile immutability与rustdoc。Owner: `snapshot-render-lane` | Done when: module production harness真实执行dynamic、static、RuntimeContext measurement、testing、string与public checked helper；prepared measurement artifact在commit前完成checked conversion，oversized失败保持所有publication state不变；legacy measurement setter signatures保留并对invalid fail loudly；renderer无live engine/TextFlow traversal或float narrowing；split trybuild fixtures和public manifest双向exact | Verify: `cargo test --workspace --lib --locked renderer::pipeline::tests::all_correctness_consumers_use_authoritative_snapshot -- --exact`; `cargo test --workspace --lib --locked renderer::pipeline::tests::oversized_measurement_fails_before_atomic_publication -- --exact`; `cargo test --test layout_snapshot_parity --locked scroll_changes_descendant_projection_only -- --exact`; `cargo test --workspace --lib --locked renderer::app::tests::snapshot_commits_only_with_prepared_app_frame -- --exact`; `cargo test --test layout_snapshot_compat --locked existing_layout_engine_renderer_and_testing_surface_compiles -- --exact`; `cargo test --test layout_snapshot_compat --locked legacy_runtime_measurement_setters_compile_and_fail_loudly -- --exact`; `cargo test --test layout_snapshot_immutability --locked public_snapshot_read_only_accessors_compile -- --exact`; `cargo test --test layout_snapshot_immutability --locked public_snapshot_mutation_surface_is_compile_fail -- --exact`; `cargo test --test layout_snapshot_error_paths --locked gh60_frame_wrapper_routes_snapshot_failures_without_fictitious_initial_variant -- --exact`; `cargo test --test gh61_public_docs --locked gh61_public_snapshot_surface_is_documented_and_compiles -- --exact`；`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked`。
   - Dependencies: GH61-T3 producer handoff；T3 writer停止。
-  - File ownership: 独占 `src/renderer/mod.rs`、`src/renderer/error.rs`、
-    `src/renderer/checked.rs`、`src/renderer/tree_renderer.rs`、
-    `src/renderer/element_renderer.rs`、`src/renderer/pipeline.rs`,
-    `src/renderer/app.rs`、`src/renderer/render_to_string.rs`、
+  - File ownership: 独占 `src/renderer/mod.rs`、`src/renderer/checked.rs`、
+    `src/renderer/checked/tests.rs`、`src/renderer/tree_renderer.rs`、
+    `src/renderer/tree_renderer/projection/staged.rs`、`src/renderer/tree_renderer/tests.rs`、
+    `src/renderer/pipeline.rs`、
+    `src/renderer/pipeline/prepared.rs`、`src/renderer/pipeline/prepared/tests.rs`、
+    `src/renderer/render_to_string.rs`、
     `src/renderer/static_content.rs`、`src/runtime/context.rs`、
-    `src/testing/renderer.rs`、`src/lib.rs`、`src/prelude.rs`、
+    `src/runtime/context/measurements.rs`、
+    `src/runtime/mod.rs`、`src/testing/renderer.rs`、
     `tests/fixtures/gh61_public_api.json`、`tests/layout_snapshot_compat.rs`、
-    `tests/layout_snapshot_immutability.rs`、`tests/ui/gh61_snapshot_private_fields.rs`、
-    `tests/ui/gh61_snapshot_private_fields.stderr`、`tests/gh61_public_docs.rs`；接管T3的
+    `tests/layout_snapshot_immutability.rs`、
+    `tests/ui/gh61_cell_rect_private_fields.rs`、
+    `tests/ui/gh61_cell_rect_private_fields.stderr`、
+    `tests/ui/gh61_snapshot_identity_private_constructor.rs`、
+    `tests/ui/gh61_snapshot_identity_private_constructor.stderr`、
+    `tests/ui/gh61_snapshot_private_fields.rs`、
+    `tests/ui/gh61_snapshot_private_fields.stderr`、
+    `tests/gh61_public_docs.rs`；接管T3的
     `tests/layout_snapshot_error_paths.rs`只补renderer/runtime cases，不写layout files。
+    这些是`59993965..HEAD`实际renderer/runtime/public supporting delta；spec三文件由已批准的
+    combined corrective exception单独维护，不伪装成T3/T4 production ownership。
   - Covers: B-001, B-003, B-007, B-008, B-009, B-010, B-016, B-017, B-018, B-019, B-020, B-021, B-022, B-023。
   - Handoff: 向T6交付全部renderer/public surface与error fixtures。
     不写benchmark、checker、workflow或baseline路径。
@@ -77,8 +100,11 @@ benchmark workload matrix、baseline artifact、promotion 流程与回归门已�
   - File ownership: 接管 `tests/layout_snapshot_root_cause.rs`、
     `tests/layout_snapshot_parity.rs`、`tests/layout_snapshot_state_machine.rs`、
     `tests/layout_snapshot_error_paths.rs`、`tests/layout_snapshot_compat.rs`、
-    `tests/layout_snapshot_immutability.rs`、`tests/ui/gh61_snapshot_private_fields.rs`、
-    `tests/ui/gh61_snapshot_private_fields.stderr`、
+    `tests/layout_snapshot_immutability.rs`、
+    `tests/ui/gh61_cell_rect_private_fields.rs`、
+    `tests/ui/gh61_cell_rect_private_fields.stderr`、
+    `tests/ui/gh61_snapshot_identity_private_constructor.rs`、
+    `tests/ui/gh61_snapshot_identity_private_constructor.stderr`、
     `tests/gh61_public_docs.rs`；
     production、bench、workflow与scripts只读，只允许修正tests/evidence；若生产缺陷暴露，
     退回对应owner新checkpoint，不在T6跨ownership偷改。

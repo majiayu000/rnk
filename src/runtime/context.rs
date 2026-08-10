@@ -36,6 +36,9 @@ use crate::layout::LayoutLookupError;
 use crate::reconciler::{ScopedNodeIdentity, SiblingIdentity};
 use crate::renderer::{IntoPrintable, RenderHandle, SharedFrameRateStats};
 
+mod measurements;
+pub(crate) use measurements::{MeasurementPublicationError, PreparedMeasurementPublication};
+
 /// Input handler function type
 pub type InputHandlerFn = Rc<dyn Fn(&str, &Key)>;
 
@@ -394,117 +397,14 @@ impl RuntimeContext {
 
     // === Measurement Methods ===
 
-    /// Store a measurement for an element
+    /// Store a measurement for an element.
     pub fn set_measurement(&mut self, element_id: crate::core::ElementId, width: u16, height: u16) {
         self.measurements.insert(element_id, (width, height));
     }
 
-    /// Get a measurement for an element
+    /// Get a measurement for an element.
     pub fn get_measurement(&self, element_id: crate::core::ElementId) -> Option<(u16, u16)> {
         self.measurements.get(&element_id).copied()
-    }
-
-    /// Replace all measurements (called by renderer after layout)
-    pub fn set_measure_layouts(
-        &mut self,
-        layouts: std::collections::HashMap<crate::core::ElementId, crate::layout::Layout>,
-    ) {
-        self.measurements.clear();
-        self.measurements_by_node_key.clear();
-        self.measurements_by_scoped_node.clear();
-        self.measurement_node_candidates.clear();
-        self.measurements_by_key.clear();
-        self.measurement_key_aliases.clear();
-        self.scoped_measurement_aliases.clear();
-        for (id, layout) in layouts {
-            self.measurements
-                .insert(id, (layout.width as u16, layout.height as u16));
-        }
-    }
-
-    /// Replace all measurements with compatibility string-keyed measurements.
-    pub fn set_measure_layouts_with_keys(
-        &mut self,
-        layouts: std::collections::HashMap<crate::core::ElementId, crate::layout::Layout>,
-        keyed_layouts: std::collections::HashMap<String, crate::layout::Layout>,
-    ) {
-        self.measurements.clear();
-        self.measurements_by_node_key.clear();
-        self.measurements_by_scoped_node.clear();
-        self.measurement_node_candidates.clear();
-        self.measurements_by_key.clear();
-        self.measurement_key_aliases.clear();
-        self.scoped_measurement_aliases.clear();
-
-        for (id, layout) in layouts {
-            self.measurements
-                .insert(id, (layout.width as u16, layout.height as u16));
-        }
-
-        for (key, layout) in keyed_layouts {
-            self.measurements_by_key
-                .insert(key, (layout.width as u16, layout.height as u16));
-        }
-    }
-
-    /// Replace all measurements with stable node-keyed measurements plus string aliases.
-    pub fn set_measure_layouts_with_node_keys(
-        &mut self,
-        layouts: std::collections::HashMap<crate::core::ElementId, crate::layout::Layout>,
-        node_keyed_layouts: std::collections::HashMap<SiblingIdentity, crate::layout::Layout>,
-        key_aliases: std::collections::HashMap<String, SiblingIdentity>,
-    ) {
-        self.measurements.clear();
-        self.measurements_by_node_key.clear();
-        self.measurements_by_scoped_node.clear();
-        self.measurement_node_candidates.clear();
-        self.measurements_by_key.clear();
-        self.measurement_key_aliases.clear();
-        self.scoped_measurement_aliases.clear();
-
-        for (id, layout) in layouts {
-            self.measurements
-                .insert(id, (layout.width as u16, layout.height as u16));
-        }
-
-        for (node_key, layout) in node_keyed_layouts {
-            self.measurements_by_node_key
-                .insert(node_key, (layout.width as u16, layout.height as u16));
-        }
-
-        self.measurement_key_aliases = key_aliases;
-    }
-
-    pub(crate) fn set_measure_layouts_with_scoped_keys(
-        &mut self,
-        layouts: std::collections::HashMap<crate::core::ElementId, crate::layout::Layout>,
-        scoped_layouts: std::collections::HashMap<ScopedNodeIdentity, crate::layout::Layout>,
-        composite_layouts: std::collections::HashMap<SiblingIdentity, crate::layout::Layout>,
-        node_candidates: std::collections::HashMap<SiblingIdentity, Vec<ScopedNodeIdentity>>,
-        key_aliases: std::collections::HashMap<String, Vec<(ScopedNodeIdentity, SiblingIdentity)>>,
-    ) {
-        self.measurements.clear();
-        self.measurements_by_node_key.clear();
-        self.measurements_by_scoped_node.clear();
-        self.measurement_node_candidates.clear();
-        self.measurements_by_key.clear();
-        self.measurement_key_aliases.clear();
-        self.scoped_measurement_aliases.clear();
-
-        for (id, layout) in layouts {
-            self.measurements
-                .insert(id, (layout.width as u16, layout.height as u16));
-        }
-        for (identity, layout) in scoped_layouts {
-            self.measurements_by_scoped_node
-                .insert(identity, (layout.width as u16, layout.height as u16));
-        }
-        for (identity, layout) in composite_layouts {
-            self.measurements_by_node_key
-                .insert(identity, (layout.width as u16, layout.height as u16));
-        }
-        self.measurement_node_candidates = node_candidates;
-        self.scoped_measurement_aliases = key_aliases;
     }
 
     /// Get measurement as Dimensions (width, height as f32)

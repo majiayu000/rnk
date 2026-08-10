@@ -4,7 +4,6 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
-
 use taffy::{AvailableSpace, NodeId};
 
 use super::{
@@ -12,17 +11,14 @@ use super::{
     text_flow_bridge::{NodeContext, flow_for_width, measure_text_node},
 };
 use crate::core::NodeKey;
-use crate::layout::{
-    Layout, LayoutLookupError, PreparedSnapshotFrame, TextFlow, TextFlowError, TextFlowInput,
-};
+use crate::layout::{Layout, LayoutLookupError, TextFlow, TextFlowError, TextFlowInput};
 use crate::reconciler::{ScopedNodeIdentity, SiblingIdentity};
 
 pub(crate) struct CheckedLayoutSnapshot {
     pub(crate) element: HashMap<crate::core::ElementId, Layout>,
-    pub(crate) scoped_vnode: HashMap<ScopedNodeIdentity, Layout>,
     pub(crate) vnode: HashMap<SiblingIdentity, Layout>,
 }
-
+pub(crate) use measurements::CheckedMeasurementSnapshot;
 #[derive(Debug)]
 pub(crate) enum LegacyLayoutSnapshotError {
     Lookup(LayoutLookupError),
@@ -256,52 +252,6 @@ impl TextContextKey for NodeKey {
 }
 
 impl LayoutEngine {
-    pub(crate) fn try_get_snapshot_measurements(
-        &self,
-        frame: &PreparedSnapshotFrame,
-    ) -> Result<CheckedLayoutSnapshot, LegacyLayoutSnapshotError> {
-        let mut element = HashMap::new();
-        let mut scoped_vnode = HashMap::new();
-        let mut vnode = HashMap::new();
-        let mut projected_scopes = HashMap::new();
-
-        for (element_id, node) in frame.element_nodes() {
-            let bounds = node.border_bounds();
-            let layout = Layout {
-                x: bounds.left() as f32,
-                y: bounds.top() as f32,
-                width: bounds.width() as f32,
-                height: bounds.height() as f32,
-            };
-            element.insert(element_id, layout);
-
-            let scoped = node.identity().scoped().clone();
-            let legacy_key = self.vnode_legacy_keys.get(&scoped).copied().ok_or(
-                LegacyLayoutSnapshotError::Invariant(
-                    IncrementalInvariantError::CompatibilityMapMismatch,
-                ),
-            )?;
-            let projected = scoped.composite_identity(legacy_key);
-            if let Some(existing) = projected_scopes.insert(projected, scoped.clone())
-                && existing != scoped
-            {
-                return Err(LegacyLayoutSnapshotError::Lookup(
-                    LayoutLookupError::CompositeIdentityCollision {
-                        identity: projected,
-                    },
-                ));
-            }
-            scoped_vnode.insert(scoped, layout);
-            vnode.insert(projected, layout);
-        }
-
-        Ok(CheckedLayoutSnapshot {
-            element,
-            scoped_vnode,
-            vnode,
-        })
-    }
-
     pub(crate) fn try_get_required_layout(
         &self,
         element_id: crate::core::ElementId,
@@ -428,7 +378,6 @@ impl LayoutEngine {
             element.insert(*element_id, public_layout(layout));
         }
 
-        let mut scoped_vnode = HashMap::with_capacity(self.vnode_map.len());
         let mut layouts = HashMap::with_capacity(self.vnode_map.len());
         let mut projected_scopes = HashMap::with_capacity(self.vnode_map.len());
         for (identity, node_id) in self.vnode_map.iter() {
@@ -458,7 +407,6 @@ impl LayoutEngine {
                 )
             })?;
             let layout = public_layout(layout);
-            scoped_vnode.insert(identity.clone(), layout);
             layouts.insert(projected, layout);
         }
         if self.vnode_legacy_keys.len() != self.vnode_map.len() {
@@ -468,7 +416,6 @@ impl LayoutEngine {
         }
         Ok(CheckedLayoutSnapshot {
             element,
-            scoped_vnode,
             vnode: layouts,
         })
     }
@@ -503,26 +450,6 @@ impl LayoutEngine {
                 .push(identity.clone());
         }
         candidates
-    }
-
-    pub(super) fn staged_clone(&self) -> Self {
-        Self {
-            taffy: self.taffy.clone(),
-            node_map: self.node_map.clone(),
-            element_keys: self.element_keys.clone(),
-            element_scopes: self.element_scopes.clone(),
-            vnode_map: self.vnode_map.clone(),
-            vnode_legacy_keys: self.vnode_legacy_keys.clone(),
-            root_node: self.root_node,
-            last_width: self.last_width,
-            last_height: self.last_height,
-            flow_cache: self.flow_cache.clone(),
-            text_flow_policy: self.text_flow_policy.clone(),
-            current_text_flows: self.current_text_flows.clone(),
-            current_vnode_flows: self.current_vnode_flows.clone(),
-            committed_vnode: self.committed_vnode.clone(),
-            commit_epoch: self.commit_epoch.clone(),
-        }
     }
 
     #[cfg(test)]
@@ -818,5 +745,6 @@ fn public_layout(layout: &taffy::Layout) -> Layout {
     }
 }
 
+mod measurements;
 #[cfg(test)]
 mod tests;

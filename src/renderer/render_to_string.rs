@@ -5,12 +5,12 @@
 
 use crate::core::{Display, Element, ElementType};
 use crate::layout::{
-    FullRebuildError, IncrementalLayoutError, LayoutEngine, PreparedLayoutFrame, RebuildFailure,
-    TransactionalLayoutError,
+    Axis, FullRebuildError, IncrementalLayoutError, LayoutEngine, PreparedLayoutFrame,
+    RebuildFailure, TransactionalLayoutError,
 };
 use crate::renderer::{
-    CheckedRenderError, Output, Terminal, TextRenderError, legacy_snapshot_coordinate_error,
-    try_render_element_snapshot_checked,
+    CheckedRenderError, Output, Terminal, TextRenderError, checked_output_extent,
+    legacy_snapshot_coordinate_error, try_render_element_snapshot_checked,
 };
 
 const DEFAULT_TEXT_FLOW_TAB_STOP: usize = 4;
@@ -122,7 +122,7 @@ fn legacy_string_error(element: &Element, error: CheckedRenderError) -> TextRend
             },
         )) => TextRenderError::flow(element.id, source),
         CheckedRenderError::LayoutBuild(TransactionalLayoutError::Snapshot(source)) => {
-            legacy_snapshot_coordinate_error(element, &source).unwrap_or_else(|| {
+            legacy_snapshot_coordinate_error(element, source.source_error()).unwrap_or_else(|| {
                 panic!("legacy string renderer cannot represent snapshot error: {source}")
             })
         }
@@ -245,9 +245,13 @@ impl RenderHelper {
         engine.set_text_flow_policy(tab_stop, "…", 1);
         let layout_width = width;
         let prepared = self.try_resolve_render_height_checked(element, layout_width, &engine)?;
-        let content_height =
-            u16::try_from(prepared.snapshot().root().border_bounds().height().max(1))
-                .unwrap_or(u16::MAX);
+        let root = prepared.snapshot().root();
+        let content_height = checked_output_extent(
+            root.identity(),
+            Axis::Y,
+            root.border_bounds().height(),
+            None,
+        )?;
         let render_width = layout_width;
 
         let mut output = Output::new(render_width, content_height);
@@ -281,12 +285,19 @@ impl RenderHelper {
             let prepared = engine
                 .prepare_element_incremental(element, None, width, probe_height)
                 .map_err(CheckedRenderError::LayoutBuild)?;
-            measured_height =
-                u16::try_from(prepared.snapshot().root().border_bounds().height().max(1))
-                    .unwrap_or(u16::MAX);
+            let root = prepared.snapshot().root();
+            measured_height = checked_output_extent(
+                root.identity(),
+                Axis::Y,
+                root.border_bounds().height(),
+                None,
+            )?;
 
             // We have headroom; current probe height is enough.
-            if measured_height.saturating_add(1) < probe_height {
+            if measured_height
+                .checked_add(1)
+                .is_some_and(|headroom| headroom < probe_height)
+            {
                 break;
             }
 
@@ -294,16 +305,25 @@ impl RenderHelper {
                 break;
             }
 
-            probe_height = probe_height
-                .saturating_mul(2)
-                .max(probe_height.saturating_add(1));
+            probe_height = if probe_height > u16::MAX / 2 {
+                u16::MAX
+            } else {
+                probe_height * 2
+            };
         }
 
-        let resolved_height = measured_height.max(1);
         engine
-            .prepare_element_incremental(element, None, width, resolved_height)
+            .prepare_element_incremental(element, None, width, measured_height)
             .map_err(CheckedRenderError::LayoutBuild)
     }
+}
+
+pub(crate) fn try_prepare_auto_height_checked(
+    element: &Element,
+    width: u16,
+    engine: &LayoutEngine,
+) -> Result<PreparedLayoutFrame, CheckedRenderError> {
+    RenderHelper.try_resolve_render_height_checked(element, width, engine)
 }
 
 #[cfg(test)]

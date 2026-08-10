@@ -7,6 +7,7 @@ use crate::core::{Overflow, Style, TextWrap};
 
 use super::measure::grapheme_width;
 
+mod semantic_difference;
 mod style_normalization;
 mod truncate;
 mod wrap;
@@ -197,6 +198,10 @@ pub struct TextFlow {
 }
 
 impl TextFlow {
+    pub(crate) fn first_semantic_difference(&self, other: &Self) -> Option<String> {
+        semantic_difference::first_difference(self, other)
+    }
+
     pub fn try_build(
         input: &TextFlowInput,
         options: &TextFlowOptions,

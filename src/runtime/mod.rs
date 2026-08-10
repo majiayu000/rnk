@@ -19,6 +19,7 @@ mod panic_handler;
 mod signal_handler;
 mod suspend;
 
+pub(crate) use context::{MeasurementPublicationError, PreparedMeasurementPublication};
 pub use context::{
     RuntimeContext, current_runtime, set_current_runtime, with_current_runtime, with_runtime,
 };

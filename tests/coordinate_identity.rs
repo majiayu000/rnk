@@ -8,11 +8,8 @@
 
 use rnk::components::{Box, Text};
 use rnk::core::{Element, Overflow, Style};
-use rnk::layout::LayoutEngine;
-use rnk::renderer::{
-    CheckedRenderError, Output, TextCoordinateError, TextRenderError,
-    try_render_element_tree_checked, try_render_to_string,
-};
+use rnk::layout::{LayoutEngine, LayoutSnapshotError, TransactionalLayoutError};
+use rnk::renderer::{Output, TextCoordinateError, TextRenderError, try_render_to_string};
 use rnk::testing::TestRenderer;
 
 /// A child whose own painting fails, nested one level below the root.
@@ -130,9 +127,10 @@ fn test_renderer_reports_the_same_failing_child_as_the_string_api() {
 
 #[test]
 fn a_failed_coordinate_commits_no_partial_frame() {
-    let (tree, failing_id) = tree_with_failing_grandchild(f32::NAN);
+    let stable = Element::text("stable").with_key("stable");
     let mut engine = LayoutEngine::new();
-    engine.try_compute(&tree, 20, 4).unwrap();
+    engine.try_compute(&stable, 20, 4).unwrap();
+    let (published, report) = engine.try_snapshot(&stable).unwrap();
 
     let mut output = Output::new(20, 4);
     output.write(0, 0, "caller-owned", &Style::default());
@@ -140,15 +138,21 @@ fn a_failed_coordinate_commits_no_partial_frame() {
     let before_dirty = output.dirty_row_indices().collect::<Vec<_>>();
     let before_is_dirty = output.is_dirty();
 
-    let error = try_render_element_tree_checked(&tree, &engine, &mut output, 0.0, 0.0)
-        .expect_err("NaN padding must fail");
+    let (tree, _) = tree_with_failing_grandchild(f32::NAN);
+    let error = match engine.prepare_element_incremental(&tree, None, 20, 4) {
+        Err(error) => error,
+        Ok(_) => panic!("NaN snapshot geometry must fail before publication"),
+    };
     assert!(matches!(
         error,
-        CheckedRenderError::Text(TextRenderError::Coordinate {
-            element_id,
-            source: TextCoordinateError::NonFinite,
-        }) if element_id == failing_id
+        TransactionalLayoutError::Snapshot(source)
+            if matches!(source.source_error(), LayoutSnapshotError::NonFiniteGeometry { .. })
     ));
+
+    let (after, after_report) = engine.try_snapshot(&stable).unwrap();
+    assert_eq!(published.snapshot(), after.snapshot());
+    assert_eq!(published.frame_revision(), after.frame_revision());
+    assert_eq!(report, after_report);
 
     assert_eq!(output.render(), before_render);
     assert_eq!(output.dirty_row_indices().collect::<Vec<_>>(), before_dirty);

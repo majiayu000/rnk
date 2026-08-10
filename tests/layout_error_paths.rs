@@ -6,11 +6,12 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use rnk::core::{Display, Element, ElementType, NodeKey, Props, Style, VNode, VNodeType};
 use rnk::layout::{
     IncrementalLayoutError, IncrementalLayoutOutcome, Layout, LayoutEngine, LayoutLookupError,
-    RebuildFailure, TextFlowError, TransactionalLayoutError,
+    LayoutSnapshotError, RebuildFailure, SnapshotInvariantError, SnapshotTargetMismatchReason,
+    TextFlowError, TransactionalLayoutError,
 };
 use rnk::reconciler::{Patch, ReconcilePlanError};
 use rnk::renderer::{
-    CheckedRenderError, DynamicFrameError, LayoutRenderError, Output, TextRenderError,
+    CheckedRenderError, DynamicFrameError, Output, SnapshotRenderError, TextRenderError,
     try_render_element_checked, try_render_element_tree_checked, try_render_to_string_checked,
 };
 use rnk::testing::TestRenderer;
@@ -137,8 +138,9 @@ fn missing_layout_reaches_all_checked_render_entrypoints() {
             .expect_err("tree renderer must require root layout");
     assert!(matches!(
         tree_failure,
-        CheckedRenderError::Layout(LayoutRenderError::MissingRootLayout { element_id })
-            if element_id == element.id
+        CheckedRenderError::Snapshot(SnapshotRenderError::Snapshot {
+            source: LayoutSnapshotError::MissingIdentity { element_id },
+        }) if element_id == element.id
     ));
 
     let mut element_output = Output::new(20, 4);
@@ -147,8 +149,9 @@ fn missing_layout_reaches_all_checked_render_entrypoints() {
             .expect_err("element renderer must require root layout");
     assert!(matches!(
         element_failure,
-        CheckedRenderError::Layout(LayoutRenderError::MissingRootLayout { element_id })
-            if element_id == element.id
+        CheckedRenderError::Snapshot(SnapshotRenderError::Snapshot {
+            source: LayoutSnapshotError::MissingIdentity { element_id },
+        }) if element_id == element.id
     ));
 
     assert!(matches!(
@@ -277,7 +280,6 @@ fn every_required_layout_failure_is_observed_without_fallback() {
 
     let mut changed = Element::root();
     let missing = Element::text("missing child");
-    let missing_id = missing.id;
     changed.add_child(missing);
     let mut output = Output::new(20, 4);
     let before = output.render();
@@ -285,8 +287,15 @@ fn every_required_layout_failure_is_observed_without_fallback() {
         .expect_err("fresh child must not use a stale/default layout");
     assert!(matches!(
         failure,
-        CheckedRenderError::Layout(LayoutRenderError::MissingElementLayout { element_id })
-            if element_id == missing_id
+        CheckedRenderError::Snapshot(SnapshotRenderError::Snapshot {
+            source: LayoutSnapshotError::InvalidTree {
+                source: SnapshotInvariantError::SnapshotTargetMismatch {
+                    reason: SnapshotTargetMismatchReason::ChildOrder,
+                    ..
+                },
+                ..
+            },
+        })
     ));
     assert_eq!(output.render(), before);
 
@@ -295,7 +304,14 @@ fn every_required_layout_failure_is_observed_without_fallback() {
     hidden.style.display = Display::None;
     filtered.add_child(hidden);
     filtered.add_child(Element::new(ElementType::VirtualText));
-    assert!(try_render_element_tree_checked(&filtered, &engine, &mut output, 0.0, 0.0).is_ok());
+    let mut filtered_engine = LayoutEngine::new();
+    filtered_engine
+        .prepare_element_incremental(&filtered, None, 20, 4)
+        .expect("filtered frame prepares its own authoritative snapshot")
+        .commit(&mut filtered_engine);
+    assert!(
+        try_render_element_tree_checked(&filtered, &filtered_engine, &mut output, 0.0, 0.0).is_ok()
+    );
 }
 
 #[test]

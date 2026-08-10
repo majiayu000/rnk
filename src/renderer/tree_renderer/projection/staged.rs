@@ -24,6 +24,15 @@ pub(in crate::renderer::tree_renderer) struct StagedFrame {
 }
 
 impl StagedFrame {
+    pub(in crate::renderer::tree_renderer) fn visible_bounds(&self) -> (i64, i64, i64, i64) {
+        (
+            self.fill_bounds.x1,
+            self.fill_bounds.y1,
+            self.fill_bounds.x2,
+            self.fill_bounds.y2,
+        )
+    }
+
     pub(in crate::renderer::tree_renderer) fn new(
         output: &Output,
         options: ProjectionOptions,
@@ -236,6 +245,7 @@ impl StagedFrame {
         self.projection.retire(&actual.old_cells)
     }
 
+    #[cfg(test)]
     pub(in crate::renderer::tree_renderer) fn fill_rect(
         &mut self,
         x: i64,
@@ -262,6 +272,28 @@ impl StagedFrame {
                         .checked_add(1)
                         .ok_or(ProjectionError::CoordinateOverflow(None))?;
                 }
+                self.paint_grapheme(column, row, " ", style)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(in crate::renderer::tree_renderer) fn fill_rect_edges(
+        &mut self,
+        x1: i64,
+        y1: i64,
+        x2: i64,
+        y2: i64,
+        style: &Style,
+    ) -> Result<(), ProjectionError> {
+        let Some(fill) = (x1 < x2 && y1 < y2)
+            .then_some(VisibleRect { x1, y1, x2, y2 })
+            .and_then(|rect| rect.intersection(self.fill_bounds))
+        else {
+            return Ok(());
+        };
+        for row in fill.y1..fill.y2 {
+            for column in fill.x1..fill.x2 {
                 self.paint_grapheme(column, row, " ", style)?;
             }
         }
@@ -340,6 +372,7 @@ impl VisibleRect {
         }
     }
 
+    #[cfg(test)]
     fn from_origin_size(
         x: i64,
         y: i64,

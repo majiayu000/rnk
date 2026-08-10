@@ -756,7 +756,17 @@ pub(crate) fn unchanged_target_and_viewport_is_noop_with_fresh_aliases() {
             .committed_vnode
             .shares_storage(&prepared.engine().committed_vnode)
     );
-    assert_eq!(prepared.engine().flow_cache.len(), 0);
+    assert_eq!(engine.flow_cache.len(), cache_len);
+    assert!(prepared.engine().flow_cache.len() >= cache_len);
+    let text_node = prepared
+        .snapshot()
+        .nodes()
+        .find(|node| node.text_flow().is_some())
+        .expect("unchanged text remains in the authoritative snapshot");
+    assert_eq!(
+        text_node.text_flow().unwrap().max_width(),
+        text_node.content_bounds().width() as usize
+    );
     assert!(engine.get_layout(first_text_id).is_some());
     assert!(engine.get_layout(current_text_id).is_none());
     assert!(prepared.engine().get_layout(current_text_id).is_some());

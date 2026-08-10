@@ -16,7 +16,8 @@ transaction/recovery/prepared commit 是强依赖，不在本 issue 内复制或
 
 以下锚点在 stacked base `spec/GH60-transactional-patching`
 `f67f973ed6903edb0cb76b5cb45c977ce92be851` 上通过 Read/grep 核实。该 base 尚未包含
-GH-58 至 GH-60 的生产实现；GH-61 implementation 必须在三个真实 merge SHA 上重新定位。
+GH-58 至 GH-60 的生产实现，因此本表只保留为root-cause历史基线；当前GH-61实现已在三项
+dependency合入后的生产模块重新定位，不能再把“尚未实现”当作当前事实或兼容性假设。
 
 | Area | Files | Current behavior | Why relevant |
 | --- | --- | --- | --- |
@@ -105,7 +106,7 @@ counters 不进入 equality。frame-local alias overlay 结构上只存在于 `P
 
 GH-59/GH-60没有`committed visible plan`，GH-61不得发明该依赖。真实边界是：
 
-- GH-59 `ReconcilePlan` / `ResolvedParentPlan::final_children`提供target child order；
+- GH-59 crate-private `ReconcilePlan.parents` / `ParentPlan.final_children`提供target child order；
 - GH-60 `PreparedLayoutFrame`携带未发布candidate，target-exact postcondition验证
   tree/root/maps/order/layout；其B-014要求renderer在required-layout lookup前过滤
   `Display::None` / `VirtualText`；
@@ -132,9 +133,11 @@ public_snapshot_mutation_surface_is_compile_fail
 ```
 
 第二个test body必须无条件执行
-`trybuild::TestCases::new().compile_fail("tests/ui/gh61_snapshot_private_fields.rs")`，并与
-checked-in `tests/ui/gh61_snapshot_private_fields.stderr`逐字匹配字段、builder与任意-state
-constructor的privacy diagnostics；不得用feature/env/平台条件skip。任务须实际执行
+`trybuild::TestCases::new()`必须分别执行
+`compile_fail("tests/ui/gh61_cell_rect_private_fields.rs")`与
+`compile_fail("tests/ui/gh61_snapshot_identity_private_constructor.rs")`，并分别与两个同名
+checked-in `.stderr`逐字匹配geometry字段与opaque identity constructor privacy diagnostics；
+不得用feature/env/平台条件skip。任务须实际执行
 `cargo test --test layout_snapshot_immutability --locked public_snapshot_mutation_surface_is_compile_fail -- --exact`，因此仅存在
 fixture、仅编译positive test或只跑`cargo check`不算证据。public API manifest同时拒绝上述
 mutation surface。
@@ -143,6 +146,14 @@ mutation surface。
 wrap/tab/ellipsis/Unicode policy revision 的语义。若 GH-58 merged实现只有 engine-local
 generation，则 GH-61 新增由完整 cache identity 与 logical result equality支持的 semantic
 stamp；hash只能作为查找加速，碰撞时仍逐字段比较，不能单独判等。
+
+GH-58 ownership boundary保持不变：T3可在`src/layout/text_flow.rs`与
+`src/layout/text_flow/semantic_difference.rs`增加仅供GH-61 stamp调用的crate-private、
+逐字段semantic diagnostic。这是B-014 evidence所需的窄handoff exception，不授权修改
+GH-58 public layout/measurement、flow构建、cache key或Unicode policy；T3 checkpoint后两
+路径冻结，T4/T6只读。B-014同一个mapped selector必须非空覆盖collection length首个缺失
+index、finite与正负Infinity的exact float bits，以及符合`Style::semantically_eq`的不同NaN
+payload相等语义，不得用hash或格式化摘要替代exact值。
 
 #### Closed typed failure algebra
 
@@ -155,13 +166,19 @@ LayoutSnapshotError =
   NegativeExtent { identity, axis, value_bits }
   EdgeArithmeticOverflow { identity, operation, lhs_bits, rhs_bits }
   CellCoordinateOverflow { identity, edge, rounded_bits }
+  CellSpanOverflow { identity, axis, start, end }
   ReversedContentBounds { identity, border_bounds, attempted_content_bounds }
   MissingIdentity { element_id }
   DuplicateIdentity { identity }
   MissingLayout { identity }
+  LayoutLookup { identity, source: IncrementalInvariantError }
   MissingTextFlowRevision { identity }
   TextFlowRevision { identity, source: TextFlowError }
+  WorkCounters { source: SnapshotCounterError }
+  CacheEvidenceOverflow
+  Alias { source: LayoutAliasError }
   InvalidTree { identity: Option<SnapshotIdentity>, source: SnapshotInvariantError }
+  TargetPlanning { source: ReconcilePlanError }
 
 SnapshotInvariantError =
   MissingParent { child, expected_parent }
@@ -173,13 +190,27 @@ LayoutAliasError =
   MissingFrameAlias { element_id, frame_revision }
   DuplicateFrameAlias { element_id, first_identity, second_identity }
   AliasTargetMissing { element_id, identity }
-  StaleFrameAlias { element_id, expected_frame_revision, actual_frame_revision }
   AliasIdentityMismatch { element_id, expected_identity, actual_identity }
 
 CellOutputError =
   NegativeAfterClip { axis, value }
-  CoordinateOutOfRange { axis, value }
   ExtentOutOfRange { axis, start, end }
+
+AttemptedContentBounds {
+  private left/top/right/bottom; public read-only accessors; no public constructor/conversion
+}
+
+SnapshotBuildFailure {
+  private source: Box<LayoutSnapshotError>,
+  private attempt_report: SnapshotAttemptReport,
+  public source_error()/attempt_report()
+}
+
+SnapshotAttemptReport {
+  operation_count,
+  exact cache_hits,
+  exact five-field work_counters
+}
 
 SnapshotRenderError =
   Snapshot { source: LayoutSnapshotError }
@@ -189,7 +220,7 @@ SnapshotRenderError =
 
 RecoveredSnapshotError {
   incremental: Box<PatchTransactionError>,
-  snapshot: Box<LayoutSnapshotError>
+  snapshot: Box<SnapshotBuildFailure>
 }
 
 RecoveredSnapshotRenderError {
@@ -199,7 +230,7 @@ RecoveredSnapshotRenderError {
 
 // GH-61 additions to GH-60 non-exhaustive wrappers:
 TransactionalLayoutError +=
-  Snapshot(LayoutSnapshotError)
+  Snapshot(SnapshotBuildFailure)
   RecoveredSnapshot(RecoveredSnapshotError)
 
 CheckedRenderError +=
@@ -208,12 +239,21 @@ CheckedRenderError +=
 ```
 
 其中`GeometryField`、`Axis`、`Edge`、`ArithmeticOperation`、
-`SnapshotTargetMismatchReason`与`FrameRevision`也必须closed；`PatchTransactionError`、
+`SnapshotTargetMismatchReason`、`SnapshotWorkCounterField`与`FrameRevision`也必须closed；
+`PatchTransactionError`、
 `TextRenderError`、`TransactionalLayoutError`、`CheckedRenderError`与
 `TransactionalFrameError`绑定GH-60 tech §2/§6的真实type，不得降为字符串。每个包含
 `source`的outer variant必须返回concrete nested error；alias leaf的`source()`为`None`但保留
-全部payload。两个recovered aggregate的标准`source()`指向最终snapshot/render failure，
-并提供`incremental_failure()` accessor保留原GH-60 patch cause。
+全部payload。`SnapshotBuildFailure::source()`必须指向concrete `LayoutSnapshotError`；两个
+recovered aggregate的标准`source()`指向最终snapshot-build/render failure，并提供
+`incremental_failure()` accessor保留原GH-60 patch cause。
+
+这是GH61刚合入但尚未稳定的pre-release checked surface的有意修正：
+`TransactionalLayoutError::Snapshot(LayoutSnapshotError)`改为
+`Snapshot(SnapshotBuildFailure)`，correctness/report preservation优先；outer enum继续
+`#[non_exhaustive]`，既有exhaustive `CheckedRenderError`不新增variant。删除三个未接生产seam的
+旧候选variant；其余advertised variant必须由真实
+quantizer/builder/target/alias/runtime seam命中，手造enum ledger只能作为supplemental value test。
 
 GH-60 frame wrapper保持且仅保持既有
 `Upstream(DynamicFrameError) | Transaction(TransactionalLayoutError) |
@@ -223,7 +263,7 @@ Render(CheckedRenderError)`三路；GH-61不新增`Initial` variant：
 initial GH-60 build/postcondition
   -> Transaction(InitialBuild(FullRebuildError))
 initial/ordinary snapshot build
-  -> Transaction(Snapshot(LayoutSnapshotError))
+  -> Transaction(Snapshot(SnapshotBuildFailure -> LayoutSnapshotError))
 recovered snapshot build failure
   -> Transaction(RecoveredSnapshot(RecoveredSnapshotError))
 snapshot/alias/output/text render
@@ -236,13 +276,14 @@ GH-59 existing frame failure
 
 所有`From`只做上述typed composition，不得加入`Other`或把initial伪装成incremental cause。
 
-`every_snapshot_failure_variant_preserves_payload_and_source_chain`、
-`every_layout_alias_variant_preserves_payload_and_source`与
-`gh60_frame_wrapper_routes_snapshot_failures_without_fictitious_initial_variant`逐variant匹配
-payload，并分别证明`SnapshotRenderError::Alias -> LayoutAliasError`、
-`Transaction -> Snapshot/RecoveredSnapshot -> leaf`与
-`Render -> Snapshot/RecoveredSnapshot -> leaf`的source traversal；compile fixture必须按
-GH-60真实三路match且不存在`TransactionalFrameError::Initial`。
+`initial_snapshot_failure_never_enters_incremental_recovery`、
+`ordinary_incremental_snapshot_failure_preserves_partial_attempt_report`、
+`published_target_validation_preserves_hostile_planning_cause`、
+`layout::snapshot::tests::layout_alias_variants_are_reached_through_checked_production_seams`与
+`gh60_frame_wrapper_routes_snapshot_failures_without_fictitious_initial_variant`必须从真实
+producer/builder/alias/API seam逐层证明exact payload、partial counters/cache与
+`Transaction -> Snapshot/RecoveredSnapshot -> SnapshotBuildFailure -> LayoutSnapshotError`
+source traversal；compile fixture按GH-60真实三路match且不存在`TransactionalFrameError::Initial`。
 
 ### 3. Absolute half-open edge quantization
 
@@ -279,8 +320,11 @@ cell_bottom = checked_floor(absolute_bottom)
   Visible轴保持继承span。`Hidden/Visible`与`Visible/Hidden`都不能构造完整content rect clip。
 - renderer只把 x/y均位于`effective_clip ∩ viewport`内的非负cell checked-convert为`u16`。
   `mixed_axis_overflow_clips_only_selected_axis`与
-  `nested_mixed_axis_overflow_matches_all_strategies`覆盖两种方向、两层嵌套、空单轴span，
-  并比较full/incremental/recovered及renderer最终cells。
+  `nested_mixed_axis_overflow_full_and_incremental_cells_match`覆盖两种方向、两层嵌套、
+  空单轴span及nonzero full/incremental最终cells；crate-private
+  `nested_mixed_axis_overflow_recovery_snapshot_and_cells_match`在既有GH60 one-shot
+  postcondition fault boundary强制真实recovery，并比较fresh full/recovered exact snapshot和
+  private snapshot renderer最终cells。
 
 Taffy 0.7 自带 pixel rounding，但 GH-61 不在 renderer 二次猜测其局部 float。merged lock
 确认 `layout()` 默认返回 final rounded relative layout，而 `unrounded_layout()` 返回 canonical
@@ -294,12 +338,12 @@ floor。parity fixture锁定 nested cumulative edges、content/border 与 scroll
 
 ```text
 try_build_snapshot(candidate, target, viewport, aliases)
-  -> Result<(LayoutSnapshot, SnapshotBuildReport), LayoutSnapshotError>
+  -> Result<(PreparedSnapshotFrame, SnapshotBuildReport), SnapshotBuildFailure>
 ```
 
 - 没有previous committed state时走一次`InitialFullBuild`：GH-60 layout/postcondition failure
   保持`Transaction(InitialBuild(FullRebuildError))`；snapshot failure为
-  `Transaction(Snapshot(LayoutSnapshotError))`；render failure为
+  `Transaction(Snapshot(SnapshotBuildFailure -> LayoutSnapshotError))`；render failure为
   `Render(Snapshot(SnapshotRenderError))`。三者`rebuild_count=0`，都不构造incremental
   cause、不进入GH-60 recovery、不发布任何state。
 - 已有committed state时，normal incremental candidate运行同一个builder；只有GH-60既定
@@ -321,7 +365,7 @@ try_build_snapshot(candidate, target, viewport, aliases)
 
 `initial_snapshot_failure_never_enters_incremental_recovery`必须用recovery spy断言
 incremental/recovered调用数均为0、`rebuild_count=0`、source chain为
-`Transaction -> Snapshot -> LayoutSnapshotError`且所有
+`Transaction -> Snapshot -> SnapshotBuildFailure -> LayoutSnapshotError`且所有
 published slots未变；`recovered_frame_uses_only_recovered_candidate_snapshot`只覆盖已有
 committed state的incremental fault；`recovered_snapshot_or_render_failure_preserves_both_causes`
 逐项断言aggregate accessors/source chain和零发布。
@@ -408,8 +452,13 @@ snapshot_nodes
 rebuild_count
 ```
 
-这些 counters 是 `SnapshotBuildReport` 的一部分。GH-61 只负责在 full、incremental 与
-recovered producer 上以同一 closed 字段集生成 counters；以它们为输入的 benchmark harness、
+`visited_nodes`只计adapter开始checked lookup；`mutated_nodes`只计producer实际完成的distinct
+mutation/removal event（不计planned、skip或失败事件）；`text_flow_recomputes`只计真实cache
+miss后的成功flow构造；`snapshot_nodes`只在成功finalize取len，失败为0；`rebuild_count`只在
+已有committed state的GH60 recovery transition为1。每字段checked-add，失败attempt也由
+`SnapshotAttemptReport`保存这些exact counters与cache hits。成功counters是
+`SnapshotBuildReport`的一部分。GH-61 只负责在 full、incremental 与recovered producer上以
+同一closed字段集生成 counters；以它们为输入的 benchmark harness、
 artifact、baseline、compare 与 promotion 生命周期全部属于 #85。
 
 ### 8. Verification、public docs 与 coverage
@@ -423,28 +472,28 @@ line 与 branch 均 100%，由既有 CI Coverage job 报告。
 
 | Behavior invariant | Implementation area | Verification |
 | --- | --- | --- |
-| B-001 | snapshot producer/consumers | `cargo test --test layout_snapshot_parity --locked all_render_consumers_use_one_snapshot -- --exact` |
+| B-001 | snapshot producer/consumers | `cargo test --test layout_snapshot_root_cause --locked render_entrypoints_must_share_snapshot_contract -- --exact`; `cargo test --workspace --lib --locked renderer::pipeline::tests::all_correctness_consumers_use_authoritative_snapshot -- --exact` |
 | B-002 | semantic node/index | `cargo test --workspace --lib --locked layout::snapshot::tests::semantic_identity_and_final_order -- --exact` |
 | B-003 | GH61 adapter over actual GH59/GH60 contracts | `cargo test --test layout_snapshot_parity --locked snapshot_target_adapter_uses_gh59_order_and_gh60_lookup_contract -- --exact`; `cargo test --test layout_snapshot_parity --locked display_none_prunes_only_snapshot_render_traversal -- --exact` |
 | B-004 | `CellRect` | `cargo test --workspace --lib --locked layout::snapshot::quantize::tests::half_open_bounds_derive_extent_from_edges -- --exact` |
-| B-005 | absolute edge quantizer | `cargo test --test layout_snapshot_parity --locked nested_shared_edges_do_not_gain_overlap -- --exact` |
+| B-005 | absolute edge quantizer | `cargo test --test layout_snapshot_root_cause --locked nested_fractional_edges_need_one_cell_snapshot -- --exact`; `cargo test --test layout_snapshot_parity --locked nested_shared_edges_do_not_gain_overlap -- --exact` |
 | B-006 | content/border quantization | `cargo test --workspace --lib --locked layout::snapshot::quantize::tests::content_border_and_gap_error_are_bounded -- --exact` |
 | B-007 | signed coordinates/output conversion | `cargo test --test layout_snapshot_error_paths --locked negative_and_overflow_cells_are_not_clamped_to_success -- --exact` |
-| B-008 | axis-independent effective clip | `cargo test --workspace --lib --locked layout::snapshot::tests::mixed_axis_overflow_clips_only_selected_axis -- --exact`; `cargo test --test layout_snapshot_parity --locked nested_mixed_axis_overflow_matches_all_strategies -- --exact` |
+| B-008 | axis-independent effective clip | `cargo test --workspace --lib --locked layout::snapshot::tests::mixed_axis_overflow_clips_only_selected_axis -- --exact`; `cargo test --test layout_snapshot_parity --locked nested_mixed_axis_overflow_full_and_incremental_cells_match -- --exact`; `cargo test --workspace --lib --locked layout::engine::transaction::tests::nested_mixed_axis_overflow_recovery_snapshot_and_cells_match -- --exact` |
 | B-009 | scroll projection | `cargo test --test layout_snapshot_parity --locked scroll_changes_descendant_projection_only -- --exact` |
 | B-010 | TextFlow semantic stamp | `cargo test --test layout_snapshot_parity --locked cold_and_cached_text_flow_revisions_are_semantically_equal -- --exact` |
-| B-011 | build report separation | `cargo test --workspace --lib --locked layout::snapshot::tests::producer_report_does_not_change_semantic_equality -- --exact` |
+| B-011 | build/failed-attempt report separation | `cargo test --workspace --lib --locked layout::snapshot::tests::producer_report_does_not_change_semantic_equality -- --exact`; `cargo test --test layout_snapshot_error_paths --locked initial_snapshot_failure_never_enters_incremental_recovery -- --exact`; `cargo test --test layout_snapshot_error_paths --locked ordinary_incremental_snapshot_failure_preserves_partial_attempt_report -- --exact` |
 | B-012 | three-strategy parity | `cargo test --test layout_snapshot_parity --locked full_incremental_and_recovered_are_semantically_equal -- --exact` |
 | B-013 | mutation matrix | `cargo test --test layout_snapshot_parity --locked chat_mutation_matrix_matches_full -- --exact` |
-| B-014 | seeded state machine | `cargo test --test layout_snapshot_state_machine --locked seeded_operations_match_after_every_step -- --exact` |
+| B-014 | seeded state machine/diagnostic | `cargo test --test layout_snapshot_state_machine --locked seeded_operations_match_after_every_step -- --exact`; `cargo test --test layout_snapshot_state_machine --locked snapshot_divergence_diagnostic_names_first_identity_field_and_values -- --exact` |
 | B-015 | resize round trip | `cargo test --test layout_snapshot_parity --locked resize_round_trip_restores_semantic_snapshot -- --exact` |
-| B-016 | renderer convergence | `cargo test --test layout_snapshot_parity --locked dynamic_static_testing_and_string_share_cell_contract -- --exact` |
+| B-016 | renderer/measurement convergence | `cargo test --workspace --lib --locked renderer::pipeline::tests::all_correctness_consumers_use_authoritative_snapshot -- --exact`; `cargo test --workspace --lib --locked renderer::pipeline::tests::oversized_measurement_fails_before_atomic_publication -- --exact` |
 | B-017 | prepared App frame | `cargo test --workspace --lib --locked renderer::app::tests::snapshot_commits_only_with_prepared_app_frame -- --exact` |
-| B-018 | snapshot failure atomicity | `cargo test --test layout_snapshot_error_paths --locked snapshot_failure_publishes_nothing -- --exact` |
+| B-018 | snapshot/measurement failure atomicity | `cargo test --test layout_snapshot_error_paths --locked snapshot_failure_publishes_nothing -- --exact`; `cargo test --test layout_snapshot_error_paths --locked ordinary_incremental_snapshot_failure_preserves_partial_attempt_report -- --exact`; `cargo test --workspace --lib --locked renderer::pipeline::tests::oversized_measurement_fails_before_atomic_publication -- --exact` |
 | B-019 | actual GH60 initial/recovery wrapper source | `cargo test --test layout_snapshot_error_paths --locked initial_snapshot_failure_never_enters_incremental_recovery -- --exact`; `cargo test --test layout_snapshot_error_paths --locked recovered_snapshot_or_render_failure_preserves_both_causes -- --exact`; `cargo test --test layout_snapshot_parity --locked recovered_frame_uses_only_recovered_candidate_snapshot -- --exact` |
 | B-020 | cancellation / enforced immutable share | `cargo test --workspace --lib --locked layout::snapshot::tests::cancelled_builder_is_hidden_and_published_snapshot_is_immutable -- --exact`; `cargo test --test layout_snapshot_immutability --locked public_snapshot_read_only_accessors_compile -- --exact`; `cargo test --test layout_snapshot_immutability --locked public_snapshot_mutation_surface_is_compile_fail -- --exact` |
-| B-021 | closed typed failures/GH60 three-route source chain | `cargo test --test layout_snapshot_error_paths --locked every_snapshot_failure_variant_preserves_payload_and_source_chain -- --exact`; `cargo test --test layout_snapshot_error_paths --locked every_layout_alias_variant_preserves_payload_and_source -- --exact`; `cargo test --test layout_snapshot_error_paths --locked gh60_frame_wrapper_routes_snapshot_failures_without_fictitious_initial_variant -- --exact` |
-| B-022 | compatibility | `cargo test --test layout_snapshot_compat --locked existing_layout_engine_renderer_and_testing_surface_compiles -- --exact` |
+| B-021 | closed typed production failures/GH60 source chain | `cargo test --test layout_snapshot_error_paths --locked published_target_validation_preserves_hostile_planning_cause -- --exact`; `cargo test --workspace --lib --locked layout::snapshot::tests::layout_alias_variants_are_reached_through_checked_production_seams -- --exact`; `cargo test --test layout_snapshot_error_paths --locked gh60_frame_wrapper_routes_snapshot_failures_without_fictitious_initial_variant -- --exact` |
+| B-022 | compatibility/docs | `cargo test --test layout_snapshot_compat --locked existing_layout_engine_renderer_and_testing_surface_compiles -- --exact`; `cargo test --test layout_snapshot_compat --locked legacy_runtime_measurement_setters_compile_and_fail_loudly -- --exact`; `cargo test --test gh61_public_docs --locked gh61_public_snapshot_surface_is_documented_and_compiles -- --exact` |
 | B-023 | no-op alias overlay | `cargo test --test layout_snapshot_parity --locked reused_snapshot_accepts_target_exact_frame_aliases -- --exact` |
 | B-029 | exact head/coverage/docs gates | direct execution of the two exact command blocks、full Rust gates、current exact-head repository CI、independent review、resolved review threads与maintainer明确merge authorization |
 | B-030 | merged dependencies | 三次 `git merge-base --is-ancestor "$GH*_MERGED_SHA" HEAD` 与 GitHub merged evidence |
@@ -488,9 +537,9 @@ full/incremental/recovered 只改变 producer report，不改变 snapshot semant
 
 - **Security**：identity 或 error payload 可能含 terminal controls。沿用 GH-58
   sanitization；诊断不暴露 public `Any`、arbitrary closure 或不受控执行 seam。
-- **Compatibility**：GH-58至GH-60尚未实现，真实module/public enum可能变化。implementation
-  只在merged SHA重定位后开始；GH-61 semantic error set首版closed，只有GH-60既有公开outer
-  wrapper可保持`#[non_exhaustive]`；旧`Layout`/wrappers保留。
+- **Compatibility**：GH-58至GH-60已是当前生产依赖；GH-61只以合入后的真实module/public
+  enum为边界。GH-61 semantic error set首版closed，只有GH-60既有公开outer wrapper保持
+  `#[non_exhaustive]`；旧`Layout`/wrappers保留。
 - **Correctness**：Taffy 0.7默认rounding与unrounded layout细节可能与写作时假设不同。只选
   一个canonical source，并用nested cumulative edge fixtures锁定；禁止double rounding。
 - **Identity**：ElementId alias与semantic identity混放会破坏no-op reuse/parity。aliases放在

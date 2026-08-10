@@ -1,23 +1,153 @@
-use rnk::core::{Dimension, Element, FlexDirection};
-use rnk::layout::LayoutEngine;
+use rnk::core::{Dimension, Element, FlexDirection, Overflow};
+use rnk::layout::{LayoutEngine, LayoutSnapshot, SnapshotBuildStrategy, SnapshotWorkCounters};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Message {
     id: u64,
+    parent: u64,
+    order: usize,
     text: String,
     padded: bool,
+    scroll_x: u16,
 }
 
-fn target(messages: &[Message]) -> Element {
+#[derive(Debug)]
+struct StepEvidence {
+    snapshot: LayoutSnapshot,
+    work: SnapshotWorkCounters,
+    operation: String,
+    raw: [u64; 8],
+    state_after: u64,
+    viewport: (u16, u16),
+    cache_hits: u64,
+}
+
+fn first_snapshot_difference(
+    full: &LayoutSnapshot,
+    incremental: &LayoutSnapshot,
+) -> Option<String> {
+    if full.viewport() != incremental.viewport() {
+        return Some(format!(
+            "identity=snapshot:<viewport> field=viewport full={:?} incremental={:?}",
+            full.viewport(),
+            incremental.viewport()
+        ));
+    }
+    let full_nodes: Vec<_> = full.nodes().collect();
+    let incremental_nodes: Vec<_> = incremental.nodes().collect();
+    for index in 0..full_nodes.len().max(incremental_nodes.len()) {
+        let Some(full_node) = full_nodes.get(index) else {
+            let incremental_node = incremental_nodes[index];
+            return Some(format!(
+                "identity={} field=node_presence full=missing incremental=present",
+                incremental_node.identity().diagnostic()
+            ));
+        };
+        let Some(incremental_node) = incremental_nodes.get(index) else {
+            return Some(format!(
+                "identity={} field=node_presence full=present incremental=missing",
+                full_node.identity().diagnostic()
+            ));
+        };
+        if full_node.identity() != incremental_node.identity() {
+            return Some(format!(
+                "identity={} field=identity full={} incremental={}",
+                full_node.identity().diagnostic(),
+                full_node.identity().diagnostic(),
+                incremental_node.identity().diagnostic()
+            ));
+        }
+        macro_rules! compare_field {
+            ($name:literal, $full:expr, $incremental:expr) => {
+                if $full != $incremental {
+                    return Some(format!(
+                        "identity={} field={} full={:?} incremental={:?}",
+                        full_node.identity().diagnostic(),
+                        $name,
+                        $full,
+                        $incremental
+                    ));
+                }
+            };
+        }
+        compare_field!("parent", full_node.parent(), incremental_node.parent());
+        compare_field!(
+            "children",
+            full_node.children(),
+            incremental_node.children()
+        );
+        compare_field!(
+            "border_bounds",
+            full_node.border_bounds(),
+            incremental_node.border_bounds()
+        );
+        compare_field!(
+            "content_bounds",
+            full_node.content_bounds(),
+            incremental_node.content_bounds()
+        );
+        compare_field!(
+            "text_origin",
+            full_node.text_origin(),
+            incremental_node.text_origin()
+        );
+        compare_field!(
+            "effective_clip",
+            full_node.effective_clip(),
+            incremental_node.effective_clip()
+        );
+        compare_field!(
+            "scroll_transform",
+            full_node.scroll_transform(),
+            incremental_node.scroll_transform()
+        );
+        if full_node.text_flow() != incremental_node.text_flow() {
+            let difference = match (full_node.text_flow(), incremental_node.text_flow()) {
+                (Some(full_flow), Some(incremental_flow)) => full_flow
+                    .first_difference_diagnostic(incremental_flow)
+                    .expect("unequal complete TextFlow semantics must name an exact subfield"),
+                (Some(_), None) => {
+                    "path=text_flow.presence full=present incremental=missing".to_owned()
+                }
+                (None, Some(_)) => {
+                    "path=text_flow.presence full=missing incremental=present".to_owned()
+                }
+                (None, None) => unreachable!("equal absent TextFlow values were filtered above"),
+            };
+            return Some(format!(
+                "identity={} field=text_flow {difference}",
+                full_node.identity().diagnostic(),
+            ));
+        }
+    }
+    None
+}
+
+fn target(messages: &[Message], width: u16) -> Element {
+    fn add_children(parent_id: u64, parent: &mut Element, messages: &[Message]) {
+        let mut children: Vec<_> = messages
+            .iter()
+            .filter(|message| message.parent == parent_id)
+            .collect();
+        children.sort_by_key(|message| (message.order, message.id));
+        for message in children {
+            let mut branch = Element::box_element().with_key(format!("m-{}", message.id));
+            branch.style.flex_direction = FlexDirection::Column;
+            branch.style.padding.left = f32::from(message.padded);
+            branch.style.overflow_x = Overflow::Scroll;
+            branch.scroll_offset_x = Some(message.scroll_x);
+            branch.add_child(
+                Element::text(message.text.clone()).with_key(format!("text-{}", message.id)),
+            );
+            add_children(message.id, &mut branch, messages);
+            parent.add_child(branch);
+        }
+    }
+
     let mut root = Element::box_element().with_key("root");
     root.style.flex_direction = FlexDirection::Column;
-    for message in messages {
-        let mut child = Element::text(message.text.clone()).with_key(format!("m-{}", message.id));
-        if message.padded {
-            child.style.padding.left = 1.0;
-        }
-        root.add_child(child);
-    }
+    root.style.width = Dimension::Points(f32::from(width));
+    add_children(0, &mut root, messages);
     root
 }
 
@@ -27,6 +157,289 @@ fn draw(state: &mut u64) -> u64 {
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     z ^ (z >> 31)
+}
+
+fn selected_id(messages: &[Message], selector: u64) -> u64 {
+    let mut ids: Vec<_> = messages.iter().map(|message| message.id).collect();
+    ids.sort_unstable();
+    ids[selector as usize % ids.len()]
+}
+
+fn selected_parent(messages: &[Message], selector: u64) -> u64 {
+    let mut ids = vec![0];
+    ids.extend(messages.iter().map(|message| message.id));
+    ids.sort_unstable();
+    ids[selector as usize % ids.len()]
+}
+
+fn remove_subtree(messages: &mut Vec<Message>, root_id: u64) {
+    let mut removed = vec![root_id];
+    let mut cursor = 0;
+    while cursor < removed.len() {
+        let parent = removed[cursor];
+        removed.extend(
+            messages
+                .iter()
+                .filter(|message| message.parent == parent)
+                .map(|message| message.id),
+        );
+        cursor += 1;
+    }
+    messages.retain(|message| !removed.contains(&message.id));
+}
+
+fn apply_operation(
+    messages: &mut Vec<Message>,
+    next_id: &mut u64,
+    viewport: &mut (u16, u16),
+    raw: [u64; 8],
+) -> String {
+    const PAYLOADS: [&str; 4] = ["ascii", "中", "👩‍💻", "e\u{301}"];
+    const VIEWPORTS: [(u16, u16); 4] = [(120, 40), (80, 24), (120, 40), (1, 1)];
+    let operation = raw[0] % 100;
+    let target_id = selected_id(messages, raw[1]);
+    let payload = PAYLOADS[raw[4] as usize % PAYLOADS.len()];
+    match operation {
+        0..=9 => "unchanged".to_owned(),
+        10..=24 => {
+            messages
+                .iter_mut()
+                .find(|item| item.id == target_id)
+                .unwrap()
+                .text
+                .push_str(payload);
+            format!("stream target={target_id} payload={payload:?}")
+        }
+        25..=34 => {
+            let target = messages
+                .iter_mut()
+                .find(|item| item.id == target_id)
+                .unwrap();
+            target.padded = !target.padded;
+            format!("style target={target_id} padded={}", target.padded)
+        }
+        35..=49 => {
+            let parent = selected_parent(messages, raw[2]);
+            let order = messages.iter().filter(|item| item.parent == parent).count();
+            let id = *next_id;
+            *next_id += 1;
+            messages.push(Message {
+                id,
+                parent,
+                order,
+                text: payload.to_owned(),
+                padded: false,
+                scroll_x: 0,
+            });
+            format!("append id={id} parent={parent} order={order} payload={payload:?}")
+        }
+        50..=59 => {
+            let parent = selected_parent(messages, raw[2]);
+            let child_count = messages.iter().filter(|item| item.parent == parent).count();
+            let order = raw[3] as usize % (child_count + 1);
+            for sibling in messages
+                .iter_mut()
+                .filter(|item| item.parent == parent && item.order >= order)
+            {
+                sibling.order += 1;
+            }
+            let id = *next_id;
+            *next_id += 1;
+            messages.push(Message {
+                id,
+                parent,
+                order,
+                text: payload.to_owned(),
+                padded: false,
+                scroll_x: 0,
+            });
+            format!("insert id={id} parent={parent} order={order} payload={payload:?}")
+        }
+        60..=69 => {
+            let before = messages.clone();
+            let parent = messages
+                .iter()
+                .find(|item| item.id == target_id)
+                .unwrap()
+                .parent;
+            let order = messages
+                .iter()
+                .find(|item| item.id == target_id)
+                .unwrap()
+                .order;
+            remove_subtree(messages, target_id);
+            if messages.is_empty() {
+                *messages = before;
+                format!("remove unchanged(last-tree) target={target_id}")
+            } else {
+                for sibling in messages
+                    .iter_mut()
+                    .filter(|item| item.parent == parent && item.order > order)
+                {
+                    sibling.order -= 1;
+                }
+                format!("remove target={target_id} parent={parent} order={order}")
+            }
+        }
+        70..=79 => {
+            let old = messages
+                .iter()
+                .find(|item| item.id == target_id)
+                .unwrap()
+                .clone();
+            remove_subtree(messages, target_id);
+            let id = *next_id;
+            *next_id += 1;
+            messages.push(Message {
+                id,
+                parent: old.parent,
+                order: old.order,
+                text: payload.to_owned(),
+                padded: false,
+                scroll_x: 0,
+            });
+            format!(
+                "replace old={target_id} new={id} parent={} order={} payload={payload:?}",
+                old.parent, old.order
+            )
+        }
+        80..=89 => {
+            let mut parents: Vec<_> = std::iter::once(0)
+                .chain(messages.iter().map(|message| message.id))
+                .filter(|parent| {
+                    messages
+                        .iter()
+                        .filter(|item| item.parent == *parent)
+                        .count()
+                        >= 2
+                })
+                .collect();
+            parents.sort_unstable();
+            if parents.is_empty() {
+                "reorder unchanged(no-parent)".to_owned()
+            } else {
+                let parent = parents[raw[2] as usize % parents.len()];
+                let mut children: Vec<_> = messages
+                    .iter()
+                    .filter(|item| item.parent == parent)
+                    .map(|item| item.id)
+                    .collect();
+                children
+                    .sort_by_key(|id| messages.iter().find(|item| item.id == *id).unwrap().order);
+                let left = raw[1] as usize % children.len();
+                let mut right = raw[3] as usize % children.len();
+                if left == right {
+                    right = (right + 1) % children.len();
+                }
+                let left_id = children[left];
+                let right_id = children[right];
+                let left_order = messages
+                    .iter()
+                    .find(|item| item.id == left_id)
+                    .unwrap()
+                    .order;
+                let right_order = messages
+                    .iter()
+                    .find(|item| item.id == right_id)
+                    .unwrap()
+                    .order;
+                messages
+                    .iter_mut()
+                    .find(|item| item.id == left_id)
+                    .unwrap()
+                    .order = right_order;
+                messages
+                    .iter_mut()
+                    .find(|item| item.id == right_id)
+                    .unwrap()
+                    .order = left_order;
+                format!("reorder parent={parent} left={left_id} right={right_id}")
+            }
+        }
+        90..=94 => {
+            *viewport = VIEWPORTS[raw[5] as usize % VIEWPORTS.len()];
+            format!("resize width={} height={}", viewport.0, viewport.1)
+        }
+        95..=99 => {
+            let scroll_x = (raw[7] % 7) as u16;
+            messages
+                .iter_mut()
+                .find(|item| item.id == target_id)
+                .unwrap()
+                .scroll_x = scroll_x;
+            format!("scroll target={target_id} x={scroll_x}")
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn run_seed(seed: u64) -> Vec<StepEvidence> {
+    let mut random = seed;
+    let mut messages = vec![Message {
+        id: 1,
+        parent: 0,
+        order: 0,
+        text: "initial".to_owned(),
+        padded: false,
+        scroll_x: 0,
+    }];
+    let mut next_id = 2;
+    let mut viewport = (120, 40);
+    let mut incremental = LayoutEngine::new();
+    let mut previous = None;
+    let mut evidence = Vec::with_capacity(64);
+    for step in 0..64 {
+        let raw = std::array::from_fn::<_, 8, _>(|_| draw(&mut random));
+        let operation = apply_operation(&mut messages, &mut next_id, &mut viewport, raw);
+        let current = target(&messages, viewport.0);
+        let prepared = incremental
+            .prepare_element_incremental(&current, previous.as_ref(), viewport.0, viewport.1)
+            .unwrap_or_else(|error| panic!("seed={seed:#018x} state={random:#018x} step={step} raw={raw:?} normalized={operation}: {error}"));
+        let full = LayoutEngine::new()
+            .prepare_element_incremental(&current, None, viewport.0, viewport.1)
+            .unwrap_or_else(|error| panic!("full seed={seed:#018x} state={random:#018x} step={step} raw={raw:?} normalized={operation}: {error}"));
+        if let Some(difference) = first_snapshot_difference(full.snapshot(), prepared.snapshot()) {
+            panic!(
+                "seed={seed:#018x} state={random:#018x} step={step} raw={raw:?} normalized={operation} {difference}"
+            );
+        }
+        let report = prepared.snapshot_report();
+        assert_eq!(
+            report.work_counters().snapshot_nodes(),
+            prepared.snapshot().nodes().len() as u64
+        );
+        assert_eq!(
+            report.work_counters().visited_nodes(),
+            prepared.snapshot().nodes().len() as u64
+        );
+        assert_eq!(report.work_counters().rebuild_count(), 0);
+        assert_eq!(
+            full.snapshot_report().strategy(),
+            SnapshotBuildStrategy::InitialFull
+        );
+        assert_eq!(full.snapshot_report().work_counters().rebuild_count(), 0);
+        assert_eq!(
+            full.snapshot_report().work_counters().mutated_nodes(),
+            full.snapshot().nodes().len() as u64
+        );
+        let item = StepEvidence {
+            snapshot: prepared.snapshot().clone(),
+            work: report.work_counters(),
+            operation,
+            raw,
+            state_after: random,
+            viewport,
+            cache_hits: report.cache_hits(),
+        };
+        let (next, _) = prepared.commit(&mut incremental);
+        previous = Some(next);
+        evidence.push(item);
+    }
+    assert!(
+        evidence.iter().any(|step| step.cache_hits > 0),
+        "seed={seed:#018x} never observed the real FlowCache hit seam"
+    );
+    evidence
 }
 
 #[test]
@@ -39,83 +452,266 @@ fn seeded_operations_match_after_every_step() {
         0xffff_ffff_ffff_ffff,
     ];
     for seed in SEEDS {
-        let mut random = seed;
-        let mut messages = vec![Message {
-            id: 1,
-            text: "initial".to_owned(),
-            padded: false,
-        }];
-        let mut next_id = 2_u64;
-        let mut incremental = LayoutEngine::new();
-        let mut previous = None;
-        for step in 0..64 {
-            let draws = std::array::from_fn::<_, 8, _>(|_| draw(&mut random));
-            let operation = draws[0] % 100;
-            let selected = (draws[1] as usize) % messages.len();
-            match operation {
-                0..=9 => {}
-                10..=24 => messages[selected].text.push_str(match draws[4] % 4 {
-                    0 => " delta",
-                    1 => "世界",
-                    2 => "🙂",
-                    _ => "e\u{301}",
-                }),
-                25..=34 => messages[selected].padded = !messages[selected].padded,
-                35..=49 => {
-                    messages.push(Message {
-                        id: next_id,
-                        text: format!("append-{}", draws[4] % 1000),
-                        padded: false,
-                    });
-                    next_id += 1;
-                }
-                50..=59 => {
-                    let index = (draws[3] as usize) % (messages.len() + 1);
-                    messages.insert(
-                        index,
-                        Message {
-                            id: next_id,
-                            text: format!("insert-{}", draws[4] % 1000),
-                            padded: false,
-                        },
-                    );
-                    next_id += 1;
-                }
-                60..=69 if messages.len() > 1 => {
-                    messages.remove(selected);
-                }
-                70..=79 => {
-                    messages[selected] = Message {
-                        id: next_id,
-                        text: format!("replace-{}", draws[4] % 1000),
-                        padded: false,
-                    };
-                    next_id += 1;
-                }
-                _ if messages.len() > 1 => {
-                    let other = (draws[3] as usize) % messages.len();
-                    messages.swap(selected, other);
-                }
-                _ => {}
+        let first = run_seed(seed);
+        let replay = run_seed(seed);
+        assert_eq!(first.len(), 64);
+        for (step, (expected, actual)) in first.iter().zip(&replay).enumerate() {
+            if expected.snapshot != actual.snapshot
+                || expected.work != actual.work
+                || expected.operation != actual.operation
+                || expected.raw != actual.raw
+                || expected.state_after != actual.state_after
+                || expected.viewport != actual.viewport
+                || expected.cache_hits != actual.cache_hits
+            {
+                panic!(
+                    "replay first difference seed={seed:#018x} step={step} expected_state={:#018x} actual_state={:#018x} expected_raw={:?} actual_raw={:?} expected_operation={} actual_operation={} expected_work={:?} actual_work={:?} snapshot_difference={}",
+                    expected.state_after,
+                    actual.state_after,
+                    expected.raw,
+                    actual.raw,
+                    expected.operation,
+                    actual.operation,
+                    expected.work,
+                    actual.work,
+                    first_snapshot_difference(&expected.snapshot, &actual.snapshot)
+                        .unwrap_or_else(|| "none".to_owned())
+                );
             }
-
-            let width = 8 + (draws[5] % 25) as u16;
-            let height = 4 + (draws[6] % 12) as u16;
-            let mut current = target(&messages);
-            current.style.width = Dimension::Points(f32::from(width));
-            let prepared = incremental
-                .prepare_element_incremental(&current, previous.as_ref(), width, height)
-                .unwrap_or_else(|error| panic!("seed={seed:#x} step={step}: {error}"));
-            let full = LayoutEngine::new()
-                .prepare_element_incremental(&current, None, width, height)
-                .unwrap();
-            assert_eq!(
-                prepared.snapshot(),
-                full.snapshot(),
-                "seed={seed:#x} step={step} operation={operation}"
-            );
-            let (next, _) = prepared.commit(&mut incremental);
-            previous = Some(next);
         }
     }
+}
+
+#[test]
+fn snapshot_divergence_diagnostic_names_first_identity_field_and_values() {
+    let messages = vec![Message {
+        id: 1,
+        parent: 0,
+        order: 0,
+        text: "diagnostic".to_owned(),
+        padded: false,
+        scroll_x: 0,
+    }];
+    let full_target = target(&messages, 12);
+    let mut narrower_target = target(&messages, 12);
+    narrower_target.style.width = Dimension::Points(8.0);
+    let full = LayoutEngine::new()
+        .prepare_element_incremental(&full_target, None, 12, 4)
+        .unwrap()
+        .snapshot()
+        .clone();
+    let incremental = LayoutEngine::new()
+        .prepare_element_incremental(&narrower_target, None, 12, 4)
+        .unwrap()
+        .snapshot()
+        .clone();
+    let diagnostic = first_snapshot_difference(&full, &incremental)
+        .expect("different cell snapshots must report the first exact field");
+    assert!(diagnostic.contains("identity="));
+    assert!(diagnostic.contains("field=border_bounds"));
+    assert!(diagnostic.contains("full=CellRect"));
+    assert!(diagnostic.contains("incremental=CellRect"));
+
+    let source_a = vec![Message {
+        text: "same-size-A\u{1b}\u{85}".to_owned(),
+        ..messages[0].clone()
+    }];
+    let source_b = vec![Message {
+        text: "same-size-B\u{1b}\u{85}".to_owned(),
+        ..messages[0].clone()
+    }];
+    let source_a_target = target(&source_a, 20);
+    let mut source_b_target = target(&source_b, 20);
+    source_b_target
+        .children
+        .iter_mut()
+        .next()
+        .expect("diagnostic branch")
+        .children
+        .iter_mut()
+        .next()
+        .expect("diagnostic text")
+        .style
+        .bold = true;
+    let source_a = full_snapshot_for_diagnostic(&source_a_target, 20, 4);
+    let source_b = full_snapshot_for_diagnostic(&source_b_target, 20, 4);
+    let flow_a = source_a
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("first fixture has a text flow");
+    let flow_b = source_b
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("second fixture has a text flow");
+    assert_eq!(flow_a.max_width(), flow_b.max_width());
+    assert_eq!(
+        flow_a.width_policy_revision(),
+        flow_b.width_policy_revision()
+    );
+    assert_eq!(flow_a.logical_row_count(), flow_b.logical_row_count());
+    assert_ne!(flow_a, flow_b, "complete TextFlow semantics must differ");
+    assert_eq!(flow_a.first_difference_diagnostic(flow_a), None);
+    assert_eq!(format!("{flow_a:?}"), "TextFlowSemanticStamp(<semantic>)");
+    assert_eq!(
+        format!("{flow_a:?}"),
+        format!("{flow_b:?}"),
+        "redacted Debug equality must not be mistaken for semantic equality"
+    );
+    let flow_diagnostic = first_snapshot_difference(&source_a, &source_b)
+        .expect("complete TextFlow equality must detect a source-only change");
+    assert!(flow_diagnostic.contains("identity=snapshot:"));
+    assert!(flow_diagnostic.contains(
+        "field=text_flow path=text_flow.rows[0].byte[10] full_len=17 incremental_len=17 full=0x41 incremental=0x42"
+    ), "{flow_diagnostic}");
+    assert!(!flow_diagnostic.contains("same-size-A"));
+    assert!(!flow_diagnostic.contains("same-size-B"));
+    assert!(!flow_diagnostic.chars().any(char::is_control));
+    assert!(flow_diagnostic.len() <= 192);
+
+    let mut style_target = source_a_target.clone();
+    style_target
+        .children
+        .iter_mut()
+        .next()
+        .expect("style diagnostic branch")
+        .children
+        .iter_mut()
+        .next()
+        .expect("style diagnostic text")
+        .style
+        .bold = true;
+    let style_snapshot = full_snapshot_for_diagnostic(&style_target, 20, 4);
+    let style_diagnostic = first_snapshot_difference(&source_a, &style_snapshot)
+        .expect("a style-only TextFlow difference must name its exact field");
+    assert!(style_diagnostic.contains(
+        "field=text_flow path=text_flow.logical_rows[0].runs[0].style.bold full=false incremental=true"
+    ));
+    assert!(!style_diagnostic.chars().any(char::is_control));
+    assert!(style_diagnostic.len() <= 192);
+
+    let control_a = vec![Message {
+        text: "same-prefix\u{1b}\u{85}".to_owned(),
+        ..messages[0].clone()
+    }];
+    let control_b = vec![Message {
+        text: "same-prefix\u{1c}\u{85}".to_owned(),
+        ..messages[0].clone()
+    }];
+    let control_a = full_snapshot_for_diagnostic(&target(&control_a, 20), 20, 4);
+    let control_b = full_snapshot_for_diagnostic(&target(&control_b, 20), 20, 4);
+    let control_diagnostic = first_snapshot_difference(&control_a, &control_b)
+        .expect("render-equivalent hostile source bytes must remain semantically distinguishable");
+    assert!(control_diagnostic.contains(
+        "field=text_flow path=text_flow.rows[0].byte[13] full_len=17 incremental_len=17 full=0x9b incremental=0x9c"
+    ), "{control_diagnostic}");
+    assert!(!control_diagnostic.contains("same-prefix"));
+    assert!(!control_diagnostic.chars().any(char::is_control));
+    assert!(control_diagnostic.len() <= 224);
+
+    let line_a = vec![Message {
+        text: "shared-line".to_owned(),
+        ..messages[0].clone()
+    }];
+    let line_b = vec![Message {
+        text: "shared-line\nsecond-line".to_owned(),
+        ..messages[0].clone()
+    }];
+    let line_a = full_snapshot_for_diagnostic(&target(&line_a, 20), 20, 4);
+    let line_b = full_snapshot_for_diagnostic(&target(&line_b, 20), 20, 4);
+    let line_a = line_a
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("single-line fixture has a text flow");
+    let line_b = line_b
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("two-line fixture has a text flow");
+    let collection_diagnostic = line_a
+        .first_difference_diagnostic(line_b)
+        .expect("a TextFlow collection length mismatch must identify its first missing index");
+    assert!(
+        collection_diagnostic.contains(
+            "path=text_flow.rows[1] full_len=1 incremental_len=2 full=missing incremental=present"
+        ),
+        "{collection_diagnostic}"
+    );
+    assert!(!collection_diagnostic.chars().any(char::is_control));
+    assert!(collection_diagnostic.len() <= 224);
+
+    let flow_with_row_gap = |value: f32| {
+        let mut target = target(&messages, 20);
+        target
+            .children
+            .iter_mut()
+            .next()
+            .expect("float diagnostic branch")
+            .children
+            .iter_mut()
+            .next()
+            .expect("float diagnostic text")
+            .style
+            .row_gap = Some(value);
+        full_snapshot_for_diagnostic(&target, 20, 4)
+    };
+    let finite_a = flow_with_row_gap(1.0);
+    let finite_b = flow_with_row_gap(2.0);
+    let finite_a = finite_a
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("finite fixture A has a text flow");
+    let finite_b = finite_b
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("finite fixture B has a text flow");
+    assert_eq!(
+        finite_a.first_difference_diagnostic(finite_b).as_deref(),
+        Some(
+            "path=text_flow.logical_rows[0].runs[0].style.row_gap \
+             full=1.0/bits:0x3f800000 incremental=2.0/bits:0x40000000"
+        )
+    );
+
+    let infinite_a = flow_with_row_gap(f32::INFINITY);
+    let infinite_b = flow_with_row_gap(f32::NEG_INFINITY);
+    let infinite_a = infinite_a
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("positive-infinity fixture has a text flow");
+    let infinite_b = infinite_b
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("negative-infinity fixture has a text flow");
+    assert_eq!(
+        infinite_a
+            .first_difference_diagnostic(infinite_b)
+            .as_deref(),
+        Some(
+            "path=text_flow.logical_rows[0].runs[0].style.row_gap \
+             full=inf/bits:0x7f800000 incremental=-inf/bits:0xff800000"
+        )
+    );
+
+    let nan_a_value = f32::from_bits(0x7fc0_0001);
+    let nan_b_value = f32::from_bits(0x7fc0_0002);
+    assert_ne!(nan_a_value.to_bits(), nan_b_value.to_bits());
+    let nan_a = flow_with_row_gap(nan_a_value);
+    let nan_b = flow_with_row_gap(nan_b_value);
+    let nan_a = nan_a
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("NaN payload fixture A has a text flow");
+    let nan_b = nan_b
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("NaN payload fixture B has a text flow");
+    assert_eq!(nan_a, nan_b, "Style semantics equate all NaN payloads");
+    assert_eq!(nan_a.first_difference_diagnostic(nan_b), None);
+}
+
+fn full_snapshot_for_diagnostic(target: &Element, width: u16, height: u16) -> LayoutSnapshot {
+    LayoutEngine::new()
+        .prepare_element_incremental(target, None, width, height)
+        .expect("diagnostic fixture builds")
+        .snapshot()
+        .clone()
 }

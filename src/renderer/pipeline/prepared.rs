@@ -4,35 +4,31 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::core::{Display, Element, ElementType, VNode};
 use crate::layout::{
-    BoundPreparedLayoutFrame, CheckedIncrementalLayoutReport, CheckedLayoutSnapshot,
-    FullRebuildError, IncrementalLayoutError, LayoutEngine, LayoutSnapshotError,
-    LegacyLayoutSnapshotError, PreparedLayoutCommitError, PreparedLayoutFrame,
-    PreparedSnapshotFrame, RebuildFailure, TransactionalLayoutError,
+    Axis, BoundPreparedLayoutFrame, CheckedIncrementalLayoutReport, FullRebuildError,
+    IncrementalLayoutError, LayoutEngine, LayoutSnapshotError, LegacyLayoutSnapshotError,
+    PreparedLayoutCommitError, PreparedLayoutFrame, PreparedSnapshotFrame, RebuildFailure,
+    SnapshotIdentity, TransactionalLayoutError,
 };
 use crate::reconciler::{ScopedNodeIdentity, SiblingIdentity};
 use crate::renderer::{
     CheckedRenderError, DynamicFrameError, LayoutRenderError, Output, RecoveredSnapshotRenderError,
     SnapshotRenderError, TextCoordinateError, TextRenderError, TransactionalFrameError,
-    try_render_element_snapshot_checked,
+    checked_output_extent, try_render_element_snapshot_checked,
 };
-use crate::runtime::RuntimeContext;
+use crate::runtime::{MeasurementPublicationError, PreparedMeasurementPublication, RuntimeContext};
 
 use super::RenderPipeline;
 
 pub(crate) struct PreparedDynamicFrame {
     layout: PreparedLayoutFrame,
     rendered: String,
-    measurements: CheckedLayoutSnapshot,
-    raw_node_candidates: HashMap<SiblingIdentity, Vec<ScopedNodeIdentity>>,
-    key_aliases: HashMap<String, Vec<(ScopedNodeIdentity, SiblingIdentity)>>,
+    measurements: PreparedMeasurementPublication,
 }
 
 pub(crate) struct BoundPreparedDynamicFrame<'a> {
     layout: BoundPreparedLayoutFrame<'a>,
     rendered: String,
-    measurements: CheckedLayoutSnapshot,
-    raw_node_candidates: HashMap<SiblingIdentity, Vec<ScopedNodeIdentity>>,
-    key_aliases: HashMap<String, Vec<(ScopedNodeIdentity, SiblingIdentity)>>,
+    measurements: PreparedMeasurementPublication,
 }
 
 impl PreparedDynamicFrame {
@@ -77,8 +73,6 @@ impl PreparedDynamicFrame {
             layout: self.layout.bind(layout_engine)?,
             rendered: self.rendered,
             measurements: self.measurements,
-            raw_node_candidates: self.raw_node_candidates,
-            key_aliases: self.key_aliases,
         })
     }
 }
@@ -90,13 +84,7 @@ impl BoundPreparedDynamicFrame<'_> {
         previous_vnode: &mut Option<VNode>,
     ) -> String {
         let (current_vnode, _) = self.layout.commit();
-        runtime_context.set_measure_layouts_with_scoped_keys(
-            self.measurements.element,
-            self.measurements.scoped_vnode,
-            self.measurements.vnode,
-            self.raw_node_candidates,
-            self.key_aliases,
-        );
+        runtime_context.publish_measurements(self.measurements);
         *previous_vnode = Some(current_vnode);
         self.rendered
     }
@@ -138,12 +126,25 @@ impl RenderPipeline {
             .prepare_element_incremental(dynamic_root, previous_vnode, width, height)
             .map_err(TransactionalFrameError::Transaction)?;
         let candidate = layout.engine();
-        let measurements = candidate
+        let raw_measurements = candidate
             .try_get_snapshot_measurements(layout.prepared_snapshot())
             .map_err(snapshot_error)?;
         let raw_node_candidates = candidate.raw_vnode_identity_candidates();
         let mut key_aliases = HashMap::new();
         collect_key_aliases(dynamic_root, candidate, &mut key_aliases, true)?;
+        let measurements = RuntimeContext::prepare_measurement_publication(
+            raw_measurements,
+            raw_node_candidates,
+            key_aliases,
+        )
+        .map_err(|MeasurementPublicationError { identity, source }| {
+            TransactionalFrameError::Render(CheckedRenderError::Snapshot(
+                SnapshotRenderError::Output {
+                    identity: SnapshotIdentity::from_scoped(identity),
+                    source,
+                },
+            ))
+        })?;
 
         if dynamic_root.style.display == Display::None
             || dynamic_root.element_type == ElementType::VirtualText
@@ -152,17 +153,16 @@ impl RenderPipeline {
                 layout,
                 rendered: String::new(),
                 measurements,
-                raw_node_candidates,
-                key_aliases,
             });
         }
         let root_bounds = layout.snapshot().root().border_bounds();
-        let content_width = u16::try_from(root_bounds.width().max(1))
-            .unwrap_or(width)
-            .min(width);
-        let render_height = u16::try_from(root_bounds.height().max(1))
-            .unwrap_or(height)
-            .min(height);
+        let root_identity = layout.snapshot().root().identity();
+        let content_width =
+            checked_output_extent(root_identity, Axis::X, root_bounds.width(), Some(width))
+                .map_err(TransactionalFrameError::Render)?;
+        let render_height =
+            checked_output_extent(root_identity, Axis::Y, root_bounds.height(), Some(height))
+                .map_err(TransactionalFrameError::Render)?;
         let mut output = Output::new(content_width, render_height);
         let recovered_incremental = match layout.report() {
             CheckedIncrementalLayoutReport::RecoveredFullRebuild {
@@ -194,8 +194,6 @@ impl RenderPipeline {
             layout,
             rendered: output.render(),
             measurements,
-            raw_node_candidates,
-            key_aliases,
         })
     }
 }
@@ -265,12 +263,17 @@ pub(super) fn legacy_dynamic_error(
         TransactionalFrameError::Render(CheckedRenderError::Layout(
             LayoutRenderError::LayoutLookup(source),
         )) => DynamicFrameError::LegacyLookup(source),
-        TransactionalFrameError::Transaction(TransactionalLayoutError::Snapshot(
-            LayoutSnapshotError::NonFiniteGeometry { .. },
-        )) => DynamicFrameError::Text(TextRenderError::coordinate(
-            root_element_id,
-            TextCoordinateError::NonFinite,
-        )),
+        TransactionalFrameError::Transaction(TransactionalLayoutError::Snapshot(source))
+            if matches!(
+                source.source_error(),
+                LayoutSnapshotError::NonFiniteGeometry { .. }
+            ) =>
+        {
+            DynamicFrameError::Text(TextRenderError::coordinate(
+                root_element_id,
+                TextCoordinateError::NonFinite,
+            ))
+        }
         TransactionalFrameError::Transaction(TransactionalLayoutError::RecoveredSnapshot(
             source,
         )) if matches!(
