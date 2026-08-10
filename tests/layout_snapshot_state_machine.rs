@@ -607,6 +607,105 @@ fn snapshot_divergence_diagnostic_names_first_identity_field_and_values() {
     assert!(!control_diagnostic.contains("same-prefix"));
     assert!(!control_diagnostic.chars().any(char::is_control));
     assert!(control_diagnostic.len() <= 224);
+
+    let line_a = vec![Message {
+        text: "shared-line".to_owned(),
+        ..messages[0].clone()
+    }];
+    let line_b = vec![Message {
+        text: "shared-line\nsecond-line".to_owned(),
+        ..messages[0].clone()
+    }];
+    let line_a = full_snapshot_for_diagnostic(&target(&line_a, 20), 20, 4);
+    let line_b = full_snapshot_for_diagnostic(&target(&line_b, 20), 20, 4);
+    let line_a = line_a
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("single-line fixture has a text flow");
+    let line_b = line_b
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("two-line fixture has a text flow");
+    let collection_diagnostic = line_a
+        .first_difference_diagnostic(line_b)
+        .expect("a TextFlow collection length mismatch must identify its first missing index");
+    assert!(
+        collection_diagnostic.contains(
+            "path=text_flow.rows[1] full_len=1 incremental_len=2 full=missing incremental=present"
+        ),
+        "{collection_diagnostic}"
+    );
+    assert!(!collection_diagnostic.chars().any(char::is_control));
+    assert!(collection_diagnostic.len() <= 224);
+
+    let flow_with_row_gap = |value: f32| {
+        let mut target = target(&messages, 20);
+        target
+            .children
+            .iter_mut()
+            .next()
+            .expect("float diagnostic branch")
+            .children
+            .iter_mut()
+            .next()
+            .expect("float diagnostic text")
+            .style
+            .row_gap = Some(value);
+        full_snapshot_for_diagnostic(&target, 20, 4)
+    };
+    let finite_a = flow_with_row_gap(1.0);
+    let finite_b = flow_with_row_gap(2.0);
+    let finite_a = finite_a
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("finite fixture A has a text flow");
+    let finite_b = finite_b
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("finite fixture B has a text flow");
+    assert_eq!(
+        finite_a.first_difference_diagnostic(finite_b).as_deref(),
+        Some(
+            "path=text_flow.logical_rows[0].runs[0].style.row_gap \
+             full=1.0/bits:0x3f800000 incremental=2.0/bits:0x40000000"
+        )
+    );
+
+    let infinite_a = flow_with_row_gap(f32::INFINITY);
+    let infinite_b = flow_with_row_gap(f32::NEG_INFINITY);
+    let infinite_a = infinite_a
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("positive-infinity fixture has a text flow");
+    let infinite_b = infinite_b
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("negative-infinity fixture has a text flow");
+    assert_eq!(
+        infinite_a
+            .first_difference_diagnostic(infinite_b)
+            .as_deref(),
+        Some(
+            "path=text_flow.logical_rows[0].runs[0].style.row_gap \
+             full=inf/bits:0x7f800000 incremental=-inf/bits:0xff800000"
+        )
+    );
+
+    let nan_a_value = f32::from_bits(0x7fc0_0001);
+    let nan_b_value = f32::from_bits(0x7fc0_0002);
+    assert_ne!(nan_a_value.to_bits(), nan_b_value.to_bits());
+    let nan_a = flow_with_row_gap(nan_a_value);
+    let nan_b = flow_with_row_gap(nan_b_value);
+    let nan_a = nan_a
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("NaN payload fixture A has a text flow");
+    let nan_b = nan_b
+        .nodes()
+        .find_map(|node| node.text_flow())
+        .expect("NaN payload fixture B has a text flow");
+    assert_eq!(nan_a, nan_b, "Style semantics equate all NaN payloads");
+    assert_eq!(nan_a.first_difference_diagnostic(nan_b), None);
 }
 
 fn full_snapshot_for_diagnostic(target: &Element, width: u16, height: u16) -> LayoutSnapshot {

@@ -51,11 +51,16 @@ benchmark workload matrix、baseline artifact、promotion 流程与回归门已�
     `src/layout/engine/patch_error/snapshot_failure.rs`、`src/layout/engine/patching.rs`、
     `src/layout/engine/snapshot.rs`、`src/layout/engine/snapshot/tests.rs`、
     `src/layout/engine/text_flow_bridge.rs`、`src/layout/engine/text_flow_bridge/tests.rs`、
+    `src/layout/text_flow.rs`、`src/layout/text_flow/semantic_difference.rs`、
     `src/layout/engine/transaction.rs`、`src/layout/engine/transaction/tests.rs`、
     `tests/coordinate_identity.rs`、`tests/layout_error_paths.rs`、
     `tests/layout_snapshot_parity.rs`、`tests/layout_snapshot_state_machine.rs`；初建并独占
     `tests/layout_snapshot_error_paths.rs`。这些是`59993965..HEAD`实际layout/supporting delta；
     不写renderer/runtime/bench。
+  - GH-58 boundary/handoff exception: T3只因B-014 exact diagnostic需要，在上述两个
+    `text_flow`路径增加基于既有完整`TextFlow`语义的crate-private逐字段诊断；不修改GH-58
+    public layout/measurement、构建、cache或Unicode语义，也不取得GH-58的一般ownership。
+    T3 checkpoint后这两个路径冻结，不向T4/T6移交写权限。
   - Covers: B-001, B-002, B-003, B-004, B-005, B-006, B-007, B-008, B-009, B-010, B-011, B-012, B-013, B-014, B-015, B-017, B-018, B-019, B-020, B-021, B-023。
   - Handoff: 向T4交付真实GH60 wrapper组合、prepared snapshot/report/error与current-frame
     alias API；产出 per-frame read-only deterministic work counters

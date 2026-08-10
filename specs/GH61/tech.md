@@ -147,6 +147,14 @@ wrap/tab/ellipsis/Unicode policy revision 的语义。若 GH-58 merged实现只�
 generation，则 GH-61 新增由完整 cache identity 与 logical result equality支持的 semantic
 stamp；hash只能作为查找加速，碰撞时仍逐字段比较，不能单独判等。
 
+GH-58 ownership boundary保持不变：T3可在`src/layout/text_flow.rs`与
+`src/layout/text_flow/semantic_difference.rs`增加仅供GH-61 stamp调用的crate-private、
+逐字段semantic diagnostic。这是B-014 evidence所需的窄handoff exception，不授权修改
+GH-58 public layout/measurement、flow构建、cache key或Unicode policy；T3 checkpoint后两
+路径冻结，T4/T6只读。B-014同一个mapped selector必须非空覆盖collection length首个缺失
+index、finite与正负Infinity的exact float bits，以及符合`Style::semantically_eq`的不同NaN
+payload相等语义，不得用hash或格式化摘要替代exact值。
+
 #### Closed typed failure algebra
 
 首版 semantic variants 固定如下；实现可将 field/axis/operation拆成同样closed的辅助enum，
