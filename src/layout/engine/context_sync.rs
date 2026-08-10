@@ -4,7 +4,6 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
-
 use taffy::{AvailableSpace, NodeId};
 
 use super::{
@@ -22,7 +21,6 @@ pub(crate) struct CheckedLayoutSnapshot {
     pub(crate) scoped_vnode: HashMap<ScopedNodeIdentity, Layout>,
     pub(crate) vnode: HashMap<SiblingIdentity, Layout>,
 }
-
 #[derive(Debug)]
 pub(crate) enum LegacyLayoutSnapshotError {
     Lookup(LayoutLookupError),
@@ -503,26 +501,6 @@ impl LayoutEngine {
                 .push(identity.clone());
         }
         candidates
-    }
-
-    pub(super) fn staged_clone(&self) -> Self {
-        Self {
-            taffy: self.taffy.clone(),
-            node_map: self.node_map.clone(),
-            element_keys: self.element_keys.clone(),
-            element_scopes: self.element_scopes.clone(),
-            vnode_map: self.vnode_map.clone(),
-            vnode_legacy_keys: self.vnode_legacy_keys.clone(),
-            root_node: self.root_node,
-            last_width: self.last_width,
-            last_height: self.last_height,
-            flow_cache: self.flow_cache.clone(),
-            text_flow_policy: self.text_flow_policy.clone(),
-            current_text_flows: self.current_text_flows.clone(),
-            current_vnode_flows: self.current_vnode_flows.clone(),
-            committed_vnode: self.committed_vnode.clone(),
-            commit_epoch: self.commit_epoch.clone(),
-        }
     }
 
     #[cfg(test)]

@@ -259,6 +259,8 @@ impl LayoutEngine {
         self.current_text_flows.clear();
         self.current_vnode_flows.clear();
         self.committed_vnode = super::Shared::default();
+        self.published_snapshot = None;
+        self.published_snapshot_report = None;
     }
 
     pub(super) fn apply_reconcile_plan(

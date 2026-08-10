@@ -132,6 +132,8 @@ pub struct LayoutEngine {
     current_vnode_flows: Shared<HashMap<ScopedNodeIdentity, Arc<TextFlow>>>,
     committed_vnode: Shared<Option<VNode>>,
     commit_epoch: Arc<()>,
+    published_snapshot: Option<crate::layout::PreparedSnapshotFrame>,
+    published_snapshot_report: Option<crate::layout::SnapshotBuildReport>,
 }
 
 impl LayoutEngine {
@@ -152,6 +154,8 @@ impl LayoutEngine {
             current_vnode_flows: Shared::default(),
             committed_vnode: Shared::default(),
             commit_epoch: Arc::new(()),
+            published_snapshot: None,
+            published_snapshot_report: None,
         }
     }
 
@@ -179,6 +183,8 @@ impl LayoutEngine {
         self.current_text_flows.clear();
         self.current_vnode_flows.clear();
         self.committed_vnode = Shared::default();
+        self.published_snapshot = None;
+        self.published_snapshot_report = None;
         self.build_node(element)
     }
 
@@ -243,9 +249,30 @@ impl LayoutEngine {
         width: u16,
         height: u16,
     ) -> Result<(), TextFlowError> {
-        self.try_compute_interruptible(root, width, height, || false)
+        match self.prepare_element_incremental(root, None, width, height) {
+            Ok(prepared) => {
+                prepared.commit(self);
+                Ok(())
+            }
+            Err(TransactionalLayoutError::Upstream(IncrementalLayoutError::TextFlow(source)))
+            | Err(TransactionalLayoutError::InitialBuild(FullRebuildError {
+                source: RebuildFailure::TextFlow(source),
+                ..
+            })) => Err(source),
+            Err(TransactionalLayoutError::SnapshotBuild(source)) => {
+                if let crate::layout::LayoutSnapshotError::TextFlowRevision { source, .. } =
+                    source.source_error()
+                {
+                    Err(source.clone())
+                } else {
+                    panic!("legacy layout computation cannot represent snapshot failure: {source}")
+                }
+            }
+            Err(error) => panic!("legacy layout computation failed: {error}"),
+        }
     }
 
+    #[cfg(test)]
     pub(crate) fn try_compute_interruptible(
         &mut self,
         root: &Element,
@@ -493,6 +520,8 @@ impl LayoutEngine {
         revision: u16,
     ) {
         self.text_flow_policy.set(tab_stop, ellipsis, revision);
+        self.published_snapshot = None;
+        self.published_snapshot_report = None;
         self.rotate_commit_epoch();
     }
 
@@ -665,6 +694,8 @@ impl LayoutEngine {
         self.taffy
             .set_node_context(node_id, None)
             .expect("fixture node exists in the Taffy backend");
+        self.published_snapshot = None;
+        self.published_snapshot_report = None;
         self.rotate_commit_epoch();
     }
 }

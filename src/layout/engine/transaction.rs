@@ -17,9 +17,12 @@ use super::{
     incremental::ElementVNodeSnapshot,
     patching,
     postcondition::{TargetAliasExpectation, TargetValidationError},
+    snapshot::{
+        SnapshotProducerEvidence, SnapshotTargetPlan, count_plan_mutations, recomputes_since,
+    },
 };
 use crate::layout::{
-    LayoutSnapshot, PreparedSnapshotFrame, SnapshotBuildReport, SnapshotBuildStrategy,
+    LayoutSnapshot, PreparedSnapshotFrame, SnapshotBuildError, SnapshotBuildReport,
 };
 
 /// A fully validated layout frame that has not changed the committed engine.
@@ -39,9 +42,12 @@ pub struct PreparedLayoutFrame {
     state: PreparedLayoutState,
     current_vnode: VNode,
     report: CheckedIncrementalLayoutReport,
-    snapshot: PreparedSnapshotFrame,
-    snapshot_report: SnapshotBuildReport,
     source_epoch: std::sync::Arc<()>,
+}
+
+struct CandidateAttemptError {
+    source: Box<PatchTransactionError>,
+    text_flow_recomputes: Option<u64>,
 }
 
 enum PreparedLayoutState {
@@ -78,17 +84,17 @@ impl PreparedLayoutFrame {
 
     /// Returns the immutable terminal-cell snapshot for this candidate.
     pub fn snapshot(&self) -> &LayoutSnapshot {
-        self.snapshot.snapshot()
+        self.engine().prepared_snapshot().snapshot()
     }
 
     /// Returns non-semantic work evidence for snapshot construction.
     pub fn snapshot_report(&self) -> &SnapshotBuildReport {
-        &self.snapshot_report
+        self.engine().prepared_snapshot_report()
     }
 
     /// Returns the semantic snapshot together with this frame's exact aliases.
     pub fn prepared_snapshot(&self) -> &PreparedSnapshotFrame {
-        &self.snapshot
+        self.engine().prepared_snapshot()
     }
 
     pub(crate) fn engine(&self) -> &LayoutEngine {
@@ -143,6 +149,8 @@ impl PreparedLayoutFrame {
                 committed.element_keys = overlay.element_keys;
                 committed.element_scopes = overlay.element_scopes;
                 committed.current_text_flows = overlay.current_text_flows;
+                committed.published_snapshot = overlay.published_snapshot;
+                committed.published_snapshot_report = overlay.published_snapshot_report;
             }
         }
         committed.rotate_commit_epoch();
@@ -262,28 +270,25 @@ impl LayoutEngine {
             ));
         }
         let current_vnode = snapshot.vnode.clone();
-        plan_initial_tree_in(&current_vnode, &mut identity_arena)
+        let initial_plan = plan_initial_tree_in(&current_vnode, &mut identity_arena)
             .map_err(IncrementalLayoutError::from)?;
         if initial_frame {
-            let candidate = self
+            let mut candidate = self
                 .try_rebuild_snapshot_fresh(&snapshot, &current_vnode, width, height)
                 .map_err(TransactionalLayoutError::InitialBuild)?;
+            let target_plan = SnapshotTargetPlan::new(root, &snapshot, &initial_plan)
+                .map_err(SnapshotBuildError::from_source)
+                .map_err(TransactionalLayoutError::SnapshotBuild)?;
+            let evidence = SnapshotProducerEvidence::initial(recomputes_since(&candidate, self));
             let (prepared_snapshot, snapshot_report) = candidate
-                .try_build_snapshot_for(
-                    root,
-                    width,
-                    height,
-                    SnapshotBuildStrategy::InitialFull,
-                    0,
-                    0,
-                )
-                .map_err(TransactionalLayoutError::Snapshot)?;
+                .try_build_snapshot_for(&target_plan, &evidence)
+                .map_err(SnapshotBuildError::from_failure)
+                .map_err(TransactionalLayoutError::SnapshotBuild)?;
+            candidate.stage_prepared_snapshot(prepared_snapshot, snapshot_report);
             return Ok(PreparedLayoutFrame {
                 state: PreparedLayoutState::Replacement(candidate),
                 current_vnode,
                 report: CheckedIncrementalLayoutReport::InitialFullBuild,
-                snapshot: prepared_snapshot,
-                snapshot_report,
                 source_epoch: self.commit_epoch.clone(),
             });
         }
@@ -309,11 +314,15 @@ impl LayoutEngine {
             .map_err(IncrementalLayoutError::from)?;
 
         let patch_count = plan.patches().len();
+        let mutation_count = count_plan_mutations(&plan);
+        let target_plan = SnapshotTargetPlan::new(root, &snapshot, &plan)
+            .map_err(SnapshotBuildError::from_source)
+            .map_err(TransactionalLayoutError::SnapshotBuild)?;
         let viewport_changed = self.last_width != width || self.last_height != height;
         let unchanged_frame = patch_count == 0
             && !viewport_changed
             && self.text_contexts_match_scoped(&snapshot.text_inputs);
-        let attempt = if unchanged_frame {
+        let attempt: Result<Self, CandidateAttemptError> = if unchanged_frame {
             self.prepare_unchanged_element_candidate(
                 &snapshot,
                 &current_vnode,
@@ -321,12 +330,22 @@ impl LayoutEngine {
                 width,
                 height,
             )
+            .map_err(|source| CandidateAttemptError {
+                source: Box::new(source),
+                text_flow_recomputes: Some(0),
+            })
         } else {
-            self.prepare_changed_element_candidate(&snapshot, &current_vnode, &plan, width, height)
+            self.prepare_changed_element_candidate_with_evidence(
+                &snapshot,
+                &current_vnode,
+                &plan,
+                width,
+                height,
+            )
         };
 
         match attempt {
-            Ok(candidate) => {
+            Ok(mut candidate) => {
                 let report = if patch_count == 0 {
                     if viewport_changed {
                         CheckedIncrementalLayoutReport::RecomputedViewport
@@ -336,16 +355,16 @@ impl LayoutEngine {
                 } else {
                     CheckedIncrementalLayoutReport::Incremental { patch_count }
                 };
+                let evidence = SnapshotProducerEvidence::incremental(
+                    patch_count,
+                    mutation_count,
+                    recomputes_since(&candidate, self),
+                );
                 let (prepared_snapshot, snapshot_report) = candidate
-                    .try_build_snapshot_for(
-                        root,
-                        width,
-                        height,
-                        SnapshotBuildStrategy::Incremental,
-                        patch_count,
-                        0,
-                    )
-                    .map_err(TransactionalLayoutError::Snapshot)?;
+                    .try_build_snapshot_for(&target_plan, &evidence)
+                    .map_err(SnapshotBuildError::from_failure)
+                    .map_err(TransactionalLayoutError::SnapshotBuild)?;
+                candidate.stage_prepared_snapshot(prepared_snapshot, snapshot_report);
                 Ok(PreparedLayoutFrame {
                     state: if unchanged_frame {
                         PreparedLayoutState::AliasOverlay(candidate)
@@ -354,31 +373,31 @@ impl LayoutEngine {
                     },
                     current_vnode,
                     report,
-                    snapshot: prepared_snapshot,
-                    snapshot_report,
                     source_epoch: self.commit_epoch.clone(),
                 })
             }
-            Err(incremental_failure) => {
+            Err(attempt_failure) => {
+                let incremental_failure = *attempt_failure.source;
                 match self.try_rebuild_snapshot_fresh(&snapshot, &current_vnode, width, height) {
-                    Ok(rebuilt) => {
+                    Ok(mut rebuilt) => {
+                        let evidence = SnapshotProducerEvidence::recovered(
+                            patch_count,
+                            incremental_failure.clone(),
+                            mutation_count,
+                            attempt_failure.text_flow_recomputes,
+                            recomputes_since(&rebuilt, self),
+                        );
                         let (prepared_snapshot, snapshot_report) = rebuilt
-                            .try_build_snapshot_for(
-                                root,
-                                width,
-                                height,
-                                SnapshotBuildStrategy::RecoveredFull,
-                                patch_count,
-                                1,
-                            )
+                            .try_build_snapshot_for(&target_plan, &evidence)
                             .map_err(|snapshot| {
                                 TransactionalLayoutError::RecoveredSnapshot(
                                     RecoveredSnapshotError::new(
                                         incremental_failure.clone(),
-                                        snapshot,
+                                        SnapshotBuildError::from_failure(snapshot),
                                     ),
                                 )
                             })?;
+                        rebuilt.stage_prepared_snapshot(prepared_snapshot, snapshot_report);
                         Ok(PreparedLayoutFrame {
                             state: PreparedLayoutState::Replacement(rebuilt),
                             current_vnode,
@@ -386,8 +405,6 @@ impl LayoutEngine {
                                 patch_count,
                                 incremental_failure,
                             },
-                            snapshot: prepared_snapshot,
-                            snapshot_report,
                             source_epoch: self.commit_epoch.clone(),
                         })
                     }
@@ -418,12 +435,14 @@ impl LayoutEngine {
             root_node: self.root_node,
             last_width: self.last_width,
             last_height: self.last_height,
-            flow_cache: Default::default(),
+            flow_cache: self.flow_cache.clone(),
             text_flow_policy: self.text_flow_policy.clone(),
             current_text_flows: std::collections::HashMap::new(),
             current_vnode_flows: self.current_vnode_flows.clone(),
             committed_vnode: self.committed_vnode.clone(),
             commit_epoch: self.commit_epoch.clone(),
+            published_snapshot: self.published_snapshot.clone(),
+            published_snapshot_report: self.published_snapshot_report.clone(),
         };
         candidate
             .try_publish_noop_element_aliases(snapshot)
@@ -446,6 +465,7 @@ impl LayoutEngine {
         Ok(candidate)
     }
 
+    #[cfg(test)]
     fn prepare_changed_element_candidate(
         &self,
         snapshot: &ElementVNodeSnapshot,
@@ -454,39 +474,60 @@ impl LayoutEngine {
         width: u16,
         height: u16,
     ) -> Result<Self, PatchTransactionError> {
+        self.prepare_changed_element_candidate_with_evidence(snapshot, target, plan, width, height)
+            .map_err(|failure| *failure.source)
+    }
+
+    fn prepare_changed_element_candidate_with_evidence(
+        &self,
+        snapshot: &ElementVNodeSnapshot,
+        target: &VNode,
+        plan: &ReconcilePlan,
+        width: u16,
+        height: u16,
+    ) -> Result<Self, CandidateAttemptError> {
         let mut candidate = self.staged_clone();
         candidate.last_width = width;
         candidate.last_height = height;
         let layout_origins = patching::LayoutPatchOrigins::for_plan(&candidate, plan);
-        candidate.apply_reconcile_plan(plan).map_err(|source| {
-            patching::transaction_error_for_plan(plan, &layout_origins, source)
-        })?;
-        candidate
-            .try_sync_text_contexts(&snapshot.text_inputs)
-            .map_err(|source| context_sync_error(plan, &candidate, &layout_origins, source))?;
-        candidate
-            .try_sync_element_node_map_scoped(snapshot)
-            .map_err(|source| {
-                patching::transaction_stage_error(
-                    plan,
-                    PatchStage::VerifyPostcondition,
-                    PatchTransactionCause::Invariant(source),
-                )
+        let attempt = (|| {
+            candidate.apply_reconcile_plan(plan).map_err(|source| {
+                patching::transaction_error_for_plan(plan, &layout_origins, source)
             })?;
-        candidate
-            .run_layout_and_publish_checked(&mut || false)
-            .map_err(|source| layout_run_error(plan, &candidate, &layout_origins, source))?;
-        candidate.committed_vnode = super::Shared::new(Some(target.clone()));
-        candidate
-            .validate_target_exact(
-                plan,
-                TargetAliasExpectation::Element(snapshot),
-                target,
-                width,
-                height,
-            )
-            .map_err(|error| postcondition_error(plan, Some(&layout_origins), error))?;
-        Ok(candidate)
+            candidate
+                .try_sync_text_contexts(&snapshot.text_inputs)
+                .map_err(|source| context_sync_error(plan, &candidate, &layout_origins, source))?;
+            candidate
+                .try_sync_element_node_map_scoped(snapshot)
+                .map_err(|source| {
+                    patching::transaction_stage_error(
+                        plan,
+                        PatchStage::VerifyPostcondition,
+                        PatchTransactionCause::Invariant(source),
+                    )
+                })?;
+            candidate
+                .run_layout_and_publish_checked(&mut || false)
+                .map_err(|source| layout_run_error(plan, &candidate, &layout_origins, source))?;
+            candidate.committed_vnode = super::Shared::new(Some(target.clone()));
+            candidate
+                .validate_target_exact(
+                    plan,
+                    TargetAliasExpectation::Element(snapshot),
+                    target,
+                    width,
+                    height,
+                )
+                .map_err(|error| postcondition_error(plan, Some(&layout_origins), error))?;
+            Ok::<(), PatchTransactionError>(())
+        })();
+        match attempt {
+            Ok(()) => Ok(candidate),
+            Err(source) => Err(CandidateAttemptError {
+                source: Box::new(source),
+                text_flow_recomputes: recomputes_since(&candidate, self),
+            }),
+        }
     }
 }
 

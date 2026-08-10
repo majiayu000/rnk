@@ -271,6 +271,17 @@ pub(super) fn legacy_dynamic_error(
             root_element_id,
             TextCoordinateError::NonFinite,
         )),
+        TransactionalFrameError::Transaction(TransactionalLayoutError::SnapshotBuild(source))
+            if matches!(
+                source.source_error(),
+                LayoutSnapshotError::NonFiniteGeometry { .. }
+            ) =>
+        {
+            DynamicFrameError::Text(TextRenderError::coordinate(
+                root_element_id,
+                TextCoordinateError::NonFinite,
+            ))
+        }
         TransactionalFrameError::Transaction(TransactionalLayoutError::RecoveredSnapshot(
             source,
         )) if matches!(

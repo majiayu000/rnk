@@ -98,12 +98,32 @@ pub(crate) fn rect(
     right: f64,
     bottom: f64,
 ) -> Result<CellRect, LayoutSnapshotError> {
-    Ok(CellRect::checked(
-        edge(identity, Edge::Left, left)?,
-        edge(identity, Edge::Top, top)?,
-        edge(identity, Edge::Right, right)?,
-        edge(identity, Edge::Bottom, bottom)?,
-    ))
+    let left = edge(identity, Edge::Left, left)?;
+    let top = edge(identity, Edge::Top, top)?;
+    let right = edge(identity, Edge::Right, right)?;
+    let bottom = edge(identity, Edge::Bottom, bottom)?;
+    if left > right || i64::from(right) - i64::from(left) > i64::from(i32::MAX) {
+        return Err(LayoutSnapshotError::CellSpanOverflow {
+            identity: identity.clone(),
+            axis: Axis::X,
+            start: left,
+            end: right,
+        });
+    }
+    if top > bottom || i64::from(bottom) - i64::from(top) > i64::from(i32::MAX) {
+        return Err(LayoutSnapshotError::CellSpanOverflow {
+            identity: identity.clone(),
+            axis: Axis::Y,
+            start: top,
+            end: bottom,
+        });
+    }
+    CellRect::checked(left, top, right, bottom).ok_or(LayoutSnapshotError::CellSpanOverflow {
+        identity: identity.clone(),
+        axis: Axis::X,
+        start: left,
+        end: right,
+    })
 }
 
 #[cfg(test)]

@@ -457,6 +457,8 @@ impl LayoutEngine {
             })?;
         let target = resolved.target;
         candidate.committed_vnode = super::Shared::new(Some(target.clone()));
+        candidate.published_snapshot = None;
+        candidate.published_snapshot_report = None;
         candidate
             .validate_target_exact(
                 &resolved.plan,

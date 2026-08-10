@@ -24,15 +24,13 @@ pub use measure::{
     truncate_start, truncate_text, wrap_text,
 };
 pub use snapshot::{
-    ArithmeticOperation, Axis, AxisClip, CellOutputError, CellPoint, CellRect, CellSpan,
-    CellVector, Edge, FrameRevision, GeometryField, LayoutAliasError, LayoutSnapshot,
-    LayoutSnapshotError, PreparedSnapshotFrame, SnapshotBuildReport, SnapshotBuildStrategy,
+    ArithmeticOperation, AttemptedContentBounds, Axis, AxisClip, CellOutputError, CellPoint,
+    CellRect, CellSpan, CellVector, Edge, FrameRevision, GeometryField, LayoutAliasError,
+    LayoutSnapshot, LayoutSnapshotError, PreparedSnapshotFrame, SnapshotAttemptReport,
+    SnapshotBuildError, SnapshotBuildReport, SnapshotBuildStrategy, SnapshotCounterError,
     SnapshotIdentity, SnapshotInvariantError, SnapshotNode, SnapshotNodeIndex,
-    SnapshotTargetMismatchReason, SnapshotWorkCounters, TextFlowSemanticStamp,
-};
-pub(crate) use snapshot::{
-    LayoutSnapshotBuilder, checked_add, checked_extent, checked_finite, checked_subtract,
-    quantize_rect,
+    SnapshotTargetMismatchReason, SnapshotWorkCounterField, SnapshotWorkCounters,
+    TextFlowSemanticStamp,
 };
 pub use text_flow::{
     StyledTextRange, TextFlow, TextFlowCache, TextFlowDiagnostic, TextFlowError, TextFlowInput,

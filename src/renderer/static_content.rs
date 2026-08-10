@@ -50,6 +50,12 @@ impl StaticRenderer {
                         panic!("legacy static renderer cannot represent snapshot error: {source}")
                     })
                 }
+                CheckedRenderError::LayoutBuild(TransactionalLayoutError::SnapshotBuild(
+                    source,
+                )) => legacy_snapshot_coordinate_error(element, source.source_error())
+                    .unwrap_or_else(|| {
+                        panic!("legacy static renderer cannot represent snapshot error: {source}")
+                    }),
                 CheckedRenderError::LayoutBuild(TransactionalLayoutError::RecoveredSnapshot(
                     source,
                 )) => legacy_snapshot_coordinate_error(element, source.snapshot_failure())

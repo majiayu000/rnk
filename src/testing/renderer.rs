@@ -58,6 +58,15 @@ impl TestRenderer {
                 ),
             ),
             Err(crate::renderer::CheckedRenderError::LayoutBuild(
+                TransactionalLayoutError::SnapshotBuild(source),
+            )) => Err(crate::renderer::legacy_snapshot_coordinate_error(
+                element,
+                source.source_error(),
+            )
+            .unwrap_or_else(|| {
+                panic!("legacy test renderer cannot represent snapshot error: {source}")
+            })),
+            Err(crate::renderer::CheckedRenderError::LayoutBuild(
                 TransactionalLayoutError::RecoveredSnapshot(source),
             )) => Err(crate::renderer::legacy_snapshot_coordinate_error(
                 element,
@@ -89,6 +98,15 @@ impl TestRenderer {
                     || panic!("legacy test renderer cannot represent snapshot error: {source}"),
                 ),
             ),
+            Err(crate::renderer::CheckedRenderError::LayoutBuild(
+                TransactionalLayoutError::SnapshotBuild(source),
+            )) => Err(crate::renderer::legacy_snapshot_coordinate_error(
+                element,
+                source.source_error(),
+            )
+            .unwrap_or_else(|| {
+                panic!("legacy test renderer cannot represent snapshot error: {source}")
+            })),
             Err(crate::renderer::CheckedRenderError::LayoutBuild(
                 TransactionalLayoutError::RecoveredSnapshot(source),
             )) => Err(crate::renderer::legacy_snapshot_coordinate_error(

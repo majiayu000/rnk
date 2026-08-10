@@ -127,12 +127,11 @@ impl TextFlowPolicy {
 
 /// Engine-local logical cache with deterministic FIFO eviction.
 ///
-/// Hits compare the complete identity, while the fixed entry limit bounds both
-/// retained history and lookup work. Live frame flows are pinned by NodeId in
-/// `NodeContext`, so history eviction cannot change current publication.
+/// Hits compare complete identity; a fixed limit bounds retained history.
 #[derive(Clone, Default)]
 pub(super) struct FlowCache {
     entries: VecDeque<Arc<TextFlow>>,
+    successful_recomputes: u64,
 }
 
 impl FlowCache {
@@ -141,6 +140,10 @@ impl FlowCache {
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    pub(super) const fn successful_recomputes(&self) -> u64 {
+        self.successful_recomputes
     }
 
     pub(super) fn get_or_compute(
@@ -163,6 +166,10 @@ impl FlowCache {
             options,
             interrupted,
         )?);
+        self.successful_recomputes = self
+            .successful_recomputes
+            .checked_add(1)
+            .ok_or(TextFlowError::ArithmeticOverflow)?;
         if self.entries.len() >= Self::MAX_ENTRIES {
             self.entries.pop_front();
         }
