@@ -311,22 +311,9 @@ pub struct TextFlowSemanticStamp {
     flow: Arc<TextFlow>,
 }
 
-struct TextFlowFingerprintWriter(std::collections::hash_map::DefaultHasher);
-
-impl fmt::Write for TextFlowFingerprintWriter {
-    fn write_str(&mut self, value: &str) -> fmt::Result {
-        self.0.write(value.as_bytes());
-        Ok(())
-    }
-}
-
 impl fmt::Debug for TextFlowSemanticStamp {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let fingerprint = self.semantic_fingerprint()?;
-        write!(
-            formatter,
-            "TextFlowSemanticStamp(<semantic:{fingerprint:016x}>)"
-        )
+        formatter.write_str("TextFlowSemanticStamp(<semantic>)")
     }
 }
 
@@ -334,12 +321,15 @@ impl TextFlowSemanticStamp {
     pub(crate) fn checked(flow: Arc<TextFlow>) -> Self {
         Self { flow }
     }
-    fn semantic_fingerprint(&self) -> Result<u64, fmt::Error> {
-        let mut writer =
-            TextFlowFingerprintWriter(std::collections::hash_map::DefaultHasher::new());
-        writer.0.write(b"rnk.snapshot.text-flow.semantic.v1");
-        fmt::write(&mut writer, format_args!("{:?}", self.flow.as_ref()))?;
-        Ok(writer.0.finish())
+    /// Return the first exact semantic difference without exposing raw text.
+    ///
+    /// String differences are represented by total byte lengths, the first
+    /// differing byte index, and exact hexadecimal byte values (or `missing`
+    /// for a prefix). Scalar and enum differences name their fixed structural
+    /// path and exact values. The diagnostic never embeds source strings, and
+    /// its size is independent of their length. Equal stamps return `None`.
+    pub fn first_difference_diagnostic(&self, other: &Self) -> Option<String> {
+        self.flow.first_semantic_difference(&other.flow)
     }
     /// Maximum content width used to build the flow.
     pub fn max_width(&self) -> usize {

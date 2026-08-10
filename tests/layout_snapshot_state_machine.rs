@@ -102,17 +102,21 @@ fn first_snapshot_difference(
             incremental_node.scroll_transform()
         );
         if full_node.text_flow() != incremental_node.text_flow() {
-            let mut full_value = format!("{:?}", full_node.text_flow());
-            let mut incremental_value = format!("{:?}", incremental_node.text_flow());
-            if full_value == incremental_value {
-                full_value.push_str(":full-collision");
-                incremental_value.push_str(":incremental-collision");
-            }
+            let difference = match (full_node.text_flow(), incremental_node.text_flow()) {
+                (Some(full_flow), Some(incremental_flow)) => full_flow
+                    .first_difference_diagnostic(incremental_flow)
+                    .expect("unequal complete TextFlow semantics must name an exact subfield"),
+                (Some(_), None) => {
+                    "path=text_flow.presence full=present incremental=missing".to_owned()
+                }
+                (None, Some(_)) => {
+                    "path=text_flow.presence full=missing incremental=present".to_owned()
+                }
+                (None, None) => unreachable!("equal absent TextFlow values were filtered above"),
+            };
             return Some(format!(
-                "identity={} field=text_flow full={} incremental={}",
+                "identity={} field=text_flow {difference}",
                 full_node.identity().diagnostic(),
-                full_value,
-                incremental_value
             ));
         }
     }
@@ -546,25 +550,63 @@ fn snapshot_divergence_diagnostic_names_first_identity_field_and_values() {
     );
     assert_eq!(flow_a.logical_row_count(), flow_b.logical_row_count());
     assert_ne!(flow_a, flow_b, "complete TextFlow semantics must differ");
-    let full_fingerprint = format!("{flow_a:?}");
-    let incremental_fingerprint = format!("{flow_b:?}");
-    assert_ne!(full_fingerprint, incremental_fingerprint);
-    assert!(full_fingerprint.starts_with("TextFlowSemanticStamp(<semantic:"));
-    assert!(incremental_fingerprint.starts_with("TextFlowSemanticStamp(<semantic:"));
-    assert!(full_fingerprint.ends_with(">)"));
-    assert!(incremental_fingerprint.ends_with(">)"));
-    assert!(full_fingerprint.len() <= 64);
-    assert!(incremental_fingerprint.len() <= 64);
+    assert_eq!(flow_a.first_difference_diagnostic(flow_a), None);
+    assert_eq!(format!("{flow_a:?}"), "TextFlowSemanticStamp(<semantic>)");
+    assert_eq!(
+        format!("{flow_a:?}"),
+        format!("{flow_b:?}"),
+        "redacted Debug equality must not be mistaken for semantic equality"
+    );
     let flow_diagnostic = first_snapshot_difference(&source_a, &source_b)
         .expect("complete TextFlow equality must detect a source-only change");
     assert!(flow_diagnostic.contains("identity=snapshot:"));
-    assert!(flow_diagnostic.contains("field=text_flow"));
-    assert!(flow_diagnostic.contains(&format!("full=Some({full_fingerprint})")));
-    assert!(flow_diagnostic.contains(&format!("incremental=Some({incremental_fingerprint})")));
+    assert!(flow_diagnostic.contains(
+        "field=text_flow path=text_flow.rows[0].byte[10] full_len=17 incremental_len=17 full=0x41 incremental=0x42"
+    ), "{flow_diagnostic}");
     assert!(!flow_diagnostic.contains("same-size-A"));
     assert!(!flow_diagnostic.contains("same-size-B"));
     assert!(!flow_diagnostic.chars().any(char::is_control));
     assert!(flow_diagnostic.len() <= 192);
+
+    let mut style_target = source_a_target.clone();
+    style_target
+        .children
+        .iter_mut()
+        .next()
+        .expect("style diagnostic branch")
+        .children
+        .iter_mut()
+        .next()
+        .expect("style diagnostic text")
+        .style
+        .bold = true;
+    let style_snapshot = full_snapshot_for_diagnostic(&style_target, 20, 4);
+    let style_diagnostic = first_snapshot_difference(&source_a, &style_snapshot)
+        .expect("a style-only TextFlow difference must name its exact field");
+    assert!(style_diagnostic.contains(
+        "field=text_flow path=text_flow.logical_rows[0].runs[0].style.bold full=false incremental=true"
+    ));
+    assert!(!style_diagnostic.chars().any(char::is_control));
+    assert!(style_diagnostic.len() <= 192);
+
+    let control_a = vec![Message {
+        text: "same-prefix\u{1b}\u{85}".to_owned(),
+        ..messages[0].clone()
+    }];
+    let control_b = vec![Message {
+        text: "same-prefix\u{1c}\u{85}".to_owned(),
+        ..messages[0].clone()
+    }];
+    let control_a = full_snapshot_for_diagnostic(&target(&control_a, 20), 20, 4);
+    let control_b = full_snapshot_for_diagnostic(&target(&control_b, 20), 20, 4);
+    let control_diagnostic = first_snapshot_difference(&control_a, &control_b)
+        .expect("render-equivalent hostile source bytes must remain semantically distinguishable");
+    assert!(control_diagnostic.contains(
+        "field=text_flow path=text_flow.rows[0].byte[13] full_len=17 incremental_len=17 full=0x9b incremental=0x9c"
+    ), "{control_diagnostic}");
+    assert!(!control_diagnostic.contains("same-prefix"));
+    assert!(!control_diagnostic.chars().any(char::is_control));
+    assert!(control_diagnostic.len() <= 224);
 }
 
 fn full_snapshot_for_diagnostic(target: &Element, width: u16, height: u16) -> LayoutSnapshot {
