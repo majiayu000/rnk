@@ -99,6 +99,46 @@ tests, or extension work. They are not the preferred application surface:
 | `golden_test!`, `inline_snapshot!`, `assert_snapshot!` | Experimental test macros | Root-exported test helpers. #27 may revise names, output formats, update behavior, or macro arguments. |
 | `rnk::reconciler` | Hidden internal | Marked `#[doc(hidden)]`; callers should not depend on it. |
 
+## Chat Surface
+
+`rnk::components::chat` is the newest large surface and is graded separately,
+because its parts settled at different times.
+
+The conversation data types and the message-list types are already in the
+prelude. The scrollback and shell types deliberately are not: they are reachable
+only through `rnk::components::chat`, and they should stay there until something
+outside this repository has driven them.
+
+| Surface | Status | Notes |
+| --- | --- | --- |
+| `ChatComposerState`, `ComposerProjection`, `ChatComposerKeyMap`, `handle_key` | Advanced, settled | The draft, its wrapping, its cursor and its key bindings. Used by four examples and covered by grapheme, CJK, emoji and paste tests. Additive keymap actions are expected; existing outcomes should not change meaning. Reached through `rnk::components::chat`. |
+| `ConversationState` and its update/event types | Prelude, settled | Provider-independent conversation data. The update set may grow; applied events and guards are contract. |
+| `ChatMessageView`, `ChatBlockRenderer` | Advanced | Block rendering and custom renderers. Variant and override sets may grow. |
+| `MessageListState` and `message_list::*` | Prelude, advanced | Row-indexed transcript geometry. `MessageMeasureOutcome` and the error enums are `#[non_exhaustive]` and will gain variants. |
+| `scrollback::*` — sinks, identity, ledger, outcomes | Experimental | The commit boundary. `ScrollbackCommitOutcome`, `NotCommittedCause` and `UnknownReason` are `#[non_exhaustive]`; new failure states are expected as more sinks exist. `DurableCommitStore` is the extension point and its contract is deliberately strict. |
+| `InlineChatShell`, `FullscreenChatShell` | Experimental | The lifecycle and layout shells. Both are new; their outcome enums are the part most likely to gain variants, and neither has yet been driven by an application outside this repository. |
+
+Migration posture for the chat surface before `1.0`:
+
+- Outcome and error enums are `#[non_exhaustive]`. Match with a wildcard arm, or
+  accept that a new variant is a compile error rather than a silent misread.
+- A variant will not change meaning in place. If a state's semantics need to
+  change, it gets a new variant and the old one is documented as superseded.
+- `ScrollbackGuarantee` is the one value never to widen silently: a sink that
+  advertises `DurableAtomicIdempotency` is making a crash-safety claim, so any
+  change there is a breaking change with release notes.
+
+### `Message` compatibility
+
+`rnk::components::display::Message` — the standalone status/notification
+component — is unrelated to the chat module and is unaffected by this work. It
+keeps its current constructor and variants, and stays prelude-exported under the
+name `Message`.
+
+`rnk::components::chat::ChatMessage` is a different type, also prelude-exported,
+under its own name. The two coexist in the prelude without shadowing; existing
+code using `Message` needs no change.
+
 Public modules not listed as stable should be treated as pre-1.0 advanced
 interfaces. They can change when the change is needed to stabilize the prelude,
 fix terminal behavior, or complete the maturity spec.

@@ -97,6 +97,10 @@ name = "message_list"
 harness = false
 
 [[bench]]
+name = "chat_scrollback"
+harness = false
+
+[[bench]]
 name = "render"
 harness = false
 

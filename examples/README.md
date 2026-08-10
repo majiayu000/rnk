@@ -32,6 +32,11 @@ These are app-shaped examples that demonstrate larger workflows:
   scrollback.
 - `claude_input_box.rs`: Claude-style input box; the same inline-input shape
   rendered entirely by the component tree.
+- `inline_chat_scrollback.rs`: inline chat committing finished transcript into
+  the terminal's own scrollback, exactly once per message.
+- `fullscreen_chat_shell.rs`: fullscreen chat regions — scrolling transcript,
+  fixed composer, fixed status bar — and what happens when the terminal is too
+  short to hold them.
 - `interactive_demo.rs`: mixed interaction demo.
 - `textarea_demo.rs`: text editing surface.
 - `viewport_demo.rs`: scrollable viewport surface.
@@ -45,12 +50,24 @@ Each chat example was reviewed against GH-68's convergence criteria:
 | `claude_input_box.rs` | Migrated to `ChatComposerState` / `ComposerProjection`; its own input state, cursor arithmetic and wrapping are gone. |
 | `claude_inline_input_box.rs` | Removed. It was byte-identical to `claude_input_box.rs` apart from its own name, so it had no independent purpose. |
 | `glm_chat.rs`, `glm_chat/prompt_box.rs` | Migrated to `ChatComposerState`. Kept as the one example that drives a real model and writes its input box outside the renderer — a shape the component tree does not cover. |
-| `chat.rs` | Kept. Smallest complete chat surface, useful as a starting point. |
-| `rnk_chat.rs` | Kept. Full application shape with sidebar, status and history. |
+| `chat.rs` | Migrated to `ChatComposerState` / `ComposerProjection`. Kept as the smallest complete chat surface. Its `String::pop` backspace and character-counted cursor are gone. |
+| `rnk_chat.rs` | Migrated to `MessageListState` and `ChatComposerState`. Kept as the full application shape with header, status and history. Its `.skip(offset).take(12)` paging and byte-sliced preview are gone. |
+| `inline_chat_scrollback.rs` | Added by #66. Drives `InlineChatShell` end to end: streaming, a repeated terminal event, and a commit into native scrollback. |
+| `fullscreen_chat_shell.rs` | Added by #67. Drives `FullscreenChatShell`: real wrapped row counts, region assignment, resize, and a refused layout. |
 
-`chat.rs` and `rnk_chat.rs` still compose their own transcript layout. Converging
-those onto shared containers needs `InlineChatShell` (#66) and
-`FullscreenChatShell` (#67), which are not implemented yet.
+What no chat example implements for itself any more: Unicode wrapping, visual
+cursor placement, delta concatenation, message height, bottom-follow, or
+scrollback commit. Each is a library concern with its own tests, and each was
+wrong in at least one example before it moved.
+
+Two behaviours are worth naming, because both only misbehave on real input:
+
+- Deletion is by grapheme cluster. `String::pop` removes one `char`, which takes
+  a piece off the end of a ZWJ emoji or a combining sequence and leaves a
+  different character behind.
+- Scrolling is by terminal row. `.skip(n).take(12)` pages by message count, so a
+  four-row paragraph and a one-row acknowledgement move the viewport by the same
+  amount and it never lands where the reader expects.
 
 ## Component Demos
 
