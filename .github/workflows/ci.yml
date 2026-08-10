@@ -106,6 +106,42 @@ jobs:
       - name: Check benchmarks
         run: cargo check --workspace --benches --all-features --locked --verbose
 
+      # The chat surface is large enough that a regression in it disappears into
+      # the full suite's output. Running it as its own step names the failure.
+      - name: Chat gate
+        run: |
+          set -eu
+          cargo test --locked --lib -- components::chat::
+          cargo test --locked \
+            --test chat_composer \
+            --test chat_conversation_contracts \
+            --test chat_message_view \
+            --test chat_message_views \
+            --test chat_targeted_updates \
+            --test message_list_properties \
+            --test message_list_public_api \
+            --test golden_real_apps
+
+      # Built, not just type-checked: an example that compiles but fails to link
+      # is not a runnable example, and these are the ones users copy from.
+      - name: Build chat examples
+        run: |
+          set -eu
+          cargo build --locked --all-features \
+            --example chat \
+            --example rnk_chat \
+            --example claude_input_box \
+            --example inline_chat_scrollback \
+            --example fullscreen_chat_shell
+
+      # Deterministic, no terminal assumptions, and they assert their own
+      # invariants — so a wrong answer fails the build rather than printing one.
+      - name: Run deterministic chat examples
+        run: |
+          set -eu
+          cargo run --locked --all-features --example inline_chat_scrollback > /dev/null
+          cargo run --locked --all-features --example fullscreen_chat_shell > /dev/null
+
       - name: Check package contents
         run: |
           set -eu
