@@ -17,9 +17,12 @@ GH-68 是 GH-57 的最终 hardening child。它不重新设计 GH-61 的布局�
 Inline 生命周期或 GH-67 的 Fullscreen 生命周期，而是在这些依赖完成后，把 examples、
 兼容入口、文档、测试、benchmark、兼容矩阵和 CI 收敛为同一套产品证据。
 
-PR #69（head `2c4720152d43f9507fe1fb43e331a866c683c585`）提供了 GH-57
-架构与验证草案，可作为本规格的搜索证据；该 PR 当前为 parked/draft，不能被描述为已批准
-或已合并的产品合同。
+PR #166 已把 `chat.rs`、`rnk_chat.rs`、quickstart、API stability、example index、独立
+`chat_scrollback` benchmark 和一部分 CI gate 合入 main，但没有完成
+`claude_input_box.rs`、`glm_chat`、统一 golden/harness、`render` benchmark、终端矩阵和严格
+public-example discovery。当前 follow-up 从 exact main
+`e1d987447141b35d8049f8bd8ff89b2015ae87b9` 修复这组已审计的剩余缺口；不得把 #166 的
+部分绿色结果描述为 GH-68 已完整完成。
 
 ## 目标
 
@@ -117,28 +120,30 @@ PR #69（head `2c4720152d43f9507fe1fb43e331a866c683c585`）提供了 GH-57
     `matched=1`、`passed=1`、`ignored=0`；没有匹配、被 ignore、只运行宽泛 workspace tests
     或复用其他 task 的绿色结果均不能替代。benchmark/coverage evidence-dependent exact test
     缺少批准 mode、artifact path、head/base binding 或 digest 时必须 fail closed。
-21. **B-021** pre-edit authorization 使用 `phase=initial`，允许 clean
-    `IMPLEMENTATION_HEAD == BASE_MAIN_SHA` 或 base 为其祖先；任何 current implementation
-    evidence/final verification 必须使用 `phase=finalorigin/main`。
+21. **B-021** post-merge follow-up 的 implementation base 固定为
+    `e1d987447141b35d8049f8bd8ff89b2015ae87b9`。每个 checkpoint 和最终验证必须绑定当前
+    exact head，证明该 base 与 GH-61、GH-66、GH-67 的 merged implementation commits 都是
+    head 的祖先；验证中 head、base 或 worktree clean state 漂移即阻断。不得复用 #166 或前一
+    checkpoint 的旧输出冒充 current-head evidence。
 22. **B-022** 高频 delta、append、prepend、可变高度和连续 resize 交错时，conversation update
     顺序、message identity、visible anchor 与 bottom-follow 必须保持上游合同：用户位于底部时
     自动跟随，主动滚离后保持锚点并显示新内容提示。example 不得通过重排、丢弃或全量重建状态
     掩盖错误。
 23. **B-023** 取消、provider failure、`NotCommitted`、`Unknown`、重复终态、重试和部分完成
     必须保持 typed outcome；未稳定内容不得被标记为成功或产生第二次 confirmed scrollback
-    commit，`Unknownfile + name` 集合必须与 task plan
-    完全相等且逐项 100%。producer/validator 必须在当前 head 实际执行；CI 中
-    `continue-on-error` coverage、视觉录屏、旧 artifact、内嵌样本或其他 task coverage
-    不构成证明。
-26. **B-026** GH-68 实现必须通过可执行、fresh、fail-closed 的 preflight evidence adapter：
-    #61/#66/#67 issue 必须 CLOSED、无 parked，且各自唯一 closing final implementation PR
-    merged、非 draft/parked、所有分页完整并含明确 executable Rust source diff；三个 merge SHA
-    两两不同且都是 implementation head 的祖先；`phase=final` 时必须为严格祖先。GH-68 spec PR 必须以 `main` 为 base、
-    body 仅用非 closing `Refs #68` linkage、changed files exact 等于本 packet 三文件、merged、
-    非 draft/parked，并有绑定 exact head/scope 的 human `APPROVED` review；#68 必须 fresh 带
-    canonical `ready_to_implement` 且无 parked/冲突 readiness labels。adapter/validator 必须
-    全量重验 decisive fields、sets 与 digests；环境变量声明、spec-only dependency、绿色 CI
-    或被 pipeline status 覆盖的失败都不满足门禁。
+    commit，`Unknown` 不得由 example 自动重试。后续成功不得删除先前可见失败或伪造一次无失败
+    历史。
+24. **B-024** provider 凭证只能由应用环境或安全 secret source 提供；缺失凭证必须在发起请求
+    前显式失败。Tool Call 展示不授予执行权限，example 业务动作不得因模型输出自动提升权限；
+    核心 Chat UI、golden 与离线 tests 不得需要真实网络、真实密钥或工具副作用。
+25. **B-025** GH-68 current-head coverage 必须以本 follow-up 实际执行的 coverage 输出绑定
+    exact head/base 与 task plan 中唯一 critical `file + name` set：changed executable lines
+    至少 80%，critical tests 逐项 100% 且 denominator 非零。CI 中 `continue-on-error`、旧
+    artifact、只编译、视觉录屏或其他 task coverage 不构成证明。
+26. **B-026** current base必须包含GH-61、GH-66、GH-67的merged implementation ancestry与
+    PR #166 partial implementation；#68必须保持canonical `ready_to_implement`且无parked/
+    冲突readiness label。follow-up只接受本packet 17-path closed scope和DCO checkpoint chain；
+    绿色CI、旧SpecRail状态或环境变量声明不能扩张写权限，也不能替代exact-head human review。
 27. **B-027** 终端能力不可用时只能进入文档化的显式降级路径并向用户说明能力差异；数据丢失、
     消息顺序错误、布局/anchor 错误、重复提交、终端恢复失败或无法判定的副作用不得降级为
     看似成功的输出。
@@ -178,6 +183,8 @@ PR #69（head `2c4720152d43f9507fe1fb43e331a866c683c585`）提供了 GH-57
 
 ## Human Gates
 
-- 本 packet 只处于 `write_spec`；人工 spec approval 与 `ready_to_implement` 缺一不可。
-- PR #69 与任何 parked/draft spec 只能作为草案证据，不能替代人工批准或 dependency merge。
-- 最终 implementation PR approval、merge、release 与 GH-57 closure 仍由人类决定。
+- #68 当前 canonical label 是 `ready_to_implement`；issue body 中历史
+  `Readiness: ready_to_spec` 仅是创建时快照，不是当前授权事实。
+- PR #166 是已合并的部分实现。maintainer 已在 issue 审计上下文中批准本次
+  spec-correction + post-merge implementation follow-up；该例外只覆盖本 packet 明列路径。
+- 最终 follow-up review、merge、release、#68 与 GH-57 closure 仍由人类决定。
