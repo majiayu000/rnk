@@ -4,10 +4,12 @@ use std::error::Error;
 
 use rnk::core::{Dimension, Element, Position, Props, VNode};
 use rnk::layout::{
-    ArithmeticOperation, Axis, CellOutputError, Edge, GeometryField, LayoutAliasError,
-    LayoutEngine, LayoutSnapshotError, SnapshotInvariantError, SnapshotTargetMismatchReason,
+    ArithmeticOperation, Axis, CellOutputError, Edge, GeometryField, IncrementalInvariantError,
+    LayoutAliasError, LayoutEngine, LayoutSnapshotError, SnapshotCounterError,
+    SnapshotInvariantError, SnapshotTargetMismatchReason, SnapshotWorkCounterField,
     TransactionalLayoutError,
 };
+use rnk::reconciler::ReconcilePlanError;
 use rnk::renderer::{
     CheckedRenderError, SnapshotRenderError, TransactionalFrameError, try_render_to_string_checked,
 };
@@ -25,6 +27,22 @@ fn non_finite_target() -> Element {
     let mut child = Element::text("invalid").with_key("message");
     child.style.padding.left = f32::NAN;
     root.add_child(child);
+    root
+}
+
+fn later_child_failure_target(invalid: bool) -> Element {
+    let mut root = Element::root();
+    root.add_child(Element::text("first visited child").with_key("first"));
+    let mut later = Element::text(if invalid {
+        "later changed child"
+    } else {
+        "later stable child"
+    })
+    .with_key("later");
+    if invalid {
+        later.style.padding.left = f32::NAN;
+    }
+    root.add_child(later);
     root
 }
 
@@ -52,27 +70,81 @@ fn negative_and_overflow_cells_are_not_clamped_to_success() {
 
     let mut overflow = Element::box_element();
     overflow.style.width = Dimension::Points(f32::MAX);
-    assert!(matches!(
-        LayoutEngine::new().prepare_element_incremental(&overflow, None, u16::MAX, 4),
-        Err(TransactionalLayoutError::Snapshot(
+    let overflow =
+        match LayoutEngine::new().prepare_element_incremental(&overflow, None, u16::MAX, 4) {
+            Err(error) => error,
+            Ok(_) => panic!("unrepresentable cell edge must fail"),
+        };
+    assert!(
+        matches!(overflow, TransactionalLayoutError::Snapshot(source)
+        if matches!(source.source_error(),
             LayoutSnapshotError::CellCoordinateOverflow { .. }
-                | LayoutSnapshotError::EdgeArithmeticOverflow { .. }
-        ))
-    ));
+                | LayoutSnapshotError::EdgeArithmeticOverflow { .. }))
+    );
 }
 
 #[test]
 fn initial_snapshot_failure_never_enters_incremental_recovery() {
     let engine = LayoutEngine::new();
-    let error = match engine.prepare_element_incremental(&non_finite_target(), None, 20, 4) {
-        Err(error) => error,
-        Ok(_) => panic!("snapshot unexpectedly succeeded"),
+    let error =
+        match engine.prepare_element_incremental(&later_child_failure_target(true), None, 20, 4) {
+            Err(error) => error,
+            Ok(_) => panic!("snapshot unexpectedly succeeded"),
+        };
+    let TransactionalLayoutError::Snapshot(source) = error else {
+        panic!("expected source-compatible snapshot route")
     };
     assert!(matches!(
-        error,
-        TransactionalLayoutError::Snapshot(LayoutSnapshotError::NonFiniteGeometry { .. })
+        source.source_error(),
+        LayoutSnapshotError::NonFiniteGeometry { .. }
     ));
+    let work = source.attempt_report().work_counters();
+    assert_eq!(work.visited_nodes(), 3);
+    assert_eq!(work.mutated_nodes(), 3);
+    assert_eq!(work.text_flow_recomputes(), 4);
+    assert_eq!(work.snapshot_nodes(), 0);
+    assert_eq!(work.rebuild_count(), 0);
+    assert_eq!(source.attempt_report().cache_hits(), 4);
+    assert!(source.source().is_some());
     assert!(!engine.has_tree());
+}
+
+#[test]
+fn ordinary_incremental_snapshot_failure_preserves_partial_attempt_report() {
+    let stable = later_child_failure_target(false);
+    let mut engine = LayoutEngine::new();
+    let initial = engine
+        .prepare_element_incremental(&stable, None, 20, 4)
+        .expect("stable initial frame");
+    let (previous, _) = initial.commit(&mut engine);
+    let (before_snapshot, before_report) = engine.try_snapshot(&stable).unwrap();
+
+    let invalid = later_child_failure_target(true);
+    let invalid_later_id = invalid.children.iter().nth(1).unwrap().id;
+    let error = match engine.prepare_element_incremental(&invalid, Some(&previous), 20, 4) {
+        Err(error) => error,
+        Ok(_) => panic!("later-child snapshot failure must retain the ordinary attempt"),
+    };
+    let TransactionalLayoutError::Snapshot(source) = error else {
+        panic!("ordinary snapshot failure must not enter recovery")
+    };
+    assert!(matches!(
+        source.source_error(),
+        LayoutSnapshotError::NonFiniteGeometry { .. }
+    ));
+    let work = source.attempt_report().work_counters();
+    assert_eq!(work.visited_nodes(), 3);
+    assert_eq!(work.mutated_nodes(), 2);
+    assert_eq!(work.text_flow_recomputes(), 2);
+    assert_eq!(work.snapshot_nodes(), 0);
+    assert_eq!(work.rebuild_count(), 0);
+    assert_eq!(source.attempt_report().cache_hits(), 3);
+    assert!(source.source().is_some());
+
+    let (after_snapshot, after_report) = engine.try_snapshot(&stable).unwrap();
+    assert_eq!(before_snapshot.snapshot(), after_snapshot.snapshot());
+    assert_eq!(before_report, after_report);
+    assert!(engine.get_layout(invalid_later_id).is_none());
 }
 
 #[test]
@@ -96,6 +168,10 @@ fn recovered_snapshot_or_render_failure_preserves_both_causes() {
         LayoutSnapshotError::NonFiniteGeometry { .. }
     ));
     assert!(source.incremental_failure().patch_index.is_none());
+    let work = source.snapshot_attempt_report().work_counters();
+    assert_eq!(source.snapshot_attempt_report().operation_count(), 1);
+    assert_eq!(work.snapshot_nodes(), 0);
+    assert_eq!(work.rebuild_count(), 1);
     assert!(source.source().is_some());
 }
 
@@ -108,6 +184,7 @@ fn snapshot_failure_publishes_nothing() {
         .unwrap();
     let (previous, _) = initial.commit(&mut engine);
     let before = engine.get_all_layouts();
+    let (before_snapshot, before_report) = engine.try_snapshot(&stable).unwrap();
 
     let invalid = non_finite_target();
     assert!(
@@ -118,13 +195,19 @@ fn snapshot_failure_publishes_nothing() {
     assert_eq!(engine.get_all_layouts().len(), before.len());
     assert!(engine.get_layout(stable.id).is_some());
     assert!(engine.get_layout(invalid.id).is_none());
+    let (after_snapshot, after_report) = engine.try_snapshot(&stable).unwrap();
+    assert_eq!(before_snapshot.snapshot(), after_snapshot.snapshot());
+    assert_eq!(
+        before_snapshot.frame_revision(),
+        after_snapshot.frame_revision()
+    );
+    assert_eq!(before_report, after_report);
 }
 
 #[test]
-fn every_snapshot_failure_variant_preserves_payload_and_source_chain() {
+fn snapshot_error_value_contract_is_supplemental() {
     let (element, prepared) = valid_frame();
     let identity = prepared.snapshot().root().identity().clone();
-    let rect = prepared.snapshot().root().border_bounds();
     let invariant = SnapshotInvariantError::SnapshotTargetMismatch {
         identity: identity.clone(),
         reason: SnapshotTargetMismatchReason::ChildOrder,
@@ -151,10 +234,11 @@ fn every_snapshot_failure_variant_preserves_payload_and_source_chain() {
             edge: Edge::Right,
             rounded_bits: f64::MAX.to_bits(),
         },
-        LayoutSnapshotError::ReversedContentBounds {
+        LayoutSnapshotError::CellSpanOverflow {
             identity: identity.clone(),
-            border_bounds: rect,
-            attempted_content_bounds: rect,
+            axis: Axis::X,
+            start: i32::MIN,
+            end: i32::MAX,
         },
         LayoutSnapshotError::MissingIdentity {
             element_id: element.id,
@@ -165,12 +249,30 @@ fn every_snapshot_failure_variant_preserves_payload_and_source_chain() {
         LayoutSnapshotError::MissingLayout {
             identity: identity.clone(),
         },
+        LayoutSnapshotError::LayoutLookup {
+            identity: identity.clone(),
+            source: IncrementalInvariantError::InvalidMappedNode,
+        },
         LayoutSnapshotError::MissingTextFlowRevision {
             identity: identity.clone(),
         },
         LayoutSnapshotError::TextFlowRevision {
             identity: identity.clone(),
             source: rnk::layout::TextFlowError::InvalidTabStop,
+        },
+        LayoutSnapshotError::WorkCounters {
+            source: SnapshotCounterError::Overflow {
+                field: SnapshotWorkCounterField::VisitedNodes,
+                lhs: u64::MAX,
+                rhs: 1,
+            },
+        },
+        LayoutSnapshotError::CacheEvidenceOverflow,
+        LayoutSnapshotError::Alias {
+            source: LayoutAliasError::AliasTargetMissing {
+                element_id: element.id,
+                identity: identity.clone(),
+            },
         },
         LayoutSnapshotError::InvalidTree {
             identity: Some(identity.clone()),
@@ -179,10 +281,26 @@ fn every_snapshot_failure_variant_preserves_payload_and_source_chain() {
     ];
     for (index, error) in variants.into_iter().enumerate() {
         assert!(!error.to_string().is_empty(), "variant {index}");
-        if matches!(
-            error,
-            LayoutSnapshotError::InvalidTree { .. } | LayoutSnapshotError::TextFlowRevision { .. }
-        ) {
+        let source_expected = match &error {
+            LayoutSnapshotError::TextFlowRevision { .. }
+            | LayoutSnapshotError::WorkCounters { .. }
+            | LayoutSnapshotError::LayoutLookup { .. }
+            | LayoutSnapshotError::Alias { .. }
+            | LayoutSnapshotError::InvalidTree { .. }
+            | LayoutSnapshotError::TargetPlanning { .. } => true,
+            LayoutSnapshotError::NonFiniteGeometry { .. }
+            | LayoutSnapshotError::NegativeExtent { .. }
+            | LayoutSnapshotError::EdgeArithmeticOverflow { .. }
+            | LayoutSnapshotError::CellCoordinateOverflow { .. }
+            | LayoutSnapshotError::CellSpanOverflow { .. }
+            | LayoutSnapshotError::ReversedContentBounds { .. }
+            | LayoutSnapshotError::MissingIdentity { .. }
+            | LayoutSnapshotError::DuplicateIdentity { .. }
+            | LayoutSnapshotError::MissingLayout { .. }
+            | LayoutSnapshotError::MissingTextFlowRevision { .. }
+            | LayoutSnapshotError::CacheEvidenceOverflow => false,
+        };
+        if source_expected {
             assert!(error.source().is_some());
         } else {
             assert!(error.source().is_none());
@@ -191,18 +309,18 @@ fn every_snapshot_failure_variant_preserves_payload_and_source_chain() {
 
     let output = SnapshotRenderError::Output {
         identity,
-        source: CellOutputError::CoordinateOutOfRange {
+        source: CellOutputError::ExtentOutOfRange {
             axis: Axis::Y,
-            value: i32::MAX,
+            start: 0,
+            end: i32::MAX,
         },
     };
     assert!(output.source().is_some());
 }
 
 #[test]
-fn every_layout_alias_variant_preserves_payload_and_source() {
+fn layout_alias_error_value_contract_is_supplemental() {
     let (element, first) = valid_frame();
-    let (_, second) = valid_frame();
     let identity = first.snapshot().root().identity().clone();
     let variants = [
         LayoutAliasError::MissingFrameAlias {
@@ -217,11 +335,6 @@ fn every_layout_alias_variant_preserves_payload_and_source() {
         LayoutAliasError::AliasTargetMissing {
             element_id: element.id,
             identity: identity.clone(),
-        },
-        LayoutAliasError::StaleFrameAlias {
-            element_id: element.id,
-            expected_frame_revision: first.prepared_snapshot().frame_revision(),
-            actual_frame_revision: second.prepared_snapshot().frame_revision(),
         },
         LayoutAliasError::AliasIdentityMismatch {
             element_id: element.id,
@@ -252,4 +365,34 @@ fn gh60_frame_wrapper_routes_snapshot_failures_without_fictitious_initial_varian
         TransactionalFrameError::Transaction(TransactionalLayoutError::Snapshot(_))
     ));
     assert!(frame.source().is_some());
+}
+
+#[test]
+fn published_target_validation_preserves_hostile_planning_cause() {
+    let mut stable = Element::root();
+    stable.add_child(Element::text("stable").with_key("stable"));
+    let mut engine = LayoutEngine::new();
+    engine
+        .prepare_element_incremental(&stable, None, 20, 4)
+        .unwrap()
+        .commit(&mut engine);
+
+    let mut hostile = Element::root();
+    hostile.add_child(Element::text("first").with_key("duplicate"));
+    hostile.add_child(Element::text("second").with_key("duplicate"));
+    let error = engine
+        .try_snapshot(&hostile)
+        .expect_err("published target validation must preserve the exact GH59 cause");
+    assert!(matches!(
+        &error,
+        LayoutSnapshotError::TargetPlanning {
+            source: ReconcilePlanError::DuplicateSiblingKey {
+                first_index: 0,
+                second_index: 1,
+                ..
+            }
+        }
+    ));
+    assert!(error.source().is_some());
+    assert!(engine.try_snapshot(&stable).is_ok());
 }

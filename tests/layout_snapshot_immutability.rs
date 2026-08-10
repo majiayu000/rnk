@@ -18,5 +18,7 @@ fn public_snapshot_read_only_accessors_compile() {
 
 #[test]
 fn public_snapshot_mutation_surface_is_compile_fail() {
-    trybuild::TestCases::new().compile_fail("tests/ui/gh61_snapshot_private_fields.rs");
+    let cases = trybuild::TestCases::new();
+    cases.compile_fail("tests/ui/gh61_cell_rect_private_fields.rs");
+    cases.compile_fail("tests/ui/gh61_snapshot_identity_private_constructor.rs");
 }

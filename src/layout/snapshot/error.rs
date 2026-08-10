@@ -5,9 +5,48 @@
 use std::{error::Error, fmt};
 
 use crate::core::ElementId;
-use crate::layout::TextFlowError;
+use crate::layout::{IncrementalInvariantError, TextFlowError};
+use crate::reconciler::ReconcilePlanError;
 
 use super::{CellRect, FrameRevision, SnapshotIdentity};
+
+/// Raw rejected content edges retained only for diagnostics.
+///
+/// This type cannot be converted into checked [`CellRect`] geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttemptedContentBounds {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+impl AttemptedContentBounds {
+    pub(crate) const fn from_raw(left: i32, top: i32, right: i32, bottom: i32) -> Self {
+        Self {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+    /// Attempted left edge.
+    pub const fn left(self) -> i32 {
+        self.left
+    }
+    /// Attempted top edge.
+    pub const fn top(self) -> i32 {
+        self.top
+    }
+    /// Attempted right edge.
+    pub const fn right(self) -> i32 {
+        self.right
+    }
+    /// Attempted bottom edge.
+    pub const fn bottom(self) -> i32 {
+        self.bottom
+    }
+}
 
 /// Coordinate axis used by snapshot validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +91,43 @@ pub enum Edge {
     Bottom,
 }
 
+/// One complete snapshot work-counter field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotWorkCounterField {
+    /// Target nodes accepted for checked lookup.
+    VisitedNodes,
+    /// Distinct mutation or removal events completed by the producer.
+    MutatedNodes,
+    /// Successful TextFlow cache misses.
+    TextFlowRecomputes,
+    /// Nodes in a successfully finalized snapshot.
+    SnapshotNodes,
+    /// GH60 recovery transitions.
+    RebuildCount,
+}
+
+/// Checked aggregation failure for snapshot work evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotCounterError {
+    /// One field overflowed during checked addition.
+    Overflow {
+        /// Counter field.
+        field: SnapshotWorkCounterField,
+        /// Existing value.
+        lhs: u64,
+        /// Added value.
+        rhs: u64,
+    },
+}
+
+impl fmt::Display for SnapshotCounterError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("snapshot work counter overflowed")
+    }
+}
+
+impl Error for SnapshotCounterError {}
+
 /// Arithmetic operation that overflowed while accumulating absolute geometry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArithmeticOperation {
@@ -66,8 +142,6 @@ pub enum ArithmeticOperation {
 pub enum SnapshotTargetMismatchReason {
     /// The target had no renderable root.
     MissingRoot,
-    /// A target node had no prepared element alias.
-    MissingAlias,
     /// The prepared child order differed from the target traversal.
     ChildOrder,
 }
@@ -156,6 +230,17 @@ pub enum LayoutSnapshotError {
         /// Floored `f64` payload bits.
         rounded_bits: u64,
     },
+    /// An ordered cell span exceeded the representable public width.
+    CellSpanOverflow {
+        /// Node identity.
+        identity: SnapshotIdentity,
+        /// Failed axis.
+        axis: Axis,
+        /// Inclusive start edge.
+        start: i32,
+        /// Exclusive end edge.
+        end: i32,
+    },
     /// Insets produced reversed content geometry.
     ReversedContentBounds {
         /// Node identity.
@@ -163,7 +248,7 @@ pub enum LayoutSnapshotError {
         /// Quantized border bounds.
         border_bounds: CellRect,
         /// Attempted quantized content bounds.
-        attempted_content_bounds: CellRect,
+        attempted_content_bounds: AttemptedContentBounds,
     },
     /// A render-required element had no semantic identity.
     MissingIdentity {
@@ -180,6 +265,13 @@ pub enum LayoutSnapshotError {
         /// Missing identity.
         identity: SnapshotIdentity,
     },
+    /// The backend rejected an exact required-layout lookup.
+    LayoutLookup {
+        /// Required identity.
+        identity: SnapshotIdentity,
+        /// Preserved GH60 invariant source.
+        source: IncrementalInvariantError,
+    },
     /// A text node had no current semantic TextFlow.
     MissingTextFlowRevision {
         /// Text node identity.
@@ -192,6 +284,18 @@ pub enum LayoutSnapshotError {
         /// Concrete TextFlow construction failure.
         source: TextFlowError,
     },
+    /// Work evidence could not be aggregated exactly.
+    WorkCounters {
+        /// Concrete checked-add failure.
+        source: SnapshotCounterError,
+    },
+    /// Cache-hit evidence could not be aggregated exactly.
+    CacheEvidenceOverflow,
+    /// A frame-local alias failed exact validation.
+    Alias {
+        /// Preserved alias cause.
+        source: LayoutAliasError,
+    },
     /// The target traversal was structurally invalid.
     InvalidTree {
         /// Identity nearest to the failure.
@@ -199,11 +303,34 @@ pub enum LayoutSnapshotError {
         /// Concrete invariant failure.
         source: SnapshotInvariantError,
     },
+    /// Exact target reconstruction or semantic comparison failed.
+    TargetPlanning {
+        /// Preserved GH59 planning/identity cause.
+        source: ReconcilePlanError,
+    },
 }
 
 impl fmt::Display for LayoutSnapshotError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "layout snapshot construction failed: {self:?}")
+        formatter.write_str(match self {
+            Self::NonFiniteGeometry { .. } => "snapshot geometry is non-finite",
+            Self::NegativeExtent { .. } => "snapshot extent is negative",
+            Self::EdgeArithmeticOverflow { .. } => "snapshot edge arithmetic overflowed",
+            Self::CellCoordinateOverflow { .. } => "snapshot cell coordinate overflowed",
+            Self::CellSpanOverflow { .. } => "snapshot cell span overflowed",
+            Self::ReversedContentBounds { .. } => "snapshot content bounds are reversed",
+            Self::MissingIdentity { .. } => "snapshot identity is missing",
+            Self::DuplicateIdentity { .. } => "snapshot identity is duplicated",
+            Self::MissingLayout { .. } => "snapshot layout is missing",
+            Self::LayoutLookup { .. } => "snapshot layout lookup failed",
+            Self::MissingTextFlowRevision { .. } => "snapshot TextFlow revision is missing",
+            Self::TextFlowRevision { .. } => "snapshot TextFlow revision failed",
+            Self::WorkCounters { .. } => "snapshot work counters failed",
+            Self::CacheEvidenceOverflow => "snapshot cache evidence overflowed",
+            Self::Alias { .. } => "snapshot alias validation failed",
+            Self::InvalidTree { .. } => "snapshot tree is invalid",
+            Self::TargetPlanning { .. } => "snapshot target planning failed",
+        })
     }
 }
 
@@ -212,8 +339,94 @@ impl Error for LayoutSnapshotError {
         match self {
             Self::InvalidTree { source, .. } => Some(source),
             Self::TextFlowRevision { source, .. } => Some(source),
+            Self::WorkCounters { source } => Some(source),
+            Self::LayoutLookup { source, .. } => Some(source),
+            Self::Alias { source } => Some(source),
+            Self::TargetPlanning { source } => Some(source),
             _ => None,
         }
+    }
+}
+
+/// Read-only work captured at the end of or during one snapshot attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotAttemptReport {
+    operation_count: u64,
+    cache_hits: u64,
+    work_counters: super::SnapshotWorkCounters,
+}
+
+impl SnapshotAttemptReport {
+    pub(crate) const fn new(
+        operation_count: u64,
+        work_counters: super::SnapshotWorkCounters,
+    ) -> Self {
+        Self {
+            operation_count,
+            cache_hits: 0,
+            work_counters,
+        }
+    }
+    /// Operations represented by this report.
+    pub const fn operation_count(&self) -> u64 {
+        self.operation_count
+    }
+    /// Complete five-field work evidence.
+    pub const fn work_counters(&self) -> super::SnapshotWorkCounters {
+        self.work_counters
+    }
+    /// Exact successful TextFlow cache hits observed before termination.
+    pub const fn cache_hits(&self) -> u64 {
+        self.cache_hits
+    }
+    pub(crate) fn set_cache_hits(&mut self, cache_hits: u64) {
+        self.cache_hits = cache_hits;
+    }
+    pub(crate) fn set_work_counters(&mut self, work_counters: super::SnapshotWorkCounters) {
+        self.work_counters = work_counters;
+    }
+}
+
+/// Authoritative snapshot-attempt failure preserving partial work.
+///
+/// This public envelope lets checked transaction callers inspect work
+/// completed before failure without allowing snapshot construction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotBuildFailure {
+    source: Box<LayoutSnapshotError>,
+    attempt_report: SnapshotAttemptReport,
+}
+
+impl SnapshotBuildFailure {
+    pub(crate) fn new(source: LayoutSnapshotError, attempt_report: SnapshotAttemptReport) -> Self {
+        Self {
+            source: Box::new(source),
+            attempt_report,
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn into_parts(self) -> (LayoutSnapshotError, SnapshotAttemptReport) {
+        (*self.source, self.attempt_report)
+    }
+    /// Concrete snapshot construction failure.
+    pub const fn source_error(&self) -> &LayoutSnapshotError {
+        &self.source
+    }
+    /// Complete work captured before the terminal failure.
+    pub const fn attempt_report(&self) -> &SnapshotAttemptReport {
+        &self.attempt_report
+    }
+}
+
+impl fmt::Display for SnapshotBuildFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.source.fmt(formatter)
+    }
+}
+
+impl Error for SnapshotBuildFailure {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.source.as_ref())
     }
 }
 
@@ -243,15 +456,6 @@ pub enum LayoutAliasError {
         /// Missing semantic identity.
         identity: SnapshotIdentity,
     },
-    /// An alias overlay came from another frame.
-    StaleFrameAlias {
-        /// Frame-local element.
-        element_id: ElementId,
-        /// Expected revision.
-        expected_frame_revision: FrameRevision,
-        /// Actual revision.
-        actual_frame_revision: FrameRevision,
-    },
     /// An alias resolved to a different semantic node.
     AliasIdentityMismatch {
         /// Frame-local element.
@@ -279,13 +483,6 @@ pub enum CellOutputError {
         /// Failed axis.
         axis: Axis,
         /// Negative value.
-        value: i32,
-    },
-    /// A coordinate exceeded the terminal cell type.
-    CoordinateOutOfRange {
-        /// Failed axis.
-        axis: Axis,
-        /// Invalid value.
         value: i32,
     },
     /// A half-open extent exceeded the terminal cell type.

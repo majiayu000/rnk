@@ -1,10 +1,16 @@
 use std::{cell::RefCell, rc::Rc};
 
 use crate::components::{Box, Text};
-use crate::core::Element;
-use crate::layout::LayoutEngine;
-use crate::renderer::{CheckedRenderError, TextRenderError};
+use crate::core::{Dimension, Element, Position};
+use crate::layout::{Axis, CellOutputError, LayoutEngine};
+use crate::renderer::{
+    CheckedRenderError, Output, SnapshotRenderError, TextRenderError, TransactionalFrameError,
+    try_render_element_tree_checked, try_render_to_string_checked,
+};
 use crate::runtime::RuntimeContext;
+use crate::testing::TestRenderer;
+
+use crate::renderer::static_content::StaticRenderer;
 
 use super::super::{PreparedDynamicFrame, RenderPipeline};
 
@@ -168,4 +174,111 @@ pub(crate) fn failed_unchanged_frame_keeps_previous_aliases() {
     assert_eq!(previous, previous_before);
     assert!(runtime.borrow().get_measurement(old_id).is_some());
     assert!(runtime.borrow().get_measurement(current_id).is_none());
+}
+
+pub(crate) fn oversized_measurement_fails_before_atomic_publication() {
+    let runtime = Rc::new(RefCell::new(RuntimeContext::new()));
+    let mut engine = LayoutEngine::new();
+    let mut previous = None;
+    let stable = keyed_root("stable");
+    commit_initial(&stable, &mut engine, &runtime, &mut previous);
+    let previous_before = previous.clone();
+    let measurement_before = runtime.borrow().get_measurement_by_key_dims("child");
+    let (snapshot_before, report_before) = engine.try_snapshot(&stable).unwrap();
+
+    let mut oversized_child = Element::text("oversized").with_key("child");
+    let oversized_child_id = oversized_child.id;
+    oversized_child.style.position = Position::Absolute;
+    oversized_child.style.width = Dimension::Points(70_000.0);
+    let mut oversized = Element::box_element().with_key("root");
+    oversized.add_child(oversized_child);
+    let error = match RenderPipeline::prepare_dynamic_frame(
+        &oversized,
+        u16::MAX,
+        4,
+        &engine,
+        previous.as_ref(),
+    ) {
+        Err(error) => error,
+        Ok(_) => {
+            panic!("runtime measurement must reject an oversized snapshot child before commit")
+        }
+    };
+    assert!(matches!(
+        error,
+        TransactionalFrameError::Render(CheckedRenderError::Snapshot(
+            SnapshotRenderError::Output {
+                source: CellOutputError::ExtentOutOfRange {
+                    axis: Axis::X,
+                    start: 0,
+                    end: 70_000,
+                },
+                ..
+            }
+        ))
+    ));
+    assert_eq!(previous, previous_before);
+    assert_eq!(
+        runtime.borrow().get_measurement_by_key_dims("child"),
+        measurement_before
+    );
+    let (snapshot_after, report_after) = engine.try_snapshot(&stable).unwrap();
+    assert_eq!(snapshot_before.snapshot(), snapshot_after.snapshot());
+    assert_eq!(report_before, report_after);
+    assert!(engine.get_layout(oversized_child_id).is_none());
+}
+
+pub(crate) fn all_correctness_consumers_use_authoritative_snapshot() {
+    const EXPECTED_TEXT: &str = "consumer parity";
+    const EXPECTED_WIDTH: i32 = 15;
+    let runtime = Rc::new(RefCell::new(RuntimeContext::new()));
+    let mut engine = LayoutEngine::new();
+    let mut previous = None;
+    let target = Element::text("consumer parity").with_key("child");
+    let prepared = RenderPipeline::prepare_dynamic_frame(&target, 20, 4, &engine, None)
+        .expect("dynamic consumer prepares from the authoritative snapshot");
+    assert_eq!(prepared.rendered(), EXPECTED_TEXT);
+    prepared.commit(&mut engine, &runtime, &mut previous);
+    let (published, _) = engine.try_snapshot(&target).unwrap();
+    let expected_bounds = published.snapshot().root().border_bounds();
+    assert_eq!(
+        (
+            expected_bounds.left(),
+            expected_bounds.top(),
+            expected_bounds.right(),
+            expected_bounds.bottom(),
+        ),
+        (0, 0, EXPECTED_WIDTH, 1)
+    );
+    assert_eq!(
+        runtime.borrow().get_measurement_by_key_dims("child"),
+        Some((EXPECTED_WIDTH as f32, 1.0))
+    );
+
+    let mut checked_output = Output::new(20, 4);
+    try_render_element_tree_checked(&target, &engine, &mut checked_output, 0.0, 0.0)
+        .expect("public checked helper consumes the published exact snapshot");
+    assert_eq!(checked_output.render(), EXPECTED_TEXT);
+    let checked_cells: String = (0..20)
+        .map(|column| checked_output.cell_at(column, 0).unwrap().ch)
+        .collect();
+    assert_eq!(checked_cells, format!("{EXPECTED_TEXT}     "));
+    assert_eq!(
+        try_render_to_string_checked(&target, 20).unwrap(),
+        EXPECTED_TEXT
+    );
+    assert_eq!(
+        TestRenderer::new(20, 4)
+            .try_render_to_plain_checked(&target)
+            .unwrap(),
+        EXPECTED_TEXT
+    );
+
+    let mut static_root = Element::box_element();
+    static_root.style.is_static = true;
+    static_root.add_child(Element::text("consumer parity"));
+    let static_lines = StaticRenderer::new()
+        .try_extract_static_content_checked(&static_root, 20)
+        .expect("static consumer uses its prepared authoritative snapshot");
+    assert_eq!(static_lines, vec![EXPECTED_TEXT.to_owned()]);
 }

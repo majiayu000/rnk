@@ -457,6 +457,8 @@ impl LayoutEngine {
             })?;
         let target = resolved.target;
         candidate.committed_vnode = super::Shared::new(Some(target.clone()));
+        candidate.published_snapshot = None;
+        candidate.published_snapshot_report = None;
         candidate
             .validate_target_exact(
                 &resolved.plan,
@@ -493,6 +495,7 @@ impl LayoutEngine {
         rebuild_counter::record_attempt();
         let mut fresh = Self::new();
         fresh.flow_cache = self.flow_cache.clone();
+        fresh.successful_mutations = self.successful_mutations;
         fresh.text_flow_policy = self.text_flow_policy.clone();
         fresh.last_width = width;
         fresh.last_height = height;

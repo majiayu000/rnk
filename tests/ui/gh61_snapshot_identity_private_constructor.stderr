@@ -1,0 +1,10 @@
+error[E0624]: associated function `from_scoped` is private
+ --> tests/ui/gh61_snapshot_identity_private_constructor.rs:4:37
+  |
+4 |     let _forged = SnapshotIdentity::from_scoped;
+  |                                     ^^^^^^^^^^^ private associated function
+  |
+ ::: src/layout/snapshot.rs
+  |
+  |     pub(crate) fn from_scoped(identity: ScopedNodeIdentity) -> Self {
+  |     --------------------------------------------------------------- private associated function defined here
