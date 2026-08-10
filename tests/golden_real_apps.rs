@@ -1,7 +1,12 @@
+use rnk::components::chat::message_list::{
+    HorizontalInsets, MessageCompositeMeasureConfig, MessageExpansionKey, MessageList,
+    MessageListEntry, MessageListState, MessageMeasureOutcome, MessageRows,
+    MessageShellMeasureConfig, MessageVariantKey, ViewportRows,
+};
 use rnk::components::chat::{
-    BlockId, ChatMessage, ChatMessageView, ChatRole, ConversationEvent, ConversationGuard,
-    ConversationState, ConversationUpdate, MessageBlock, MessageBlockEntry, MessageId,
-    MessageMutationGuard, UpdateId,
+    BlockId, ChatComposerState, ChatMessage, ChatMessageView, ChatRole, ConversationEvent,
+    ConversationGuard, ConversationState, ConversationUpdate, FullscreenChatShell, MessageBlock,
+    MessageBlockEntry, MessageId, MessageMutationGuard, MessageRevision, UpdateId,
 };
 use rnk::components::{
     Badge, BadgeVariant, Box as RnkBox, Confirm, ConfirmState, Message, Progress, ProgressSymbols,
@@ -527,4 +532,106 @@ fn gh68_chat_tutorial_contract() {
     let rendered = rnk::render_to_string(&conversation_view(&state), 60);
     assert!(rendered.contains("Explain the release gate"));
     assert!(rendered.contains("Use typed updates."));
+}
+
+#[test]
+fn gh68_fullscreen_example_contract() {
+    let source = include_str!("../examples/rnk_chat.rs");
+    for required in [
+        "FullscreenChatShell::try_new",
+        "MessageList::new",
+        "ChatMessageView::new",
+        ".snapshot().root().border_bounds().height()",
+        "slice.message_rows",
+        "slice.viewport_rows",
+        "scroll_offset_y(offset)",
+        "candidate.try_shell()?",
+    ] {
+        assert!(
+            source.contains(required),
+            "missing fullscreen seam: {required}"
+        );
+    }
+    for forbidden in [
+        "struct ChatMessage {",
+        "enum Role {",
+        ".skip(",
+        ".take(12)",
+        "Vec<String>",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "fullscreen example retained private chat logic: {forbidden}"
+        );
+    }
+
+    let state = apply_adapter_fixture(&[
+        AdapterDelta {
+            event_id: "fullscreen-1",
+            text: "A deliberately wrapped response that spans several terminal rows ",
+            terminal: false,
+        },
+        AdapterDelta {
+            event_id: "fullscreen-2",
+            text: "and proves the visible slice is row based.",
+            terminal: true,
+        },
+    ]);
+    let entries = state
+        .messages()
+        .iter()
+        .map(|message| {
+            let shell = MessageShellMeasureConfig::try_new(24, HorizontalInsets::new(0, 0), vec![])
+                .unwrap();
+            MessageListEntry::new(
+                message.id(),
+                message.revision(),
+                MessageVariantKey::new(0),
+                MessageExpansionKey::new(0),
+                MessageCompositeMeasureConfig::try_new(vec![], shell).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let transcript = MessageListState::try_new(&entries, 24, ViewportRows::new(3), 16, |request| {
+        let message = state
+            .message(request.entry.message_id())
+            .expect("entry identity comes from the conversation");
+        let element = ChatMessageView::new(message).into_element();
+        let engine = rnk::layout::LayoutEngine::new();
+        let frame = engine
+            .prepare_element_incremental(&element, None, 24, u16::MAX)
+            .expect("fixture message has an authoritative snapshot");
+        let height = frame.snapshot().root().border_bounds().height();
+        MessageMeasureOutcome::<String, ()>::Measured(
+            MessageRows::try_new(u64::try_from(height).unwrap()).unwrap(),
+        )
+    })
+    .unwrap();
+    let shell =
+        FullscreenChatShell::try_new(transcript, ChatComposerState::new(), 24, 5, 1).unwrap();
+    assert_eq!(shell.layout().transcript().rows(), 3);
+
+    let mut slices = Vec::new();
+    let element = MessageList::new(shell.transcript())
+        .try_into_element::<String, _>(|entry, _key, slice| {
+            let visible = slice.viewport_rows.end - slice.viewport_rows.start;
+            assert_eq!(visible, slice.message_rows.end - slice.message_rows.start);
+            slices.push((
+                entry.message_id(),
+                slice.message_rows.clone(),
+                slice.viewport_rows.clone(),
+            ));
+            Ok(ChatMessageView::new(state.message(entry.message_id()).unwrap()).into_element())
+        })
+        .unwrap();
+    assert!(!slices.is_empty());
+    assert!(slices.iter().all(|(_, message, viewport)| {
+        message.start < message.end && viewport.start < viewport.end && viewport.end <= 3
+    }));
+    let rendered = rnk::render_to_string(&element, 24);
+    assert!(!rendered.is_empty());
+    assert_eq!(
+        entries[0].content_revision(),
+        MessageRevision::new(1).unwrap()
+    );
 }

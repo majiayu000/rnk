@@ -1,53 +1,34 @@
-//! rnk-chat: a terminal chat client built with rnk.
+//! Fullscreen chat composed from the public chat contracts.
 //!
-//! Two things in here used to be hand-rolled and are now library concerns,
-//! because both were wrong in ways that only show up with real input.
+//! `FullscreenChatShell` owns region arithmetic and composer routing,
+//! `MessageListState` owns row scrolling, and `ChatMessageView` owns semantic
+//! message projection. The example only supplies fixture content and colors.
 //!
-//! **Scrolling is by row, not by message.** This example used to page with
-//! `.skip(offset).take(12)`, which treats every message as one unit. A wrapped
-//! paragraph is four rows and an acknowledgement is one, so paging by count
-//! scrolls a different distance every time and never lands where the reader
-//! expects. `MessageListState` indexes the transcript by the rows its messages
-//! actually occupy, and `visible_range()` reports which rows of which messages
-//! fall inside the viewport — including the partly visible ones at each edge.
-//!
-//! **The draft is a `ChatComposerState`, not a `String`.** Backspace used to be
-//! `String::pop`, which removes one `char`; a `char` is not a user-perceived
-//! character, so deleting from an emoji built out of a ZWJ sequence took a piece
-//! off the end and left something else behind. The composer deletes by grapheme
-//! cluster and reports its cursor in terminal cells, which is the only unit that
-//! puts a cursor in the right column after a CJK character.
-//!
-//! Run with: cargo run --example rnk_chat
+//! Run with: `cargo run --example rnk_chat`
 
-use rnk::components::InteractionOutcome;
+use rnk::components::ScrollableBox;
 use rnk::components::chat::message_list::{
-    HorizontalInsets, MessageCompositeMeasureConfig, MessageExpansionKey, MessageListEntry,
-    MessageListState, MessageMeasureOutcome, MessageMeasureRequest, MessageRows,
-    MessageShellMeasureConfig, MessageVariantKey, RowOffset, ViewportRows,
+    HorizontalInsets, MessageCompositeMeasureConfig, MessageExpansionKey, MessageList,
+    MessageListEntry, MessageListMeasureError, MessageListState, MessageMeasureOutcome,
+    MessageMeasureRequest, MessageResizeConfigOutcome, MessageRows, MessageShellMeasureConfig,
+    MessageVariantKey, RowOffset, ViewportRows,
 };
 use rnk::components::chat::{
-    ChatComposerKeyMap, ChatComposerState, ComposerProjection, MessageId, MessageRevision,
-    handle_key,
+    BlockId, ChatComposerKeyMap, ChatComposerState, ChatMessage, ChatMessageMetadata,
+    ChatMessageView, ChatMessageViewOptions, ChatRole, FullscreenChatShell, FullscreenKeyOutcome,
+    MessageAuthor, MessageBlock, MessageBlockEntry, MessageId, MessageRevision, MessageStatus,
+    MessageTimestamp,
 };
-use rnk::core::TextWrap;
-use rnk::hooks::use_window_size;
+use rnk::core::{Overflow, TextWrap};
+use rnk::hooks::{Key, use_window_size};
+use rnk::layout::LayoutEngine;
 use rnk::layout::text_flow::{
-    TextFlow, TextFlowCacheIdentity, TextFlowInput, TextFlowOptions, TextFlowSourceKind,
+    TextFlowCacheIdentity, TextFlowInput, TextFlowOptions, TextFlowSourceKind,
 };
 use rnk::prelude::*;
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
-/// Columns a message bubble's content is laid out in.
-const BUBBLE_WIDTH: u16 = 60;
-
-/// Rows of chrome above and below the transcript: header, input box, footer.
-const CHROME_ROWS: u16 = 8;
-
-/// Rows a page-up or page-down moves.
+const STATUS_ROWS: u16 = 1;
 const PAGE_ROWS: u64 = 5;
-
 const MEASUREMENT_CACHE: usize = 512;
 
 fn main() -> std::io::Result<()> {
@@ -55,508 +36,539 @@ fn main() -> std::io::Result<()> {
 }
 
 #[derive(Clone)]
-struct ChatMessage {
-    role: Role,
-    content: String,
-    timestamp: String,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Role {
-    User,
-    Assistant,
-    System,
-}
-
-/// The conversation, plus the row index that decides what is on screen.
-///
-/// Two fields rather than one because they answer different questions.
-/// `MessageListState` is a row index — it knows how tall each message is and
-/// nothing about what it says. The content lives here, and the two are joined by
-/// the message index that `visible_range()` reports.
-#[derive(Clone)]
-struct Transcript {
+struct ChatSurface {
     messages: Vec<ChatMessage>,
-    rows: MessageListState,
+    transcript: MessageListState,
+    composer: ChatComposerState,
+    width: u16,
+    height: u16,
+    typing: bool,
+    status: String,
 }
 
-impl Transcript {
-    fn new(messages: Vec<ChatMessage>, viewport_rows: u64) -> Self {
-        let entries = entries_for(&messages);
-        let rows = MessageListState::try_new(
-            &entries,
-            BUBBLE_WIDTH,
-            ViewportRows::new(viewport_rows.max(1)),
-            MEASUREMENT_CACHE,
-            measure,
+impl ChatSurface {
+    fn try_new(width: u16, height: u16) -> Result<Self, String> {
+        let messages = initial_messages()?;
+        let transcript = build_transcript(&messages, width, 1)?;
+        let candidate = Self {
+            messages,
+            transcript,
+            composer: ChatComposerState::new(),
+            width,
+            height,
+            typing: false,
+            status: "ready".to_owned(),
+        };
+        candidate.try_shell()?;
+        Ok(candidate)
+    }
+
+    fn try_shell(&self) -> Result<FullscreenChatShell, String> {
+        FullscreenChatShell::try_new(
+            self.transcript.clone(),
+            self.composer.clone(),
+            self.width,
+            self.height,
+            STATUS_ROWS,
         )
-        .expect("every message measures");
-        Self { messages, rows }
+        .map_err(|error| error.to_string())
     }
 
-    /// Appends a message and follows it if the reader is at the bottom.
-    ///
-    /// Following is the list's decision, not this example's: content arriving
-    /// while the reader has scrolled up must not yank them back down.
-    fn push(&mut self, message: ChatMessage) {
-        self.messages.push(message);
-        let entry = entry_for(
-            self.messages.len() - 1,
-            self.messages.last().expect("just pushed"),
-        );
-        let revision = self.rows.revision();
-        if self
-            .rows
-            .try_append(revision, std::slice::from_ref(&entry), measure)
-            .is_err()
-        {
-            // Re-measuring from scratch is the honest fallback for an example:
-            // a half-updated index would report row positions that exist
-            // nowhere on screen.
-            *self = Self::new(self.messages.clone(), self.rows.viewport_rows().get());
-        }
+    fn try_resize(&self, width: u16, height: u16) -> Result<Self, String> {
+        let provisional = FullscreenChatShell::try_new(
+            self.transcript.clone(),
+            self.composer.clone(),
+            width,
+            height,
+            STATUS_ROWS,
+        )
+        .map_err(|error| error.to_string())?;
+        let mut candidate = self.clone();
+        let viewport_rows = ViewportRows::new(u64::from(provisional.layout().transcript().rows()));
+        let messages = &candidate.messages;
+        candidate
+            .transcript
+            .try_resize(
+                candidate.transcript.revision(),
+                width,
+                viewport_rows,
+                |request| {
+                    let Some(message) = messages
+                        .iter()
+                        .find(|message| message.id() == request.old_entry.message_id())
+                    else {
+                        return MessageResizeConfigOutcome::Failed(
+                            "resize identity is absent".to_owned(),
+                        );
+                    };
+                    match entry_for(message, request.new_width) {
+                        Ok(entry) => {
+                            MessageResizeConfigOutcome::Rebuilt(entry.measure_config().clone())
+                        }
+                        Err(error) => MessageResizeConfigOutcome::Failed(error),
+                    }
+                },
+                |request| measure_message_request(messages, request),
+            )
+            .map_err(measure_error)?;
+        candidate.width = width;
+        candidate.height = height;
+        candidate.status = format!("{}x{}", width, height);
+        candidate.try_shell()?;
+        Ok(candidate)
     }
 
-    fn scroll_by(&mut self, delta: i64) {
-        let current = self.rows.scroll_offset().get() as i64;
+    fn try_scroll(&self, delta: i64) -> Result<Self, String> {
+        let mut candidate = self.clone();
+        let current = i64::try_from(candidate.transcript.scroll_offset().get())
+            .map_err(|_| "scroll offset exceeds signed range".to_owned())?;
         let target = current.saturating_add(delta).max(0) as u64;
-        let revision = self.rows.revision();
-        // Clamping and the follow-state transition both belong to the list:
-        // landing exactly on the last row resumes following, and anything above
-        // it stays paused.
-        let _ = self.rows.try_scroll_to(revision, RowOffset::new(target));
+        candidate
+            .transcript
+            .try_scroll_to(candidate.transcript.revision(), RowOffset::new(target))
+            .map_err(|error| error.to_string())?;
+        candidate.try_shell()?;
+        Ok(candidate)
     }
 
-    fn resize_viewport(&mut self, viewport_rows: u64) {
-        let rows = ViewportRows::new(viewport_rows.max(1));
-        if rows == self.rows.viewport_rows() {
-            return;
-        }
-        let revision = self.rows.revision();
-        let _ = self.rows.try_set_viewport_rows(revision, rows);
+    fn try_key(&self, input: &str, key: &Key) -> Result<(Self, Option<String>), String> {
+        let mut shell = self.try_shell()?;
+        let outcome = shell
+            .handle_key(&ChatComposerKeyMap::new(), input, key)
+            .map_err(|error| error.to_string())?;
+        let mut candidate = self.clone();
+        candidate.transcript = shell.transcript().clone();
+        candidate.composer = shell.composer().clone();
+
+        let submitted = match outcome {
+            FullscreenKeyOutcome::Submitted(text) => {
+                let token = candidate
+                    .composer
+                    .pending_submission()
+                    .map(|pending| pending.token())
+                    .ok_or_else(|| "submitted composer has no pending token".to_owned())?;
+                candidate.try_push(message(
+                    next_message_id(&candidate.messages)?,
+                    ChatRole::User,
+                    "You",
+                    text.clone(),
+                )?)?;
+                candidate
+                    .composer
+                    .acknowledge_success(token)
+                    .map_err(|error| format!("composer acknowledgement failed: {error:?}"))?;
+                candidate.typing = true;
+                candidate.status = "assistant is typing".to_owned();
+                Some(text)
+            }
+            FullscreenKeyOutcome::Cancelled => {
+                candidate.status = "input cancelled".to_owned();
+                None
+            }
+            FullscreenKeyOutcome::Changed(_) => {
+                candidate.status = "editing".to_owned();
+                None
+            }
+            FullscreenKeyOutcome::Consumed(_) | FullscreenKeyOutcome::Unconsumed(_) => None,
+            FullscreenKeyOutcome::Overlay => None,
+        };
+        candidate.try_shell()?;
+        Ok((candidate, submitted))
     }
-}
 
-/// Builds the measurement entry for one message.
-///
-/// The key is derived from the message's own text, so editing content changes
-/// the key and the cached height is invalidated exactly where it should be.
-fn entry_for(index: usize, message: &ChatMessage) -> MessageListEntry {
-    let shell =
-        MessageShellMeasureConfig::try_new(BUBBLE_WIDTH, HorizontalInsets::new(1, 1), vec![])
-            .expect("a positive content width");
-    let identity = TextFlowCacheIdentity {
-        input: TextFlowInput::plain(
-            message.content.clone(),
-            TextFlowSourceKind::Exact,
-            Style::default(),
-        ),
-        options: TextFlowOptions::new(usize::from(shell.content_width()), TextWrap::Wrap),
-    };
-    MessageListEntry::new(
-        MessageId::new(index as u64 + 1),
-        MessageRevision::INITIAL,
-        MessageVariantKey::new(role_key(message.role)),
-        MessageExpansionKey::new(0),
-        MessageCompositeMeasureConfig::try_new(vec![identity], shell).expect("a valid config"),
-    )
-}
-
-fn entries_for(messages: &[ChatMessage]) -> Vec<MessageListEntry> {
-    messages
-        .iter()
-        .enumerate()
-        .map(|(index, message)| entry_for(index, message))
-        .collect()
-}
-
-const fn role_key(role: Role) -> u64 {
-    match role {
-        Role::User => 0,
-        Role::Assistant => 1,
-        Role::System => 2,
-    }
-}
-
-/// Rows one bubble occupies: its wrapped content, plus the name line.
-///
-/// Measured through the same `TextFlow` the renderer wraps with. A separate
-/// estimate here would make the index and the paint disagree about how tall a
-/// message is, and the transcript would scroll to rows that are not where it
-/// thinks they are.
-fn measure(request: MessageMeasureRequest<'_>) -> MessageMeasureOutcome<String, ()> {
-    let mut rows = 1u64; // the name and timestamp line
-    for flow in request.key.config().text_flows() {
-        match TextFlow::try_build(&flow.input, &flow.options) {
-            Ok(built) => rows += built.row_count() as u64,
-            Err(error) => return MessageMeasureOutcome::Failed(error.to_string()),
-        }
-    }
-    match MessageRows::try_new(rows) {
-        Ok(rows) => MessageMeasureOutcome::Measured(rows),
-        Err(error) => MessageMeasureOutcome::Failed(error.to_string()),
+    fn try_push(&mut self, message: ChatMessage) -> Result<(), String> {
+        let mut messages = self.messages.clone();
+        messages.push(message);
+        let entry = entry_for(
+            messages
+                .last()
+                .expect("candidate contains appended message"),
+            self.width,
+        )?;
+        let mut transcript = self.transcript.clone();
+        transcript
+            .try_append(
+                transcript.revision(),
+                std::slice::from_ref(&entry),
+                |request| measure_message_request(&messages, request),
+            )
+            .map_err(measure_error)?;
+        self.messages = messages;
+        self.transcript = transcript;
+        Ok(())
     }
 }
 
 fn app() -> Element {
-    let (_, terminal_height) = use_window_size();
-    let viewport_rows = u64::from(terminal_height.saturating_sub(CHROME_ROWS).max(1));
-
-    let transcript = use_signal(|| Transcript::new(initial_messages(), viewport_rows));
-    let composer = use_signal(ChatComposerState::new);
-    let is_typing = use_signal(|| false);
+    let (terminal_width, terminal_height) = use_window_size();
+    let surface = use_signal(|| {
+        ChatSurface::try_new(terminal_width, terminal_height)
+            .expect("fullscreen chat requires a non-zero usable terminal")
+    });
     let app = use_app();
-
-    let transcript_input = transcript.clone();
-    let composer_input = composer.clone();
-    let is_typing_input = is_typing.clone();
+    let input_surface = surface.clone();
 
     use_input(move |input, key| {
         if key.escape || (key.ctrl && input == "c") {
             app.exit();
             return;
         }
-
-        if key.page_up {
-            transcript_input.update(|state| state.scroll_by(-(PAGE_ROWS as i64)));
-            return;
-        }
-        if key.page_down {
-            transcript_input.update(|state| state.scroll_by(PAGE_ROWS as i64));
-            return;
-        }
-
-        // Editing, deletion, movement and submission in one call. The example
-        // decides none of it.
-        let mut state = composer_input.get();
-        let outcome = handle_key(&mut state, &ChatComposerKeyMap::new(), input, key);
-
-        if let InteractionOutcome::Submitted(text) = outcome {
-            transcript_input.update(|transcript| {
-                transcript.push(ChatMessage {
-                    role: Role::User,
-                    content: text.clone(),
-                    timestamp: current_time(),
-                });
-            });
-
-            is_typing_input.set(true);
-            let transcript_reply = transcript_input.clone();
-            let typing_reply = is_typing_input.clone();
-            let prompt = text.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(800));
-                typing_reply.set(false);
-                transcript_reply.update(|transcript| {
-                    transcript.push(ChatMessage {
-                        role: Role::Assistant,
-                        content: generate_response(&prompt),
-                        timestamp: current_time(),
+        let current = input_surface.get();
+        let candidate = if key.page_up {
+            current
+                .try_scroll(-(PAGE_ROWS as i64))
+                .map(|state| (state, None))
+        } else if key.page_down {
+            current
+                .try_scroll(PAGE_ROWS as i64)
+                .map(|state| (state, None))
+        } else {
+            current.try_key(input, key)
+        };
+        match candidate {
+            Ok((candidate, submitted)) => {
+                input_surface.set(candidate);
+                if let Some(prompt) = submitted {
+                    let reply_surface = input_surface.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(800));
+                        let mut candidate = reply_surface.get();
+                        let result = next_message_id(&candidate.messages)
+                            .and_then(|id| {
+                                message(
+                                    id,
+                                    ChatRole::Assistant,
+                                    "Assistant",
+                                    generate_response(&prompt),
+                                )
+                            })
+                            .and_then(|reply| candidate.try_push(reply));
+                        match result {
+                            Ok(()) => {
+                                candidate.typing = false;
+                                candidate.status = "ready".to_owned();
+                            }
+                            Err(error) => candidate.status = format!("reply failed: {error}"),
+                        }
+                        if candidate.try_shell().is_ok() {
+                            reply_surface.set(candidate);
+                        }
                     });
-                });
-            });
-
-            // The draft survives Enter and is cleared only once the send is
-            // known to have succeeded.
-            if let Some(token) = state.pending_submission().map(|pending| pending.token()) {
-                let _ = state.acknowledge_success(token);
-            }
-        }
-
-        composer_input.set(state);
-    });
-
-    // Checked before updating, and read without cloning. `Signal::update` calls
-    // `trigger_render()` unconditionally, so an unconditional update here would
-    // schedule a render from inside a render and spin forever.
-    let viewport_changed = transcript
-        .with(|state| state.rows.viewport_rows() != ViewportRows::new(viewport_rows.max(1)));
-    if viewport_changed {
-        transcript.update(|state| state.resize_viewport(viewport_rows));
-    }
-
-    // Borrowed rather than cloned: `get()` would copy the whole transcript —
-    // every message plus the row index — on every frame.
-    let transcript_view = transcript.with(|state| message_list(state, is_typing.get()));
-    let composer_view = composer.with(input_area);
-
-    Box::new()
-        .flex_direction(FlexDirection::Column)
-        .children(vec![header(), transcript_view, composer_view, footer()])
-        .into_element()
-}
-
-fn header() -> Element {
-    Box::new()
-        .flex_direction(FlexDirection::Row)
-        .justify_content(JustifyContent::SpaceBetween)
-        .padding_x(1.0)
-        .background(Color::Ansi256(236))
-        .children(vec![
-            Text::new("rnk-chat")
-                .color(Color::Cyan)
-                .bold()
-                .into_element(),
-            Text::new("AI Assistant").color(Color::Green).into_element(),
-        ])
-        .into_element()
-}
-
-fn message_list(transcript: &Transcript, is_typing: bool) -> Element {
-    let mut children = Vec::new();
-
-    if transcript.messages.is_empty() {
-        children.push(
-            Box::new()
-                .flex_grow(1.0)
-                .justify_content(JustifyContent::Center)
-                .align_items(AlignItems::Center)
-                .child(
-                    Text::new("Start a conversation...")
-                        .color(Color::BrightBlack)
-                        .into_element(),
-                )
-                .into_element(),
-        );
-    } else {
-        // Which rows of which messages are on screen — including the messages
-        // only partly visible at the top and bottom edges, which paging by
-        // message count cannot express at all.
-        match transcript.rows.visible_range() {
-            Ok(range) => {
-                for slice in &range.slices {
-                    if let Some(message) = transcript.messages.get(slice.message_index) {
-                        children.push(render_message(message));
-                    }
                 }
             }
-            // Reported rather than silently drawing an empty transcript: an
-            // index that cannot answer is a bug worth seeing.
-            Err(error) => children.push(
-                Text::new(format!("transcript unavailable: {error}"))
-                    .color(Color::Red)
-                    .into_element(),
-            ),
+            Err(error) => {
+                let mut candidate = current;
+                candidate.status = format!("update refused: {error}");
+                input_surface.set(candidate);
+            }
+        }
+    });
+
+    let resize_needed = surface
+        .with(|current| current.width != terminal_width || current.height != terminal_height);
+    if resize_needed {
+        let current = surface.get();
+        match current.try_resize(terminal_width, terminal_height) {
+            Ok(candidate) => surface.set(candidate),
+            Err(error) => {
+                let mut candidate = current;
+                candidate.status = format!("resize refused: {error}");
+                surface.set(candidate);
+            }
         }
     }
 
-    if is_typing {
-        children.push(
-            Box::new()
-                .padding_x(1.0)
-                .margin_top(0.5)
-                .child(
-                    Text::new("Assistant is typing...")
-                        .color(Color::BrightBlack)
-                        .italic()
-                        .into_element(),
-                )
-                .into_element(),
-        );
-    }
+    surface.with(render_surface)
+}
 
+fn render_surface(surface: &ChatSurface) -> Element {
+    let shell = match surface.try_shell() {
+        Ok(shell) => shell,
+        Err(error) => {
+            return Text::new(format!("chat unavailable: {error}"))
+                .color(Color::Red)
+                .into_element();
+        }
+    };
+    let layout = shell.layout();
+    let transcript = render_transcript(surface, shell.transcript()).unwrap_or_else(|error| {
+        Text::new(format!("transcript unavailable: {error}"))
+            .color(Color::Red)
+            .into_element()
+    });
     Box::new()
         .flex_direction(FlexDirection::Column)
-        .flex_grow(1.0)
-        .padding(1)
-        .children(children)
+        .child(
+            ScrollableBox::new()
+                .width(layout.width())
+                .height(i32::from(layout.transcript().rows()))
+                .child(transcript)
+                .into_element(),
+        )
+        .child(render_composer(
+            shell.composer(),
+            layout.width(),
+            layout.composer().rows(),
+        ))
+        .child(status_bar(surface))
         .into_element()
 }
 
-fn render_message(msg: &ChatMessage) -> Element {
-    let (name, name_color, content_color, align) = match msg.role {
-        Role::User => ("You", Color::Blue, Color::White, JustifyContent::FlexEnd),
-        Role::Assistant => (
-            "Assistant",
-            Color::Green,
-            Color::Reset,
-            JustifyContent::FlexStart,
-        ),
-        Role::System => (
-            "System",
-            Color::Yellow,
-            Color::BrightBlack,
-            JustifyContent::Center,
-        ),
-    };
-
-    let bubble_bg = match msg.role {
-        Role::User => Color::Ansi256(24),
-        Role::Assistant => Color::Ansi256(238),
-        Role::System => Color::Ansi256(236),
-    };
-
-    Box::new()
-        .flex_direction(FlexDirection::Row)
-        .justify_content(align)
-        .margin_bottom(0.5)
-        .child(
-            Box::new()
-                .flex_direction(FlexDirection::Column)
-                .max_width(i32::from(BUBBLE_WIDTH))
-                .padding_x(1.0)
-                .padding_y(0.5)
-                .background(bubble_bg)
-                .border_style(BorderStyle::Round)
-                .border_color(Color::Ansi256(240))
-                .children(vec![
-                    Box::new()
-                        .flex_direction(FlexDirection::Row)
-                        .justify_content(JustifyContent::SpaceBetween)
-                        .children(vec![
-                            Text::new(name).color(name_color).bold().into_element(),
-                            Text::new(&msg.timestamp).dim().into_element(),
-                        ])
+fn render_transcript(
+    surface: &ChatSurface,
+    transcript: &MessageListState,
+) -> Result<Element, String> {
+    MessageList::new(transcript)
+        .try_into_element(|entry, _key, slice| {
+            let message = surface
+                .messages
+                .iter()
+                .find(|message| message.id() == entry.message_id())
+                .ok_or_else(|| "visible message identity is absent".to_owned())?;
+            let visible_rows = slice
+                .viewport_rows
+                .end
+                .checked_sub(slice.viewport_rows.start)
+                .ok_or_else(|| "visible viewport rows are reversed".to_owned())?;
+            let message_rows = slice
+                .message_rows
+                .end
+                .checked_sub(slice.message_rows.start)
+                .ok_or_else(|| "visible message rows are reversed".to_owned())?;
+            if visible_rows != message_rows {
+                return Err("message and viewport slice heights disagree".to_owned());
+            }
+            let height = i32::try_from(visible_rows)
+                .map_err(|_| "visible slice height exceeds layout range".to_owned())?;
+            let offset = u16::try_from(slice.message_rows.start)
+                .map_err(|_| "message row offset exceeds renderer range".to_owned())?;
+            Ok(ScrollableBox::new()
+                .height(height)
+                .scroll_offset_y(offset)
+                .child(
+                    ChatMessageView::new(message)
+                        .options(ChatMessageViewOptions::default())
                         .into_element(),
-                    Text::new(&msg.content).color(content_color).into_element(),
-                ])
+                )
+                .into_element())
+        })
+        .map_err(|error| error.to_string())
+}
+
+fn render_composer(composer: &ChatComposerState, width: u16, rows: u16) -> Element {
+    let projection = rnk::components::chat::ComposerProjection::build(composer, width);
+    Box::new()
+        .height(i32::from(rows))
+        .overflow_y(Overflow::Hidden)
+        .flex_direction(FlexDirection::Row)
+        .child(Text::new("> ").color(Color::Cyan).bold().into_element())
+        .child(Text::new(projection.visible_slice().join("\n")).into_element())
+        .child(Text::new("▏").color(Color::Cyan).into_element())
+        .into_element()
+}
+
+fn status_bar(surface: &ChatSurface) -> Element {
+    let typing = if surface.typing { " · typing" } else { "" };
+    Box::new()
+        .height(i32::from(STATUS_ROWS))
+        .background(Color::Ansi256(236))
+        .child(
+            Text::new(format!("rnk-chat · {}{typing}", surface.status))
+                .dim()
                 .into_element(),
         )
         .into_element()
 }
 
-fn input_area(composer: &ChatComposerState) -> Element {
-    let projection = ComposerProjection::build(composer, BUBBLE_WIDTH);
-    let first_row = projection.scroll_offset();
-    let mut lines = Box::new().flex_direction(FlexDirection::Column);
+fn build_transcript(
+    messages: &[ChatMessage],
+    width: u16,
+    viewport_rows: u64,
+) -> Result<MessageListState, String> {
+    let entries = messages
+        .iter()
+        .map(|message| entry_for(message, width))
+        .collect::<Result<Vec<_>, _>>()?;
+    MessageListState::try_new(
+        &entries,
+        width,
+        ViewportRows::new(viewport_rows),
+        MEASUREMENT_CACHE,
+        |request| measure_message_request(messages, request),
+    )
+    .map_err(measure_error)
+}
 
-    if composer.text().is_empty() {
-        lines = lines.child(
-            Box::new()
-                .flex_direction(FlexDirection::Row)
-                .children(vec![
-                    Text::new("> ").color(Color::Cyan).bold().into_element(),
-                    Text::new("Type a message...")
-                        .color(Color::BrightBlack)
-                        .into_element(),
-                    cell(" ", true),
-                ])
-                .into_element(),
-        );
-    } else {
-        for (offset, row) in projection.visible_slice().iter().enumerate() {
-            let absolute_row = first_row + offset;
-            let cursor_column =
-                (absolute_row == projection.cursor_row()).then(|| projection.cursor_column());
-            lines = lines.child(input_line(row, cursor_column, offset == 0));
+fn measure_error(error: MessageListMeasureError<String, ()>) -> String {
+    match error {
+        MessageListMeasureError::State(source) => source.to_string(),
+        MessageListMeasureError::ConfigRebuildFailed {
+            message_index,
+            message_id,
+            ..
+        } => format!(
+            "message {} at index {message_index} config rebuild failed",
+            message_id.get()
+        ),
+        MessageListMeasureError::ConfigRebuildCancelled {
+            message_index,
+            message_id,
+            ..
+        } => format!(
+            "message {} at index {message_index} config rebuild was cancelled",
+            message_id.get()
+        ),
+        MessageListMeasureError::MeasurementFailed { key, .. } => {
+            format!("message {} measurement failed", key.message_id().get())
         }
+        MessageListMeasureError::Cancelled { key, .. } => {
+            format!(
+                "message {} measurement was cancelled",
+                key.message_id().get()
+            )
+        }
+        _ => "unknown message measurement failure".to_owned(),
     }
-
-    Box::new()
-        .padding_x(1.0)
-        .padding_y(0.5)
-        .border_style(BorderStyle::Round)
-        .border_color(Color::Cyan)
-        .margin_x(1.0)
-        .child(lines.into_element())
-        .into_element()
 }
 
-fn input_line(row: &str, cursor_column: Option<usize>, first: bool) -> Element {
-    let mut line = Box::new().flex_direction(FlexDirection::Row).child(
-        Text::new(if first { "> " } else { "  " })
-            .color(Color::Cyan)
-            .bold()
-            .into_element(),
+fn entry_for(message: &ChatMessage, width: u16) -> Result<MessageListEntry, String> {
+    let shell = MessageShellMeasureConfig::try_new(width, HorizontalInsets::new(0, 0), vec![])
+        .map_err(|error| error.to_string())?;
+    let text = message
+        .blocks()
+        .iter()
+        .filter_map(|entry| match entry.block() {
+            MessageBlock::Text(value) | MessageBlock::Markdown(value) => Some(value.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let identity = TextFlowCacheIdentity {
+        input: TextFlowInput::plain(text, TextFlowSourceKind::Exact, Style::default()),
+        options: TextFlowOptions::new(usize::from(shell.content_width()), TextWrap::Wrap),
+    };
+    let variant = match message.role() {
+        ChatRole::User => 0,
+        ChatRole::Assistant => 1,
+        ChatRole::System => 2,
+        ChatRole::Tool => 3,
+    };
+    Ok(MessageListEntry::new(
+        message.id(),
+        message.revision(),
+        MessageVariantKey::new(variant),
+        MessageExpansionKey::new(0),
+        MessageCompositeMeasureConfig::try_new(vec![identity], shell)
+            .map_err(|error| error.to_string())?,
+    ))
+}
+
+fn measure_message_request(
+    messages: &[ChatMessage],
+    request: MessageMeasureRequest<'_>,
+) -> MessageMeasureOutcome<String, ()> {
+    let Some(message) = messages
+        .iter()
+        .find(|message| message.id() == request.entry.message_id())
+    else {
+        return MessageMeasureOutcome::Missing;
+    };
+    let element = ChatMessageView::new(message).into_element();
+    let engine = LayoutEngine::new();
+    let frame = match engine.prepare_element_incremental(
+        &element,
+        None,
+        request.key.config().shell().outer_width(),
+        u16::MAX,
+    ) {
+        Ok(frame) => frame,
+        Err(error) => return MessageMeasureOutcome::Failed(error.to_string()),
+    };
+    let height = frame.snapshot().root().border_bounds().height();
+    let rows = match u64::try_from(height) {
+        Ok(0) | Err(_) => {
+            return MessageMeasureOutcome::Failed("root snapshot height is invalid".to_owned());
+        }
+        Ok(rows) => rows,
+    };
+    match MessageRows::try_new(rows) {
+        Ok(rows) => MessageMeasureOutcome::Measured(rows),
+        Err(error) => MessageMeasureOutcome::Failed(error.to_string()),
+    }
+}
+
+fn next_message_id(messages: &[ChatMessage]) -> Result<MessageId, String> {
+    messages.last().map_or(Ok(MessageId::new(1)), |message| {
+        message
+            .id()
+            .get()
+            .checked_add(1)
+            .map(MessageId::new)
+            .ok_or_else(|| "message identity exhausted".to_owned())
+    })
+}
+
+fn message(
+    id: MessageId,
+    role: ChatRole,
+    author: &str,
+    content: String,
+) -> Result<ChatMessage, String> {
+    let metadata = ChatMessageMetadata::new(
+        Some(MessageAuthor::new(author).map_err(|error| error.to_string())?),
+        Some(MessageTimestamp::new(current_time()).map_err(|error| error.to_string())?),
     );
-
-    let mut column = 0usize;
-    let mut painted_cursor = false;
-    for cluster in row.graphemes(true) {
-        let at_cursor = cursor_column == Some(column);
-        painted_cursor |= at_cursor;
-        line = line.child(cell(cluster, at_cursor));
-        // Cells, not clusters: a CJK character occupies two columns.
-        column += UnicodeWidthStr::width(cluster).max(1);
-    }
-    if let Some(target) = cursor_column
-        && !painted_cursor
-        && target >= column
-    {
-        line = line.child(cell(" ", true));
-    }
-
-    line.into_element()
+    ChatMessage::try_restore(
+        id,
+        role,
+        MessageStatus::Complete,
+        MessageRevision::INITIAL,
+        vec![MessageBlockEntry::new(
+            BlockId::new(id.get()),
+            MessageBlock::Text(content),
+        )],
+        metadata,
+    )
+    .map_err(|error| error.to_string())
 }
 
-fn cell(cluster: &str, at_cursor: bool) -> Element {
-    let text = Text::new(cluster.to_string());
-    if at_cursor {
-        text.color(Color::Black)
-            .background(Color::Cyan)
-            .into_element()
-    } else {
-        text.color(Color::White).into_element()
-    }
-}
-
-fn footer() -> Element {
-    Box::new()
-        .flex_direction(FlexDirection::Row)
-        .padding_x(1.0)
-        .background(Color::Ansi256(236))
-        .gap(2.0)
-        .children(vec![
-            Text::new("Enter")
-                .color(Color::Yellow)
-                .bold()
-                .into_element(),
-            Text::new("Send").dim().into_element(),
-            Text::new("PgUp/PgDn")
-                .color(Color::Yellow)
-                .bold()
-                .into_element(),
-            Text::new("Scroll").dim().into_element(),
-            Text::new("Esc").color(Color::Yellow).bold().into_element(),
-            Text::new("Exit").dim().into_element(),
-        ])
-        .into_element()
+fn initial_messages() -> Result<Vec<ChatMessage>, String> {
+    Ok(vec![
+        message(
+            MessageId::new(1),
+            ChatRole::System,
+            "System",
+            "Welcome to rnk-chat. Row measurement comes from the published layout snapshot."
+                .to_owned(),
+        )?,
+        message(
+            MessageId::new(2),
+            ChatRole::Assistant,
+            "Assistant",
+            "Hi! Resize the terminal or use Page Up and Page Down to inspect row clipping."
+                .to_owned(),
+        )?,
+    ])
 }
 
 fn current_time() -> String {
     use std::time::SystemTime;
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let hours = (now / 3600) % 24;
-    let minutes = (now / 60) % 60;
-    format!("{hours:02}:{minutes:02}")
-}
-
-fn generate_response(input: &str) -> String {
-    let input_lower = input.to_lowercase();
-
-    if input_lower.contains("hello") || input_lower.contains("hi") {
-        "Hello! How can I help you today?".to_string()
-    } else if input_lower.contains("rnk") {
-        "rnk is a React-like terminal UI framework for Rust! It features declarative components, hooks, and flexbox layout.".to_string()
-    } else if input_lower.contains("help") {
-        "I'm here to help! You can ask me about rnk, Rust, or just chat.".to_string()
-    } else if input_lower.contains("feature") {
-        "rnk has 45+ components, animation system, chainable styles, and more! Check out the examples.".to_string()
-    } else if input_lower.contains("thank") {
-        "You're welcome! Let me know if you need anything else.".to_string()
-    } else {
-        // Truncated by grapheme cluster. Slicing to byte 30 panics the moment
-        // someone types a multi-byte character, which is any non-ASCII one.
-        let preview: String = input.graphemes(true).take(30).collect();
-        format!("I received your message: \"{preview}\". How can I assist you further?")
+    match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(elapsed) => {
+            let seconds = elapsed.as_secs();
+            format!("{:02}:{:02}", (seconds / 3600) % 24, (seconds / 60) % 60)
+        }
+        Err(_) => "clock-error".to_owned(),
     }
 }
 
-fn initial_messages() -> Vec<ChatMessage> {
-    vec![
-        ChatMessage {
-            role: Role::System,
-            content: "Welcome to rnk-chat! This is a demo of rnk's chat UI capabilities."
-                .to_string(),
-            timestamp: current_time(),
-        },
-        ChatMessage {
-            role: Role::Assistant,
-            content: "Hi! I'm an AI assistant. How can I help you today?".to_string(),
-            timestamp: current_time(),
-        },
-    ]
+fn generate_response(input: &str) -> String {
+    let normalized = input.to_lowercase();
+    if normalized.contains("hello") || normalized.contains("hi") {
+        "Hello! How can I help you today?".to_owned()
+    } else if normalized.contains("rnk") {
+        "rnk composes typed terminal UI state, layout, and rendering.".to_owned()
+    } else {
+        format!("I received your message: {input}")
+    }
 }
