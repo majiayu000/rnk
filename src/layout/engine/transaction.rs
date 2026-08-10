@@ -11,11 +11,15 @@ use crate::reconciler::{
 use super::{
     CheckedIncrementalLayoutReport, FullRebuildError, IncrementalLayoutError,
     InvalidLayoutTargetError, LayoutEngine, PatchStage, PatchTransactionCause,
-    PatchTransactionError, RebuildFailure, RebuildStage, TransactionalLayoutError,
+    PatchTransactionError, RebuildFailure, RebuildStage, RecoveredSnapshotError,
+    TransactionalLayoutError,
     context_sync::{ContextSyncError, LayoutRunError},
     incremental::ElementVNodeSnapshot,
     patching,
     postcondition::{TargetAliasExpectation, TargetValidationError},
+};
+use crate::layout::{
+    LayoutSnapshot, PreparedSnapshotFrame, SnapshotBuildReport, SnapshotBuildStrategy,
 };
 
 /// A fully validated layout frame that has not changed the committed engine.
@@ -35,6 +39,8 @@ pub struct PreparedLayoutFrame {
     state: PreparedLayoutState,
     current_vnode: VNode,
     report: CheckedIncrementalLayoutReport,
+    snapshot: PreparedSnapshotFrame,
+    snapshot_report: SnapshotBuildReport,
     source_epoch: std::sync::Arc<()>,
 }
 
@@ -68,6 +74,21 @@ impl PreparedLayoutFrame {
     /// Returns the checked incremental/recovery classification.
     pub fn report(&self) -> &CheckedIncrementalLayoutReport {
         &self.report
+    }
+
+    /// Returns the immutable terminal-cell snapshot for this candidate.
+    pub fn snapshot(&self) -> &LayoutSnapshot {
+        self.snapshot.snapshot()
+    }
+
+    /// Returns non-semantic work evidence for snapshot construction.
+    pub fn snapshot_report(&self) -> &SnapshotBuildReport {
+        &self.snapshot_report
+    }
+
+    /// Returns the semantic snapshot together with this frame's exact aliases.
+    pub fn prepared_snapshot(&self) -> &PreparedSnapshotFrame {
+        &self.snapshot
     }
 
     pub(crate) fn engine(&self) -> &LayoutEngine {
@@ -247,10 +268,22 @@ impl LayoutEngine {
             let candidate = self
                 .try_rebuild_snapshot_fresh(&snapshot, &current_vnode, width, height)
                 .map_err(TransactionalLayoutError::InitialBuild)?;
+            let (prepared_snapshot, snapshot_report) = candidate
+                .try_build_snapshot_for(
+                    root,
+                    width,
+                    height,
+                    SnapshotBuildStrategy::InitialFull,
+                    0,
+                    0,
+                )
+                .map_err(TransactionalLayoutError::Snapshot)?;
             return Ok(PreparedLayoutFrame {
                 state: PreparedLayoutState::Replacement(candidate),
                 current_vnode,
                 report: CheckedIncrementalLayoutReport::InitialFullBuild,
+                snapshot: prepared_snapshot,
+                snapshot_report,
                 source_epoch: self.commit_epoch.clone(),
             });
         }
@@ -303,6 +336,16 @@ impl LayoutEngine {
                 } else {
                     CheckedIncrementalLayoutReport::Incremental { patch_count }
                 };
+                let (prepared_snapshot, snapshot_report) = candidate
+                    .try_build_snapshot_for(
+                        root,
+                        width,
+                        height,
+                        SnapshotBuildStrategy::Incremental,
+                        patch_count,
+                        0,
+                    )
+                    .map_err(TransactionalLayoutError::Snapshot)?;
                 Ok(PreparedLayoutFrame {
                     state: if unchanged_frame {
                         PreparedLayoutState::AliasOverlay(candidate)
@@ -311,20 +354,43 @@ impl LayoutEngine {
                     },
                     current_vnode,
                     report,
+                    snapshot: prepared_snapshot,
+                    snapshot_report,
                     source_epoch: self.commit_epoch.clone(),
                 })
             }
             Err(incremental_failure) => {
                 match self.try_rebuild_snapshot_fresh(&snapshot, &current_vnode, width, height) {
-                    Ok(rebuilt) => Ok(PreparedLayoutFrame {
-                        state: PreparedLayoutState::Replacement(rebuilt),
-                        current_vnode,
-                        report: CheckedIncrementalLayoutReport::RecoveredFullRebuild {
-                            patch_count,
-                            incremental_failure,
-                        },
-                        source_epoch: self.commit_epoch.clone(),
-                    }),
+                    Ok(rebuilt) => {
+                        let (prepared_snapshot, snapshot_report) = rebuilt
+                            .try_build_snapshot_for(
+                                root,
+                                width,
+                                height,
+                                SnapshotBuildStrategy::RecoveredFull,
+                                patch_count,
+                                1,
+                            )
+                            .map_err(|snapshot| {
+                                TransactionalLayoutError::RecoveredSnapshot(
+                                    RecoveredSnapshotError::new(
+                                        incremental_failure.clone(),
+                                        snapshot,
+                                    ),
+                                )
+                            })?;
+                        Ok(PreparedLayoutFrame {
+                            state: PreparedLayoutState::Replacement(rebuilt),
+                            current_vnode,
+                            report: CheckedIncrementalLayoutReport::RecoveredFullRebuild {
+                                patch_count,
+                                incremental_failure,
+                            },
+                            snapshot: prepared_snapshot,
+                            snapshot_report,
+                            source_epoch: self.commit_epoch.clone(),
+                        })
+                    }
                     Err(rebuild) => Err(TransactionalLayoutError::RecoveryFailed {
                         incremental: Box::new(incremental_failure),
                         rebuild: Box::new(rebuild),

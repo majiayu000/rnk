@@ -626,6 +626,7 @@ fn build_position_map(tokens: &[TextFlowToken]) -> Vec<TextFlowPositionMapEntry>
 }
 
 /// Compatibility wrapper retained for PR #84 callers.
+#[allow(dead_code)]
 pub(crate) fn flow_text(text: &str, max_width: usize, wrap: TextWrap) -> TextFlow {
     let input = TextFlowInput::plain(text, TextFlowSourceKind::Exact, Style::new());
     TextFlow::try_build(&input, &TextFlowOptions::new(max_width, wrap))

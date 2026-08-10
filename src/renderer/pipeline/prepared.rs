@@ -4,14 +4,16 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::core::{Display, Element, ElementType, VNode};
 use crate::layout::{
-    BoundPreparedLayoutFrame, CheckedLayoutSnapshot, FullRebuildError, IncrementalLayoutError,
-    LayoutEngine, LayoutSnapshotError, PreparedLayoutCommitError, PreparedLayoutFrame,
-    RebuildFailure, TransactionalLayoutError,
+    BoundPreparedLayoutFrame, CheckedIncrementalLayoutReport, CheckedLayoutSnapshot,
+    FullRebuildError, IncrementalLayoutError, LayoutEngine, LayoutSnapshotError,
+    LegacyLayoutSnapshotError, PreparedLayoutCommitError, PreparedLayoutFrame,
+    PreparedSnapshotFrame, RebuildFailure, TransactionalLayoutError,
 };
 use crate::reconciler::{ScopedNodeIdentity, SiblingIdentity};
 use crate::renderer::{
-    CheckedRenderError, DynamicFrameError, LayoutRenderError, Output, TransactionalFrameError,
-    try_render_element_checked,
+    CheckedRenderError, DynamicFrameError, LayoutRenderError, Output, RecoveredSnapshotRenderError,
+    SnapshotRenderError, TextCoordinateError, TextRenderError, TransactionalFrameError,
+    try_render_element_snapshot_checked,
 };
 use crate::runtime::RuntimeContext;
 
@@ -114,7 +116,7 @@ impl RenderPipeline {
             height,
             layout_engine,
             previous_vnode,
-            try_render_element_checked,
+            try_render_element_snapshot_checked,
         )
     }
 
@@ -126,7 +128,7 @@ impl RenderPipeline {
         previous_vnode: Option<&VNode>,
         renderer: impl FnOnce(
             &Element,
-            &LayoutEngine,
+            &PreparedSnapshotFrame,
             &mut Output,
             f32,
             f32,
@@ -137,7 +139,7 @@ impl RenderPipeline {
             .map_err(TransactionalFrameError::Transaction)?;
         let candidate = layout.engine();
         let measurements = candidate
-            .try_get_layout_snapshot()
+            .try_get_snapshot_measurements(layout.prepared_snapshot())
             .map_err(snapshot_error)?;
         let raw_node_candidates = candidate.raw_vnode_identity_candidates();
         let mut key_aliases = HashMap::new();
@@ -154,25 +156,39 @@ impl RenderPipeline {
                 key_aliases,
             });
         }
-        let root_layout = candidate
-            .try_get_required_layout(dynamic_root.id)
-            .map_err(|source| {
-                TransactionalFrameError::Render(CheckedRenderError::Layout(
-                    LayoutRenderError::Invariant(source),
-                ))
-            })?
-            .ok_or({
-                TransactionalFrameError::Render(CheckedRenderError::Layout(
-                    LayoutRenderError::MissingRootLayout {
-                        element_id: dynamic_root.id,
-                    },
-                ))
-            })?;
-        let content_width = (root_layout.width as u16).max(1).min(width);
-        let render_height = (root_layout.height as u16).max(1).min(height);
+        let root_bounds = layout.snapshot().root().border_bounds();
+        let content_width = u16::try_from(root_bounds.width().max(1))
+            .unwrap_or(width)
+            .min(width);
+        let render_height = u16::try_from(root_bounds.height().max(1))
+            .unwrap_or(height)
+            .min(height);
         let mut output = Output::new(content_width, render_height);
-        renderer(dynamic_root, candidate, &mut output, 0.0, 0.0)
-            .map_err(TransactionalFrameError::Render)?;
+        let recovered_incremental = match layout.report() {
+            CheckedIncrementalLayoutReport::RecoveredFullRebuild {
+                incremental_failure,
+                ..
+            } => Some(incremental_failure.clone()),
+            _ => None,
+        };
+        if let Err(error) = renderer(
+            dynamic_root,
+            layout.prepared_snapshot(),
+            &mut output,
+            0.0,
+            0.0,
+        ) {
+            let error = match (recovered_incremental, error) {
+                (Some(incremental), CheckedRenderError::Snapshot(render)) => {
+                    CheckedRenderError::RecoveredSnapshot(RecoveredSnapshotRenderError::new(
+                        incremental,
+                        render,
+                    ))
+                }
+                (_, error) => error,
+            };
+            return Err(TransactionalFrameError::Render(error));
+        }
 
         Ok(PreparedDynamicFrame {
             layout,
@@ -217,15 +233,18 @@ fn collect_key_aliases(
     Ok(())
 }
 
-fn snapshot_error(source: LayoutSnapshotError) -> TransactionalFrameError {
+fn snapshot_error(source: LegacyLayoutSnapshotError) -> TransactionalFrameError {
     let source = match source {
-        LayoutSnapshotError::Lookup(source) => LayoutRenderError::LayoutLookup(source),
-        LayoutSnapshotError::Invariant(source) => LayoutRenderError::Invariant(source),
+        LegacyLayoutSnapshotError::Lookup(source) => LayoutRenderError::LayoutLookup(source),
+        LegacyLayoutSnapshotError::Invariant(source) => LayoutRenderError::Invariant(source),
     };
     TransactionalFrameError::Render(CheckedRenderError::Layout(source))
 }
 
-pub(super) fn legacy_dynamic_error(source: TransactionalFrameError) -> DynamicFrameError {
+pub(super) fn legacy_dynamic_error(
+    source: TransactionalFrameError,
+    root_element_id: crate::core::ElementId,
+) -> DynamicFrameError {
     match source {
         TransactionalFrameError::Upstream(source) => source,
         TransactionalFrameError::Transaction(TransactionalLayoutError::Upstream(source)) => {
@@ -240,9 +259,30 @@ pub(super) fn legacy_dynamic_error(source: TransactionalFrameError) -> DynamicFr
         TransactionalFrameError::Render(CheckedRenderError::Text(source)) => {
             DynamicFrameError::Text(source)
         }
+        TransactionalFrameError::Render(CheckedRenderError::Snapshot(
+            SnapshotRenderError::Text { source, .. },
+        )) => DynamicFrameError::Text(source),
         TransactionalFrameError::Render(CheckedRenderError::Layout(
             LayoutRenderError::LayoutLookup(source),
         )) => DynamicFrameError::LegacyLookup(source),
+        TransactionalFrameError::Transaction(TransactionalLayoutError::Snapshot(
+            LayoutSnapshotError::NonFiniteGeometry { .. },
+        )) => DynamicFrameError::Text(TextRenderError::coordinate(
+            root_element_id,
+            TextCoordinateError::NonFinite,
+        )),
+        TransactionalFrameError::Transaction(TransactionalLayoutError::RecoveredSnapshot(
+            source,
+        )) if matches!(
+            source.snapshot_failure(),
+            LayoutSnapshotError::NonFiniteGeometry { .. }
+        ) =>
+        {
+            DynamicFrameError::Text(TextRenderError::coordinate(
+                root_element_id,
+                TextCoordinateError::NonFinite,
+            ))
+        }
         other => panic!("legacy dynamic frame cannot represent generalized error: {other}"),
     }
 }

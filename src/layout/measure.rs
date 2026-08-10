@@ -307,6 +307,7 @@ pub fn truncate_middle(text: &str, max_width: usize, ellipsis: &str) -> String {
 }
 
 /// Count wrapped lines for a text block without allocating wrapped content.
+#[allow(dead_code)]
 pub(crate) fn count_wrapped_lines_by_width(text: &str, max_width: usize) -> usize {
     crate::layout::text_flow::flow_text(text, max_width, crate::core::TextWrap::Wrap).row_count()
 }

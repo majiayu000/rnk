@@ -175,9 +175,11 @@ pub use crate::renderer::{
     LayoutRenderError,
     ModeSwitch,
     Printable,
+    RecoveredSnapshotRenderError,
     // Types
     RenderHandle,
     RenderOptions,
+    SnapshotRenderError,
     TextCoordinateError,
     TextProjectionError,
     TextRenderError,

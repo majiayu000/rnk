@@ -17,7 +17,7 @@ pub use preflight::{DirectPatchPreflightCause, DirectPatchPreflightError};
 use std::fmt;
 
 use crate::core::NodeKey;
-use crate::layout::TextFlowError;
+use crate::layout::{LayoutSnapshotError, TextFlowError};
 use crate::reconciler::{ReconcilePlanError, SiblingIdentity};
 
 use super::IncrementalInvariantError;
@@ -650,6 +650,48 @@ impl std::error::Error for InvalidLayoutTargetError {
     }
 }
 
+/// A successful recovery layout whose immutable snapshot could not be built.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveredSnapshotError {
+    incremental: Box<PatchTransactionError>,
+    snapshot: Box<LayoutSnapshotError>,
+}
+
+impl RecoveredSnapshotError {
+    pub(crate) fn new(incremental: PatchTransactionError, snapshot: LayoutSnapshotError) -> Self {
+        Self {
+            incremental: Box::new(incremental),
+            snapshot: Box::new(snapshot),
+        }
+    }
+
+    /// Original incremental transaction failure.
+    pub fn incremental_failure(&self) -> &PatchTransactionError {
+        &self.incremental
+    }
+
+    /// Final snapshot construction failure.
+    pub fn snapshot_failure(&self) -> &LayoutSnapshotError {
+        &self.snapshot
+    }
+}
+
+impl fmt::Display for RecoveredSnapshotError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "incremental layout failed ({}); recovered snapshot failed ({})",
+            self.incremental, self.snapshot
+        )
+    }
+}
+
+impl std::error::Error for RecoveredSnapshotError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.snapshot.as_ref())
+    }
+}
+
 /// Recoverable checked transaction boundary for incremental layout.
 ///
 /// ```
@@ -670,6 +712,10 @@ pub enum TransactionalLayoutError {
     InitialBuild(FullRebuildError),
     /// The target was invalid before transaction or recovery work began.
     InvalidTarget(InvalidLayoutTargetError),
+    /// Layout succeeded but immutable snapshot construction failed.
+    Snapshot(LayoutSnapshotError),
+    /// Recovery layout succeeded but its immutable snapshot failed.
+    RecoveredSnapshot(RecoveredSnapshotError),
     /// Incremental commit and its single fresh recovery attempt both failed.
     RecoveryFailed {
         /// Primary incremental failure.
@@ -684,6 +730,7 @@ impl TransactionalLayoutError {
     pub fn incremental_failure(&self) -> Option<&PatchTransactionError> {
         match self {
             Self::RecoveryFailed { incremental, .. } => Some(incremental),
+            Self::RecoveredSnapshot(source) => Some(source.incremental_failure()),
             _ => None,
         }
     }
@@ -705,6 +752,8 @@ impl fmt::Display for TransactionalLayoutError {
             Self::DirectPatch(source) => write!(formatter, "direct patch failed: {source}"),
             Self::InitialBuild(source) => write!(formatter, "initial build failed: {source}"),
             Self::InvalidTarget(source) => source.fmt(formatter),
+            Self::Snapshot(source) => write!(formatter, "snapshot failed: {source}"),
+            Self::RecoveredSnapshot(source) => source.fmt(formatter),
             Self::RecoveryFailed {
                 incremental,
                 rebuild,
@@ -723,6 +772,8 @@ impl std::error::Error for TransactionalLayoutError {
             Self::DirectPatch(source) => Some(source),
             Self::InitialBuild(source) => Some(source),
             Self::InvalidTarget(source) => Some(source),
+            Self::Snapshot(source) => Some(source),
+            Self::RecoveredSnapshot(source) => Some(source),
             Self::RecoveryFailed { rebuild, .. } => Some(rebuild.as_ref()),
         }
     }

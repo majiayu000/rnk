@@ -50,6 +50,22 @@ impl TestRenderer {
         match self.try_render_to_plain_checked(element) {
             Ok(output) => Ok(output),
             Err(crate::renderer::CheckedRenderError::Text(source)) => Err(source),
+            Err(crate::renderer::CheckedRenderError::LayoutBuild(
+                TransactionalLayoutError::Snapshot(source),
+            )) => Err(
+                crate::renderer::legacy_snapshot_coordinate_error(element, &source).unwrap_or_else(
+                    || panic!("legacy test renderer cannot represent snapshot error: {source}"),
+                ),
+            ),
+            Err(crate::renderer::CheckedRenderError::LayoutBuild(
+                TransactionalLayoutError::RecoveredSnapshot(source),
+            )) => Err(crate::renderer::legacy_snapshot_coordinate_error(
+                element,
+                source.snapshot_failure(),
+            )
+            .unwrap_or_else(|| {
+                panic!("legacy test renderer cannot represent snapshot error: {source}")
+            })),
             Err(other) => {
                 panic!("legacy test renderer cannot represent checked error: {other}")
             }
@@ -66,6 +82,22 @@ impl TestRenderer {
         match self.try_render_to_ansi_checked(element) {
             Ok(output) => Ok(output),
             Err(crate::renderer::CheckedRenderError::Text(source)) => Err(source),
+            Err(crate::renderer::CheckedRenderError::LayoutBuild(
+                TransactionalLayoutError::Snapshot(source),
+            )) => Err(
+                crate::renderer::legacy_snapshot_coordinate_error(element, &source).unwrap_or_else(
+                    || panic!("legacy test renderer cannot represent snapshot error: {source}"),
+                ),
+            ),
+            Err(crate::renderer::CheckedRenderError::LayoutBuild(
+                TransactionalLayoutError::RecoveredSnapshot(source),
+            )) => Err(crate::renderer::legacy_snapshot_coordinate_error(
+                element,
+                source.snapshot_failure(),
+            )
+            .unwrap_or_else(|| {
+                panic!("legacy test renderer cannot represent snapshot error: {source}")
+            })),
             Err(other) => {
                 panic!("legacy test renderer cannot represent checked error: {other}")
             }

@@ -55,12 +55,15 @@ CellPoint { x: i32, y: i32 }
 CellVector { dx: i32, dy: i32 }
 CellRect { left: i32, top: i32, right: i32, bottom: i32 } // half-open
 
+pub struct SnapshotIdentity(ScopedNodeIdentity); // public opaque type, private storage/constructors
+
 pub struct SnapshotNode { // all fields private
-  identity: ScopedNodeIdentity,
+  identity: SnapshotIdentity,
   parent: Option<SnapshotNodeIndex>,
   children: Arc<[SnapshotNodeIndex]>,
   border_bounds: CellRect,
   content_bounds: CellRect,
+  text_origin: CellPoint,
   effective_clip: AxisClip { x: CellSpan, y: CellSpan },
   scroll_transform: CellVector,
   text_flow: Option<TextFlowSemanticStamp>,
@@ -87,8 +90,10 @@ SnapshotBuildReport {
 
 `CellSpan { start: i32, end: i32 }` 与 `AxisClip { x, y }` 同样只允许 checked construction。
 `LayoutSnapshot` 公开 `viewport()`、`root()`、`nodes()`（read-only exact-size iterator）与
-`get(&ScopedNodeIdentity)`；`SnapshotNode` 仅公开 identity/parent/children/bounds/clip/
-scroll/TextFlow 的借用或 copy accessor。不得公开 field、setter、任意-state `new`/`Default`、
+`get(&SnapshotIdentity)`；`SnapshotNode` 仅公开 identity/parent/children/bounds/clip/
+scroll/TextFlow 的借用或 copy accessor。`SnapshotIdentity` 只公开 exact `Eq`/`Hash` 与
+diagnostic accessor，不公开内部 `ScopedNodeIdentity`、构造器或 segment。不得公开 field、
+setter、任意-state `new`/`Default`、
 `DerefMut`、`AsMut`、`IndexMut`，也不得从调用方接收未经验证的 node slice。`Clone` 只共享
 已验证 `Arc`。
 
@@ -155,7 +160,8 @@ LayoutSnapshotError =
   DuplicateIdentity { identity }
   MissingLayout { identity }
   MissingTextFlowRevision { identity }
-  InvalidTree { identity: Option<ScopedNodeIdentity>, source: SnapshotInvariantError }
+  TextFlowRevision { identity, source: TextFlowError }
+  InvalidTree { identity: Option<SnapshotIdentity>, source: SnapshotInvariantError }
 
 SnapshotInvariantError =
   MissingParent { child, expected_parent }
@@ -249,19 +255,23 @@ absolute_top    = parent_absolute_top  + local_y - inherited_scroll_y
 absolute_right  = absolute_left + raw_width
 absolute_bottom = absolute_top  + raw_height
 
-cell_left   = checked_round(absolute_left)
-cell_top    = checked_round(absolute_top)
-cell_right  = checked_round(absolute_right)
-cell_bottom = checked_round(absolute_bottom)
+cell_left   = checked_floor(absolute_left)
+cell_top    = checked_floor(absolute_top)
+cell_right  = checked_floor(absolute_right)
+cell_bottom = checked_floor(absolute_bottom)
 ```
 
-- `checked_round` 使用与 pinned Taffy/Rust一致、写入 contract test的 nearest/half-away-from-zero
-  规则；start/end共用同一函数。
+- `checked_floor` 沿用已合入 PR #160 的绝对 half-open containing-cell 合同：正负坐标都取
+  checked floor，`(-1.0, 0.0)` 不得被折叠到 cell 0；start/end 共用同一函数。
 - 量化前验证所有 input/intermediate finite、extent非负、加法无超出 `i32` representable
   rounded range；失败返回 exact identity/field/value 的 `LayoutSnapshotError`。
 - width/height只能由 right-left / bottom-top 得出。不能量化 raw width，不能 `as u16`。
 - content edges从 raw border/padding/content geometry以相同 absolute rule量化，再与
   border rect求交；正常空 content合法，反向 raw geometry或算术错误不合法。
+- `text_origin`保留量化后的raw content start，允许负padding等兼容输入在clip前保持signed；
+  `content_bounds`仍与border求交并保持内含。若producer TextFlow width与量化后的raw content
+  width不同，snapshot在不可见candidate内用同一input/policy重绑定TextFlow，失败保留
+  `TextFlowError` source。
 - monotone Q 保证 raw `right <= next.left` 时 cell `right <= next.left`；合法 CSS overlap
   仍保留，测试只证明 quantizer 不制造新 overlap。
 - scroll offset累积为 signed transform。clip使用`AxisClip`逐轴继承：x轴只与terminal x、
@@ -272,11 +282,11 @@ cell_bottom = checked_round(absolute_bottom)
   `nested_mixed_axis_overflow_matches_all_strategies`覆盖两种方向、两层嵌套、空单轴span，
   并比较full/incremental/recovered及renderer最终cells。
 
-Taffy 0.7 自带 pixel rounding，但 GH-61 不在 renderer 二次猜测其局部 float。实现必须在
-merged lock上确认 `layout()` / `unrounded_layout()`语义，并选择一个唯一 source。若直接复用
-Taffy final layout，必须用 parity fixture证明 nested cumulative edges、content/border与上述
-合同逐项一致；否则 snapshot builder按上述 absolute rule读取 unrounded values。禁止同时
-保留“Taffy rounded getter”和“自定义 renderer cast”两套路径。
+Taffy 0.7 自带 pixel rounding，但 GH-61 不在 renderer 二次猜测其局部 float。merged lock
+确认 `layout()` 默认返回 final rounded relative layout，而 `unrounded_layout()` 返回 canonical
+raw relative geometry；snapshot builder统一读取后者、累计绝对 edges，再执行上述 checked
+floor。parity fixture锁定 nested cumulative edges、content/border 与 scroll；禁止同时保留
+“Taffy rounded getter”和“renderer cast”两套 correctness 路径。
 
 ### 4. Producer、recovery 与 publication
 

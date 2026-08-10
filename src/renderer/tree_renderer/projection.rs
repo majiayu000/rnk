@@ -6,7 +6,9 @@ use crate::core::{Display, Element, ElementId, ElementType};
 use crate::layout::text_flow::{
     TextFlow, TextFlowPlacement, TextFlowRow, TextFlowRun, TextFlowSource, TextFlowToken,
 };
-use crate::layout::{IncrementalInvariantError, LayoutEngine};
+use crate::layout::{
+    CellOutputError, LayoutAliasError, LayoutEngine, LayoutSnapshotError, PreparedSnapshotFrame,
+};
 use crate::renderer::Output;
 use crate::renderer::{TextCoordinateError, TextProjectionError, TextRenderError};
 
@@ -15,7 +17,7 @@ mod staged;
 pub(super) use staged::StagedFrame;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) struct FrameCell {
+pub(crate) struct FrameCell {
     pub(super) x: u16,
     pub(super) y: u16,
 }
@@ -27,7 +29,7 @@ pub(super) struct SignedCell {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) struct ProjectionId {
+pub(crate) struct ProjectionId {
     pub(super) element_id: ElementId,
     pub(super) token_index: usize,
 }
@@ -125,10 +127,14 @@ pub(super) struct ProjectionOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum ProjectionError {
+pub(crate) enum ProjectionError {
+    Snapshot(LayoutSnapshotError),
+    Alias(LayoutAliasError),
+    Output {
+        element_id: Option<ElementId>,
+        source: CellOutputError,
+    },
     MissingCurrentFlow(ElementId),
-    MissingLayout(ElementId),
-    LayoutInvariant(IncrementalInvariantError),
     NonFiniteCoordinate(Option<ElementId>),
     CoordinateOverflow(Option<ElementId>),
     MalformedFlow(&'static str),
@@ -144,13 +150,15 @@ pub(super) enum ProjectionError {
 impl fmt::Display for ProjectionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Snapshot(source) => source.fmt(formatter),
+            Self::Alias(source) => source.fmt(formatter),
+            Self::Output { element_id, source } => match element_id {
+                Some(id) => write!(formatter, "cell output failed for element {id:?}: {source}"),
+                None => source.fmt(formatter),
+            },
             Self::MissingCurrentFlow(id) => {
                 write!(formatter, "missing current TextFlow for element {id:?}")
             }
-            Self::MissingLayout(id) => {
-                write!(formatter, "missing current layout for element {id:?}")
-            }
-            Self::LayoutInvariant(source) => source.fmt(formatter),
             Self::NonFiniteCoordinate(Some(id)) => {
                 write!(formatter, "non-finite render coordinate for element {id:?}")
             }
@@ -184,7 +192,16 @@ impl fmt::Display for ProjectionError {
     }
 }
 
-impl std::error::Error for ProjectionError {}
+impl std::error::Error for ProjectionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Snapshot(source) => Some(source),
+            Self::Alias(source) => Some(source),
+            Self::Output { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
 
 impl ProjectionError {
     /// Name the element a coordinate or malformed-flow failure came from.
@@ -197,21 +214,34 @@ impl ProjectionError {
         match self {
             Self::NonFiniteCoordinate(None) => Self::NonFiniteCoordinate(Some(element_id)),
             Self::CoordinateOverflow(None) => Self::CoordinateOverflow(Some(element_id)),
+            Self::Output {
+                element_id: None,
+                source,
+            } => Self::Output {
+                element_id: Some(element_id),
+                source,
+            },
             Self::MalformedFlow(reason) => Self::MalformedFlowAt(element_id, reason),
             other => other,
         }
     }
 
-    pub(super) fn into_text_render_error(self, fallback_element_id: ElementId) -> TextRenderError {
+    pub(crate) fn into_text_render_error(self, fallback_element_id: ElementId) -> TextRenderError {
         match self {
+            Self::Snapshot(LayoutSnapshotError::MissingTextFlowRevision { .. }) => {
+                TextRenderError::MissingCurrentFlow {
+                    element_id: fallback_element_id,
+                }
+            }
+            Self::Snapshot(_) | Self::Alias(_) => {
+                TextRenderError::projection(fallback_element_id, TextProjectionError::MissingLayout)
+            }
+            Self::Output { element_id, .. } => TextRenderError::coordinate(
+                element_id.unwrap_or(fallback_element_id),
+                TextCoordinateError::Overflow,
+            ),
             Self::MissingCurrentFlow(element_id) => {
                 TextRenderError::MissingCurrentFlow { element_id }
-            }
-            Self::MissingLayout(element_id) => {
-                TextRenderError::projection(element_id, TextProjectionError::MissingLayout)
-            }
-            Self::LayoutInvariant(source) => {
-                panic!("checked layout invariant failed inside legacy renderer: {source}")
             }
             Self::NonFiniteCoordinate(element_id) => TextRenderError::coordinate(
                 element_id.unwrap_or(fallback_element_id),
@@ -253,9 +283,22 @@ pub(super) fn try_render_tree(
     offset_x: f32,
     offset_y: f32,
 ) -> Result<RenderProjection, ProjectionError> {
-    try_render_tree_with_options(
+    let (snapshot, _) = layout_engine
+        .try_snapshot(element)
+        .map_err(ProjectionError::Snapshot)?;
+    try_render_snapshot(element, &snapshot, output, offset_x, offset_y)
+}
+
+pub(super) fn try_render_snapshot(
+    element: &Element,
+    snapshot: &PreparedSnapshotFrame,
+    output: &mut Output,
+    offset_x: f32,
+    offset_y: f32,
+) -> Result<RenderProjection, ProjectionError> {
+    try_render_snapshot_with_options(
         element,
-        layout_engine,
+        snapshot,
         output,
         offset_x,
         offset_y,
@@ -263,6 +306,7 @@ pub(super) fn try_render_tree(
     )
 }
 
+#[cfg(test)]
 pub(super) fn try_render_tree_with_options(
     element: &Element,
     layout_engine: &LayoutEngine,
@@ -271,20 +315,27 @@ pub(super) fn try_render_tree_with_options(
     offset_y: f32,
     options: ProjectionOptions,
 ) -> Result<RenderProjection, ProjectionError> {
-    validate_tree_flows(element, layout_engine)?;
+    let (snapshot, _) = layout_engine
+        .try_snapshot(element)
+        .map_err(ProjectionError::Snapshot)?;
+    try_render_snapshot_with_options(element, &snapshot, output, offset_x, offset_y, options)
+}
+
+fn try_render_snapshot_with_options(
+    element: &Element,
+    snapshot: &PreparedSnapshotFrame,
+    output: &mut Output,
+    offset_x: f32,
+    offset_y: f32,
+    options: ProjectionOptions,
+) -> Result<RenderProjection, ProjectionError> {
+    validate_tree_flows(element, snapshot)?;
     #[cfg(test)]
     if let Some(rows) = options.validation_rows.as_deref() {
         validate_row_footprints(rows)?;
     }
     let mut staged = StagedFrame::new(output, options);
-    super::render_element_tree_staged(
-        element,
-        layout_engine,
-        &mut staged,
-        offset_x,
-        offset_y,
-        None,
-    )?;
+    super::render_element_tree_staged(element, snapshot, &mut staged, offset_x, offset_y)?;
     let (staged_output, mut projection) = staged.finish()?;
     output.commit_staged(staged_output);
     projection.stats.committed_replacements = 1;
@@ -293,19 +344,23 @@ pub(super) fn try_render_tree_with_options(
 
 fn validate_tree_flows(
     element: &Element,
-    layout_engine: &LayoutEngine,
+    snapshot: &PreparedSnapshotFrame,
 ) -> Result<(), ProjectionError> {
     if element.style.display == Display::None || element.element_type == ElementType::VirtualText {
         return Ok(());
     }
     if element.spans.is_some() || element.text_content.is_some() {
-        let flow = layout_engine
-            .current_text_flow(element.id)
-            .ok_or(ProjectionError::MissingCurrentFlow(element.id))?;
-        validate_flow(&flow).map_err(|error| error.attributed_to(element.id))?;
+        let node = snapshot
+            .node_for_element(element.id)
+            .map_err(ProjectionError::Alias)?;
+        let flow = node
+            .text_flow()
+            .ok_or(ProjectionError::MissingCurrentFlow(element.id))?
+            .flow();
+        validate_flow(flow).map_err(|error| error.attributed_to(element.id))?;
     }
     for child in &element.children {
-        validate_tree_flows(child, layout_engine)?;
+        validate_tree_flows(child, snapshot)?;
     }
     Ok(())
 }

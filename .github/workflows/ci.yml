@@ -241,7 +241,8 @@ jobs:
         uses: taiki-e/install-action@cargo-tarpaulin
 
       - name: Run coverage
-        run: cargo tarpaulin --workspace --all-features --out Xml --locked
+        # trybuild's cold compile-fail fixture can be silent for more than 60 seconds.
+        run: cargo tarpaulin --workspace --all-features --out Xml --timeout 300 --locked
 
       - name: Upload coverage
         uses: codecov/codecov-action@v3
