@@ -479,3 +479,52 @@ fn gh68_harness_contract() {
 
     assert_eq!(CommitObservation::Retained, CommitObservation::Retained);
 }
+
+#[test]
+fn gh68_chat_tutorial_contract() {
+    let source = include_str!("../examples/chat.rs");
+    for required in [
+        "ConversationState::new",
+        "ConversationUpdate::push",
+        "ConversationUpdate::complete",
+        "ChatMessageView::new",
+        "ComposerProjection::build",
+        "acknowledge_success",
+        "acknowledge_failure",
+    ] {
+        assert!(
+            source.contains(required),
+            "missing public chat seam: {required}"
+        );
+    }
+    for forbidden in [
+        "Vec::<String>",
+        ".pop(",
+        "UnicodeSegmentation",
+        "UnicodeWidthStr",
+        "cursor_column()",
+        ".graphemes(",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "tutorial retained private transcript/cursor logic: {forbidden}"
+        );
+    }
+
+    let state = apply_adapter_fixture(&[
+        AdapterDelta {
+            event_id: "offline-1",
+            text: "Use typed ",
+            terminal: false,
+        },
+        AdapterDelta {
+            event_id: "offline-2",
+            text: "updates.",
+            terminal: true,
+        },
+    ]);
+    assert_eq!(state.messages().len(), 2);
+    let rendered = rnk::render_to_string(&conversation_view(&state), 60);
+    assert!(rendered.contains("Explain the release gate"));
+    assert!(rendered.contains("Use typed updates."));
+}

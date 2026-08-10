@@ -10,19 +10,20 @@
 //! The composer deletes by grapheme cluster, so backspace removes what the user
 //! sees.
 //!
-//! Wrapping and the cursor's visual position come from `ComposerProjection` for
-//! the same reason: a CJK character is two cells wide, so counting characters
-//! puts the cursor in the wrong column as soon as one appears.
+//! Wrapping comes from `ComposerProjection`; the example never counts bytes,
+//! characters, or terminal cells itself.
 //!
 //! Run with: cargo run --example chat
 
 use rnk::components::InteractionOutcome;
 use rnk::components::chat::{
-    ChatComposerKeyMap, ChatComposerState, ComposerProjection, handle_key,
+    BlockId, ChatComposerKeyMap, ChatComposerState, ChatMessage, ChatMessageView, ChatRole,
+    ComposerProjection, ConversationError, ConversationEvent, ConversationGuard, ConversationState,
+    ConversationUpdate, MessageBlock, MessageBlockEntry, MessageId, MessageMutationGuard, UpdateId,
+    handle_key,
 };
 use rnk::prelude::*;
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
+use std::num::NonZeroUsize;
 
 /// Columns the input line is laid out in.
 const INPUT_WIDTH: u16 = 60;
@@ -34,10 +35,12 @@ fn main() -> std::io::Result<()> {
 fn app() -> Element {
     let app = use_app();
     let composer = use_signal(ChatComposerState::new);
-    let messages = use_signal(Vec::<String>::new);
+    let conversation = use_signal(|| ConversationState::new(0, NonZeroUsize::MIN));
+    let status = use_signal(|| None::<String>);
 
     let composer_for_handler = composer.clone();
-    let messages_for_handler = messages.clone();
+    let conversation_for_handler = conversation.clone();
+    let status_for_handler = status.clone();
 
     use_input(move |input, key| {
         if input == "q" && key.ctrl {
@@ -51,21 +54,37 @@ fn app() -> Element {
         let outcome = handle_key(&mut state, &ChatComposerKeyMap::new(), input, key);
 
         if let InteractionOutcome::Submitted(text) = outcome {
-            messages_for_handler.update(|messages| messages.push(format!("You: {text}")));
-
-            // Enter stages a submission; it does not clear the draft. Clearing
-            // happens here, once the send is known to have succeeded — a failed
-            // send would call `acknowledge_failure` and leave the text in place
-            // rather than destroy it at the moment it is hardest to retype.
             if let Some(token) = state.pending_submission().map(|pending| pending.token()) {
-                let _ = state.acknowledge_success(token);
+                let mut candidate = conversation_for_handler.get();
+                match append_user_message(&mut candidate, text) {
+                    Ok(()) => match state.acknowledge_success(token) {
+                        Ok(()) => {
+                            conversation_for_handler.set(candidate);
+                            status_for_handler.set(None);
+                        }
+                        Err(error) => {
+                            status_for_handler.set(Some(format!("composer failure: {error:?}")))
+                        }
+                    },
+                    Err(error) => {
+                        let acknowledgement = state.acknowledge_failure(token);
+                        status_for_handler.set(Some(match acknowledgement {
+                            Ok(()) => error.to_string(),
+                            Err(acknowledgement) => {
+                                format!(
+                                    "{error}; composer acknowledgement failed: {acknowledgement:?}"
+                                )
+                            }
+                        }));
+                    }
+                }
             }
         }
 
         composer_for_handler.set(state);
     });
 
-    let current_messages = messages.get();
+    let current_conversation = conversation.get();
     let projection = ComposerProjection::build(&composer.get(), INPUT_WIDTH);
 
     Box::new()
@@ -90,14 +109,19 @@ fn app() -> Element {
                 .flex_direction(FlexDirection::Column)
                 .min_height(10.0)
                 .children(
-                    current_messages
+                    current_conversation
+                        .messages()
                         .iter()
-                        .map(|message| Text::new(message).color(Color::White).into_element()),
+                        .map(|message| ChatMessageView::new(message).into_element()),
                 )
                 .into_element(),
         )
         .child(Newline::new().into_element())
         .child(render_input(&projection))
+        .child(status.get().map_or_else(
+            || Text::new("").into_element(),
+            |error| Text::new(error).color(Color::Red).into_element(),
+        ))
         .child(Newline::new().into_element())
         .child(
             Text::new("Press Enter to send, Ctrl+Q to quit")
@@ -107,59 +131,50 @@ fn app() -> Element {
         .into_element()
 }
 
-/// Draws the draft's visible rows, with the cursor on the row that holds it.
-fn render_input(projection: &ComposerProjection) -> Element {
-    let first_row = projection.scroll_offset();
-    let mut container = Box::new().flex_direction(FlexDirection::Column);
+fn append_user_message(
+    state: &mut ConversationState,
+    text: String,
+) -> Result<(), ConversationError> {
+    let identity = state.expected_sequence();
+    let message_id = MessageId::new(identity);
+    let block_id = BlockId::new(identity);
+    let message = ChatMessage::new(
+        message_id,
+        ChatRole::User,
+        vec![MessageBlockEntry::new(block_id, MessageBlock::Text(text))],
+    )?;
+    state.apply_event(ConversationEvent::new(
+        UpdateId::new(format!("chat-push-{identity}"))?,
+        state.expected_sequence(),
+        ConversationUpdate::push(ConversationGuard::new(state.revision()), message),
+    ))?;
 
-    for (offset, row) in projection.visible_slice().iter().enumerate() {
-        let absolute_row = first_row + offset;
-        let prefix = if offset == 0 {
-            "Enter message: "
-        } else {
-            "               "
-        };
-        // The cursor's column comes from the projection, in terminal cells. A
-        // character count would land in the wrong place after the first CJK
-        // character, which occupies two.
-        let cursor_column =
-            (absolute_row == projection.cursor_row()).then(|| projection.cursor_column());
-
-        let mut line = Box::new()
-            .flex_direction(FlexDirection::Row)
-            .child(Text::new(prefix).color(Color::Green).into_element());
-
-        let mut column = 0usize;
-        let mut painted_cursor = false;
-        for cluster in row.graphemes(true) {
-            let at_cursor = cursor_column == Some(column);
-            painted_cursor |= at_cursor;
-            line = line.child(cell(cluster, at_cursor));
-            // Advance by cells, not clusters: a CJK character is two columns.
-            column += UnicodeWidthStr::width(cluster).max(1);
-        }
-        // A cursor past the last cluster has no character to sit on, so it gets
-        // a space of its own rather than disappearing.
-        if let Some(target) = cursor_column
-            && !painted_cursor
-            && target >= column
-        {
-            line = line.child(cell(" ", true));
-        }
-
-        container = container.child(line.into_element());
-    }
-
-    container.into_element()
+    let message = state
+        .message(message_id)
+        .ok_or(ConversationError::UnknownMessage { message_id })?;
+    let guard = MessageMutationGuard::new(
+        ConversationGuard::new(state.revision()),
+        message_id,
+        message.revision(),
+    );
+    state.apply_event(ConversationEvent::new(
+        UpdateId::new(format!("chat-complete-{identity}"))?,
+        state.expected_sequence(),
+        ConversationUpdate::complete(guard),
+    ))?;
+    Ok(())
 }
 
-fn cell(cluster: &str, at_cursor: bool) -> Element {
-    let text = Text::new(cluster.to_string());
-    if at_cursor {
-        text.color(Color::Black)
-            .background(Color::BrightCyan)
-            .into_element()
-    } else {
-        text.color(Color::White).into_element()
-    }
+/// Draws the exact rows projected by the shared composer.
+fn render_input(projection: &ComposerProjection) -> Element {
+    Box::new()
+        .flex_direction(FlexDirection::Row)
+        .child(
+            Text::new("Enter message: ")
+                .color(Color::Green)
+                .into_element(),
+        )
+        .child(Text::new(projection.visible_slice().join("\n")).into_element())
+        .child(Text::new("▏").color(Color::BrightCyan).into_element())
+        .into_element()
 }
