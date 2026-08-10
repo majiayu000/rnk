@@ -14,6 +14,31 @@ can undo.
 The asymmetry is not a missing feature. Inline hands finished lines to the
 terminal and can no longer address them; that is exactly why they persist.
 
+This minimal typed-state example is compiled as a doctest:
+
+```rust
+use rnk::components::chat::{
+    BlockId, ChatMessage, ChatRole, ConversationEvent, ConversationGuard,
+    ConversationState, ConversationUpdate, MessageBlock, MessageBlockEntry,
+    MessageId, UpdateId,
+};
+use std::num::NonZeroUsize;
+
+let mut state = ConversationState::new(0, NonZeroUsize::MIN);
+let message = ChatMessage::new(
+    MessageId::new(1),
+    ChatRole::User,
+    vec![MessageBlockEntry::new(
+        BlockId::new(1),
+        MessageBlock::Text("hello".to_owned()),
+    )],
+)?;
+let update = ConversationUpdate::push(ConversationGuard::new(state.revision()), message);
+state.apply_event(ConversationEvent::new(UpdateId::new("push")?, 0, update))?;
+assert_eq!(state.messages().len(), 1);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
 ## Inline quickstart
 
 ```rust,ignore
@@ -205,9 +230,10 @@ is the point, since a silently misread state is worse.
 
 These are out of scope by design, not yet-to-do:
 
-- **Model requests, retries, tool execution and session persistence.** The chat
-  module is data, geometry and terminal I/O. It has no provider SDK dependency
-  and no network code, and examples do not introduce one.
+- **Model requests, retries, tool execution and session persistence in the chat
+  module.** Core chat remains provider-independent. `glm_chat` is an explicit
+  adapter example: its network and default-deny workspace policy stay in the
+  example and never become capabilities of `MessageBlock::ToolCall`.
 - **Simulating a terminal scrollback buffer.** Inline hands lines to the terminal
   and stops tracking them.
 - **Rewriting history already committed to a terminal.** Once bytes are in the

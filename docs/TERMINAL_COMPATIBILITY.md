@@ -29,6 +29,25 @@ that every listed terminal has been manually certified on every platform.
 | SSH / remote TTY | Implemented when stdin/stdout are TTYs and the remote `$TERM` supports the emitted sequences. | Terminal-dependent across SSH client, server, `$TERM`, and multiplexer settings. | Terminal-dependent. | Implemented repaint in `rnk`; remote terminal resize delivery is external. | Non-TTY pipes and redirects should use non-interactive rendering paths. |
 | Non-TTY / CI | Interactive terminal mode is unsupported as an end-user experience. | Unsupported. | Structured rendering and snapshots are supported; emulator-specific behavior is not automatically tested. | Source-level resize decisions are tested; real emulator resize is not automatically tested. | `Environment` detects CI and TTY state so apps can disable interactive behavior. |
 
+## Chat Evidence Matrix
+
+The chat checks bind structured output to the exact source revision under test.
+They do not promote source or golden evidence into a claim about an emulator
+that CI did not run. CI records its current `GITHUB_SHA`, runner environment and
+the named evidence below in the job artifact.
+
+| Chat contract | Evidence kind | Environment and head binding | Status |
+|---|---|---|---|
+| Typed conversation and custom block view | Public API convergence test plus plain/ANSI golden | CI runner; exact checked-out `GITHUB_SHA` | Source-verified; terminal presentation is not automatically tested. |
+| Fullscreen row clipping and resize | Public `FullscreenChatShell`/`MessageList` test | CI runner; exact checked-out `GITHUB_SHA` | Source-verified; alternate-screen restoration remains terminal-dependent. |
+| Inline commit outcomes | Public `InlineChatShell` test with complete, zero-byte and partial writers | CI runner; exact checked-out `GITHUB_SHA` | Process-local outcomes verified; terminal scrollback display is not automatically tested. |
+| GLM provider/tool adapter | Offline typed-event and hostile workspace fixtures | CI runner; exact checked-out `GITHUB_SHA`; no network or secret | Adapter policy verified; provider service and real terminal are not automatically tested. |
+
+No cell in this matrix is a macOS Terminal, iTerm2, Windows Terminal, tmux or
+SSH certification. A real-terminal evidence record may say `verified` only when
+it also names the evidence kind, environment and exact source head; the current
+automated matrix intentionally makes no such claim.
+
 ## Terminal Features
 
 Inline rendering is implemented by updating the current terminal position and

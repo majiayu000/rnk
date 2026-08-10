@@ -243,13 +243,18 @@ fn command_lines(source: &str) -> Vec<&str> {
 }
 
 fn chat_flow() -> Element {
-    RnkBox::new()
-        .flex_direction(FlexDirection::Column)
-        .child(Message::system("session: deterministic chat").into_element())
-        .child(Message::user("Summarize the release gates").into_element())
-        .child(Message::assistant("CI, docs, and examples are all checked.").into_element())
-        .child(Text::new("> ready").color(Color::Yellow).into_element())
-        .into_element()
+    conversation_view(&apply_adapter_fixture(&[
+        AdapterDelta {
+            event_id: "golden-1",
+            text: "Typed updates, ",
+            terminal: false,
+        },
+        AdapterDelta {
+            event_id: "golden-2",
+            text: "row layout, and commit outcomes.",
+            terminal: true,
+        },
+    ]))
 }
 
 fn git_flow() -> Element {
@@ -389,135 +394,36 @@ fn textarea_flow_plain_golden() {
 }
 
 #[test]
+#[rustfmt::skip]
 fn gh68_harness_contract() {
     const EXPECTED_HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
-    let offline = [
-        AdapterDelta {
-            event_id: "offline-1",
-            text: "Use typed ",
-            terminal: false,
-        },
-        AdapterDelta {
-            event_id: "offline-2",
-            text: "updates.",
-            terminal: true,
-        },
-    ];
-    let provider = [
-        AdapterDelta {
-            event_id: "offline-1",
-            text: "Use typed ",
-            terminal: false,
-        },
-        AdapterDelta {
-            event_id: "offline-2",
-            text: "updates.",
-            terminal: true,
-        },
-    ];
+    let offline = [AdapterDelta { event_id: "offline-1", text: "Use typed ", terminal: false }, AdapterDelta { event_id: "offline-2", text: "updates.", terminal: true }];
+    let provider = [AdapterDelta { event_id: "offline-1", text: "Use typed ", terminal: false }, AdapterDelta { event_id: "offline-2", text: "updates.", terminal: true }];
     let offline_state = apply_adapter_fixture(&offline);
     let provider_state = apply_adapter_fixture(&provider);
     assert_eq!(offline_state.snapshot(), provider_state.snapshot());
-    let view = conversation_view(&offline_state);
-    assert_eq!(view.children.len(), 2);
-
-    assert_eq!(
-        exact_test_names("#[test]\nfn exact_name() {\n}\nfn helper() {}"),
-        ["exact_name"]
-    );
-    assert_eq!(
-        markdown_links("[quickstart](docs/CHAT_QUICKSTART.md)"),
-        ["docs/CHAT_QUICKSTART.md"]
-    );
-    assert_eq!(
-        public_example_names("- `chat` — tutorial\n- `rnk_chat` — fullscreen"),
-        ["chat", "rnk_chat"]
-    );
-    assert_eq!(
-        command_lines("note\ncargo check --example chat\nother"),
-        ["cargo check --example chat"]
-    );
-
-    let valid = HarnessEvidence {
-        head: EXPECTED_HEAD,
-        evidence: &["typed-conversation", "rendered-view"],
-        environment: "ubuntu-24.04",
-        expected_environment: "ubuntu-24.04",
-        verified: true,
-        api_key: None,
-        commit_observation: CommitObservation::Fixed,
-        retries: 0,
-        exact_test_ignored: false,
-        benchmark: BenchmarkEvidence::CorrectnessOracle,
-    };
+    assert_eq!(conversation_view(&offline_state).children.len(), 2);
+    assert_eq!(exact_test_names("#[test]\nfn exact_name() {\n}\nfn helper() {}"), ["exact_name"]);
+    assert_eq!(markdown_links("[quickstart](docs/CHAT_QUICKSTART.md)"), ["docs/CHAT_QUICKSTART.md"]);
+    assert_eq!(public_example_names("- `chat` — tutorial\n- `rnk_chat` — fullscreen"), ["chat", "rnk_chat"]);
+    assert_eq!(command_lines("note\ncargo check --example chat\nother"), ["cargo check --example chat"]);
+    let valid = HarnessEvidence { head: EXPECTED_HEAD, evidence: &["typed-conversation", "rendered-view"], environment: "ubuntu-24.04",
+        expected_environment: "ubuntu-24.04", verified: true, api_key: None, commit_observation: CommitObservation::Fixed,
+        retries: 0, exact_test_ignored: false, benchmark: BenchmarkEvidence::CorrectnessOracle };
     assert_eq!(validate_harness_evidence(&valid, EXPECTED_HEAD), Ok(()));
-
     let cases = [
-        (
-            HarnessEvidence {
-                head: "a3e36dbae157cda3c7247c89675936e9ce7c5625",
-                ..valid.clone()
-            },
-            HarnessEvidenceError::StaleHead,
-        ),
-        (
-            HarnessEvidence {
-                evidence: &[],
-                ..valid.clone()
-            },
-            HarnessEvidenceError::EmptyEvidence,
-        ),
-        (
-            HarnessEvidence {
-                verified: false,
-                ..valid.clone()
-            },
-            HarnessEvidenceError::UnauthenticatedVerification,
-        ),
-        (
-            HarnessEvidence {
-                environment: "macos-15",
-                ..valid.clone()
-            },
-            HarnessEvidenceError::EnvironmentMismatch,
-        ),
-        (
-            HarnessEvidence {
-                api_key: Some("placeholder"),
-                ..valid.clone()
-            },
-            HarnessEvidenceError::PlaceholderKey,
-        ),
-        (
-            HarnessEvidence {
-                commit_observation: CommitObservation::Unknown,
-                retries: 1,
-                ..valid.clone()
-            },
-            HarnessEvidenceError::UnknownWasRetried,
-        ),
-        (
-            HarnessEvidence {
-                exact_test_ignored: true,
-                ..valid.clone()
-            },
-            HarnessEvidenceError::IgnoredExactTest,
-        ),
-        (
-            HarnessEvidence {
-                benchmark: BenchmarkEvidence::SmokeOnly,
-                ..valid.clone()
-            },
-            HarnessEvidenceError::SmokeOnlyPerformanceClaim,
-        ),
+        (HarnessEvidence { head: "a3e36dbae157cda3c7247c89675936e9ce7c5625", ..valid.clone() }, HarnessEvidenceError::StaleHead),
+        (HarnessEvidence { evidence: &[], ..valid.clone() }, HarnessEvidenceError::EmptyEvidence),
+        (HarnessEvidence { verified: false, ..valid.clone() }, HarnessEvidenceError::UnauthenticatedVerification),
+        (HarnessEvidence { environment: "macos-15", ..valid.clone() }, HarnessEvidenceError::EnvironmentMismatch),
+        (HarnessEvidence { api_key: Some("placeholder"), ..valid.clone() }, HarnessEvidenceError::PlaceholderKey),
+        (HarnessEvidence { commit_observation: CommitObservation::Unknown, retries: 1, ..valid.clone() }, HarnessEvidenceError::UnknownWasRetried),
+        (HarnessEvidence { exact_test_ignored: true, ..valid.clone() }, HarnessEvidenceError::IgnoredExactTest),
+        (HarnessEvidence { benchmark: BenchmarkEvidence::SmokeOnly, ..valid.clone() }, HarnessEvidenceError::SmokeOnlyPerformanceClaim),
     ];
     for (candidate, expected) in cases {
-        assert_eq!(
-            validate_harness_evidence(&candidate, EXPECTED_HEAD),
-            Err(expected)
-        );
+        assert_eq!(validate_harness_evidence(&candidate, EXPECTED_HEAD), Err(expected));
     }
-
     assert_eq!(CommitObservation::Retained, CommitObservation::Retained);
 }
 
@@ -796,4 +702,73 @@ fn gh68_provider_example_contract() {
     std::fs::create_dir_all(&deep).unwrap(); std::fs::write(deep.join("needle.txt"), "x").unwrap();
     let mut search = request("call-5", "search_files", serde_json::json!({"pattern":"needle"}));
     search.approve_exact("approve call-5").unwrap(); assert!(search.execute_once(&workspace).is_err());
+}
+
+#[rustfmt::skip]
+fn strip_sgr(input: &str) -> String {
+    let bytes = input.as_bytes(); let mut output = Vec::with_capacity(bytes.len()); let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != 0x1b { output.push(bytes[index]); index += 1; continue; }
+        assert_eq!(bytes.get(index + 1), Some(&b'['), "golden contains a non-SGR escape"); index += 2;
+        while index < bytes.len() && !(0x40..=0x7e).contains(&bytes[index]) { index += 1; }
+        assert!(index < bytes.len(), "golden contains an unterminated SGR escape"); index += 1;
+    }
+    String::from_utf8(output).expect("removing ASCII escapes preserves UTF-8")
+}
+
+#[test]
+#[rustfmt::skip]
+fn gh68_example_convergence_contract() {
+    let events = [AdapterDelta { event_id: "same-1", text: "Typed updates, ", terminal: false }, AdapterDelta { event_id: "same-2", text: "row layout, and commit outcomes.", terminal: true }];
+    let offline = apply_adapter_fixture(&events); let provider = apply_adapter_fixture(&events);
+    assert_eq!(offline.snapshot(), provider.snapshot());
+    let plain = include_str!("golden/real_app_chat.txt"); let ansi = include_str!("golden/real_app_chat.ansi.txt");
+    assert_eq!(format!("{}\n", strip_sgr(&rnk::render_to_string(&conversation_view(&offline), 80))), plain);
+    assert_eq!(strip_sgr(ansi), plain, "ANSI normalization may remove styling only");
+    for (source, seam) in [(include_str!("../examples/chat.rs"), "ConversationState"), (include_str!("../examples/rnk_chat.rs"), "FullscreenChatShell"), (include_str!("../examples/claude_input_box.rs"), "InlineChatShell"), (include_str!("../examples/glm_chat.rs"), "ChatMessageView")] {
+        assert!(source.contains(seam), "example is missing its shared seam: {seam}");
+    }
+}
+
+#[test]
+#[rustfmt::skip]
+fn gh68_example_index_contract() {
+    let index = include_str!("../examples/README.md");
+    let ledger = index.split_once("### Chat example review").unwrap().0;
+    let names = public_example_names(ledger);
+    for expected in ["chat.rs", "rnk_chat.rs", "claude_input_box.rs", "glm_chat.rs"] {
+        assert_eq!(names.iter().filter(|name| **name == expected).count(), 1, "{expected} must have one classification");
+    }
+    assert!(!names.contains(&"glm_chat/prompt_box.rs"));
+    assert!(!std::path::Path::new("examples/glm_chat/prompt_box.rs").exists());
+}
+
+#[test]
+#[rustfmt::skip]
+fn gh68_message_compatibility_contract() {
+    assert_ne!(std::any::TypeId::of::<Message>(), std::any::TypeId::of::<ChatMessage>());
+    let legacy = rnk::render_to_string(&Message::user("legacy notification").into_element(), 40);
+    let typed = rnk::render_to_string(&ChatMessageView::new(&text_message(9, 9, ChatRole::User, "typed conversation")).into_element(), 40);
+    assert!(legacy.contains("legacy notification")); assert!(typed.contains("typed conversation"));
+}
+
+#[test]
+#[rustfmt::skip]
+fn gh68_public_docs_contract() {
+    let quickstart = include_str!("../docs/CHAT_QUICKSTART.md"); let stability = include_str!("../docs/API_STABILITY.md");
+    for required in ["## Inline quickstart", "## Fullscreen quickstart", "## Updating a conversation", "## Custom block renderers", "## Keymaps", "## Error handling", "## Non-goals", "```rust\n"] { assert!(quickstart.contains(required), "missing docs contract: {required}"); }
+    for required in ["ConversationState", "ChatMessageView", "InlineChatShell", "FullscreenChatShell", "### `Message` compatibility", "provider-independent"] { assert!(stability.contains(required), "missing maturity contract: {required}"); }
+    let state = apply_adapter_fixture(&[AdapterDelta { event_id: "docs", text: "documented", terminal: true }]);
+    assert!(rnk::render_to_string(&conversation_view(&state), 40).contains("documented"));
+}
+
+#[test]
+#[rustfmt::skip]
+fn gh68_compatibility_matrix_contract() {
+    let matrix = include_str!("../docs/TERMINAL_COMPATIBILITY.md");
+    for required in ["## Chat Evidence Matrix", "Evidence kind", "exact checked-out `GITHUB_SHA`", "not automatically tested", "no network or secret"] { assert!(matrix.contains(required)); }
+    for overclaim in ["all terminals verified", "all platforms verified", "terminal-certified"] { assert!(!matrix.contains(overclaim)); }
+    let evidence = HarnessEvidence { head: "0123456789abcdef0123456789abcdef01234567", evidence: &["plain/ANSI golden"], environment: "ubuntu-24.04", expected_environment: "ubuntu-24.04", verified: true, api_key: None, commit_observation: CommitObservation::Fixed, retries: 0, exact_test_ignored: false, benchmark: BenchmarkEvidence::CorrectnessOracle };
+    assert_eq!(validate_harness_evidence(&evidence, evidence.head), Ok(()));
+    assert_eq!(strip_sgr(include_str!("golden/real_app_chat.ansi.txt")), include_str!("golden/real_app_chat.txt"));
 }

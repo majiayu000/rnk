@@ -116,7 +116,15 @@ outside this repository has driven them.
 | `ChatMessageView`, `ChatBlockRenderer` | Advanced | Block rendering and custom renderers. Variant and override sets may grow. |
 | `MessageListState` and `message_list::*` | Prelude, advanced | Row-indexed transcript geometry. `MessageMeasureOutcome` and the error enums are `#[non_exhaustive]` and will gain variants. |
 | `scrollback::*` — sinks, identity, ledger, outcomes | Experimental | The commit boundary. `ScrollbackCommitOutcome`, `NotCommittedCause` and `UnknownReason` are `#[non_exhaustive]`; new failure states are expected as more sinks exist. `DurableCommitStore` is the extension point and its contract is deliberately strict. |
-| `InlineChatShell`, `FullscreenChatShell` | Experimental | The lifecycle and layout shells. Both are new; their outcome enums are the part most likely to gain variants, and neither has yet been driven by an application outside this repository. |
+| `InlineChatShell`, `FullscreenChatShell` | Experimental | The lifecycle and layout shells. GH-68 now drives them through four in-repository examples and exact golden/convergence tests, but neither has yet been validated by an application outside this repository. Their outcome enums remain the part most likely to gain variants. |
+
+The chat core remains provider-independent. The GLM example is an adapter, not
+a new core capability: provider requests,
+credentials and default-deny workspace tools remain outside
+`rnk::components::chat`. The example converts provider events into the same
+typed conversation updates used by the offline fixture. This is evidence for
+the adapter boundary, not a promise that a provider SDK or tool executor is a
+stable `rnk` API.
 
 Migration posture for the chat surface before `1.0`:
 

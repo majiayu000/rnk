@@ -1,4 +1,4 @@
-● session: deterministic chat
-> Summarize the release gates
-● CI, docs, and examples are all checked.
-> ready
+user · pending
+Explain the release gate
+assistant
+Typed updates, row layout, and commit outcomes.

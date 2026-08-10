@@ -18,6 +18,7 @@ Start here when learning the crate API:
 - `use_focus_with_id.rs`: explicit focus IDs.
 - `use_stdio.rs`: stdio hooks.
 - `typed_cmd_demo.rs`: typed command workflow.
+- `chat.rs`: smallest typed conversation/composer/view tutorial.
 
 ## Showcase
 
@@ -25,13 +26,12 @@ These are app-shaped examples that demonstrate larger workflows:
 
 - `rnk_top.rs`: system monitor-style dashboard.
 - `rnk_git.rs`: Git status interface.
-- `rnk_chat.rs`: chat-style terminal application.
-- `chat.rs`: compact chat interface.
-- `glm_chat.rs` and `glm_chat/`: chat prompt surface driving a real model, with
-  the input box outside the renderer so submitted turns land in native
-  scrollback.
-- `claude_input_box.rs`: Claude-style input box; the same inline-input shape
-  rendered entirely by the component tree.
+- `rnk_chat.rs`: `FullscreenChatShell` showcase with snapshot-measured,
+  row-clipped messages.
+- `glm_chat.rs`: typed GLM provider adapter with default-deny, one-shot
+  workspace tools and `InlineChatShell` publication.
+- `claude_input_box.rs`: `InlineChatShell` commit-outcome showcase; only a
+  confirmed `Fixed` result clears the draft.
 - `inline_chat_scrollback.rs`: inline chat committing finished transcript into
   the terminal's own scrollback, exactly once per message.
 - `fullscreen_chat_shell.rs`: fullscreen chat regions — scrolling transcript,
@@ -47,11 +47,11 @@ Each chat example was reviewed against GH-68's convergence criteria:
 
 | Example | Outcome |
 |---|---|
-| `claude_input_box.rs` | Migrated to `ChatComposerState` / `ComposerProjection`; its own input state, cursor arithmetic and wrapping are gone. |
+| `claude_input_box.rs` | Uses `InlineChatShell`; `Fixed`, `Retained`, and `Latched` remain distinct and only `Fixed` clears the composer. |
 | `claude_inline_input_box.rs` | Removed. It was byte-identical to `claude_input_box.rs` apart from its own name, so it had no independent purpose. |
-| `glm_chat.rs`, `glm_chat/prompt_box.rs` | Migrated to `ChatComposerState`. Kept as the one example that drives a real model and writes its input box outside the renderer — a shape the component tree does not cover. |
-| `chat.rs` | Migrated to `ChatComposerState` / `ComposerProjection`. Kept as the smallest complete chat surface. Its `String::pop` backspace and character-counted cursor are gone. |
-| `rnk_chat.rs` | Migrated to `MessageListState` and `ChatComposerState`. Kept as the full application shape with header, status and history. Its `.skip(offset).take(12)` paging and byte-sliced preview are gone. |
+| `glm_chat.rs` | Uses typed conversation/view/shell state; missing keys create zero requests and tool execution is exact-call approved, one-shot, bounded, and workspace-contained. The retired `glm_chat/prompt_box.rs` has no independent contract. |
+| `chat.rs` | Uses public `ConversationState`, typed updates, `ChatMessageView`, and the shared composer projection. No private transcript or cursor arithmetic remains. |
+| `rnk_chat.rs` | Uses `FullscreenChatShell`, `MessageList`, and `ChatMessageView`; root snapshot rows and exact visible slices replace item paging. |
 | `inline_chat_scrollback.rs` | Added by #66. Drives `InlineChatShell` end to end: streaming, a repeated terminal event, and a commit into native scrollback. |
 | `fullscreen_chat_shell.rs` | Added by #67. Drives `FullscreenChatShell`: real wrapped row counts, region assignment, resize, and a refused layout. |
 
