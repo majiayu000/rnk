@@ -1,62 +1,60 @@
-//! GLM CLI Chat Demo with Tool Use - Using rnk UI
+//! GLM provider adapter over rnk's typed conversation and inline shell.
 //!
-//! Run with: GLM_API_KEY=your_key cargo run --example glm_chat
+//! The model produces inert `ToolCallContent`. A separate, default-deny
+//! `PendingToolRequest` requires an exact human approval before a one-shot
+//! workspace operation. Missing `GLM_API_KEY` fails before a client or request
+//! is created. The earlier out-of-renderer prompt module is intentionally gone;
+//! stdin is only the provider adapter's transport, while public rnk state owns
+//! conversation, view projection, and scrollback publication.
+//!
+//! Run with: `GLM_API_KEY=... cargo run --example glm_chat`
 
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    terminal,
-};
-use reqwest::Client;
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use std::env;
+use std::error::Error;
+use std::fmt;
 use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
-use tokio::sync::watch;
+use std::path::{Component, Path, PathBuf};
 
-use rnk::prelude::{Color, Element, FlexDirection, Text};
-
-// Alias rnk's Box to avoid conflict with std::boxed::Box
-use rnk::prelude::Box as RnkBox;
-
-#[path = "glm_chat/prompt_box.rs"]
-mod prompt_box;
-use prompt_box::{clear_live_prompt_box, draw_prompt_box, redraw_prompt_box};
-use rnk::components::InteractionOutcome;
-use rnk::components::chat::{ChatComposerKeyMap, ChatComposerState, handle_key};
-use rnk::hooks::Key;
+use reqwest::Client;
+use rnk::components::chat::scrollback::NativeTerminalSink;
+use rnk::components::chat::{
+    BlockId, ChatMessage, ChatMessageView, ChatRole, ConversationEvent, ConversationGuard,
+    ConversationState, ConversationUpdate, InlineChatShell, InlineCommitReport, MessageBlock,
+    MessageBlockEntry, MessageId, MessageMutationGuard, ProjectionContext, ScrollbackNamespace,
+    ThemeIdentity, ThinkingContent, ThinkingId, ThinkingStatus, ToolArgument, ToolCallContent,
+    ToolCallId, ToolCallStatus, ToolResultContent, ToolResultStatus, TypedValue, UpdateId,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 const API_URL: &str = "https://open.bigmodel.cn/api/anthropic/v1/messages";
+const MAX_TOOL_DEPTH: usize = 3;
+const MAX_TOOL_ENTRIES: usize = 20;
+const MAX_TOOL_BYTES: usize = 64 * 1024;
+const MAX_TOOL_CYCLES: usize = 8;
+const MAX_RESPONSE_BLOCKS: usize = 64;
+
+pub(crate) type AppResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
+type OutputShell = InlineChatShell<NativeTerminalSink<io::Stdout>>;
 
 #[derive(Serialize, Clone)]
 struct ChatRequest {
-    model: String,
+    model: &'static str,
     max_tokens: u32,
     messages: Vec<MessageParam>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<Tool>>,
+    tools: Vec<ToolDefinition>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Clone)]
 struct MessageParam {
-    role: String,
-    content: MessageContent,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(untagged)]
-enum MessageContent {
-    Text(String),
-    Blocks(Vec<ContentBlock>),
+    role: &'static str,
+    content: Vec<ProviderBlock>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type")]
-enum ContentBlock {
+enum ProviderBlock {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "tool_use")]
@@ -73,671 +71,673 @@ enum ContentBlock {
 }
 
 #[derive(Serialize, Clone)]
-struct Tool {
-    name: String,
-    description: String,
+struct ToolDefinition {
+    name: &'static str,
+    description: &'static str,
     input_schema: Value,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize)]
 struct ChatResponse {
     content: Vec<ResponseBlock>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize)]
 #[serde(tag = "type")]
 enum ResponseBlock {
     #[serde(rename = "text")]
     Text { text: String },
+    #[serde(rename = "thinking")]
+    Thinking { thinking: String },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
         name: String,
         input: Value,
     },
-    #[serde(rename = "thinking")]
-    Thinking { thinking: String },
 }
 
-fn get_tools() -> Vec<Tool> {
-    vec![
-        Tool {
-            name: "read_file".to_string(),
-            description: "Read file content at specified path".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "File path"
-                    }
-                },
-                "required": ["path"]
-            }),
-        },
-        Tool {
-            name: "list_files".to_string(),
-            description: "List files and folders in specified directory".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Directory path"
-                    }
-                },
-                "required": ["path"]
-            }),
-        },
-        Tool {
-            name: "search_files".to_string(),
-            description: "Search for matching filenames in current directory".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "pattern": {
-                        "type": "string",
-                        "description": "Search pattern"
-                    }
-                },
-                "required": ["pattern"]
-            }),
-        },
-    ]
+pub(crate) struct ProviderAdapter {
+    client: Client,
+    api_key: String,
 }
 
-fn execute_tool(name: &str, input: &Value) -> String {
-    match name {
-        "read_file" => {
-            let path = input["path"].as_str().unwrap_or("");
-            match fs::read_to_string(path) {
-                Ok(content) => {
-                    let lines: Vec<&str> = content.lines().take(100).collect();
-                    format!("Read {} lines", lines.len())
-                }
-                Err(e) => format!("Error: {}", e),
-            }
+impl ProviderAdapter {
+    fn from_environment() -> AppResult<Self> {
+        Self::from_optional_key(env::var("GLM_API_KEY").ok(), || {
+            Ok(Client::builder().build()?)
+        })
+    }
+
+    pub(crate) fn from_optional_key(
+        api_key: Option<String>,
+        build_client: impl FnOnce() -> AppResult<Client>,
+    ) -> AppResult<Self> {
+        let api_key = api_key.ok_or(ProviderError::MissingApiKey)?;
+        if api_key.trim().is_empty() {
+            return Err(ProviderError::MissingApiKey.into());
         }
-        "list_files" => {
-            let path = input["path"].as_str().unwrap_or(".");
-            match fs::read_dir(path) {
-                Ok(entries) => {
-                    let files: Vec<String> = entries
-                        .filter_map(|e| e.ok())
-                        .take(20)
-                        .map(|e| {
-                            let name = e.file_name().to_string_lossy().to_string();
-                            if e.path().is_dir() {
-                                format!("{}/", name)
-                            } else {
-                                name
-                            }
-                        })
-                        .collect();
-                    files.join(", ")
-                }
-                Err(e) => format!("Error: {}", e),
-            }
+        let client = build_client()?;
+        Ok(Self { client, api_key })
+    }
+
+    async fn send(&self, state: &ConversationState) -> AppResult<ChatResponse> {
+        let request = ChatRequest {
+            model: "claude-3-5-sonnet-20241022",
+            max_tokens: 8192,
+            messages: provider_messages(state)?,
+            tools: tool_definitions(),
+        };
+        let response = self
+            .client
+            .post(API_URL)
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .json(&request)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(ProviderError::HttpStatus(response.status().as_u16()).into());
         }
-        "search_files" => {
-            let pattern = input["pattern"].as_str().unwrap_or("*");
-            let mut results = Vec::new();
-            search_recursive(Path::new("."), pattern, &mut results, 0, 3);
-            if results.is_empty() {
-                "No files found".to_string()
-            } else {
-                format!("Found {} files", results.len())
-            }
-        }
-        _ => format!("Unknown tool: {}", name),
+        Ok(response.json().await?)
     }
 }
 
-fn search_recursive(
-    dir: &Path,
-    pattern: &str,
-    results: &mut Vec<String>,
-    depth: usize,
-    max_depth: usize,
-) {
-    if depth > max_depth || results.len() >= 20 {
-        return;
-    }
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
+#[derive(Debug)]
+enum ProviderError {
+    MissingApiKey,
+    HttpStatus(u16),
+    UnsupportedBlock,
+    InvalidToolInput,
+    ToolCycleLimit,
+}
 
-            if name.contains(pattern) {
-                results.push(path.display().to_string());
+impl fmt::Display for ProviderError {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingApiKey => {
+                output.write_str("GLM_API_KEY is required; no request was created")
             }
-
-            if path.is_dir() && !name.starts_with('.') {
-                search_recursive(&path, pattern, results, depth + 1, max_depth);
+            Self::HttpStatus(status) => write!(output, "provider returned HTTP status {status}"),
+            Self::UnsupportedBlock => {
+                output.write_str("conversation contains an unsupported provider block")
+            }
+            Self::InvalidToolInput => {
+                output.write_str("provider tool input is not a closed string object")
+            }
+            Self::ToolCycleLimit => {
+                output.write_str("provider exceeded the closed tool-cycle limit")
             }
         }
     }
 }
 
-// ===== Claude Code Style UI Components =====
+impl Error for ProviderError {}
 
-fn render_banner() -> Element {
-    RnkBox::new()
-        .flex_direction(FlexDirection::Column)
-        .child(
-            Text::new("GLM Chat CLI")
-                .color(Color::Cyan)
-                .bold()
-                .into_element(),
-        )
-        .child(
-            Text::new("Type 'quit' to exit | 'clear' to clear screen")
-                .dim()
-                .into_element(),
-        )
-        .into_element()
+#[derive(Debug)]
+pub(crate) enum ToolError {
+    Denied,
+    WrongApproval,
+    AlreadyExecuted,
+    UnknownTool,
+    InvalidPath,
+    WorkspaceEscape,
+    Symlink,
+    DepthLimit,
+    EntryLimit,
+    ByteLimit,
+    InvalidUtf8,
+    Io(io::Error),
 }
 
-/// Render user message with Claude Code style (> prefix, no background)
-fn render_user_message(text: &str) -> Element {
-    RnkBox::new()
-        .flex_direction(FlexDirection::Row)
-        .child(Text::new("> ").color(Color::Yellow).bold().into_element())
-        .child(Text::new(text).color(Color::BrightWhite).into_element())
-        .into_element()
-}
-
-/// Render tool call (Claude Code style: ● ToolName(args))
-fn render_tool_call(name: &str, args: &str) -> Element {
-    RnkBox::new()
-        .flex_direction(FlexDirection::Row)
-        .child(Text::new("● ").color(Color::Magenta).into_element())
-        .child(Text::new(name).color(Color::Magenta).bold().into_element())
-        .child(
-            Text::new(format!("(\"{}\")", args))
-                .color(Color::Magenta)
-                .into_element(),
-        )
-        .into_element()
-}
-
-/// Render tool result (Claude Code style: ⎿ result with indent)
-fn render_tool_result(result: &str) -> Element {
-    RnkBox::new()
-        .flex_direction(FlexDirection::Row)
-        .child(Text::new("  ⎿ ").color(Color::Ansi256(245)).into_element())
-        .child(Text::new(result).color(Color::Ansi256(245)).into_element())
-        .into_element()
-}
-
-/// Render thinking block (Claude Code style)
-fn render_thinking(text: &str) -> Element {
-    let lines: Vec<&str> = text.lines().take(5).collect();
-    let has_more = text.lines().count() > 5;
-
-    let mut container = RnkBox::new().flex_direction(FlexDirection::Column).child(
-        Text::new("● Thinking...")
-            .color(Color::Magenta) // Pink/Magenta color
-            .into_element(),
-    );
-
-    for line in lines {
-        container = container.child(
-            RnkBox::new()
-                .flex_direction(FlexDirection::Row)
-                .child(Text::new("  ").into_element())
-                .child(Text::new(line).color(Color::Magenta).dim().into_element())
-                .into_element(),
-        );
-    }
-
-    if has_more {
-        container = container.child(
-            Text::new("  ...")
-                .color(Color::Ansi256(245))
-                .dim()
-                .into_element(),
-        );
-    }
-
-    container.into_element()
-}
-
-fn render_error(message: &str) -> Element {
-    RnkBox::new()
-        .flex_direction(FlexDirection::Row)
-        .child(Text::new("● ").color(Color::Red).into_element())
-        .child(Text::new(message).color(Color::Red).into_element())
-        .into_element()
-}
-
-fn render_goodbye() -> Element {
-    Text::new("Goodbye!").dim().into_element()
-}
-
-fn render_cancelled() -> Element {
-    RnkBox::new()
-        .flex_direction(FlexDirection::Row)
-        .child(Text::new("● ").color(Color::Yellow).into_element())
-        .child(
-            Text::new("Cancelled")
-                .color(Color::Yellow)
-                .dim()
-                .into_element(),
-        )
-        .into_element()
-}
-
-// Print rnk element to stdout (with newline)
-fn print_element(element: &Element) {
-    let output = rnk::render_to_string_auto(element);
-    println!("{}", output);
-}
-
-// Direct ANSI print for AI response (bypasses layout engine to avoid indentation)
-fn print_assistant_response(text: &str) {
-    // ● prefix in default color, then white text
-    // \x1b[97m = bright white, \x1b[0m = reset
-    println!("\x1b[97m● {}\x1b[0m", text);
-}
-
-struct RawModeGuard;
-
-impl RawModeGuard {
-    fn enter() -> io::Result<Self> {
-        terminal::enable_raw_mode()?;
-        Ok(Self)
+impl fmt::Display for ToolError {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        output.write_str(match self {
+            Self::Denied => "tool request is denied by default",
+            Self::WrongApproval => "approval did not match the exact tool call",
+            Self::AlreadyExecuted => "tool request has already executed",
+            Self::UnknownTool => "tool name is not allowed",
+            Self::InvalidPath => "tool path must be a relative path without traversal",
+            Self::WorkspaceEscape => "tool path escapes the canonical workspace",
+            Self::Symlink => "tool traversal encountered a symbolic link",
+            Self::DepthLimit => "tool traversal exceeded the depth limit",
+            Self::EntryLimit => "tool traversal exceeded the entry limit",
+            Self::ByteLimit => "tool output exceeded the byte limit",
+            Self::InvalidUtf8 => "tool file or path is not valid UTF-8",
+            Self::Io(_) => "workspace I/O failed",
+        })
     }
 }
 
-impl Drop for RawModeGuard {
-    fn drop(&mut self) {
-        let _ = terminal::disable_raw_mode();
-    }
-}
-
-/// Read a line in a Claude Code style prompt box with proper CJK backspace handling.
-/// Translate a crossterm key event into the library's `Key`.
-///
-/// The example drives crossterm directly, so it has to build the value the
-/// composer expects rather than receiving one from `use_input`.
-fn to_rnk_key(code: KeyCode, modifiers: KeyModifiers) -> (String, Key) {
-    let mut key = Key {
-        ctrl: modifiers.contains(KeyModifiers::CONTROL),
-        shift: modifiers.contains(KeyModifiers::SHIFT),
-        alt: modifiers.contains(KeyModifiers::ALT),
-        ..Key::default()
-    };
-    let mut input = String::new();
-
-    match code {
-        KeyCode::Enter => key.return_key = true,
-        KeyCode::Esc => key.escape = true,
-        KeyCode::Backspace => key.backspace = true,
-        KeyCode::Delete => key.delete = true,
-        KeyCode::Left => key.left_arrow = true,
-        KeyCode::Right => key.right_arrow = true,
-        KeyCode::Home => key.home = true,
-        KeyCode::End => key.end = true,
-        KeyCode::Char(c) => {
-            key.character = Some(c);
-            if !key.ctrl && !key.alt {
-                input.push(c);
-            }
-        }
-        _ => {}
-    }
-
-    (input, key)
-}
-
-fn read_line_with_input_box() -> io::Result<String> {
-    // The composer owns the draft, so backspace removes a whole grapheme
-    // cluster. Popping a `char`, as this loop used to, splits an emoji or a
-    // combining sequence into something the user cannot repair.
-    let mut composer = ChatComposerState::new();
-    let keymap = ChatComposerKeyMap::new();
-    let _raw_mode = RawModeGuard::enter()?;
-
-    draw_prompt_box(&composer)?;
-
-    loop {
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(KeyEvent {
-                code, modifiers, ..
-            }) = event::read()?
-            {
-                if matches!(code, KeyCode::Char('c')) && modifiers.contains(KeyModifiers::CONTROL) {
-                    // Ctrl+C - exit immediately, matching terminal conventions.
-                    terminal::disable_raw_mode()?;
-                    std::process::exit(0);
-                }
-
-                let (input, key) = to_rnk_key(code, modifiers);
-                match handle_key(&mut composer, &keymap, &input, &key) {
-                    InteractionOutcome::Submitted(text) => {
-                        // The composer keeps the draft until the send is
-                        // acknowledged; this caller takes the text and is done
-                        // with the composer, so it acknowledges immediately.
-                        if let Some(token) = composer.pending_submission().map(|p| p.token()) {
-                            let _ = composer.acknowledge_success(token);
-                        }
-                        return Ok(text);
-                    }
-                    InteractionOutcome::Cancelled => {
-                        composer = ChatComposerState::new();
-                        redraw_prompt_box(&composer)?;
-                    }
-                    InteractionOutcome::Changed(_) | InteractionOutcome::Handled => {
-                        redraw_prompt_box(&composer)?;
-                    }
-                    InteractionOutcome::Ignored => {}
-                }
-            }
+impl Error for ToolError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Io(source) => Some(source),
+            _ => None,
         }
     }
 }
 
-// Spinner for loading animation with ESC cancellation support
-struct Spinner {
-    running: Arc<AtomicBool>,
-    cancel_rx: watch::Receiver<bool>,
-    handle: Option<std::thread::JoinHandle<()>>,
+impl From<io::Error> for ToolError {
+    fn from(source: io::Error) -> Self {
+        Self::Io(source)
+    }
 }
 
-impl Spinner {
-    fn new(message: &str) -> Self {
-        let running = Arc::new(AtomicBool::new(true));
-        let running_clone = running.clone();
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        let cancel_tx_clone = cancel_tx.clone();
-        let message = message.to_string();
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolDecision {
+    Denied,
+    Approved,
+}
 
-        let handle = std::thread::spawn(move || {
-            let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-            let mut i = 0;
+pub(crate) struct PendingToolRequest {
+    call_id: ToolCallId,
+    name: String,
+    input: Value,
+    decision: ToolDecision,
+    executed: bool,
+}
 
-            // Enable raw mode for key detection
-            let _ = terminal::enable_raw_mode();
-
-            while running_clone.load(Ordering::Relaxed) {
-                // Check for ESC key
-                if event::poll(Duration::from_millis(80)).unwrap_or(false) {
-                    if let Ok(Event::Key(KeyEvent {
-                        code: KeyCode::Esc, ..
-                    })) = event::read()
-                    {
-                        let _ = cancel_tx_clone.send(true);
-                        running_clone.store(false, Ordering::Relaxed);
-                        break;
-                    }
-                }
-
-                // Use ANSI codes for spinner
-                print!(
-                    "\x1b[2K\r\x1b[33m{} {} \x1b[2m(ESC to cancel)\x1b[0m",
-                    frames[i], message
-                );
-                io::stdout().flush().unwrap();
-                i = (i + 1) % frames.len();
-            }
-
-            let _ = terminal::disable_raw_mode();
-            print!("\x1b[2K\r");
-            io::stdout().flush().unwrap();
-        });
-
+impl PendingToolRequest {
+    pub(crate) fn new(call_id: ToolCallId, name: String, input: Value) -> Self {
         Self {
-            running,
-            cancel_rx,
-            handle: Some(handle),
+            call_id,
+            name,
+            input,
+            decision: ToolDecision::Denied,
+            executed: false,
         }
     }
 
-    fn get_cancel_receiver(&self) -> watch::Receiver<bool> {
-        self.cancel_rx.clone()
+    pub(crate) fn approval_phrase(&self) -> String {
+        format!("approve {}", self.call_id.as_str())
     }
 
-    fn stop(mut self) -> bool {
-        self.running.store(false, Ordering::Relaxed);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+    pub(crate) fn approve_exact(&mut self, supplied: &str) -> Result<(), ToolError> {
+        if supplied != self.approval_phrase() {
+            return Err(ToolError::WrongApproval);
         }
-        *self.cancel_rx.borrow()
-    }
-}
-
-impl Drop for Spinner {
-    fn drop(&mut self) {
-        self.running.store(false, Ordering::Relaxed);
-    }
-}
-
-async fn send_request(
-    client: &Client,
-    messages: &[MessageParam],
-    tools: &[Tool],
-    api_key: &str,
-) -> Result<ChatResponse, Box<dyn std::error::Error + Send + Sync>> {
-    let request = ChatRequest {
-        model: "claude-3-5-sonnet-20241022".to_string(),
-        max_tokens: 8192,
-        messages: messages.to_vec(),
-        tools: Some(tools.to_vec()),
-    };
-
-    let response = client
-        .post(API_URL)
-        .header("x-api-key", api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("Content-Type", "application/json")
-        .json(&request)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let error_text = response.text().await?;
-        return Err(format!("API Error: {}", error_text).into());
+        self.decision = ToolDecision::Approved;
+        Ok(())
     }
 
-    Ok(response.json().await?)
-}
-
-/// Send request with cancellation support
-async fn send_request_cancellable(
-    client: &Client,
-    messages: &[MessageParam],
-    tools: &[Tool],
-    api_key: &str,
-    mut cancel_rx: watch::Receiver<bool>,
-) -> Result<Option<ChatResponse>, Box<dyn std::error::Error + Send + Sync>> {
-    tokio::select! {
-        result = send_request(client, messages, tools, api_key) => {
-            Ok(Some(result?))
+    pub(crate) fn execute_once(&mut self, workspace: &Workspace) -> Result<String, ToolError> {
+        if self.decision != ToolDecision::Approved {
+            return Err(ToolError::Denied);
         }
-        _ = async {
-            loop {
-                cancel_rx.changed().await.ok();
-                if *cancel_rx.borrow() {
-                    break;
-                }
+        if self.executed {
+            return Err(ToolError::AlreadyExecuted);
+        }
+        self.executed = true;
+        let fields = string_object(&self.input).map_err(|_| ToolError::InvalidPath)?;
+        match self.name.as_str() {
+            "read_file" => workspace.read_file(required_field(&fields, "path")?),
+            "list_files" => workspace.list_files(required_field(&fields, "path")?),
+            "search_files" => workspace.search_files(required_field(&fields, "pattern")?),
+            _ => Err(ToolError::UnknownTool),
+        }
+    }
+}
+
+pub(crate) struct Workspace {
+    root: PathBuf,
+}
+
+impl Workspace {
+    fn current() -> Result<Self, ToolError> {
+        let root = env::current_dir()?.canonicalize()?;
+        Ok(Self { root })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_root(root: &Path) -> Result<Self, ToolError> {
+        Ok(Self {
+            root: root.canonicalize()?,
+        })
+    }
+
+    fn resolve(&self, supplied: &str) -> Result<PathBuf, ToolError> {
+        let relative = Path::new(supplied);
+        if relative.is_absolute()
+            || supplied.is_empty()
+            || relative
+                .components()
+                .any(|part| !matches!(part, Component::Normal(_)))
+        {
+            return Err(ToolError::InvalidPath);
+        }
+        let joined = self.root.join(relative);
+        if fs::symlink_metadata(&joined)?.file_type().is_symlink() {
+            return Err(ToolError::Symlink);
+        }
+        let canonical = joined.canonicalize()?;
+        if !canonical.starts_with(&self.root) {
+            return Err(ToolError::WorkspaceEscape);
+        }
+        Ok(canonical)
+    }
+
+    fn read_file(&self, path: &str) -> Result<String, ToolError> {
+        let path = self.resolve(path)?;
+        let metadata = fs::metadata(&path)?;
+        if !metadata.is_file() {
+            return Err(ToolError::InvalidPath);
+        }
+        if metadata.len() > MAX_TOOL_BYTES as u64 {
+            return Err(ToolError::ByteLimit);
+        }
+        let bytes = fs::read(path)?;
+        if bytes.len() > MAX_TOOL_BYTES {
+            return Err(ToolError::ByteLimit);
+        }
+        String::from_utf8(bytes).map_err(|_| ToolError::InvalidUtf8)
+    }
+
+    fn list_files(&self, path: &str) -> Result<String, ToolError> {
+        let directory = self.resolve(path)?;
+        let mut names = Vec::new();
+        for item in fs::read_dir(directory)? {
+            let item = item?;
+            if item.file_type()?.is_symlink() {
+                return Err(ToolError::Symlink);
             }
-        } => {
-            Ok(None) // Cancelled
+            if names.len() == MAX_TOOL_ENTRIES {
+                return Err(ToolError::EntryLimit);
+            }
+            names.push(
+                item.file_name()
+                    .into_string()
+                    .map_err(|_| ToolError::InvalidUtf8)?,
+            );
+        }
+        names.sort();
+        bounded_join(names)
+    }
+
+    fn search_files(&self, pattern: &str) -> Result<String, ToolError> {
+        if pattern.is_empty() || pattern.len() > 128 {
+            return Err(ToolError::InvalidPath);
+        }
+        let mut found = Vec::new();
+        self.search_directory(&self.root, pattern, 0, &mut found)?;
+        found.sort();
+        bounded_join(found)
+    }
+
+    fn search_directory(
+        &self,
+        directory: &Path,
+        pattern: &str,
+        depth: usize,
+        found: &mut Vec<String>,
+    ) -> Result<(), ToolError> {
+        if depth > MAX_TOOL_DEPTH {
+            return Err(ToolError::DepthLimit);
+        }
+        for item in fs::read_dir(directory)? {
+            let item = item?;
+            let kind = item.file_type()?;
+            if kind.is_symlink() {
+                return Err(ToolError::Symlink);
+            }
+            let canonical = item.path().canonicalize()?;
+            if !canonical.starts_with(&self.root) {
+                return Err(ToolError::WorkspaceEscape);
+            }
+            let relative = canonical
+                .strip_prefix(&self.root)
+                .map_err(|_| ToolError::WorkspaceEscape)?;
+            let name = relative.to_str().ok_or(ToolError::InvalidUtf8)?;
+            if name.contains(pattern) {
+                if found.len() == MAX_TOOL_ENTRIES {
+                    return Err(ToolError::EntryLimit);
+                }
+                found.push(name.to_owned());
+            }
+            if kind.is_dir() {
+                if depth == MAX_TOOL_DEPTH {
+                    return Err(ToolError::DepthLimit);
+                }
+                self.search_directory(&canonical, pattern, depth + 1, found)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn bounded_join(values: Vec<String>) -> Result<String, ToolError> {
+    let joined = values.join("\n");
+    if joined.len() > MAX_TOOL_BYTES {
+        Err(ToolError::ByteLimit)
+    } else {
+        Ok(joined)
+    }
+}
+
+fn required_field<'a>(fields: &'a [(String, String)], name: &str) -> Result<&'a str, ToolError> {
+    fields
+        .iter()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.as_str())
+        .ok_or(ToolError::InvalidPath)
+}
+
+fn string_object(value: &Value) -> Result<Vec<(String, String)>, ProviderError> {
+    let object = value.as_object().ok_or(ProviderError::InvalidToolInput)?;
+    object
+        .iter()
+        .map(|(name, value)| {
+            value
+                .as_str()
+                .map(|value| (name.clone(), value.to_owned()))
+                .ok_or(ProviderError::InvalidToolInput)
+        })
+        .collect()
+}
+
+fn tool_definitions() -> Vec<ToolDefinition> {
+    [
+        ("read_file", "Read one bounded workspace file", "path"),
+        ("list_files", "List one bounded workspace directory", "path"),
+        ("search_files", "Search bounded workspace paths", "pattern"),
+    ].into_iter().map(|(name, description, field)| ToolDefinition {
+        name, description,
+        input_schema: json!({"type":"object","properties":{field:{"type":"string"}},"required":[field],"additionalProperties":false}),
+    }).collect()
+}
+
+fn provider_messages(state: &ConversationState) -> AppResult<Vec<MessageParam>> {
+    let mut messages = Vec::new();
+    for message in state.messages() {
+        let role = match message.role() {
+            ChatRole::Assistant => "assistant",
+            ChatRole::User | ChatRole::System | ChatRole::Tool => "user",
+        };
+        let mut content = Vec::new();
+        for entry in message.blocks() {
+            match entry.block() {
+                MessageBlock::Text(text) | MessageBlock::Markdown(text) => {
+                    content.push(ProviderBlock::Text { text: text.clone() });
+                }
+                MessageBlock::ToolCall(call) => content.push(ProviderBlock::ToolUse {
+                    id: call.call_id().as_str().to_owned(),
+                    name: call.name().to_owned(),
+                    input: arguments_json(call.arguments()),
+                }),
+                MessageBlock::ToolResult(result) => content.push(ProviderBlock::ToolResult {
+                    tool_use_id: result.call_id().as_str().to_owned(),
+                    content: result.output().to_owned(),
+                }),
+                // Provider thinking is visible typed state, never request input.
+                MessageBlock::Thinking(_) => {}
+                _ => return Err(ProviderError::UnsupportedBlock.into()),
+            }
+        }
+        if !content.is_empty() {
+            messages.push(MessageParam { role, content });
+        }
+    }
+    Ok(messages)
+}
+
+fn arguments_json(arguments: &[ToolArgument]) -> Value {
+    Value::Object(
+        arguments
+            .iter()
+            .map(|argument| (argument.name().to_owned(), typed_json(argument.value())))
+            .collect(),
+    )
+}
+
+fn typed_json(value: &TypedValue) -> Value {
+    match value {
+        TypedValue::Null => Value::Null,
+        TypedValue::Bool(value) => Value::Bool(*value),
+        TypedValue::Integer(value) => Value::from(*value),
+        TypedValue::Decimal(value) => Value::String(value.as_str().to_owned()),
+        TypedValue::String(value) => Value::String(value.clone()),
+        TypedValue::List(values) => Value::Array(values.iter().map(typed_json).collect()),
+        TypedValue::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|field| (field.name().to_owned(), typed_json(field.value())))
+                .collect(),
+        ),
+    }
+}
+
+fn response_blocks(
+    response: &ChatResponse,
+) -> AppResult<(Vec<MessageBlockEntry>, Vec<PendingToolRequest>)> {
+    let mut entries = Vec::new();
+    let mut pending = Vec::new();
+    for (index, block) in response.content.iter().enumerate() {
+        let block_id = BlockId::new(
+            u64::try_from(index)?
+                .checked_add(1)
+                .ok_or(ProviderError::InvalidToolInput)?,
+        );
+        let value = match block {
+            ResponseBlock::Text { text } => MessageBlock::Text(text.clone()),
+            ResponseBlock::Thinking { thinking } => MessageBlock::Thinking(
+                ThinkingContent::new(
+                    ThinkingId::new(format!("thinking-{}", block_id.get()))?,
+                    thinking,
+                )
+                .with_status(ThinkingStatus::Complete),
+            ),
+            ResponseBlock::ToolUse { id, name, input } => {
+                let call_id = ToolCallId::new(id.clone())?;
+                let arguments = string_object(input)?
+                    .into_iter()
+                    .map(|(name, value)| ToolArgument::new(name, TypedValue::String(value)))
+                    .collect::<Result<Vec<_>, _>>()?;
+                pending.push(PendingToolRequest::new(
+                    call_id.clone(),
+                    name.clone(),
+                    input.clone(),
+                ));
+                MessageBlock::ToolCall(
+                    ToolCallContent::new(call_id, name, arguments)?
+                        .with_status(ToolCallStatus::Pending),
+                )
+            }
+        };
+        entries.push(MessageBlockEntry::new(block_id, value));
+    }
+    if entries.is_empty() {
+        return Err(ProviderError::UnsupportedBlock.into());
+    }
+    Ok((entries, pending))
+}
+
+fn push_completed(
+    state: &mut ConversationState,
+    role: ChatRole,
+    entries: Vec<MessageBlockEntry>,
+) -> AppResult<MessageId> {
+    let mut candidate = state.clone();
+    let id = MessageId::new(candidate.expected_sequence());
+    if entries.is_empty() || entries.len() > MAX_RESPONSE_BLOCKS {
+        return Err(ProviderError::UnsupportedBlock.into());
+    }
+    let base = id
+        .get()
+        .checked_mul(u64::try_from(MAX_RESPONSE_BLOCKS)?)
+        .ok_or(ProviderError::InvalidToolInput)?;
+    let entries = entries
+        .into_iter()
+        .enumerate()
+        .map(|(position, entry)| {
+            let offset = u64::try_from(position)?
+                .checked_add(1)
+                .ok_or(ProviderError::InvalidToolInput)?;
+            let block_id = base
+                .checked_add(offset)
+                .ok_or(ProviderError::InvalidToolInput)?;
+            Ok(MessageBlockEntry::new(
+                BlockId::new(block_id),
+                entry.block().clone(),
+            ))
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    let message = ChatMessage::new(id, role, entries)?;
+    let event = format!("push-{}", candidate.expected_sequence());
+    let guard = ConversationGuard::new(candidate.revision());
+    apply(
+        &mut candidate,
+        event,
+        ConversationUpdate::push(guard, message),
+    )?;
+    let message = candidate
+        .message(id)
+        .ok_or(ProviderError::UnsupportedBlock)?;
+    let guard = MessageMutationGuard::new(
+        ConversationGuard::new(candidate.revision()),
+        id,
+        message.revision(),
+    );
+    let event = format!("complete-{}", candidate.expected_sequence());
+    apply(&mut candidate, event, ConversationUpdate::complete(guard))?;
+    *state = candidate;
+    Ok(id)
+}
+
+fn apply(
+    state: &mut ConversationState,
+    event: String,
+    update: ConversationUpdate,
+) -> AppResult<()> {
+    state.apply_event(ConversationEvent::new(
+        UpdateId::new(event)?,
+        state.expected_sequence(),
+        update,
+    ))?;
+    Ok(())
+}
+
+fn publish(shell: &mut OutputShell, message: &ChatMessage, width: u16) -> AppResult<()> {
+    let rendered = rnk::render_to_string(&ChatMessageView::new(message).into_element(), width);
+    let report = shell.finish(
+        message.id(),
+        message.revision(),
+        &rendered,
+        ProjectionContext::new(width, ThemeIdentity::new(1))?,
+    )?;
+    match report {
+        InlineCommitReport::Fixed { .. } => Ok(()),
+        InlineCommitReport::Retained { cause } => {
+            Err(format!("scrollback retained message: {cause}").into())
+        }
+        InlineCommitReport::Latched { evidence } => {
+            Err(format!("scrollback commit is undecidable: {evidence}").into())
         }
     }
 }
 
-fn format_tool_args(input: &Value) -> String {
-    if let Some(obj) = input.as_object() {
-        obj.iter()
-            .map(|(k, v)| {
-                let val = match v {
-                    Value::String(s) => s.clone(),
-                    _ => v.to_string(),
-                };
-                format!("{}={}", k, val)
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    } else {
-        String::new()
+fn prompt_line(prompt: &str) -> AppResult<String> {
+    print!("{prompt}");
+    io::stdout().flush()?;
+    let mut line = String::new();
+    let read = io::stdin().read_line(&mut line)?;
+    if read == 0 {
+        return Err("stdin closed".into());
     }
+    Ok(line.trim_end().to_owned())
+}
+
+fn approve_and_execute(
+    request: &mut PendingToolRequest,
+    workspace: &Workspace,
+) -> AppResult<String> {
+    let phrase = request.approval_phrase();
+    let supplied = prompt_line(&format!(
+        "Tool {} requests {}. Type `{phrase}` to approve: ",
+        request.call_id.as_str(),
+        request.name
+    ))?;
+    request.approve_exact(&supplied)?;
+    Ok(request.execute_once(workspace)?)
+}
+
+fn tool_result(call_id: ToolCallId, output: String) -> MessageBlockEntry {
+    MessageBlockEntry::new(
+        BlockId::new(1),
+        MessageBlock::ToolResult(
+            ToolResultContent::new(call_id, output).with_status(ToolResultStatus::Complete),
+        ),
+    )
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Get API key from environment
-    let api_key = env::var("GLM_API_KEY").unwrap_or_else(|_| {
-        eprintln!("Warning: GLM_API_KEY not set, using default key");
-        "your_api_key_here".to_string()
-    });
-
-    let client = Client::new();
-    let mut messages: Vec<MessageParam> = Vec::new();
-    let tools = get_tools();
-
-    // Print banner
-    println!();
-    print_element(&render_banner());
-    println!();
+async fn main() -> AppResult<()> {
+    let provider = ProviderAdapter::from_environment()?;
+    let workspace = Workspace::current()?;
+    let width = rnk::renderer::Terminal::size()?.0;
+    if width == 0 {
+        return Err("terminal width is zero".into());
+    }
+    let namespace = ScrollbackNamespace::new("example.glm-chat")?;
+    let mut shell = InlineChatShell::new(namespace, NativeTerminalSink::new(io::stdout()));
+    let mut state = ConversationState::new(0, std::num::NonZeroUsize::new(128).unwrap());
 
     loop {
-        // Use custom input handler for a live Claude Code style prompt box.
-        let input = read_line_with_input_box()?;
-        clear_live_prompt_box();
-        io::stdout().flush()?;
-
-        let input = input.trim();
-
-        match input.to_lowercase().as_str() {
-            "quit" | "exit" => {
-                println!();
-                print_element(&render_goodbye());
-                println!();
-                break;
-            }
-            "clear" => {
-                print!("\x1b[2J\x1b[H");
-                print_element(&render_banner());
-                println!();
-                continue;
-            }
-            "" => continue,
-            _ => {}
+        let input = prompt_line("glm> ")?;
+        if matches!(input.as_str(), "quit" | "exit") {
+            break;
         }
+        if input.trim().is_empty() {
+            continue;
+        }
+        let user_id = push_completed(
+            &mut state,
+            ChatRole::User,
+            vec![MessageBlockEntry::new(
+                BlockId::new(1),
+                MessageBlock::Text(input),
+            )],
+        )?;
+        publish(
+            &mut shell,
+            state
+                .message(user_id)
+                .ok_or(ProviderError::UnsupportedBlock)?,
+            width,
+        )?;
 
-        // Display user message in Claude Code style
-        print_element(&render_user_message(input));
-
-        messages.push(MessageParam {
-            role: "user".to_string(),
-            content: MessageContent::Text(input.to_string()),
-        });
-
-        // Handle multi-turn tool calls
-        loop {
-            let spinner = Spinner::new("Thinking...");
-            let cancel_rx = spinner.get_cancel_receiver();
-            let result =
-                send_request_cancellable(&client, &messages, &tools, &api_key, cancel_rx).await;
-            let was_cancelled = spinner.stop();
-
-            // Handle cancellation
-            if was_cancelled {
-                println!();
-                print_element(&render_cancelled());
-                messages.pop(); // Remove the user message since we cancelled
-                println!();
+        for cycle in 0..MAX_TOOL_CYCLES {
+            let response = provider.send(&state).await?;
+            let (blocks, mut pending) = response_blocks(&response)?;
+            let assistant_id = push_completed(&mut state, ChatRole::Assistant, blocks)?;
+            publish(
+                &mut shell,
+                state
+                    .message(assistant_id)
+                    .ok_or(ProviderError::UnsupportedBlock)?,
+                width,
+            )?;
+            if pending.is_empty() {
                 break;
             }
-
-            match result {
-                Ok(Some(response)) => {
-                    let mut tool_uses = Vec::new();
-
-                    for block in &response.content {
-                        match block {
-                            ResponseBlock::Thinking { thinking } => {
-                                println!();
-                                print_element(&render_thinking(thinking));
-                            }
-                            ResponseBlock::Text { text } => {
-                                if !text.is_empty() {
-                                    println!();
-                                    print_assistant_response(text);
-                                }
-                            }
-                            ResponseBlock::ToolUse { id, name, input } => {
-                                let args = format_tool_args(input);
-                                println!();
-                                print_element(&render_tool_call(name, &args));
-
-                                let tool_result = execute_tool(name, input);
-                                print_element(&render_tool_result(&tool_result));
-
-                                tool_uses.push((id.clone(), tool_result));
-                            }
-                        }
-                    }
-
-                    // Save assistant message
-                    let assistant_content: Vec<ContentBlock> = response
-                        .content
-                        .iter()
-                        .filter_map(|b| match b {
-                            ResponseBlock::Text { text } => {
-                                Some(ContentBlock::Text { text: text.clone() })
-                            }
-                            ResponseBlock::ToolUse { id, name, input } => {
-                                Some(ContentBlock::ToolUse {
-                                    id: id.clone(),
-                                    name: name.clone(),
-                                    input: input.clone(),
-                                })
-                            }
-                            _ => None,
-                        })
-                        .collect();
-
-                    messages.push(MessageParam {
-                        role: "assistant".to_string(),
-                        content: MessageContent::Blocks(assistant_content),
-                    });
-
-                    if !tool_uses.is_empty() {
-                        let tool_results: Vec<ContentBlock> = tool_uses
-                            .into_iter()
-                            .map(|(id, result)| ContentBlock::ToolResult {
-                                tool_use_id: id,
-                                content: result,
-                            })
-                            .collect();
-
-                        messages.push(MessageParam {
-                            role: "user".to_string(),
-                            content: MessageContent::Blocks(tool_results),
-                        });
-                        continue;
-                    }
-
-                    println!();
-                    break;
-                }
-                Ok(None) => {
-                    // Already handled above (cancelled)
-                    break;
-                }
-                Err(e) => {
-                    println!();
-                    print_element(&render_error(&e.to_string()));
-                    println!();
-                    messages.pop();
-                    break;
-                }
+            for request in &mut pending {
+                let output = approve_and_execute(request, &workspace)?;
+                let result_id = push_completed(
+                    &mut state,
+                    ChatRole::Tool,
+                    vec![tool_result(request.call_id.clone(), output)],
+                )?;
+                publish(
+                    &mut shell,
+                    state
+                        .message(result_id)
+                        .ok_or(ProviderError::UnsupportedBlock)?,
+                    width,
+                )?;
+            }
+            if cycle + 1 == MAX_TOOL_CYCLES {
+                return Err(ProviderError::ToolCycleLimit.into());
             }
         }
     }
-
     Ok(())
 }

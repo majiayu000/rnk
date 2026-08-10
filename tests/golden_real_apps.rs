@@ -21,6 +21,37 @@ use rnk::testing::GoldenTest;
 use std::io::{self, Write};
 use std::num::NonZeroUsize;
 
+#[path = "../examples/glm_chat.rs"]
+#[allow(dead_code)]
+mod gh68_glm;
+
+struct Gh68TempDir(std::path::PathBuf);
+
+impl Gh68TempDir {
+    fn new() -> Self {
+        for nonce in 0..1000_u32 {
+            let path =
+                std::env::temp_dir().join(format!("rnk-gh68-{}-{nonce}", std::process::id()));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("cannot create GH68 temp directory: {error}"),
+            }
+        }
+        panic!("cannot allocate a collision-free GH68 temp directory")
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Gh68TempDir {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).expect("GH68 temp directory cleanup must succeed");
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CommitObservation {
     Fixed,
@@ -646,92 +677,34 @@ struct Gh68BudgetedWriter {
     accepted: Vec<u8>,
     budget: Option<usize>,
 }
-
+#[rustfmt::skip]
 impl Gh68BudgetedWriter {
-    const fn unlimited() -> Self {
-        Self {
-            accepted: Vec::new(),
-            budget: None,
-        }
-    }
-
-    const fn accepting(budget: usize) -> Self {
-        Self {
-            accepted: Vec::new(),
-            budget: Some(budget),
-        }
-    }
+    const fn unlimited() -> Self { Self { accepted: Vec::new(), budget: None } }
+    const fn accepting(budget: usize) -> Self { Self { accepted: Vec::new(), budget: Some(budget) } }
 }
-
+#[rustfmt::skip]
 impl Write for Gh68BudgetedWriter {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        let Some(budget) = self.budget else {
-            self.accepted.extend_from_slice(bytes);
-            return Ok(bytes.len());
-        };
+        let Some(budget) = self.budget else { self.accepted.extend_from_slice(bytes); return Ok(bytes.len()); };
         let room = budget.saturating_sub(self.accepted.len());
-        if room == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "budget exhausted",
-            ));
-        }
-        let count = room.min(bytes.len());
-        self.accepted.extend_from_slice(&bytes[..count]);
-        Ok(count)
+        if room == 0 { return Err(io::Error::new(io::ErrorKind::BrokenPipe, "budget exhausted")); }
+        let count = room.min(bytes.len()); self.accepted.extend_from_slice(&bytes[..count]); Ok(count)
     }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
+    fn flush(&mut self) -> io::Result<()> { Ok(()) }
 }
-
-fn inline_report(
-    writer: Gh68BudgetedWriter,
-) -> (
-    InlineCommitReport,
-    InlineChatShell<NativeTerminalSink<Gh68BudgetedWriter>>,
-    rnk::components::chat::SubmissionToken,
-) {
-    let mut shell = InlineChatShell::new(
-        ScrollbackNamespace::new("gh68.inline").unwrap(),
-        NativeTerminalSink::new(writer),
-    );
-    assert!(matches!(
-        shell.handle_key(
-            &rnk::components::chat::ChatComposerKeyMap::new(),
-            "draft",
-            &Key::default()
-        ),
-        InlineKeyOutcome::Changed(_)
-    ));
-    let enter = Key {
-        return_key: true,
-        ..Key::default()
-    };
-    assert_eq!(
-        shell.handle_key(
-            &rnk::components::chat::ChatComposerKeyMap::new(),
-            "",
-            &enter
-        ),
-        InlineKeyOutcome::Submitted("draft".to_owned())
-    );
-    let token = shell.composer().pending_submission().unwrap().token();
-    let id = MessageId::new(1);
-    shell.stream(id).unwrap();
-    let report = shell
-        .finish(
-            id,
-            MessageRevision::INITIAL,
-            "You: draft",
-            ProjectionContext::new(40, ThemeIdentity::new(1)).unwrap(),
-        )
-        .unwrap();
+#[rustfmt::skip]
+fn inline_report(writer: Gh68BudgetedWriter) -> (InlineCommitReport, InlineChatShell<NativeTerminalSink<Gh68BudgetedWriter>>, rnk::components::chat::SubmissionToken) {
+    let mut shell = InlineChatShell::new(ScrollbackNamespace::new("gh68.inline").unwrap(), NativeTerminalSink::new(writer));
+    assert!(matches!(shell.handle_key(&rnk::components::chat::ChatComposerKeyMap::new(), "draft", &Key::default()), InlineKeyOutcome::Changed(_)));
+    let enter = Key { return_key: true, ..Key::default() };
+    assert_eq!(shell.handle_key(&rnk::components::chat::ChatComposerKeyMap::new(), "", &enter), InlineKeyOutcome::Submitted("draft".to_owned()));
+    let token = shell.composer().pending_submission().unwrap().token(); let id = MessageId::new(1); shell.stream(id).unwrap();
+    let report = shell.finish(id, MessageRevision::INITIAL, "You: draft", ProjectionContext::new(40, ThemeIdentity::new(1)).unwrap()).unwrap();
     (report, shell, token)
 }
 
 #[test]
+#[rustfmt::skip]
 fn gh68_inline_example_contract() {
     let source = include_str!("../examples/claude_input_box.rs");
     for required in [
@@ -746,44 +719,81 @@ fn gh68_inline_example_contract() {
         assert!(source.contains(required), "missing inline seam: {required}");
     }
     for forbidden in ["app.println(", "println!(", "submitted_count", "wrap_text("] {
-        assert!(
-            !source.contains(forbidden),
-            "inline example retained a direct publication ledger: {forbidden}"
-        );
+        assert!(!source.contains(forbidden), "inline example retained a direct publication ledger: {forbidden}");
     }
 
     let (fixed, mut fixed_shell, fixed_token) = inline_report(Gh68BudgetedWriter::unlimited());
     assert!(matches!(fixed, InlineCommitReport::Fixed { .. }));
-    fixed_shell
-        .composer_mut()
-        .acknowledge_success(fixed_token)
-        .unwrap();
+    fixed_shell.composer_mut().acknowledge_success(fixed_token).unwrap();
     assert_eq!(fixed_shell.composer().text(), "");
     assert!(fixed_shell.live_messages().is_empty());
 
-    let (retained, mut retained_shell, retained_token) =
-        inline_report(Gh68BudgetedWriter::accepting(0));
+    let (retained, mut retained_shell, retained_token) = inline_report(Gh68BudgetedWriter::accepting(0));
     assert!(matches!(retained, InlineCommitReport::Retained { .. }));
-    retained_shell
-        .composer_mut()
-        .acknowledge_failure(retained_token)
-        .unwrap();
+    retained_shell.composer_mut().acknowledge_failure(retained_token).unwrap();
     assert_eq!(retained_shell.composer().text(), "draft");
-    assert_eq!(
-        retained_shell.live_state(MessageId::new(1)),
-        Some(LiveState::AwaitingRetry)
-    );
+    assert_eq!(retained_shell.live_state(MessageId::new(1)), Some(LiveState::AwaitingRetry));
 
-    let (latched, mut latched_shell, latched_token) =
-        inline_report(Gh68BudgetedWriter::accepting(3));
+    let (latched, mut latched_shell, latched_token) = inline_report(Gh68BudgetedWriter::accepting(3));
     assert!(matches!(latched, InlineCommitReport::Latched { .. }));
-    latched_shell
-        .composer_mut()
-        .acknowledge_failure(latched_token)
-        .unwrap();
+    latched_shell.composer_mut().acknowledge_failure(latched_token).unwrap();
     assert_eq!(latched_shell.composer().text(), "draft");
-    assert_eq!(
-        latched_shell.live_state(MessageId::new(1)),
-        Some(LiveState::AwaitingResolution)
-    );
+    assert_eq!(latched_shell.live_state(MessageId::new(1)), Some(LiveState::AwaitingResolution));
+}
+
+#[test]
+#[rustfmt::skip]
+fn gh68_provider_example_contract() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let source = include_str!("../examples/glm_chat.rs");
+    for required in ["ConversationState::new", "ConversationUpdate::push", "ChatMessageView::new",
+        "InlineChatShell::new", "struct PendingToolRequest", "ToolDecision::Denied", "approve_exact",
+        "execute_once", "canonicalize()", "MAX_TOOL_DEPTH", "MAX_TOOL_ENTRIES", "MAX_TOOL_BYTES"] {
+        assert!(source.contains(required), "missing provider seam: {required}");
+    }
+    for forbidden in ["your_api_key_here", "using default key", "filter_map(|e| e.ok())",
+        "unwrap_or((80, 24))", "mod prompt_box"] {
+        assert!(!source.contains(forbidden), "unsafe provider residue: {forbidden}");
+    }
+    assert!(!std::path::Path::new("examples/glm_chat/prompt_box.rs").exists());
+    let client_builds = AtomicUsize::new(0);
+    let missing = gh68_glm::ProviderAdapter::from_optional_key(None, || {
+        client_builds.fetch_add(1, Ordering::SeqCst); Ok(reqwest::Client::new())
+    });
+    assert!(missing.is_err()); assert_eq!(client_builds.load(Ordering::SeqCst), 0);
+    let blank = gh68_glm::ProviderAdapter::from_optional_key(Some("  ".to_owned()), || {
+        client_builds.fetch_add(1, Ordering::SeqCst); Ok(reqwest::Client::new())
+    });
+    assert!(blank.is_err()); assert_eq!(client_builds.load(Ordering::SeqCst), 0);
+    let root = Gh68TempDir::new();
+    std::fs::write(root.path().join("safe.txt"), "safe-content").unwrap();
+    let workspace = gh68_glm::Workspace::from_root(root.path()).unwrap();
+    let request = |id: &str, name: &str, input: serde_json::Value| {
+        gh68_glm::PendingToolRequest::new(rnk::components::chat::ToolCallId::new(id).unwrap(), name.to_owned(), input)
+    };
+    let mut denied = request("call-1", "read_file", serde_json::json!({"path":"safe.txt"}));
+    assert_eq!(denied.execute_once(&workspace).unwrap_err().to_string(), "tool request is denied by default");
+    assert!(denied.approve_exact("approve wrong").is_err());
+    denied.approve_exact(&denied.approval_phrase()).unwrap();
+    assert_eq!(denied.execute_once(&workspace).unwrap(), "safe-content");
+    assert_eq!(denied.execute_once(&workspace).unwrap_err().to_string(), "tool request has already executed");
+    let mut traversal = request("call-2", "read_file", serde_json::json!({"path":"../escape"}));
+    traversal.approve_exact("approve call-2").unwrap(); assert!(traversal.execute_once(&workspace).is_err());
+    std::fs::write(root.path().join("large.txt"), vec![b'x'; 65 * 1024]).unwrap();
+    let mut large = request("call-3", "read_file", serde_json::json!({"path":"large.txt"}));
+    large.approve_exact("approve call-3").unwrap(); assert!(large.execute_once(&workspace).is_err());
+    std::fs::create_dir(root.path().join("many")).unwrap();
+    for index in 0..21 { std::fs::write(root.path().join(format!("many/{index}")), "x").unwrap(); }
+    let mut many = request("call-many", "list_files", serde_json::json!({"path":"many"}));
+    many.approve_exact("approve call-many").unwrap(); assert!(many.execute_once(&workspace).is_err());
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(root.path().join("safe.txt"), root.path().join("link")).unwrap();
+        let mut link = request("call-4", "read_file", serde_json::json!({"path":"link"}));
+        link.approve_exact("approve call-4").unwrap(); assert!(link.execute_once(&workspace).is_err());
+    }
+    let deep = root.path().join("d0/d1/d2/d3/d4");
+    std::fs::create_dir_all(&deep).unwrap(); std::fs::write(deep.join("needle.txt"), "x").unwrap();
+    let mut search = request("call-5", "search_files", serde_json::json!({"pattern":"needle"}));
+    search.approve_exact("approve call-5").unwrap(); assert!(search.execute_once(&workspace).is_err());
 }
