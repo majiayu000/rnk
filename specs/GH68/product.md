@@ -159,7 +159,7 @@ public-example discovery。当前 follow-up 从 exact main
     视觉录屏或其他task coverage不构成证明。
 26. **B-026** current base必须包含GH-61、GH-66、GH-67的merged implementation ancestry与
     PR #166 partial implementation；#68必须保持canonical `ready_to_implement`且无parked/
-    冲突readiness label。follow-up只接受本packet 17-path closed scope和DCO checkpoint chain；
+    冲突readiness label。follow-up只接受本packet 21-path closed scope和DCO checkpoint chain；
     绿色CI、旧SpecRail状态或环境变量声明不能扩张写权限，也不能替代exact-head human review。
 27. **B-027** 终端能力不可用时只能进入文档化的显式降级路径并向用户说明能力差异；数据丢失、
     消息顺序错误、布局/anchor 错误、重复提交、终端恢复失败或无法判定的副作用不得降级为
@@ -203,5 +203,6 @@ public-example discovery。当前 follow-up 从 exact main
 - #68 当前 canonical label 是 `ready_to_implement`；issue body 中历史
   `Readiness: ready_to_spec` 仅是创建时快照，不是当前授权事实。
 - PR #166 是已合并的部分实现。maintainer 已在 issue 审计上下文中批准本次
-  spec-correction + post-merge implementation follow-up；该例外只覆盖本 packet 明列路径。
+  spec-correction + post-merge implementation follow-up；最终审查发现的 runtime paste 与
+  composer selection 根因经当前人工接管确认后，例外仍只覆盖本 packet 明列的21个路径。
 - 最终 follow-up review、merge、release、#68 与 GH-57 closure 仍由人类决定。

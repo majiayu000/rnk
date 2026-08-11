@@ -33,6 +33,8 @@ use rnk::components::chat::{
     ThemeIdentity, ThinkingContent, ThinkingId, ThinkingStatus, ToolArgument, ToolCallContent,
     ToolCallId, ToolCallStatus, ToolResultContent, ToolResultStatus, TypedValue, UpdateId,
 };
+#[cfg(test)]
+use rnk::components::chat::{DecimalValue, TypedField};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -404,7 +406,7 @@ impl Workspace {
         bounded_join(names)
     }
 
-    fn search_files(&self, pattern: &str) -> Result<String, ToolError> {
+    pub(crate) fn search_files(&self, pattern: &str) -> Result<String, ToolError> {
         if pattern.is_empty() || pattern.len() > 128 {
             return Err(ToolError::InvalidPath);
         }
@@ -857,6 +859,102 @@ pub(crate) fn gh68_provider_adapter_view() -> AppResult<String> {
         )
         .into_element();
     Ok(rnk::render_to_string(&root, 60))
+}
+
+#[cfg(test)]
+pub(crate) fn gh68_provider_internal_contract() -> AppResult<(usize, usize, usize, usize)> {
+    let response = ChatResponse {
+        content: vec![ResponseBlock::Text {
+            text: "answer".to_owned(),
+        }],
+    };
+    let (blocks, _) = response_blocks(&response)?;
+    let (_, pending) = response_blocks(&ChatResponse {
+        content: vec![ResponseBlock::ToolUse {
+            id: "call-internal".to_owned(),
+            name: "search_files".to_owned(),
+            input: json!({"pattern":"needle"}),
+        }],
+    })?;
+    let _ = response_blocks(&ChatResponse {
+        content: vec![ResponseBlock::Thinking {
+            thinking: "reasoning".to_owned(),
+        }],
+    })?;
+    let mut state = ConversationState::new(0, std::num::NonZeroUsize::new(16).unwrap());
+    push_completed(&mut state, ChatRole::Assistant, blocks)?;
+    let _ = tool_result(ToolCallId::new("call-internal")?, "needle.txt".to_owned());
+    let provider = provider_messages(&state)?;
+    let arguments = vec![
+        ToolArgument::new("null", TypedValue::Null)?,
+        ToolArgument::new("bool", TypedValue::Bool(true))?,
+        ToolArgument::new("integer", TypedValue::Integer(68))?,
+        ToolArgument::new("string", TypedValue::String("value".to_owned()))?,
+        ToolArgument::new(
+            "list",
+            TypedValue::List(vec![TypedValue::String("item".to_owned())]),
+        )?,
+        ToolArgument::new("decimal", TypedValue::Decimal(DecimalValue::new("1.5")?))?,
+        ToolArgument::new(
+            "object",
+            TypedValue::object(vec![TypedField::new(
+                "field",
+                TypedValue::String("nested".to_owned()),
+            )?])?,
+        )?,
+    ];
+    let typed = arguments_json(&arguments);
+    let _ = [
+        ProviderError::MissingApiKey.to_string(),
+        ProviderError::HttpStatus(500).to_string(),
+        ProviderError::UnsupportedBlock.to_string(),
+        ProviderError::InvalidToolInput.to_string(),
+        ProviderError::ToolCycleLimit.to_string(),
+        ToolError::UnknownTool.to_string(),
+        ToolError::InvalidUtf8.to_string(),
+    ];
+    let _ = ToolName::parse("read_file")?;
+    let _ = ToolName::parse("list_files")?;
+    let _ = ToolName::parse("search_files")?;
+    validate_call_id("internal._:-68")?;
+    validate_tool_argument(ToolName::ReadFile, "file.txt")?;
+    validate_tool_argument(ToolName::ListFiles, "directory")?;
+    validate_tool_argument(ToolName::SearchFiles, "needle")?;
+    let _ = string_object(&json!({"path":"file.txt"}))?;
+    let _ = bounded_join(vec!["a".to_owned(), "b".to_owned()])?;
+    let _ = relative_components("directory/file.txt")?;
+    let definitions = tool_definitions();
+    let mut candidate = ConversationState::new(0, std::num::NonZeroUsize::new(16).unwrap());
+    let oversized = (0..=MAX_RESPONSE_BLOCKS)
+        .map(|index| {
+            MessageBlockEntry::new(
+                BlockId::new(u64::try_from(index + 1).unwrap()),
+                MessageBlock::Text("x".to_owned()),
+            )
+        })
+        .collect::<Vec<_>>();
+    let negative_checks = [
+        ProviderAdapter::from_optional_key(Some("key".to_owned()), || Ok(reqwest::Client::new()))
+            .is_ok(),
+        ToolName::parse("unknown").is_err(),
+        validate_call_id("").is_err(),
+        validate_call_id(&"a".repeat(65)).is_err(),
+        validate_tool_argument(ToolName::ReadFile, "/absolute").is_err(),
+        validate_tool_argument(ToolName::SearchFiles, "").is_err(),
+        string_object(&Value::Null).is_err(),
+        string_object(&json!({"path":1})).is_err(),
+        response_blocks(&ChatResponse { content: vec![] }).is_err(),
+        push_completed(&mut candidate, ChatRole::User, vec![]).is_err(),
+        push_completed(&mut candidate, ChatRole::User, oversized).is_err(),
+        bounded_join(vec!["x".repeat(MAX_TOOL_BYTES + 1)]).is_err(),
+        relative_components("../escape").is_err(),
+    ];
+    Ok((
+        pending.len(),
+        provider.len(),
+        typed.as_object().unwrap().len() + definitions.len(),
+        negative_checks.into_iter().map(usize::from).sum(),
+    ))
 }
 
 fn push_completed(

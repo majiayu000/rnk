@@ -44,6 +44,8 @@ pub enum ComposerAction {
     DeleteWordBefore,
     /// Empty the draft.
     Clear,
+    /// Select the complete draft so the next edit replaces it atomically.
+    SelectAll,
 }
 
 /// Composer key bindings.
@@ -53,6 +55,7 @@ pub struct ChatComposerKeyMap {
     newline: Vec<KeyBinding>,
     cancel: Vec<KeyBinding>,
     clear: Vec<KeyBinding>,
+    select_all: Vec<KeyBinding>,
 }
 
 impl Default for ChatComposerKeyMap {
@@ -76,6 +79,7 @@ impl ChatComposerKeyMap {
             ],
             cancel: vec![KeyBinding::new(KeyType::Escape, Modifiers::NONE)],
             clear: vec![KeyBinding::new(KeyType::Char('u'), Modifiers::CTRL)],
+            select_all: vec![KeyBinding::new(KeyType::Char('a'), Modifiers::CTRL)],
         }
     }
 
@@ -103,6 +107,12 @@ impl ChatComposerKeyMap {
         self
     }
 
+    /// Replaces the select-all bindings.
+    pub fn select_all(mut self, bindings: Vec<KeyBinding>) -> Self {
+        self.select_all = bindings;
+        self
+    }
+
     /// The action a keystroke maps to, if any.
     ///
     /// Newline is matched before submit: its bindings are the more specific
@@ -120,6 +130,9 @@ impl ChatComposerKeyMap {
         }
         if matches(&self.clear, key) {
             return Some(ComposerAction::Clear);
+        }
+        if matches(&self.select_all, key) {
+            return Some(ComposerAction::SelectAll);
         }
 
         builtin_action(key)

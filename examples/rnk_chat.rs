@@ -20,7 +20,7 @@ use rnk::components::chat::{
     MessageId, MessageRevision, MessageStatus, MessageTimestamp,
 };
 use rnk::core::{Overflow, TextWrap};
-use rnk::hooks::{Key, use_window_size};
+use rnk::hooks::{BracketedPasteGuard, Key, use_paste, use_window_size};
 use rnk::layout::LayoutEngine;
 use rnk::layout::text_flow::{
     TextFlowCacheIdentity, TextFlowInput, TextFlowOptions, TextFlowSourceKind,
@@ -33,6 +33,7 @@ const PAGE_ROWS: u64 = 5;
 const MEASUREMENT_CACHE: usize = 512;
 
 fn main() -> std::io::Result<()> {
+    let _paste = BracketedPasteGuard::new()?;
     render(app).fullscreen().run()
 }
 
@@ -206,6 +207,14 @@ impl ChatSurface {
         Ok((candidate, submitted))
     }
 
+    pub(crate) fn try_paste(&self, content: &str) -> Result<Self, String> {
+        let (candidate, submitted) = self.try_key(content, &Key::default())?;
+        if submitted.is_some() {
+            return Err("paste unexpectedly submitted the draft".to_owned());
+        }
+        Ok(candidate)
+    }
+
     fn try_push(&mut self, message: ChatMessage) -> Result<(), String> {
         let mut messages = self.messages.clone();
         messages.push(message);
@@ -300,7 +309,7 @@ impl ChatSurface {
     }
 }
 
-fn app() -> Element {
+pub(crate) fn app() -> Element {
     let (terminal_width, terminal_height) = use_window_size();
     let surface = use_signal(|| {
         Arc::new(Mutex::new(
@@ -398,6 +407,32 @@ fn app() -> Element {
                 input_surface.set(handle);
             }
         }
+    });
+
+    let paste_surface = surface.clone();
+    use_paste(move |event| {
+        let handle = paste_surface.get();
+        let mut locked = match handle.lock() {
+            Ok(surface) => surface,
+            Err(_) => {
+                eprintln!("rnk_chat: chat state lock is poisoned during paste");
+                return;
+            }
+        };
+        let current = locked.clone();
+        match current.try_paste(event.content()) {
+            Ok(candidate) => *locked = candidate,
+            Err(error) => {
+                let mut candidate = current;
+                candidate.status = format!("paste refused: {error}");
+                if let Some(revision) = candidate.revision.checked_add(1) {
+                    candidate.revision = revision;
+                }
+                *locked = candidate;
+            }
+        }
+        drop(locked);
+        paste_surface.set(handle);
     });
 
     let handle = surface.get();

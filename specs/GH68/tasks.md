@@ -33,7 +33,7 @@ cargo test --test golden_real_apps --all-features --locked <name> -- --exact
 
 - [ ] `SP68-F1` 修正 post-merge packet。Owner: `followup-spec-owner` | Done when: product、
   tech、tasks 记录 #166 partial merge、current readiness、exact base、`CHAT_QUICKSTART.md`、
-  17-path closed scope、15 个 `golden_real_apps` exact selectors 和真实 ownership；删除损坏的
+  21-path closed scope、15 个 `golden_real_apps` exact selectors 和真实 ownership；删除损坏的
   pre-merge/SpecRail 文本 | Verify: `git diff --check -- specs/GH68`; planned JSON `jq`；B-ID/
   task/mapping/critical set equality；`python3 .github/scripts/check_markdown_links.py specs/GH68`。
   - File ownership: `specs/GH68/product.md`、`specs/GH68/tech.md`、
@@ -43,10 +43,13 @@ cargo test --test golden_real_apps --all-features --locked <name> -- --exact
 
 - [ ] `SP68-F2` 建立 reusable green harness 与 root-cause evidence。Owner:
   `hardening-harness-owner` | Done when: deterministic conversation/view/shell fixtures、example
-  source/index/docs/CI/benchmark parsers和负例均可复用；不预提交未来 selector 的红断言 |
+  source/index/docs/CI/benchmark parsers和负例均可复用；真实`Event::Paste`进入paste hooks，
+  composer提供grapheme-safe selection/替换路径；不预提交未来 selector 的红断言 |
   Verify: `cargo test --test golden_real_apps --all-features --locked gh68_harness_contract -- --exact`；
   `cargo test --test golden_real_apps --all-features --locked`。
-  - File ownership: `tests/golden_real_apps.rs`。
+  - File ownership: `tests/golden_real_apps.rs`、`src/renderer/runtime.rs`、
+    `src/components/chat/composer.rs`、`src/components/chat/composer/keymap.rs`、
+    `src/components/chat/composer/state.rs`。
   - Covers: B-002, B-005, B-006, B-010, B-011, B-012, B-013, B-014, B-018, B-020,
     B-022, B-023, B-024, B-027, B-028。
   - Handoff: 向F3移交harness和测试文件；未迁移examples仍保持当前行为。
@@ -150,8 +153,8 @@ F1 -> F2 -> F3 -> F4 -> F5 -> F6 -> F7 -> F8 -> F9
 ```
 
 - checkpoints串行移交`tests/golden_real_apps.rs`，任一时刻只有一个writer。
-- 根`README.md`、`Cargo.toml`/lock、`src/**`、现有`benches/chat_scrollback.rs`和所有未列路径
-  只读；需要它们才能修复时必须停下重新裁决。
+- 根`README.md`、`Cargo.toml`/lock、除F2四个精确文件外的`src/**`、现有
+  `benches/chat_scrollback.rs`和所有未列路径只读；需要它们才能修复时必须停下重新裁决。
 - `examples/glm_chat/prompt_box.rs`只能在F6 parity通过后删除。
 
 ## Invariant coverage audit

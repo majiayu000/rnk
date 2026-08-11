@@ -17,17 +17,20 @@ environment.
 
 ## Environment Matrix
 
-The matrix records the contract that `rnk` can make today. It is not a claim
-that every listed terminal has been manually certified on every platform.
+The matrix uses only the closed status vocabulary above. Each required
+dimension appears exactly once; a row does not imply broader certification.
 
-| Environment | Inline / fullscreen | Mouse and bracketed paste | Hyperlinks and color | Resize behavior | Non-TTY and CI |
-|-------------|---------------------|---------------------------|----------------------|-----------------|----------------|
-| macOS Terminal | Implemented by inline diff rendering and alternate-screen sequences; final alternate-screen behavior is terminal-dependent. | Best effort through crossterm enable/disable commands. | Color sequences are emitted; OSC 8 hyperlinks are terminal-dependent and may fall back to plain text. | Implemented repaint on size change; terminal wrapping policy remains terminal-dependent. | Use normal TTY path when attached to a terminal. |
-| iTerm2 | Implemented by inline diff rendering and alternate-screen sequences. | Best effort; iTerm2 commonly supports both, but `rnk` treats this as terminal-dependent. | Best effort for colors and OSC 8 hyperlinks. | Implemented repaint on size change. | Use normal TTY path when attached to a terminal. |
-| Windows Terminal | Implemented through crossterm and ANSI-compatible terminal behavior. | Best effort through crossterm; input mode support depends on Windows terminal state. | Best effort for ANSI colors and OSC 8 hyperlinks. | Implemented repaint on size change. | Use normal TTY path when attached to a terminal. |
-| tmux | Implemented when the pane passes through the required ANSI behavior. | Terminal-dependent; tmux mode, mouse settings, and paste forwarding can change behavior. | Terminal-dependent; OSC 8 and truecolor may require tmux configuration. | Implemented repaint in the application; tmux pane resize behavior is external. | Use normal TTY path inside tmux. |
-| SSH / remote TTY | Implemented when stdin/stdout are TTYs and the remote `$TERM` supports the emitted sequences. | Terminal-dependent across SSH client, server, `$TERM`, and multiplexer settings. | Terminal-dependent. | Implemented repaint in `rnk`; remote terminal resize delivery is external. | Non-TTY pipes and redirects should use non-interactive rendering paths. |
-| Non-TTY / CI | Interactive terminal mode is unsupported as an end-user experience. | Unsupported. | Structured rendering and snapshots are supported; emulator-specific behavior is not automatically tested. | Source-level resize decisions are tested; real emulator resize is not automatically tested. | `Environment` detects CI and TTY state so apps can disable interactive behavior. |
+| Dimension | Status | Current boundary |
+|---|---|---|
+| OS | `verified` | The artifact records the CI runner OS and architecture for the exact head. |
+| Terminal emulator | `unverified` | No named emulator was exercised by current-head automation. |
+| Inline | `verified` | Inline commit and PTY lifecycle tests ran on the recorded runner. |
+| Fullscreen | `verified` | Fullscreen layout and PTY lifecycle tests ran on the recorded runner. |
+| Paste | `verified` | Runtime dispatch and grapheme-safe composer paste tests ran; emulator forwarding is not certified. |
+| Resize | `verified` | Overflow, paused-anchor, draft, and message-order transitions ran. |
+| Raw restoration | `verified` | Complete captured termios state plus cursor/mouse/screen sequences were checked. |
+| tmux | `unverified` | No current-head tmux session evidence exists. |
+| SSH | `unverified` | No current-head remote TTY evidence exists. |
 
 ## Chat Evidence Matrix
 
@@ -35,18 +38,23 @@ The chat checks bind structured output to the exact source revision under test.
 They do not promote source or golden evidence into a claim about an emulator
 that CI did not run. CI records its current `GITHUB_SHA`, runner environment and
 the named evidence below in the job artifact.
+These compatibility checks use no network or secret.
 
 <!-- gh68-terminal-matrix-v1
-{"schema":"gh68-terminal-matrix-v1","cells":[{"evidence":"gh68_example_convergence_contract","id":"conversation_view","status":"verified"},{"evidence":"gh68_fullscreen_example_contract","id":"fullscreen_restoration","status":"verified"},{"evidence":"gh68_inline_example_contract","id":"inline_commit_resolution","status":"verified"},{"evidence":"gh68_provider_example_contract","id":"provider_tool_boundary","status":"verified"},{"evidence":"none","id":"named_emulator_certification","status":"unverified"}]}
+{"schema":"gh68-terminal-matrix-v1","cells":[{"evidence":"runner.os+runner.arch","id":"os","status":"verified"},{"evidence":"none","id":"terminal_emulator","status":"unverified"},{"evidence":"gh68_inline_example_contract","id":"inline","status":"verified"},{"evidence":"gh68_fullscreen_example_contract","id":"fullscreen","status":"verified"},{"evidence":"gh68_chat_tutorial_contract+test_event_loop_paste_dispatch_requests_render","id":"paste","status":"verified"},{"evidence":"gh68_fullscreen_example_contract","id":"resize","status":"verified"},{"evidence":"gh68_fullscreen_example_contract+gh68_inline_example_contract","id":"raw_restoration","status":"verified"},{"evidence":"none","id":"tmux","status":"unverified"},{"evidence":"none","id":"ssh","status":"unverified"}]}
 -->
 
-| Chat contract | Evidence kind | Environment and head binding | Status |
+| Dimension | Evidence kind | Environment and head binding | Status |
 |---|---|---|---|
-| Typed conversation and custom block view | Public API convergence test plus plain/ANSI golden | CI runner; exact checked-out `GITHUB_SHA` | `verified` |
-| Fullscreen row clipping, resize, and PTY restoration | Public shell test plus PTY raw/cursor/mouse/alternate-screen checks | CI runner; exact checked-out `GITHUB_SHA` | `verified` |
-| Inline commit outcomes and PTY restoration | Public shell test with complete, zero-byte, partial writers and PTY lifecycle | CI runner; exact checked-out `GITHUB_SHA` | `verified` |
-| GLM provider/tool adapter | Offline typed-event and hostile workspace fixtures | CI runner; exact checked-out `GITHUB_SHA`; no network or secret | `verified` |
-| Named terminal-emulator certification | No emulator-specific run | None | `unverified` |
+| OS | Recorded runner OS and architecture | CI runner; exact checked-out `GITHUB_SHA` | `verified` |
+| Terminal emulator | No emulator-specific run | None | `unverified` |
+| Inline | Commit outcomes and PTY lifecycle | CI runner; exact checked-out `GITHUB_SHA` | `verified` |
+| Fullscreen | Public shell layout and PTY lifecycle | CI runner; exact checked-out `GITHUB_SHA` | `verified` |
+| Paste | Runtime event dispatch, selection replacement, and grapheme deletion | CI runner; exact checked-out `GITHUB_SHA` | `verified` |
+| Resize | Overflowing paused viewport with interleaved draft input | CI runner; exact checked-out `GITHUB_SHA` | `verified` |
+| Raw restoration | Complete termios snapshot and output-sequence checks | CI runner; exact checked-out `GITHUB_SHA` | `verified` |
+| tmux | No tmux session run | None | `unverified` |
+| SSH | No remote TTY run | None | `unverified` |
 
 No cell in this matrix is a macOS Terminal, iTerm2, Windows Terminal, tmux or
 SSH certification. A real-terminal evidence record may say `verified` only when
@@ -67,6 +75,8 @@ scrollback and restoration behavior belongs to the terminal emulator.
 Mouse input and bracketed paste are best-effort terminal modes. `rnk` can request
 those modes and dispatch events when the terminal sends them. It cannot force an
 emulator, SSH client, or tmux pane to support or forward those events.
+The interactive chat examples hold a `BracketedPasteGuard` for their complete
+terminal session, so both normal return and unwind disable the input mode.
 
 Hyperlinks use OSC 8 when hyperlink support is detected or explicitly enabled.
 When support is disabled, the hyperlink component renders fallback text. OSC 8

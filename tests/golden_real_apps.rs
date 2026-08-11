@@ -1,3 +1,4 @@
+use crossterm::event::KeyModifiers;
 use rnk::components::chat::message_list::ViewportRows;
 use rnk::components::chat::scrollback::NativeTerminalSink;
 use rnk::components::chat::{
@@ -11,8 +12,8 @@ use rnk::components::{
     SelectInput, SelectItem, Stat, Text, TextArea, TextAreaState,
 };
 use rnk::core::{Color, Element, FlexDirection};
-use rnk::hooks::Key;
-use rnk::testing::GoldenTest;
+use rnk::hooks::{Key, KeyCodeKind, use_input, use_paste, use_signal};
+use rnk::testing::{GoldenTest, TestHarness};
 use std::io::{self, Write};
 use std::num::NonZeroUsize;
 
@@ -184,6 +185,7 @@ fn invocation_has(arguments: &[String], name: &str) -> bool {
 #[cfg(unix)]
 struct Gh68PtySession {
     terminal: rnk::renderer::Terminal,
+    paste: Option<rnk::hooks::BracketedPasteGuard>,
     fullscreen: bool,
 }
 #[cfg(unix)]
@@ -193,21 +195,46 @@ impl Gh68PtySession {
         let mut terminal = rnk::renderer::Terminal::new();
         if fullscreen { terminal.enter().unwrap(); } else { terminal.enter_inline().unwrap(); }
         terminal.enable_mouse().unwrap();
-        Self { terminal, fullscreen }
+        let paste=Some(rnk::hooks::BracketedPasteGuard::new().unwrap());
+        Self { terminal, paste, fullscreen }
     }
 }
 #[cfg(unix)]
 #[rustfmt::skip]
 impl Drop for Gh68PtySession {
     fn drop(&mut self) {
+        self.paste.take();
         if self.fullscreen { self.terminal.exit().unwrap(); } else { self.terminal.exit_inline().unwrap(); }
     }
 }
 #[cfg(unix)]
-fn gh68_termios(fd: RawFd) -> libc::termios {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Gh68TermiosSnapshot {
+    input_flags: libc::tcflag_t,
+    output_flags: libc::tcflag_t,
+    control_flags: libc::tcflag_t,
+    local_flags: libc::tcflag_t,
+    control_chars: [libc::cc_t; libc::NCCS],
+    input_speed: libc::speed_t,
+    output_speed: libc::speed_t,
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    line_discipline: libc::cc_t,
+}
+#[cfg(unix)]
+fn gh68_termios(fd: RawFd) -> Gh68TermiosSnapshot {
     let mut value = unsafe { std::mem::zeroed() };
     assert_eq!(unsafe { libc::tcgetattr(fd, &mut value) }, 0);
-    value
+    Gh68TermiosSnapshot {
+        input_flags: value.c_iflag,
+        output_flags: value.c_oflag,
+        control_flags: value.c_cflag,
+        local_flags: value.c_lflag,
+        control_chars: value.c_cc,
+        input_speed: unsafe { libc::cfgetispeed(&value) },
+        output_speed: unsafe { libc::cfgetospeed(&value) },
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        line_discipline: value.c_line,
+    }
 }
 #[cfg(unix)]
 #[rustfmt::skip]
@@ -219,8 +246,8 @@ fn gh68_pty_restoration(fullscreen: bool) {
         let mut child=pty.slave.spawn_command(command).unwrap(); let mut reader=pty.master.try_clone_reader().unwrap(); let mut writer=pty.master.take_writer().unwrap(); drop(pty.slave);
         let mut output=String::new(); let mut held=None; let deadline=Instant::now()+Duration::from_secs(20); let mut buffer=[0;4096];
         while !output.contains("<<RESTORED>>") { assert!(Instant::now()<deadline,"PTY timeout: {output}"); let count=reader.read(&mut buffer).unwrap(); assert!(count>0,"PTY closed: {output}"); output.push_str(&String::from_utf8_lossy(&buffer[..count])); if held.is_none()&&output.contains("<<HELD>>") { held=Some(gh68_termios(fd)); writer.write_all(b"\n").unwrap(); writer.flush().unwrap(); } }
-        assert!(child.wait().unwrap().success()); let held=held.unwrap(); let after=gh68_termios(fd); assert_eq!(before.c_lflag,after.c_lflag); assert_eq!(held.c_lflag&(libc::ECHO|libc::ICANON),0);
-        let hide=output.find("\u{1b}[?25l").unwrap(); let show=output.rfind("\u{1b}[?25h").unwrap(); let mouse_on=output.find("\u{1b}[?1000h").unwrap(); let mouse_off=output.rfind("\u{1b}[?1000l").unwrap(); assert!(hide<show&&mouse_on<mouse_off);
+        assert!(child.wait().unwrap().success()); let held=held.unwrap(); let after=gh68_termios(fd); assert_eq!(before,after,"the complete termios state must be restored"); assert_eq!(held.local_flags&(libc::ECHO|libc::ICANON),0);
+        let hide=output.find("\u{1b}[?25l").unwrap(); let show=output.rfind("\u{1b}[?25h").unwrap(); let mouse_on=output.find("\u{1b}[?1000h").unwrap(); let mouse_off=output.rfind("\u{1b}[?1000l").unwrap(); let paste_on=output.find("\u{1b}[?2004h").unwrap(); let paste_off=output.rfind("\u{1b}[?2004l").unwrap(); assert!(hide<show&&mouse_on<mouse_off&&paste_on<paste_off);
         assert_eq!(output.contains("\u{1b}[?1049h"),fullscreen); assert_eq!(output.contains("\u{1b}[?1049l"),fullscreen);
     }
 }
@@ -241,6 +268,33 @@ fn gh68_pty_child() {
 
 fn chat_flow() -> Element {
     conversation_view(&conversation_fixture())
+}
+
+fn gh68_composer_input() -> Element {
+    let state = use_signal(ChatComposerState::new);
+    let input_state = state.clone();
+    use_input(move |input, key| {
+        let mut candidate = input_state.get();
+        rnk::components::chat::handle_key(
+            &mut candidate,
+            &rnk::components::chat::ChatComposerKeyMap::new(),
+            input,
+            key,
+        );
+        input_state.set(candidate);
+    });
+    let paste_state = state.clone();
+    use_paste(move |event| {
+        let mut candidate = paste_state.get();
+        rnk::components::chat::handle_key(
+            &mut candidate,
+            &rnk::components::chat::ChatComposerKeyMap::new(),
+            event.content(),
+            &Key::default(),
+        );
+        paste_state.set(candidate);
+    });
+    Text::new(state.get().text().to_owned()).into_element()
 }
 
 fn git_flow() -> Element {
@@ -403,14 +457,24 @@ fn gh68_chat_tutorial_contract() {
     let state = conversation_fixture();
     let rendered = rnk::render_to_string(&conversation_view(&state), 60);
     assert_eq!(rendered, gh68_chat::gh68_offline_adapter_view().unwrap()); assert_eq!([rendered.contains("Explain the release gate"),rendered.contains("Use typed updates.")],[true,true]);
+    let mut tutorial=TestHarness::with_size(gh68_chat::app,80,24); tutorial.send_text("harness input"); tutorial.send_key(KeyCodeKind::Enter); tutorial.assert_text_contains("harness input");
+    for source in [include_str!("../examples/rnk_chat.rs"),include_str!("../examples/claude_input_box.rs")] { assert!(source.contains("use_paste"),"interactive chat example must register a paste hook"); assert!(source.contains("BracketedPasteGuard::new()"),"interactive chat example must enable bracketed paste for its terminal session"); }
+    assert!(include_str!("../src/renderer/runtime.rs").contains("Event::Paste(content)"));
+    let complex = "old\r\n界👩‍👩‍👧‍👦e\u{301}";
+    let mut harness = TestHarness::with_size(gh68_composer_input, 80, 4);
+    harness.send_paste(complex);
+    harness.assert_text_contains("old\r\n界👩‍👩‍👧‍👦e\u{301}");
+    harness.send_key_with_modifiers(KeyCodeKind::Char('a'),KeyModifiers::CONTROL);
+    harness.send_paste("界👩‍👩‍👧‍👦e\u{301}");
+    assert!(!harness.render().contains("old"),"paste must replace the active selection");
+    harness.send_key(KeyCodeKind::Left);
+    harness.send_key(KeyCodeKind::Delete);
+    harness.assert_text_contains("界👩‍👩‍👧‍👦");
+    assert!(!harness.render().contains("e\u{301}"),"forward delete must remove one combining grapheme");
+    harness.send_key(KeyCodeKind::Backspace);
+    assert!(!harness.render().contains("👩‍👩‍👧‍👦"),"backspace must remove one ZWJ grapheme");
     let mut composer = ChatComposerState::new();
-    let complex = "界👩‍👩‍👧‍👦e\u{301}\r\n多字 paste";
-    assert!(matches!(rnk::components::chat::handle_key(&mut composer,&rnk::components::chat::ChatComposerKeyMap::new(),complex,&Key::default()),rnk::components::InteractionOutcome::Changed(_)));
-    assert_eq!(composer.text(), complex.replace("\r\n", "\n"));
-    let before = composer.text().to_owned();
-    let backspace = Key { backspace: true, ..Key::default() };
-    rnk::components::chat::handle_key(&mut composer,&rnk::components::chat::ChatComposerKeyMap::new(),"",&backspace);
-    assert!(before.starts_with(&composer.text())); assert!(!composer.text().ends_with("paste"));
+    rnk::components::chat::handle_key(&mut composer,&rnk::components::chat::ChatComposerKeyMap::new(),"界👩‍👩‍👧‍👦e\u{301}",&Key::default());
     let projection = rnk::components::chat::ComposerProjection::build(&composer, 8);
     assert!(projection.visible_slice().iter().all(|line|unicode_width::UnicodeWidthStr::width(line.as_str())<=8));
 }
@@ -450,6 +514,7 @@ fn gh68_fullscreen_example_contract() {
     }
 
     assert!(gh68_fullscreen::ChatSurface::try_new(24, 2).is_err());
+    let mut live=TestHarness::with_size(gh68_fullscreen::app,40,12); assert_eq!(live.runtime_context().borrow().paste_handler_count(),1); live.send_key(KeyCodeKind::Function(1)); live.send_key(KeyCodeKind::Function(1)); live.send_key(KeyCodeKind::Tab); live.send_key(KeyCodeKind::PageUp); live.send_key(KeyCodeKind::PageDown); live.send_key(KeyCodeKind::Tab); live.send_paste("live paste"); live.send_key(KeyCodeKind::Enter); live.resize(31,10); live.send_key_with_modifiers(KeyCodeKind::Char('c'),KeyModifiers::CONTROL);
     let initial = gh68_fullscreen::ChatSurface::try_new(24, 8).unwrap();
     let initial_shell = initial.try_shell().unwrap();
     assert_eq!(
@@ -482,6 +547,23 @@ fn gh68_fullscreen_example_contract() {
         .unwrap()
         .try_set_focus(rnk::components::chat::FullscreenFocus::Composer)
         .unwrap();
+    surface = surface.try_resize(18, 7).unwrap();
+    let following = surface.try_shell().unwrap();
+    assert_eq!(
+        following.transcript().follow_state(),
+        rnk::components::chat::message_list::BottomFollowState::Following
+    );
+    assert!(
+        following.transcript().total_rows().unwrap()
+            > following.transcript().viewport_rows().get(),
+        "the resize scenario must begin with an overflowing transcript"
+    );
+    surface = surface.try_scroll(-2).unwrap();
+    let paused = surface.try_shell().unwrap();
+    assert!(matches!(paused.transcript().follow_state(),rnk::components::chat::message_list::BottomFollowState::Paused { .. }));
+    let paused_anchor = paused.transcript().stored_anchor().expect("paused viewport has an anchor");
+    let stable_ids = surface.message_ids();
+    let mut expected_draft = String::new();
     for (width, height, input) in [
         (18, 7, "界"),
         (31, 10, "👩‍👩‍👧‍👦"),
@@ -489,8 +571,18 @@ fn gh68_fullscreen_example_contract() {
         (40, 12, "paste 多字"),
     ] {
         surface = surface.try_resize(width, height).unwrap();
-        surface = surface.try_key(input, &Key::default()).unwrap().0;
-        assert_eq!(surface.try_shell().unwrap().layout().width(), width);
+        let resized = surface.try_shell().unwrap();
+        assert_eq!(resized.layout().width(), width);
+        assert_eq!(surface.message_ids(),stable_ids);
+        assert!(matches!(resized.transcript().follow_state(),rnk::components::chat::message_list::BottomFollowState::Paused { .. }));
+        assert_eq!(resized.transcript().stored_anchor(),Some(paused_anchor));
+        surface = surface.try_paste(input).unwrap();
+        expected_draft.push_str(input);
+        let edited = surface.try_shell().unwrap();
+        assert_eq!(edited.composer().text(),expected_draft);
+        assert_eq!(surface.message_ids(),stable_ids);
+        assert!(matches!(edited.transcript().follow_state(),rnk::components::chat::message_list::BottomFollowState::Paused { .. }));
+        assert_eq!(edited.transcript().stored_anchor(),Some(paused_anchor));
     }
     let enter = Key {
         return_key: true,
@@ -499,8 +591,10 @@ fn gh68_fullscreen_example_contract() {
     let (submitted_surface, prompt) = surface.try_key("", &enter).unwrap();
     let prompt = prompt.unwrap();
     assert_eq!([prompt.contains("界"),prompt.contains("👩‍👩‍👧‍👦"),prompt.contains("e\u{301}"),prompt.contains("paste 多字")],[true,true,true,true]);
+    let submitted_shell=submitted_surface.try_shell().unwrap(); assert_eq!(submitted_shell.transcript().stored_anchor(),Some(paused_anchor)); assert!(matches!(submitted_shell.transcript().follow_state(),rnk::components::chat::message_list::BottomFollowState::Paused { .. }));
     let expected = submitted_surface.revision();
     let moved = submitted_surface.try_resize(32, 10).unwrap();
+    let moved_shell=moved.try_shell().unwrap(); assert_eq!(moved_shell.transcript().stored_anchor(),Some(paused_anchor)); assert!(matches!(moved_shell.transcript().follow_state(),rnk::components::chat::message_list::BottomFollowState::Paused { .. }));
     assert!(
         moved
             .try_reply(expected, &prompt)
@@ -509,6 +603,7 @@ fn gh68_fullscreen_example_contract() {
             .contains("stale")
     );
     let replied = moved.try_reply(moved.revision(), &prompt).unwrap();
+    let replied_shell=replied.try_shell().unwrap(); assert_eq!(replied_shell.transcript().stored_anchor(),Some(paused_anchor)); assert!(matches!(replied_shell.transcript().follow_state(),rnk::components::chat::message_list::BottomFollowState::Paused { .. }));
     assert_eq!(replied.message_ids(), [1, 2, 3, 4]);
     assert_eq!(replied.status(), "ready");
     let painted = rnk::render_to_string(&gh68_fullscreen::render_surface(&replied), 32);
@@ -575,6 +670,7 @@ fn gh68_inline_example_contract() {
     for forbidden in ["app.println(", "println!(", "submitted_count", "wrap_text("] {
         assert!(!source.contains(forbidden), "inline example retained a direct publication ledger: {forbidden}");
     }
+    let mut live=TestHarness::with_size(gh68_inline::app,80,12); live.send_paste("inline paste"); live.assert_text_contains("inline paste"); live.send_key_with_modifiers(KeyCodeKind::Char('r'),KeyModifiers::CONTROL); live.send_key_with_modifiers(KeyCodeKind::Char('v'),KeyModifiers::CONTROL); live.send_key(KeyCodeKind::Left); live.send_key(KeyCodeKind::Delete); live.send_text(" publish"); live.send_key(KeyCodeKind::Enter); live.send_key(KeyCodeKind::Escape);
 
     let (fixed, mut fixed_shell, fixed_token) = inline_report(Gh68BudgetedWriter::unlimited());
     assert!(matches!(fixed, InlineCommitReport::Fixed { .. }));
@@ -613,6 +709,7 @@ fn gh68_provider_example_contract() {
         assert!(!source.contains(forbidden), "unsafe provider residue: {forbidden}");
     }
     assert!(!std::path::Path::new("examples/glm_chat/prompt_box.rs").exists());
+    assert_eq!(gh68_glm::gh68_provider_internal_contract().unwrap(),(1,1,10,13));
     let client_builds = AtomicUsize::new(0);
     let missing = gh68_glm::ProviderAdapter::from_optional_key(None, || {
         client_builds.fetch_add(1, Ordering::SeqCst); Ok(reqwest::Client::new())
@@ -624,9 +721,20 @@ fn gh68_provider_example_contract() {
     assert!(blank.is_err()); assert_eq!(client_builds.load(Ordering::SeqCst), 0);
     let root = Gh68TempDir::new();
     std::fs::write(root.path().join("safe.txt"), "safe-content").unwrap();
+    std::fs::create_dir(root.path().join("directory")).unwrap();
+    std::fs::write(root.path().join("directory/nested.txt"), "nested-content").unwrap();
     let workspace = gh68_glm::Workspace::from_root(root.path()).unwrap();
     assert_eq!(gh68_chat::gh68_offline_adapter_view().unwrap(), gh68_glm::gh68_provider_adapter_view().unwrap());
     let request = |id: &str, name: &str, input: serde_json::Value| gh68_glm::PendingToolRequest::parse(id, name, &input).unwrap();
+    let mut list_root=request("call-list-root","list_files",serde_json::json!({"path":"."})); list_root.approve_exact(&list_root.approval_phrase()).unwrap(); assert!(list_root.execute_once(&workspace).unwrap().contains("safe.txt"));
+    let mut search_safe=request("call-search-safe","search_files",serde_json::json!({"pattern":"safe"})); search_safe.approve_exact(&search_safe.approval_phrase()).unwrap(); assert!(search_safe.execute_once(&workspace).unwrap().contains("safe.txt"));
+    let mut read_directory=request("call-read-directory","read_file",serde_json::json!({"path":"directory"})); read_directory.approve_exact(&read_directory.approval_phrase()).unwrap(); assert!(read_directory.execute_once(&workspace).is_err());
+    let mut read_root=request("call-read-root","read_file",serde_json::json!({"path":"."})); read_root.approve_exact(&read_root.approval_phrase()).unwrap(); assert!(read_root.execute_once(&workspace).is_err());
+    let mut read_nested=request("call-read-nested","read_file",serde_json::json!({"path":"directory/nested.txt"})); read_nested.approve_exact(&read_nested.approval_phrase()).unwrap(); assert_eq!(read_nested.execute_once(&workspace).unwrap(),"nested-content");
+    let mut list_file=request("call-list-file","list_files",serde_json::json!({"path":"safe.txt"})); list_file.approve_exact(&list_file.approval_phrase()).unwrap(); assert!(list_file.execute_once(&workspace).is_err());
+    assert!(workspace.search_files("").is_err()); assert!(workspace.search_files(&"x".repeat(129)).is_err());
+    assert!(gh68_glm::PendingToolRequest::parse("call-wrong-field","read_file",&serde_json::json!({"wrong":"safe.txt"})).is_err());
+    assert!(gh68_glm::PendingToolRequest::parse("call-long-search","search_files",&serde_json::json!({"pattern":"x".repeat(129)})).is_err());
     let mut denied = request("call-1", "read_file", serde_json::json!({"path":"safe.txt"}));
     assert_eq!(denied.execute_once(&workspace).unwrap_err().to_string(), "tool request is denied by default");
     assert!(denied.approve_exact("approve wrong").is_err());
@@ -651,6 +759,9 @@ fn gh68_provider_example_contract() {
     fanout.approve_exact(&fanout.approval_phrase()).unwrap(); assert!(fanout.execute_once(&workspace).is_err());
     #[cfg(unix)]
     {
+        let symlink_root=Gh68TempDir::new(); std::fs::write(symlink_root.path().join("target"),"x").unwrap(); std::os::unix::fs::symlink(symlink_root.path().join("target"),symlink_root.path().join("link")).unwrap(); let symlink_workspace=gh68_glm::Workspace::from_root(symlink_root.path()).unwrap();
+        let mut list_link=request("call-list-link","list_files",serde_json::json!({"path":"."})); list_link.approve_exact(&list_link.approval_phrase()).unwrap(); assert!(list_link.execute_once(&symlink_workspace).is_err());
+        let mut search_link=request("call-search-link","search_files",serde_json::json!({"pattern":"absent"})); search_link.approve_exact(&search_link.approval_phrase()).unwrap(); assert!(search_link.execute_once(&symlink_workspace).is_err());
         std::os::unix::fs::symlink(root.path().join("safe.txt"), root.path().join("link")).unwrap();
         let mut link = request("call-4", "read_file", serde_json::json!({"path":"link"}));
         link.approve_exact(&link.approval_phrase()).unwrap(); assert!(link.execute_once(&workspace).is_err());
@@ -717,7 +828,7 @@ fn compile_gh68_quickstarts(blocks:&[&str]) {
 }
 #[rustfmt::skip]
 fn validate_gh68_terminal_evidence(matrix:&str) {
-    let line=matrix.split_once("gh68-terminal-matrix-v1").unwrap().1.lines().find(|line|line.starts_with('{')).unwrap(); let manifest:serde_json::Value=serde_json::from_str(line).unwrap(); let mut keys=manifest.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(); keys.sort_unstable(); assert_eq!(keys,["cells","schema"]); assert_eq!(manifest["schema"],"gh68-terminal-matrix-v1"); let cells=manifest["cells"].as_array().unwrap(); assert_eq!(cells.len(),5); let vocabulary=["verified","best_effort","terminal_dependent","unsupported","unverified"]; for cell in cells { let mut keys=cell.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(); keys.sort_unstable(); assert_eq!(keys,["evidence","id","status"]); assert!(vocabulary.contains(&cell["status"].as_str().unwrap())); assert!(!cell["id"].as_str().unwrap().is_empty()&&!cell["evidence"].as_str().unwrap().is_empty()); }
+    let line=matrix.split_once("gh68-terminal-matrix-v1").unwrap().1.lines().find(|line|line.starts_with('{')).unwrap(); let manifest:serde_json::Value=serde_json::from_str(line).unwrap(); let mut keys=manifest.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(); keys.sort_unstable(); assert_eq!(keys,["cells","schema"]); assert_eq!(manifest["schema"],"gh68-terminal-matrix-v1"); let cells=manifest["cells"].as_array().unwrap(); let required=["os","terminal_emulator","inline","fullscreen","paste","resize","raw_restoration","tmux","ssh"]; assert_eq!(cells.len(),required.len()); let mut ids=cells.iter().map(|cell|cell["id"].as_str().unwrap()).collect::<Vec<_>>(); ids.sort_unstable(); let mut expected=required; expected.sort_unstable(); assert_eq!(ids,expected); let vocabulary=["verified","best_effort","terminal_dependent","unsupported","unverified"]; for cell in cells { let mut keys=cell.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(); keys.sort_unstable(); assert_eq!(keys,["evidence","id","status"]); let status=cell["status"].as_str().unwrap(); let evidence=cell["evidence"].as_str().unwrap(); assert!(vocabulary.contains(&status)); assert!(!evidence.is_empty()); if status=="verified" { assert_ne!(evidence,"none"); } else if status=="unverified" { assert_eq!(evidence,"none"); } }
     let Some(path)=std::env::var_os("GH68_TERMINAL_EVIDENCE") else { assert!(!exact_invocation("gh68_compatibility_matrix_contract"),"exact terminal evidence path is required"); return; }; let path=std::path::PathBuf::from(path); assert!(path.is_absolute()); let evidence:serde_json::Value=serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap(); let mut evidence_keys=evidence.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(); evidence_keys.sort_unstable(); assert_eq!(evidence_keys,["cells","head_sha","runner","schema"]); assert_eq!(evidence["schema"],"gh68-terminal-evidence-v1"); assert_eq!(evidence["head_sha"],std::env::var("GH68_IMPLEMENTATION_HEAD").unwrap()); assert_eq!(evidence["cells"],manifest["cells"]); let runner=&evidence["runner"]; let mut runner_keys=runner.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(); runner_keys.sort_unstable(); assert_eq!(runner_keys,["arch","os","rustc_vv"]); let rustc=std::process::Command::new("rustc").arg("-Vv").output().unwrap(); assert!(rustc.status.success()); assert_eq!(runner["rustc_vv"],String::from_utf8(rustc.stdout).unwrap().trim()); assert!(!runner["os"].as_str().unwrap().is_empty()&&!runner["arch"].as_str().unwrap().is_empty());
 }
 #[test]
@@ -745,19 +856,22 @@ fn gh68_stress_correctness_contract() {
     let first=gh68_render::gh68_workload_oracles(); let replay=gh68_render::gh68_workload_oracles(); assert_eq!(first,replay);
     assert_eq!(first.iter().map(|item|item.name).collect::<Vec<_>>(), ["gh68_long_conversation","gh68_high_frequency_streaming","gh68_variable_height_prepend","gh68_continuous_resize","gh68_inline_commit_churn"]);
     assert_eq!(first[0].message_order, (1..=128).collect::<Vec<_>>()); assert_eq!(first[1].message_order,[1,2]);
+    assert_eq!(first[1].active_stream_steps,256); assert_eq!(first[1].expansion_transitions,0); assert!(first[1].bottom_follow);
     assert_eq!(first[2].message_order.first(),Some(&1)); assert_eq!(first[2].message_order.last(),Some(&131)); assert!(first[2].anchor.is_some()); assert!(!first[2].bottom_follow);
+    assert_eq!(first[2].expansion_transitions,2); assert_eq!(first[2].active_stream_steps,0);
     assert!(first[3].semantic_checksum!=0); assert_eq!(first[4].commit_count,64); assert_eq!(first[4].message_order,(1..=64).collect::<Vec<_>>());
 }
 #[test]
 #[rustfmt::skip]
 fn gh68_benchmark_metadata_contract() {
     assert!(gh68_render::gh68_sha256_contract());
-    match gh68_render::gh68_benchmark_route_contract("metadata") { Ok("performance_status=validation_required")=>gh68_render::gh68_benchmark_metadata_contract().unwrap(), Ok("performance_status=not_available")=>{ assert!(std::env::var_os("GH68_BENCHMARK_MODE").is_none()); assert!(!gh68_render::gh68_is_regression(1_100_000,1_000_000,1)); assert!(gh68_render::gh68_is_regression(3_000_000,1_000_000,1)); }, Ok(other)=>panic!("unexpected benchmark status {other}"), Err(error)=>{ assert!(!exact_invocation("gh68_benchmark_metadata_contract"),"exact benchmark route is required: {error:?}"); } }
+    gh68_render::gh68_benchmark_internal_contract().unwrap();
+    match gh68_render::gh68_benchmark_route_contract("metadata") { Ok("performance_status=validation_required")=>gh68_render::gh68_benchmark_metadata_contract().unwrap(), Ok("performance_status=not_available")=>{ assert!(std::env::var_os("GH68_BENCHMARK_MODE").is_none()); let base="b".repeat(40); let head="a".repeat(40); assert_eq!(gh68_render::gh68_validate_baseline_head(&base,&head,&base),Ok(())); assert_eq!(gh68_render::gh68_validate_baseline_head(&"c".repeat(40),&head,&base),Err(gh68_render::Gh68EvidenceError("baseline identity"))); assert!(!gh68_render::gh68_is_regression(1_100_000,1_000_000,1)); assert!(gh68_render::gh68_is_regression(3_000_000,1_000_000,1)); }, Ok(other)=>panic!("unexpected benchmark status {other}"), Err(error)=>{ assert!(!exact_invocation("gh68_benchmark_metadata_contract"),"exact benchmark route is required: {error:?}"); } }
 }
 #[test]
 #[rustfmt::skip]
 fn gh68_benchmark_comparison_contract() {
-    match gh68_render::gh68_benchmark_route_contract("comparison") { Ok("performance_status=validation_required")=>gh68_render::gh68_benchmark_comparison_contract().unwrap(), Ok("performance_status=not_available")=>{ assert!(std::env::var_os("GH68_BENCHMARK_EVIDENCE").is_none()); assert_eq!(gh68_render::gh68_benchmark_comparison_contract(),Err(gh68_render::Gh68EvidenceError("mode is not validate"))); }, Ok(other)=>panic!("unexpected benchmark status {other}"), Err(error)=>{ assert!(!exact_invocation("gh68_benchmark_comparison_contract"),"exact benchmark route is required: {error:?}"); } }
+    match gh68_render::gh68_benchmark_route_contract("comparison") { Ok("performance_status=validation_required")=>gh68_render::gh68_benchmark_comparison_contract().unwrap(), Ok("performance_status=not_available")=>{ assert!(std::env::var_os("GH68_BENCHMARK_EVIDENCE").is_none()); assert_eq!(gh68_render::gh68_benchmark_comparison_contract(),Err(gh68_render::Gh68EvidenceError("mode is not validate"))); assert_eq!(gh68_render::gh68_require_no_regressions([false,false]),Ok(())); assert_eq!(gh68_render::gh68_require_no_regressions([false,true]),Err(gh68_render::Gh68EvidenceError("performance regression"))); }, Ok(other)=>panic!("unexpected benchmark status {other}"), Err(error)=>{ assert!(!exact_invocation("gh68_benchmark_comparison_contract"),"exact benchmark route is required: {error:?}"); } }
 }
 
 #[test]
@@ -774,7 +888,7 @@ fn validate_gh68_coverage_evidence() {
     let mut keys=object.keys().map(String::as_str).collect::<Vec<_>>(); keys.sort_unstable(); assert_eq!(keys,["base_main_sha","branch_collection","changed_executable","critical","head_sha","raw_sha256","schema","toolchain"]);
     assert_eq!(evidence["schema"],"gh68-coverage-v1"); assert_eq!(evidence["head_sha"],std::env::var("GH68_IMPLEMENTATION_HEAD").unwrap()); assert_eq!(evidence["base_main_sha"],std::env::var("GH68_BASE_MAIN_SHA").unwrap()); assert_eq!(evidence["toolchain"],"nightly-2026-01-18"); assert_eq!(evidence["branch_collection"],true);
     let raw_path=std::path::PathBuf::from(std::env::var_os("GH68_COVERAGE_RAW").expect("raw coverage path is required")); assert!(raw_path.is_absolute()); let raw=std::fs::read(raw_path).unwrap(); assert_eq!(evidence["raw_sha256"],gh68_render::gh68_sha256(&raw));
-    let changed=&evidence["changed_executable"]; let mut changed_keys=changed.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(); changed_keys.sort_unstable(); assert_eq!(changed_keys,["branch_covered","branch_percent","branch_total","file","line_covered","line_percent","line_total"]); assert_eq!(changed["file"],"tests/golden_real_apps.rs");
+    let changed=&evidence["changed_executable"]; let mut changed_keys=changed.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(); changed_keys.sort_unstable(); assert_eq!(changed_keys,["branch_covered","branch_percent","branch_total","files","line_covered","line_percent","line_total"]); let files=changed["files"].as_array().unwrap(); assert!(!files.is_empty()); let mut paths=files.iter().map(|path|path.as_str().unwrap()).collect::<Vec<_>>(); let before=paths.len(); paths.sort_unstable(); paths.dedup(); assert_eq!(paths.len(),before); assert!(paths.contains(&"tests/golden_real_apps.rs"));
     for kind in ["line","branch"] { let covered=changed[format!("{kind}_covered")].as_u64().unwrap(); let total=changed[format!("{kind}_total")].as_u64().unwrap(); let percent=changed[format!("{kind}_percent")].as_f64().unwrap(); assert!(total>0&&covered<=total&&percent>=80.0); assert!((percent-100.0*covered as f64/total as f64).abs()<0.000_001); }
     let critical=evidence["critical"].as_array().unwrap(); assert_eq!(critical.len(),15); let mut reported=Vec::new(); for item in critical { let mut item_keys=item.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(); item_keys.sort_unstable(); assert_eq!(item_keys,["branch_covered","branch_status","branch_total","file","line_covered","line_total","name"]); reported.push(item["name"].as_str().unwrap()); assert_eq!(item["file"],"tests/golden_real_apps.rs"); let lt=item["line_total"].as_u64().unwrap(); let bt=item["branch_total"].as_u64().unwrap(); assert!(lt>0); assert_eq!(item["line_covered"].as_u64(),Some(lt)); if bt==0 { assert_eq!(item["branch_status"],"not_applicable"); assert_eq!(item["branch_covered"],0); } else { assert_eq!(item["branch_status"],"covered"); assert_eq!(item["branch_covered"].as_u64(),Some(bt)); } } reported.sort_unstable(); assert_eq!(reported,names);
 }
@@ -782,7 +896,7 @@ fn validate_gh68_coverage_evidence() {
 #[rustfmt::skip]
 fn gh68_ci_public_examples_contract() {
     let index=include_str!("../examples/README.md"); let mut indexed=public_example_names(index).into_iter().filter(|name|name.ends_with(".rs")).collect::<Vec<_>>(); let count=indexed.len(); indexed.sort_unstable(); indexed.dedup(); assert_eq!(indexed.len(),count); let mut actual=std::fs::read_dir("examples").unwrap().map(|entry|entry.unwrap().path()).filter(|path|path.extension().is_some_and(|ext|ext=="rs")).map(|path|path.file_name().unwrap().to_str().unwrap().to_owned()).collect::<Vec<_>>(); actual.sort_unstable(); assert_eq!(indexed,actual);
-    let workflow=include_str!("../.github/workflows/ci.yml"); for required in ["gh68:","github.event.pull_request.head.sha || github.sha","persist-credentials: false","nightly-2026-01-18","cargo +nightly-2026-01-18 llvm-cov","execution_count - false_execution_count","GH68_COVERAGE_RAW","GH68_TERMINAL_EVIDENCE","GH68_BENCHMARK_ROUTE: smoke_blocked_no_baseline","actions/upload-artifact@v4","GH68_ARTIFACT_DIGEST","      - gh68"] { assert!(workflow.contains(required),"missing GH68 CI contract: {required}"); } let job=workflow.split("  gh68:").nth(1).unwrap().split("  ci-gate:").next().unwrap(); assert!(!job.contains("continue-on-error")); let ordered=["Produce pinned-nightly current-head branch coverage","Derive closed GH68 coverage summary","Run all fifteen exact GH68 selectors","Run complete GH68 target","Run deterministic GH68 benchmark smoke","Bind evidence digests","Upload validated GH68 evidence","Verify immutable artifact receipt"]; let positions=ordered.map(|name|job.find(name).unwrap()); assert!(positions.windows(2).all(|pair|pair[0]<pair[1]));
+    let workflow=include_str!("../.github/workflows/ci.yml"); for required in ["gh68:","github.event.pull_request.head.sha || github.sha","persist-credentials: false","nightly-2026-01-18","cargo +nightly-2026-01-18 llvm-cov","execution_count - false_execution_count","region_line_counts","nested-region precedence self-check","GH68_COVERAGE_RAW","GH68_TERMINAL_EVIDENCE","GH68_BENCHMARK_ROUTE: smoke_blocked_no_baseline","actions/upload-artifact@v4","GH68_ARTIFACT_DIGEST","      - gh68"] { assert!(workflow.contains(required),"missing GH68 CI contract: {required}"); } assert!(!workflow.contains("validate_gh68_coverage_evidence\" not in function")); let job=workflow.split("  gh68:").nth(1).unwrap().split("  ci-gate:").next().unwrap(); assert!(!job.contains("continue-on-error")); let ordered=["Produce pinned-nightly current-head branch coverage","Derive closed GH68 coverage summary","Run all fifteen exact GH68 selectors","Run complete GH68 target","Run deterministic GH68 benchmark smoke","Bind evidence digests","Upload validated GH68 evidence","Verify immutable artifact receipt"]; let positions=ordered.map(|name|job.find(name).unwrap()); assert!(positions.windows(2).all(|pair|pair[0]<pair[1]));
     let normalize=|value:&str|{let digest=value.strip_prefix("sha256:").unwrap_or(value); (digest.len()==64&&digest.bytes().all(|byte|byte.is_ascii_digit()||(b'a'..=b'f').contains(&byte))).then(||digest.to_owned())}; let bare="ab".repeat(32); assert_eq!(normalize(&bare),Some(bare.clone())); assert_eq!(normalize(&format!("sha256:{bare}")),Some(bare)); assert_eq!(normalize("sha256:xyz"),None);
     let branches=[(10,5_u64,2_u64),(20,0,4)]; let selected=[10]; let (covered,total)=branches.into_iter().filter(|(line,_,_)|selected.contains(line)).fold((0,0),|(covered,total),(_,reported_true_count,false_execution_count)|{let execution_count=reported_true_count+false_execution_count;(covered+u64::from(execution_count-false_execution_count>0)+u64::from(false_execution_count>0),total+2)}); assert_eq!((covered,total),(2,2));
 }

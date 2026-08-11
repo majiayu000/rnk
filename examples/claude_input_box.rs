@@ -54,10 +54,11 @@ pub(crate) enum HumanResolutionReport {
 }
 
 fn main() -> io::Result<()> {
+    let _paste = BracketedPasteGuard::new()?;
     render(app).run()
 }
 
-fn app() -> Element {
+pub(crate) fn app() -> Element {
     let app = use_app();
     let shell = use_signal(|| {
         let namespace = ScrollbackNamespace::new("example.claude-input")
@@ -162,6 +163,30 @@ fn app() -> Element {
             InlineKeyOutcome::Ignored => input_status.set("key ignored".to_owned()),
             InlineKeyOutcome::NotFocused => input_status.set("composer is not focused".to_owned()),
         }
+    });
+
+    let paste_shell = shell.clone();
+    let paste_status = status.clone();
+    use_paste(move |event| {
+        let handle = paste_shell.get();
+        let mut shell = match handle.lock() {
+            Ok(shell) => shell,
+            Err(_) => {
+                paste_status.set("inline shell lock is poisoned during paste".to_owned());
+                return;
+            }
+        };
+        match shell.handle_key(&ChatComposerKeyMap::new(), event.content(), &Key::default()) {
+            InlineKeyOutcome::Changed(_) => paste_status.set("pasted".to_owned()),
+            InlineKeyOutcome::Handled => paste_status.set("paste handled".to_owned()),
+            InlineKeyOutcome::Ignored => paste_status.set("paste ignored".to_owned()),
+            InlineKeyOutcome::NotFocused => paste_status.set("composer is not focused".to_owned()),
+            InlineKeyOutcome::Submitted(_) | InlineKeyOutcome::Cancelled => {
+                paste_status.set("paste produced an invalid composer outcome".to_owned())
+            }
+        }
+        drop(shell);
+        paste_shell.set(handle);
     });
 
     let handle = shell.get();

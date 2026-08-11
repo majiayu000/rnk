@@ -196,9 +196,12 @@ impl ChatComposerState {
 
         let before = self.text.content();
         let cursor_before = self.text.cursor();
+        let selection_before = self.text.selection();
         let reported = edit(&mut self.text);
-        let changed =
-            reported || before != self.text.content() || cursor_before != self.text.cursor();
+        let changed = reported
+            || before != self.text.content()
+            || cursor_before != self.text.cursor()
+            || selection_before != self.text.selection();
 
         if !changed {
             return Ok(false);

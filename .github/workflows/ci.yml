@@ -386,19 +386,44 @@ jobs:
           def normalized_files(function):
               return [os.path.relpath(os.path.normpath(path), root) for path in function.get("filenames", [])]
 
-          def line_totals(function):
-              lines = {}
-              for region in function.get("regions", []):
-                  if len(region) < 6 or region[5] != 0:
-                      continue
-                  for line in range(region[0], region[2] + 1):
-                      lines[line] = max(lines.get(line, 0), region[4])
-              return sum(value > 0 for value in lines.values()), len(lines)
+          def interval_lines(start, end):
+              last = end[0] if end[1] > 1 else end[0] - 1
+              return range(start[0], last + 1)
 
-          def branch_totals(function, selected_lines=None):
+          def region_line_counts(function, file_id=0):
+              regions = []
+              for raw in function.get("regions", []):
+                  if len(raw) < 6 or raw[5] != file_id or (len(raw) > 7 and raw[7] != 0):
+                      continue
+                  start, end = (raw[0], raw[1]), (raw[2], raw[3])
+                  if start >= end or not isinstance(raw[4], int) or raw[4] < 0:
+                      raise SystemExit("invalid LLVM region counter")
+                  regions.append((start, end, raw[4]))
+              points = sorted({point for start, end, _ in regions for point in (start, end)})
+              lines = {}
+              for start, end in zip(points, points[1:]):
+                  active = [region for region in regions if region[0] <= start and region[1] >= end]
+                  if not active:
+                      continue
+                  effective = max(active, key=lambda region: (region[0], -region[1][0], -region[1][1]))
+                  for line in interval_lines(start, end):
+                      lines.setdefault(line, []).append(effective[2])
+              return lines
+
+          def line_totals(function):
+              lines = region_line_counts(function)
+              return sum(any(value > 0 for value in counts) for counts in lines.values()), len(lines)
+
+          synthetic = {"regions": [[1, 1, 5, 1, 1, 0, 0, 0], [3, 1, 4, 1, 0, 0, 0, 0]]}
+          if line_totals(synthetic) != (3, 4):
+              raise SystemExit("LLVM nested-region precedence self-check failed")
+
+          def branch_totals(function, selected_lines=None, file_id=0):
               covered = total = 0
               for branch in function.get("branches", []):
-                  if len(branch) < 6 or (selected_lines is not None and branch[0] not in selected_lines):
+                  if (len(branch) < 6
+                          or (len(branch) > 6 and branch[6] != file_id)
+                          or (selected_lines is not None and branch[0] not in selected_lines)):
                       continue
                   reported_true_count, false_execution_count = branch[4], branch[5]
                   if (not isinstance(reported_true_count, int)
@@ -411,15 +436,45 @@ jobs:
                   covered += int(true_count > 0) + int(false_execution_count > 0)
               return covered, total
 
+          def merged_branch_totals(source_functions, selected_lines):
+              branches = {}
+              for function, file_id in source_functions:
+                  for branch in function.get("branches", []):
+                      if (len(branch) < 6
+                              or (len(branch) > 6 and branch[6] != file_id)
+                              or branch[0] not in selected_lines):
+                          continue
+                      true_count, false_count = branch[4], branch[5]
+                      if (not isinstance(true_count, int) or not isinstance(false_count, int)
+                              or true_count < 0 or false_count < 0):
+                          raise SystemExit("invalid LLVM branch counters")
+                      # Rust emits one function record per monomorphization. Merge
+                      # identical source branches so generic/closure instances do
+                      # not multiply the changed-file coverage denominator.
+                      coordinate = tuple(branch[:4])
+                      counts = branches.setdefault(coordinate, [0, 0])
+                      counts[0] += true_count
+                      counts[1] += false_count
+              covered = sum(int(true_count > 0) + int(false_count > 0)
+                  for true_count, false_count in branches.values())
+              return covered, 2 * len(branches)
+
+          duplicate_branch = {"branches": [[2, 1, 2, 8, 1, 0, 0], [2, 1, 2, 8, 0, 1, 0]]}
+          if merged_branch_totals([(duplicate_branch, 0)], {2}) != (2, 2):
+              raise SystemExit("LLVM duplicate-branch coordinate self-check failed")
+
           critical = []
           for name in names:
               matches = [function for function in functions if test_file in normalized_files(function) and function["name"].endswith(name)]
               if len(matches) != 1 or matches[0].get("count") != 1:
                   raise SystemExit(f"missing/ambiguous/unexecuted critical selector: {name}")
-              line_covered, line_total = line_totals(matches[0])
+              file_id = normalized_files(matches[0]).index(test_file)
+              critical_lines = region_line_counts(matches[0], file_id)
+              line_covered = sum(any(value > 0 for value in counts) for counts in critical_lines.values())
+              line_total = len(critical_lines)
               if line_total == 0 or line_covered != line_total:
                   raise SystemExit(f"critical line coverage is not 100%: {name}")
-              branch_covered, branch_total = branch_totals(matches[0])
+              branch_covered, branch_total = branch_totals(matches[0], file_id=file_id)
               if branch_total and branch_covered != branch_total:
                   raise SystemExit(f"critical branch coverage is not 100%: {name}")
               critical.append({"file": test_file, "name": name,
@@ -427,34 +482,52 @@ jobs:
                   "branch_covered": branch_covered, "branch_total": branch_total,
                   "branch_status": "covered" if branch_total else "not_applicable"})
 
-          diff = subprocess.check_output(["git", "diff", "--unified=0", f"{base}..{head}", "--", test_file], text=True)
-          changed, current = set(), None
+          diff = subprocess.check_output(["git", "diff", "--unified=0", f"{base}..{head}", "--", "*.rs"], text=True)
+          changed, current = {}, None
           for line in diff.splitlines():
               if line.startswith("+++ b/"):
                   current = line[6:]
-              elif current == test_file and line.startswith("@@"):
+              elif line.startswith("+++ /dev/null"):
+                  current = None
+              elif current is not None and line.startswith("@@"):
                   match = re.search(r"\+(\d+)(?:,(\d+))?", line)
                   start, count = int(match.group(1)), int(match.group(2) or 1)
-                  changed.update(range(start, start + count))
-          executable, covered = set(), set()
-          branch_total = branch_covered = 0
-          for function in functions:
-              if test_file not in normalized_files(function):
-                  continue
-              local_covered, local_total = line_totals(function)
-              del local_covered, local_total
-              for region in function.get("regions", []):
-                  if len(region) >= 6 and region[5] == 0:
-                      for line in range(region[0], region[2] + 1):
-                          executable.add(line)
-                          if region[4] > 0:
-                              covered.add(line)
-              if "validate_gh68_coverage_evidence" not in function["name"]:
-                  local_covered, local_total = branch_totals(function, changed)
-                  branch_total += local_total
-                  branch_covered += local_covered
-          line_total = len(changed & executable)
-          line_covered = len(changed & covered)
+                  changed.setdefault(current, set()).update(range(start, start + count))
+          attributed = {filename for function in functions for filename in normalized_files(function)}
+          unmeasured = sorted(path for path, lines in changed.items()
+              if lines and Path(path).is_file() and path not in attributed)
+          if unmeasured:
+              raise SystemExit(f"changed Rust files are absent from coverage: {unmeasured}")
+          line_total = line_covered = branch_total = branch_covered = 0
+          changed_files = []
+          for source_file, changed_lines in sorted(changed.items()):
+              changed_regions = []
+              source_functions = []
+              for function in functions:
+                  filenames = normalized_files(function)
+                  if source_file not in filenames:
+                      continue
+                  file_id = filenames.index(source_file)
+                  source_functions.append((function, file_id))
+                  for raw in function.get("regions", []):
+                      if len(raw) >= 6 and raw[5] == file_id:
+                          remapped = list(raw)
+                          remapped[5] = 0
+                          changed_regions.append(remapped)
+              counts = region_line_counts({"regions": changed_regions})
+              executable = set(counts)
+              local_lines = changed_lines & executable
+              local_line_total = len(local_lines)
+              local_line_covered = len({line for line in local_lines
+                  if any(value > 0 for value in counts[line])})
+              local_branch_covered, local_branch_total = merged_branch_totals(
+                  source_functions, local_lines)
+              if local_line_total or local_branch_total:
+                  changed_files.append(source_file)
+              line_total += local_line_total
+              line_covered += local_line_covered
+              branch_total += local_branch_total
+              branch_covered += local_branch_covered
           if not line_total or not branch_total:
               raise SystemExit("changed executable coverage denominator is zero")
           line_percent = 100.0 * line_covered / line_total
@@ -464,7 +537,7 @@ jobs:
           summary = {"schema":"gh68-coverage-v1", "head_sha":head, "base_main_sha":base,
               "toolchain":"nightly-2026-01-18", "branch_collection":True,
               "raw_sha256":hashlib.sha256(raw_bytes).hexdigest(),
-              "changed_executable":{"file":test_file,"line_covered":line_covered,"line_total":line_total,
+              "changed_executable":{"files":changed_files,"line_covered":line_covered,"line_total":line_total,
                   "line_percent":line_percent,"branch_covered":branch_covered,"branch_total":branch_total,
                   "branch_percent":branch_percent}, "critical":critical}
           Path(output_path).write_text(json.dumps(summary, sort_keys=True, indent=2) + "\n", encoding="utf-8")
@@ -485,11 +558,14 @@ jobs:
               raise SystemExit("invalid terminal matrix schema")
           cells = matrix["cells"]
           vocabulary = {"verified", "best_effort", "terminal_dependent", "unsupported", "unverified"}
-          if len(cells) != 5 or len({cell.get("id") for cell in cells}) != len(cells):
+          required = {"os", "terminal_emulator", "inline", "fullscreen", "paste", "resize", "raw_restoration", "tmux", "ssh"}
+          if len(cells) != len(required) or {cell.get("id") for cell in cells} != required:
               raise SystemExit("terminal matrix cells are missing or duplicated")
           for cell in cells:
               if set(cell) != {"id", "status", "evidence"} or cell["status"] not in vocabulary or not cell["evidence"]:
                   raise SystemExit("terminal matrix cell is not closed")
+              if (cell["status"] == "verified" and cell["evidence"] == "none") or (cell["status"] == "unverified" and cell["evidence"] != "none"):
+                  raise SystemExit("terminal matrix status is not bound to evidence")
           rustc = subprocess.check_output(["rustc", "-Vv"], text=True).strip()
           artifact = {"schema":"gh68-terminal-evidence-v1", "head_sha":head,
               "runner":{"os":platform.system(), "arch":platform.machine(), "rustc_vv":rustc}, "cells":cells}

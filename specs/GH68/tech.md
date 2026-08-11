@@ -6,7 +6,7 @@ GH-68: https://github.com/majiayu000/rnk/issues/68
 
 <!-- specrail-requires-planned-changes-v1 -->
 <!-- specrail-planned-changes
-{"version":1,"issue":68,"complete":true,"paths":[".github/workflows/ci.yml","benches/render.rs","docs/API_STABILITY.md","docs/CHAT_QUICKSTART.md","docs/TERMINAL_COMPATIBILITY.md","examples/README.md","examples/chat.rs","examples/claude_input_box.rs","examples/glm_chat.rs","examples/glm_chat/prompt_box.rs","examples/rnk_chat.rs","specs/GH68/product.md","specs/GH68/tasks.md","specs/GH68/tech.md","tests/golden/real_app_chat.ansi.txt","tests/golden/real_app_chat.txt","tests/golden_real_apps.rs"],"spec_refs":["specs/GH68/product.md","specs/GH68/tech.md","specs/GH68/tasks.md"]}
+{"version":1,"issue":68,"complete":true,"paths":[".github/workflows/ci.yml","benches/render.rs","docs/API_STABILITY.md","docs/CHAT_QUICKSTART.md","docs/TERMINAL_COMPATIBILITY.md","examples/README.md","examples/chat.rs","examples/claude_input_box.rs","examples/glm_chat.rs","examples/glm_chat/prompt_box.rs","examples/rnk_chat.rs","specs/GH68/product.md","specs/GH68/tasks.md","specs/GH68/tech.md","src/components/chat/composer.rs","src/components/chat/composer/keymap.rs","src/components/chat/composer/state.rs","src/renderer/runtime.rs","tests/golden/real_app_chat.ansi.txt","tests/golden/real_app_chat.txt","tests/golden_real_apps.rs"],"spec_refs":["specs/GH68/product.md","specs/GH68/tech.md","specs/GH68/tasks.md"]}
 -->
 
 该planned-changes JSON只是closed file-scope manifest，不是SpecRail authorization/readiness/
@@ -16,14 +16,18 @@ coverage gate；实施授权遵循当前`CONTRIBUTING.md`的明确maintainer con
 
 见 [`product.md`](product.md)。
 
-本文件只定义 GH-68 的最终 composition、迁移、文档、兼容矩阵、test/golden、
-stress/benchmark 与 CI evidence。它不拥有 Conversation、TextFlow、LayoutSnapshot、
-`MessageList`、`ChatComposer`、`InlineChatShell` 或 `FullscreenChatShell` 的生产实现。
+本文件定义 GH-68 的最终 composition、迁移、文档、兼容矩阵、test/golden、
+stress/benchmark 与 CI evidence。最终审查确认真实 bracketed paste 无法进入 runtime、composer
+也缺少可验证的 selection action，因此本 follow-up 仅额外拥有
+`src/renderer/runtime.rs` 与 `src/components/chat/composer{,/keymap,/state}.rs` 的窄修复；它不拥有
+Conversation、TextFlow、LayoutSnapshot、`MessageList`、`InlineChatShell` 或
+`FullscreenChatShell` 的其他生产实现。
 
 GH-61、GH-66、GH-67 和 partial GH-68 PR #166 已合入当前 main；#68 当前 canonical label
 是`ready_to_implement`。本 follow-up 固定 base 为
-`e1d987447141b35d8049f8bd8ff89b2015ae87b9`，只修复下文17-path closed scope。根
-`README.md`、`Cargo.toml`/lock、`src/**`和#166新增的`benches/chat_scrollback.rs`均只读。
+`e1d987447141b35d8049f8bd8ff89b2015ae87b9`，只修复下文21-path closed scope。根
+`README.md`、`Cargo.toml`/lock、除上述四个精确文件外的`src/**`和#166新增的
+`benches/chat_scrollback.rs`均只读。
 
 ## Codebase Context
 
@@ -56,8 +60,8 @@ matrix、`render` GH68 workloads和严格CI discovery仍是本follow-up缺口。
 每个checkpoint开始时必须验证`HEAD`是fixed base
 `e1d987447141b35d8049f8bd8ff89b2015ae87b9`的后代、worktree只含当前owner预期修改，并记录
 上一DCO checkpoint。完成证据必须fresh运行当前head命令；head变化后旧test、coverage、bench
-和CI输出全部失效。#68 readiness和人工授权只授予明列scope，不授权改`src/**`、Cargo、根
-README或外部状态。最终review/merge仍是独立human gate。
+和CI输出全部失效。#68 readiness和人工授权只授予明列scope，不授权改未列出的`src/**`、
+Cargo、根README或外部状态。最终review/merge仍是独立human gate。
 
 ### 2. Example ownership and purpose
 
@@ -404,7 +408,7 @@ coverage只作补充且不得替代branch artifact。任何修正产生新head�
 
 | Risk | Mitigation |
 | --- | --- |
-| 上游 API 在 parked 草案后改变 | 实现前 fresh 读取 merged GH61/GH66/GH67 specs/code；GH68 不计划任何 `src/` path，不复制上游合同 |
+| 上游 API 在 parked 草案后改变 | 实现前 fresh 读取 merged GH61/GH66/GH67 specs/code；仅 runtime paste dispatch 与 composer selection 四个精确 `src/` 文件属于 corrective scope，不复制其他上游合同 |
 | 四个 examples 迁移造成范围重叠 | 按 `chat -> rnk_chat -> claude_input_box -> glm_chat` 串行 handoff，每步独立 parity evidence |
 | provider demo 泄露密钥或执行未授权 tool | key 只从环境读取；缺失即零请求失败；tool authorization 留在应用显式 callback，offline tests 禁止网络 |
 | ANSI/plain 或 terminal matrix 夸大能力 | semantic normalization test；只有绑定 current evidence 的单元可为 verified，其余 unverified/best-effort |
@@ -424,7 +428,7 @@ coverage只作补充且不得替代branch artifact。任何修正产生新head�
 
 ## Handoff
 
-- 本 packet 与issue audit已授权17-path post-merge follow-up；不授权`src/**`、Cargo、根README、
-  push、GitHub mutation或merge。
+- 本 packet、最终审查与当前人工接管已授权21-path post-merge follow-up；除四个精确
+  runtime/composer路径外，不授权其他`src/**`、Cargo、根README、push、GitHub mutation或merge。
 - 每个checkpoint按tasks串行交接唯一shared test file；禁止并行共享写。
 - writer自报结果不能替代exact-head independent review、maintainer merge authorization或CI。

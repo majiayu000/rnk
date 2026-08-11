@@ -133,6 +133,10 @@ fn apply(state: &mut ChatComposerState, action: ComposerAction) -> InteractionOu
             text.clear();
             true
         }
+        ComposerAction::SelectAll => {
+            text.select_all();
+            false
+        }
         ComposerAction::MoveLeft => {
             text.move_left();
             false
@@ -174,5 +178,55 @@ fn apply(state: &mut ChatComposerState, action: ComposerAction) -> InteractionOu
         Ok(true) => InteractionOutcome::Changed(state.text()),
         Ok(false) => InteractionOutcome::Handled,
         Err(_) => InteractionOutcome::Ignored,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paste_selection_and_deletion_preserve_grapheme_boundaries() {
+        let keymap = ChatComposerKeyMap::new();
+        let mut state = ChatComposerState::new();
+        assert!(matches!(
+            handle_key(&mut state, &keymap, "old\r\n界👩‍👩‍👧‍👦e\u{301}", &Key::default()),
+            InteractionOutcome::Changed(_)
+        ));
+        assert_eq!(state.text(), "old\n界👩‍👩‍👧‍👦e\u{301}");
+
+        let select_all = Key {
+            character: Some('a'),
+            ctrl: true,
+            ..Key::default()
+        };
+        assert!(matches!(
+            handle_key(&mut state, &keymap, "", &select_all),
+            InteractionOutcome::Changed(_)
+        ));
+        assert_eq!(
+            state.text_state().selected_text().as_deref(),
+            Some("old\n界👩‍👩‍👧‍👦e\u{301}")
+        );
+
+        handle_key(&mut state, &keymap, "界👩‍👩‍👧‍👦e\u{301}", &Key::default());
+        assert_eq!(state.text(), "界👩‍👩‍👧‍👦e\u{301}");
+        let left = Key {
+            left_arrow: true,
+            ..Key::default()
+        };
+        let delete = Key {
+            delete: true,
+            ..Key::default()
+        };
+        let backspace = Key {
+            backspace: true,
+            ..Key::default()
+        };
+        handle_key(&mut state, &keymap, "", &left);
+        handle_key(&mut state, &keymap, "", &delete);
+        assert_eq!(state.text(), "界👩‍👩‍👧‍👦");
+        handle_key(&mut state, &keymap, "", &backspace);
+        assert_eq!(state.text(), "界");
     }
 }

@@ -32,7 +32,7 @@ fn main() -> std::io::Result<()> {
     render(app).run()
 }
 
-fn app() -> Element {
+pub(crate) fn app() -> Element {
     let app = use_app();
     let composer = use_signal(ChatComposerState::new);
     let conversation = use_signal(|| ConversationState::new(0, NonZeroUsize::MIN));

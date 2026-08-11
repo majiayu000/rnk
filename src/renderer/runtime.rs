@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
+use crate::hooks::paste::dispatch_paste;
 use crate::hooks::use_input::dispatch_key_event;
 use crate::hooks::use_mouse::dispatch_mouse_event;
 use crate::renderer::Terminal;
@@ -162,6 +163,11 @@ impl EventLoop {
                 // Request re-render after mouse event
                 self.runtime.request_render();
             }
+            Event::Paste(content) => {
+                dispatch_paste(&content);
+                crate::hooks::record_activity();
+                self.runtime.request_render();
+            }
             Event::Resize(_new_width, _new_height) => {
                 // Resize is handled by the App itself
                 // Just request re-render
@@ -187,6 +193,7 @@ impl EventLoop {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hooks::paste::register_paste_handler;
     use crate::hooks::use_input::register_input_handler;
     use crate::hooks::use_mouse::register_mouse_handler;
     use crate::renderer::frame_rate::FrameRateConfig;
@@ -332,6 +339,35 @@ mod tests {
         event_loop.handle_event(Event::Mouse(mouse_event));
 
         assert!(hit.load(Ordering::SeqCst));
+        assert!(runtime.render_requested());
+
+        set_current_runtime(None);
+    }
+
+    #[test]
+    fn test_event_loop_paste_dispatch_requests_render() {
+        use crate::runtime::{RuntimeContext, set_current_runtime};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use std::sync::Mutex;
+
+        let runtime = AppRuntime::new(false);
+        runtime.clear_render_request();
+        let should_exit = Arc::new(AtomicBool::new(false));
+        let mut event_loop = create_event_loop(runtime.clone(), should_exit);
+
+        let rt_ctx = Rc::new(RefCell::new(RuntimeContext::new()));
+        set_current_runtime(Some(rt_ctx));
+
+        let content = Arc::new(Mutex::new(None));
+        let captured = content.clone();
+        register_paste_handler(move |event| {
+            *captured.lock().unwrap() = Some(event.content().to_owned());
+        });
+
+        event_loop.handle_event(Event::Paste("line 1\r\n界👩‍👩‍👧‍👦".to_owned()));
+
+        assert_eq!(*content.lock().unwrap(), Some("line 1\r\n界👩‍👩‍👧‍👦".to_owned()));
         assert!(runtime.render_requested());
 
         set_current_runtime(None);
