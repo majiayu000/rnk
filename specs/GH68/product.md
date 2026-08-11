@@ -86,7 +86,9 @@ public-example discovery。当前 follow-up 从 exact main
 12. **B-012** focused interaction evidence 必须覆盖 focus 进入/离开、keymap 冲突、
     supported minimum size、窄宽 resize、连续 resize 与 resize 期间输入；事件只能被目标
     component 消费一次，focus 或尺寸变化不得丢失 draft、改变已提交 transcript 或制造错误
-    bottom jump。
+    bottom jump。Fullscreen 应用发布必须把 shell 修正后的 transcript/focus/overlay 与尺寸、
+    composer、status、typing 原子提交；异步回复必须绑定不可变 revision 并以 CAS 拒绝 stale
+    reply，失败要进入可见 status，不能静默丢弃。
 13. **B-013** 同一 deterministic conversation fixture 必须同时生成 plain 与 ANSI golden；
     去除 ANSI 后的语义文本、状态、消息顺序和可见错误必须等价。颜色只能增强表现，不能成为
     empty/loading/streaming/failed/cancelled/focus 等状态的唯一信息来源。
@@ -105,7 +107,9 @@ public-example discovery。当前 follow-up 从 exact main
 17. **B-017** 性能回归判定必须从当前 head 实际生成的 benchmark artifact 读取样本，使用批准的
     相对阈值与绝对噪声下限，并以多样本统计量比较同环境 baseline；单次慢样本、不同机器结果、
     只编译未执行的 benchmark 或只校验内嵌正/负 fixture 不得判定通过或失败。benchmark smoke
-    只证明 workload 可运行，不等于满足性能门槛。
+    只证明 workload 可运行，不等于满足性能门槛。没有 approved baseline 时 route 必须闭合为
+    `smoke_blocked_no_baseline`、`performance_status=not_available`；缺 route/env 的 exact selector
+    必须失败，不能用内嵌断言或零回归伪造 performance pass。
 18. **B-018** 兼容矩阵必须分别记录支持的 OS、terminal emulator、Inline、Fullscreen、
     paste、resize、raw-mode restoration、tmux 与 SSH 状态，并使用闭集
     `{verified, best_effort, terminal_dependent, unsupported, unverified}`。每个 `verified`
@@ -113,8 +117,9 @@ public-example discovery。当前 follow-up 从 exact main
 19. **B-019** CI 必须发现并构建全部公开 examples，而不是维护可遗漏的手写子集；任何公开
     example 编译失败、索引漂移或引入核心不允许的 provider 依赖时，required gate 必须失败。
     hosted CI 必须验证 implementation PR exact head 而非 merge-ref，并按本地相同顺序先生成
-    runner-local benchmark/coverage artifacts 再运行 full suite；baseline coordinate/digest
-    缺失或不匹配时 fail closed。
+    runner-local benchmark/coverage artifacts 再运行 full suite；performance-validation route的
+    baseline coordinate/digest缺失或不匹配时 fail closed，smoke route只能成功发布明确
+    `performance_status=not_available`，不得满足性能完成声明。
 20. **B-020** CI 必须逐名运行 task-owned focused example、全局 convergence、docs、
     benchmark/coverage evidence 与 CI contract tests，并证明每个 exact test
     `matched=1`、`passed=1`、`ignored=0`；没有匹配、被 ignore、只运行宽泛 workspace tests
@@ -135,6 +140,10 @@ public-example discovery。当前 follow-up 从 exact main
     历史。
 24. **B-024** provider 凭证只能由应用环境或安全 secret source 提供；缺失凭证必须在发起请求
     前显式失败。Tool Call 展示不授予执行权限，example 业务动作不得因模型输出自动提升权限；
+    `name`、`call_id` 与 closed args 必须先完成 bounded/control-safe 验证，UI 只展示其完整
+    canonical exact-call 描述，批准绑定该不可变描述且只能执行一次。workspace IO 必须由已打开
+    root descriptor 逐 component no-follow 打开，禁止 canonicalize 后按路径重开；read 使用
+    `MAX+1`，search 的全局 visited-entry/depth/byte budget 计入不匹配项并拒绝 symlink/race。
     核心 Chat UI、golden 与离线 tests 不得需要真实网络、真实密钥或工具副作用。
 25. **B-025** GH-68 current-head coverage 必须以本 follow-up 实际执行的 coverage 输出绑定
     exact head/base 与 task plan 中唯一 critical `file + name` set：changed executable line
@@ -144,7 +153,10 @@ public-example discovery。当前 follow-up 从 exact main
     逐项branch 100%；真实zero-branch selector必须显式记录`not_applicable`与denominator=0，
     不能把缺artifact/未收集伪装成N/A。branch evidence固定由`nightly-2026-01-18`的
     `cargo llvm-cov --branch`生成；stable gate只验证构建/测试，不声称产生branch evidence。
-    CI 中`continue-on-error`、旧artifact、只编译、视觉录屏或其他task coverage不构成证明。
+    summary 必须闭合验证 schema、head/base、toolchain、branch collection 与 raw SHA-256；LLVM
+    branch true-edge taken 按`execution_count - false_execution_count`计算，changed branch只计
+    changed executable line 上的branch。CI 中`continue-on-error`、缺env、旧artifact、只编译、
+    视觉录屏或其他task coverage不构成证明。
 26. **B-026** current base必须包含GH-61、GH-66、GH-67的merged implementation ancestry与
     PR #166 partial implementation；#68必须保持canonical `ready_to_implement`且无parked/
     冲突readiness label。follow-up只接受本packet 17-path closed scope和DCO checkpoint chain；

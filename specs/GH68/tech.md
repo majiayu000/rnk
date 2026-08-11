@@ -101,7 +101,17 @@ InlineChatShell            FullscreenChatShell
   public updates；测试只使用静态 fixture，不访问网络或真实密钥。
 - `glm_chat` 可执行应用明确授权的 demo tool，但 Tool Call view 只呈现 typed state；模型输出
   不能直接获得权限。缺失 `GLM_API_KEY` 时必须在创建请求前返回可见错误，不再用 placeholder
-  key 发起网络请求。
+  key 发起网络请求。provider DTO 的tool name/call-id/closed args先解析为bounded typed request，
+  canonical exact-call description使用长度与hex编码保持control-safe，approval绑定全部immutable
+  bytes。workspace保存已打开root directory descriptor，逐component使用`openat`/no-follow；目录
+  遍历必须重新descriptor-relative打开`.`取得独立游标（复制fd会共享游标而绕过第二次遍历），
+  所有entry计入global budget，read读取`MAX+1`，symlink、rename race、fanout/depth与IO均fail closed。
+- `rnk_chat` 的candidate保存上游shell修正后的transcript/focus/overlay；resize/scroll/key一次性提交
+  完整candidate。异步reply捕获candidate revision并在同一state lock下CAS，stale或生成/布局失败
+  发布显式status；初始viewport在首次publication前也经过shell region correction。
+- `claude_input_box` 只有`Fixed`自动acknowledge；`Retained`保持retry state，`Latched`保持
+  `AwaitingResolution`，仅human选择`UnknownResolution::{AlreadyVisible,NotVisible}`后才能丢弃
+  或做一次显式retry。
 
 ### 4. Compatibility and documentation
 
@@ -109,7 +119,10 @@ InlineChatShell            FullscreenChatShell
   stable/advanced/experimental 状态。沿用现有规则：未具备批准 evidence 的 module-public
   API 保持 advanced/experimental，不自动进入 prelude stable surface。
 - `docs/CHAT_QUICKSTART.md` 提供可复制的 Inline/Fullscreen quickstart，以及 conversation update、
-  custom block renderer、keymap、error handling、provider/tool boundary 和非目标。
+  custom block renderer、keymap、error handling、provider/tool boundary 和非目标。两段required
+  quickstart标记`rust,compile`，mapped selector逐段写入临时crate并`cargo check --offline`；substring
+  检查不构成编译证据。文档只对真实带`#[non_exhaustive]`的enum要求wildcard，并明确
+  `NativeTerminalSink` ledger仅process-local，restart dedup需要durable sink。
 - `examples/README.md` 是 examples 分类与用途的唯一索引；其他文档只链接，不复制第二份列表。
 - `docs/TERMINAL_COMPATIBILITY.md` 扩展 Chat matrix。每个 `verified` 单元记录 evidence
   kind、environment 与 current head；通用 cross-platform compile 不能升级为真实 terminal
@@ -149,9 +162,11 @@ output 同一绿色提交中新增。
 
 测试可使用 `include_str!` 核对 docs/index/workflow contract，但必须同时运行 public API
 行为测试；单纯 grep source 不能证明 runtime correctness。focused tests 复用 GH-66/GH-67
-public harness 与 PTY fixture。`gh68_fullscreen_example_contract` 自身必须覆盖 Fullscreen
+public harness 与真实PTY。`gh68_fullscreen_example_contract` 自身必须覆盖 Fullscreen
 normal/cancel/typed-failure/panic-unwind 后 raw mode、cursor visibility、alternate screen 与
-input mode 全部恢复；Inline/provider evidence 不得替代。其余 focused scope 覆盖
+input mode 全部恢复；`gh68_inline_example_contract`独立覆盖相同四出口并明确不进入alternate
+screen。两者实际构造example/shell seam、在HELD handshake期间读取termios，并校验
+cursor/mouse/alternate序列顺序；Inline/provider source scan不得替代。其余 focused scope 覆盖
 Unicode/paste、focus/resize、typed outcomes、provider/tool security 与显式 degradation。
 
 plain 与 ANSI golden 继续使用现有
@@ -174,7 +189,7 @@ bottom-follow 与 commit count。benchmark 不使用 provider network、wall-clo
 terminal input。
 
 baseline artifact 不提交生成物到仓库。F8在固定环境设置
-`GH68_BENCHMARK_MODE=produce` 与
+`GH68_BENCHMARK_ROUTE=performance_validation`、`GH68_BENCHMARK_MODE=produce` 与
 `GH68_BENCHMARK_BASELINE=$GH68_EVIDENCE_DIR/benchmark-baseline.json`、
 `GH68_BENCHMARK_EVIDENCE=$GH68_EVIDENCE_DIR/benchmark.json` 后运行
 `gh68_benchmark_metadata_contract`；该 test 执行与 `benches/render.rs` 同一 fixture/workload
@@ -241,12 +256,14 @@ baseline artifact 也必须是同 schema family 的实际历史运行，绑定 d
 top-level coordinate；producer 保存下载 SHA-256，并规范化到 `baseline.coordinate`。validator invocation 固定为：
 
 ```sh
+GH68_BENCHMARK_ROUTE=performance_validation \
 GH68_BENCHMARK_MODE=produce \
 GH68_BENCHMARK_BASELINE="$GH68_EVIDENCE_DIR/benchmark-baseline.json" \
 GH68_BENCHMARK_EVIDENCE="$GH68_EVIDENCE_DIR/benchmark.json" \
 GH68_IMPLEMENTATION_HEAD="$IMPLEMENTATION_HEAD" \
 GH68_BASE_MAIN_SHA="$BASE_MAIN_SHA" \
   cargo test --test golden_real_apps --all-features --locked gh68_benchmark_metadata_contract -- --exact
+GH68_BENCHMARK_ROUTE=performance_validation \
 GH68_BENCHMARK_MODE=validate \
 GH68_BENCHMARK_BASELINE="$GH68_EVIDENCE_DIR/benchmark-baseline.json" \
 GH68_BENCHMARK_EVIDENCE="$GH68_EVIDENCE_DIR/benchmark.json" \
@@ -282,8 +299,13 @@ branch collection或缺artifact不能解释为N/A。branch producer固定使用
 `nightly-2026-01-18`、`llvm-tools-preview`与`cargo llvm-cov --branch --json`；stable job继续运行
 稳定构建/测试但不得声称branch evidence。raw JSON、派生summary和exact head/base/command/
 toolchain digest按先raw、后summary、最后exact selector的顺序写入runner temp；summary SHA-256
-绑定raw bytes，selector只读验证。缺工具、空结果、旧head/base、unknown/duplicate/extra critical
-项、顺序错误或`continue-on-error`均失败。
+绑定raw bytes，selector只读验证closed keys
+`schema/head_sha/base_main_sha/toolchain/branch_collection/raw_sha256/changed_executable/critical`。
+LLVM export的raw true/false edge counters先验证为非负，以二者checked sum归一化
+`execution_count`，再把true edge taken固定为`execution_count - false_execution_count`；changed branch
+只统计其source line属于base..head changed executable
+line的branch。缺env/raw、缺工具、空结果、旧head/base、unknown/duplicate/extra critical项、
+顺序错误或`continue-on-error`均失败。
 
 固定producer命令为：
 

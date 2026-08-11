@@ -4,6 +4,10 @@ This index separates examples by intent. CI builds the example set through the
 workspace gates, so files listed here should stay deterministic enough to compile
 without local terminal assumptions.
 
+<!-- gh68-public-chat-examples-v1
+{"schema":"gh68-public-chat-examples-v1","records":[{"category":"tutorial","example":"chat.rs","purpose":"minimal typed conversation and composer","runtime_mode":"offline_inline","target_reader":"new_chat_user"},{"category":"showcase","example":"rnk_chat.rs","purpose":"row-measured fullscreen transcript and focus routing","runtime_mode":"interactive_fullscreen","target_reader":"fullscreen_app_author"},{"category":"showcase","example":"claude_input_box.rs","purpose":"native scrollback and explicit commit resolution","runtime_mode":"interactive_inline","target_reader":"inline_app_author"},{"category":"showcase","example":"glm_chat.rs","purpose":"provider adapter and default-deny workspace tools","runtime_mode":"provider_inline","target_reader":"provider_integrator"}]}
+-->
+
 ## Tutorial
 
 Start here when learning the crate API:

@@ -41,18 +41,19 @@ assert_eq!(state.messages().len(), 1);
 
 ## Inline quickstart
 
-```rust,ignore
+```rust,compile
 use rnk::components::chat::scrollback::NativeTerminalSink;
 use rnk::components::chat::{
     InlineChatShell, InlineCommitReport, MessageId, MessageRevision,
     ProjectionContext, ScrollbackNamespace, ThemeIdentity,
 };
 
+fn main() -> Result<(), Box<dyn std::error::Error>> {
 let mut shell = InlineChatShell::new(
-    // Must survive a restart unchanged. A namespace built from a PID or a
-    // random per-run token silently disables durable deduplication.
+    // Stable within this process. NativeTerminalSink does not persist its
+    // ledger across restart; durable cross-process dedup needs a durable sink.
     ScrollbackNamespace::new("my-app.session")?,
-    NativeTerminalSink::new(std::io::stdout()),
+    NativeTerminalSink::new(std::io::sink()),
 );
 let context = ProjectionContext::new(80, ThemeIdentity::new(1))?;
 
@@ -62,16 +63,18 @@ shell.stream(MessageId::new(1))?;
 
 // When it finishes, commit it. Safe to call again for a duplicate terminal
 // event — the identity is derived from the content, so the sink recognises it.
-match shell.finish(MessageId::new(1), MessageRevision::INITIAL, &text, context)? {
-    InlineCommitReport::Fixed { receipt, .. } => {
+match shell.finish(MessageId::new(1), MessageRevision::INITIAL, "done", context)? {
+    InlineCommitReport::Fixed { .. } => {
         // Confirmed. The message has left the live region.
     }
-    InlineCommitReport::Retained { cause } => {
+    InlineCommitReport::Retained { cause: _ } => {
         // Provably nothing was written. Retryable, when you decide to.
     }
-    InlineCommitReport::Latched { evidence } => {
+    InlineCommitReport::Latched { evidence: _ } => {
         // Undecidable. See "Error handling" below — do not retry this.
     }
+}
+Ok(())
 }
 ```
 
@@ -79,29 +82,41 @@ Run `cargo run --example inline_chat_scrollback` to see all three outcomes.
 
 ## Fullscreen quickstart
 
-```rust,ignore
+```rust,compile
 use rnk::components::chat::{
-    ChatComposerState, FullscreenChatShell, FullscreenKeyOutcome,
+    ChatComposerKeyMap, ChatComposerState, FullscreenChatShell,
+    FullscreenKeyOutcome,
 };
+use rnk::components::chat::message_list::{
+    MessageListState, MessageMeasureOutcome, ViewportRows,
+};
+use rnk::hooks::Key;
 
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+let transcript = MessageListState::try_new::<(), (), _>(
+    &[], 80, ViewportRows::new(20), 8,
+    |_| MessageMeasureOutcome::Missing,
+).expect("an empty list does not invoke measurement");
 let mut shell = FullscreenChatShell::try_new(
-    transcript,               // a MessageListState
+    transcript,
     ChatComposerState::new(),
-    width, height,
+    80, 24,
     1,                        // status bar rows
 )?;
 
 // Regions, top to bottom. They tile the terminal exactly.
 let layout = shell.layout();
-draw(layout.transcript(), layout.composer(), layout.status());
+assert_eq!(layout.width(), 80);
 
-match shell.handle_key(&keymap, input, &key)? {
-    FullscreenKeyOutcome::Submitted(text) => send(text),
-    FullscreenKeyOutcome::Overlay => {}        // a modal consumed it
-    other => { /* every outcome names the region that saw the key */ }
+match shell.handle_key(&ChatComposerKeyMap::new(), "hello", &Key::default())? {
+    FullscreenKeyOutcome::Submitted(_) | FullscreenKeyOutcome::Overlay
+    | FullscreenKeyOutcome::Cancelled | FullscreenKeyOutcome::Changed(_)
+    | FullscreenKeyOutcome::Consumed(_) | FullscreenKeyOutcome::Unconsumed(_) => {}
 }
 
-shell.try_resize(new_width, new_height)?;
+shell.try_resize(100, 30)?;
+Ok(())
+}
 ```
 
 Run `cargo run --example fullscreen_chat_shell` to see region assignment across
@@ -222,9 +237,10 @@ shell.resolve(id, UnknownResolution::AlreadyVisible)?; // drop it, do not rewrit
 shell.resolve(id, UnknownResolution::NotVisible)?;     // allow one more attempt
 ```
 
-Outcome and error enums across the chat surface are `#[non_exhaustive]`. Match
-with a wildcard arm, or accept a compile error when a new state appears — which
-is the point, since a silently misread state is worse.
+Error enums and the scrollback outcome enums marked `#[non_exhaustive]` require
+a wildcard arm. `InlineCommitReport`, `InlineKeyOutcome`,
+`FullscreenKeyOutcome`, and `MessageMeasureOutcome` are currently exhaustive;
+match every variant so an additive change produces a compile-time review point.
 
 ## Non-goals
 

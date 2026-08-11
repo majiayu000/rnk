@@ -11,10 +11,18 @@
 
 use std::env;
 use std::error::Error;
+use std::ffi::{CStr, CString};
 use std::fmt;
 use std::fs;
-use std::io::{self, Write};
-use std::path::{Component, Path, PathBuf};
+use std::io::{self, Read, Write};
+use std::path::{Component, Path};
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::os::unix::fs::OpenOptionsExt;
 
 use reqwest::Client;
 use rnk::components::chat::scrollback::NativeTerminalSink;
@@ -181,12 +189,13 @@ pub(crate) enum ToolError {
     AlreadyExecuted,
     UnknownTool,
     InvalidPath,
-    WorkspaceEscape,
     Symlink,
     DepthLimit,
     EntryLimit,
     ByteLimit,
     InvalidUtf8,
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    UnsupportedPlatform,
     Io(io::Error),
 }
 
@@ -198,12 +207,15 @@ impl fmt::Display for ToolError {
             Self::AlreadyExecuted => "tool request has already executed",
             Self::UnknownTool => "tool name is not allowed",
             Self::InvalidPath => "tool path must be a relative path without traversal",
-            Self::WorkspaceEscape => "tool path escapes the canonical workspace",
             Self::Symlink => "tool traversal encountered a symbolic link",
             Self::DepthLimit => "tool traversal exceeded the depth limit",
             Self::EntryLimit => "tool traversal exceeded the entry limit",
             Self::ByteLimit => "tool output exceeded the byte limit",
             Self::InvalidUtf8 => "tool file or path is not valid UTF-8",
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            Self::UnsupportedPlatform => {
+                "secure descriptor-relative workspace tools are unavailable on this platform"
+            }
             Self::Io(_) => "workspace I/O failed",
         })
     }
@@ -230,27 +242,84 @@ enum ToolDecision {
     Approved,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolName {
+    ReadFile,
+    ListFiles,
+    SearchFiles,
+}
+
+impl ToolName {
+    fn parse(value: &str) -> Result<Self, ToolError> {
+        match value {
+            "read_file" => Ok(Self::ReadFile),
+            "list_files" => Ok(Self::ListFiles),
+            "search_files" => Ok(Self::SearchFiles),
+            _ => Err(ToolError::UnknownTool),
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadFile => "read_file",
+            Self::ListFiles => "list_files",
+            Self::SearchFiles => "search_files",
+        }
+    }
+
+    const fn argument_name(self) -> &'static str {
+        match self {
+            Self::ReadFile | Self::ListFiles => "path",
+            Self::SearchFiles => "pattern",
+        }
+    }
+}
+
 pub(crate) struct PendingToolRequest {
     call_id: ToolCallId,
-    name: String,
-    input: Value,
+    name: ToolName,
+    argument: String,
+    exact_description: String,
     decision: ToolDecision,
     executed: bool,
 }
 
 impl PendingToolRequest {
-    pub(crate) fn new(call_id: ToolCallId, name: String, input: Value) -> Self {
-        Self {
+    pub(crate) fn parse(call_id: &str, name: &str, input: &Value) -> Result<Self, ToolError> {
+        validate_call_id(call_id)?;
+        let name = ToolName::parse(name)?;
+        let fields = string_object(input).map_err(|_| ToolError::InvalidPath)?;
+        if fields.len() != 1 || fields[0].0 != name.argument_name() {
+            return Err(ToolError::InvalidPath);
+        }
+        let argument = fields[0].1.clone();
+        validate_tool_argument(name, &argument)?;
+        let call_id = ToolCallId::new(call_id).map_err(|_| ToolError::InvalidPath)?;
+        let exact_description = format!(
+            "tool={} call_id_hex={} {}_len={} {}_hex={}",
+            name.as_str(),
+            hex_bytes(call_id.as_str().as_bytes()),
+            name.argument_name(),
+            argument.len(),
+            name.argument_name(),
+            hex_bytes(argument.as_bytes()),
+        );
+        Ok(Self {
             call_id,
             name,
-            input,
+            argument,
+            exact_description,
             decision: ToolDecision::Denied,
             executed: false,
-        }
+        })
     }
 
     pub(crate) fn approval_phrase(&self) -> String {
-        format!("approve {}", self.call_id.as_str())
+        format!("approve {}", self.exact_description)
+    }
+
+    pub(crate) fn exact_description(&self) -> &str {
+        &self.exact_description
     }
 
     pub(crate) fn approve_exact(&mut self, supplied: &str) -> Result<(), ToolError> {
@@ -269,64 +338,49 @@ impl PendingToolRequest {
             return Err(ToolError::AlreadyExecuted);
         }
         self.executed = true;
-        let fields = string_object(&self.input).map_err(|_| ToolError::InvalidPath)?;
-        match self.name.as_str() {
-            "read_file" => workspace.read_file(required_field(&fields, "path")?),
-            "list_files" => workspace.list_files(required_field(&fields, "path")?),
-            "search_files" => workspace.search_files(required_field(&fields, "pattern")?),
-            _ => Err(ToolError::UnknownTool),
+        match self.name {
+            ToolName::ReadFile => workspace.read_file(&self.argument),
+            ToolName::ListFiles => workspace.list_files(&self.argument),
+            ToolName::SearchFiles => workspace.search_files(&self.argument),
         }
     }
 }
 
 pub(crate) struct Workspace {
-    root: PathBuf,
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    root: fs::File,
 }
 
 impl Workspace {
     fn current() -> Result<Self, ToolError> {
-        let root = env::current_dir()?.canonicalize()?;
-        Ok(Self { root })
+        Self::from_root(Path::new("."))
     }
 
-    #[cfg(test)]
     pub(crate) fn from_root(root: &Path) -> Result<Self, ToolError> {
-        Ok(Self {
-            root: root.canonicalize()?,
-        })
-    }
-
-    fn resolve(&self, supplied: &str) -> Result<PathBuf, ToolError> {
-        let relative = Path::new(supplied);
-        if relative.is_absolute()
-            || supplied.is_empty()
-            || relative
-                .components()
-                .any(|part| !matches!(part, Component::Normal(_)))
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
-            return Err(ToolError::InvalidPath);
+            let root = fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                .open(root)?;
+            Ok(Self { root })
         }
-        let joined = self.root.join(relative);
-        if fs::symlink_metadata(&joined)?.file_type().is_symlink() {
-            return Err(ToolError::Symlink);
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = root;
+            Err(ToolError::UnsupportedPlatform)
         }
-        let canonical = joined.canonicalize()?;
-        if !canonical.starts_with(&self.root) {
-            return Err(ToolError::WorkspaceEscape);
-        }
-        Ok(canonical)
     }
 
     fn read_file(&self, path: &str) -> Result<String, ToolError> {
-        let path = self.resolve(path)?;
-        let metadata = fs::metadata(&path)?;
-        if !metadata.is_file() {
-            return Err(ToolError::InvalidPath);
-        }
-        if metadata.len() > MAX_TOOL_BYTES as u64 {
-            return Err(ToolError::ByteLimit);
-        }
-        let bytes = fs::read(path)?;
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let mut file = self.open_relative(path, false)?;
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        return Err(ToolError::UnsupportedPlatform);
+        let mut bytes = Vec::with_capacity(MAX_TOOL_BYTES.min(8192));
+        Read::by_ref(&mut file)
+            .take(u64::try_from(MAX_TOOL_BYTES).unwrap() + 1)
+            .read_to_end(&mut bytes)?;
         if bytes.len() > MAX_TOOL_BYTES {
             return Err(ToolError::ByteLimit);
         }
@@ -334,21 +388,17 @@ impl Workspace {
     }
 
     fn list_files(&self, path: &str) -> Result<String, ToolError> {
-        let directory = self.resolve(path)?;
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let directory = self.open_relative(path, true)?;
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        return Err(ToolError::UnsupportedPlatform);
         let mut names = Vec::new();
-        for item in fs::read_dir(directory)? {
-            let item = item?;
-            if item.file_type()?.is_symlink() {
+        let mut visited = 0;
+        for item in read_directory(&directory, &mut visited)? {
+            if item.kind == EntryKind::Symlink {
                 return Err(ToolError::Symlink);
             }
-            if names.len() == MAX_TOOL_ENTRIES {
-                return Err(ToolError::EntryLimit);
-            }
-            names.push(
-                item.file_name()
-                    .into_string()
-                    .map_err(|_| ToolError::InvalidUtf8)?,
-            );
+            names.push(item.name);
         }
         names.sort();
         bounded_join(names)
@@ -359,50 +409,285 @@ impl Workspace {
             return Err(ToolError::InvalidPath);
         }
         let mut found = Vec::new();
-        self.search_directory(&self.root, pattern, 0, &mut found)?;
+        let mut visited = 0;
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        self.search_directory(&self.root, "", pattern, 0, &mut visited, &mut found)?;
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        return Err(ToolError::UnsupportedPlatform);
         found.sort();
         bounded_join(found)
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn search_directory(
         &self,
-        directory: &Path,
+        directory: &fs::File,
+        prefix: &str,
         pattern: &str,
         depth: usize,
+        visited: &mut usize,
         found: &mut Vec<String>,
     ) -> Result<(), ToolError> {
         if depth > MAX_TOOL_DEPTH {
             return Err(ToolError::DepthLimit);
         }
-        for item in fs::read_dir(directory)? {
-            let item = item?;
-            let kind = item.file_type()?;
-            if kind.is_symlink() {
+        for item in read_directory(directory, visited)? {
+            if item.kind == EntryKind::Symlink {
                 return Err(ToolError::Symlink);
             }
-            let canonical = item.path().canonicalize()?;
-            if !canonical.starts_with(&self.root) {
-                return Err(ToolError::WorkspaceEscape);
-            }
-            let relative = canonical
-                .strip_prefix(&self.root)
-                .map_err(|_| ToolError::WorkspaceEscape)?;
-            let name = relative.to_str().ok_or(ToolError::InvalidUtf8)?;
+            let name = if prefix.is_empty() {
+                item.name.clone()
+            } else {
+                format!("{prefix}/{}", item.name)
+            };
             if name.contains(pattern) {
-                if found.len() == MAX_TOOL_ENTRIES {
-                    return Err(ToolError::EntryLimit);
-                }
-                found.push(name.to_owned());
+                found.push(name.clone());
             }
-            if kind.is_dir() {
+            if item.kind == EntryKind::Directory {
                 if depth == MAX_TOOL_DEPTH {
                     return Err(ToolError::DepthLimit);
                 }
-                self.search_directory(&canonical, pattern, depth + 1, found)?;
+                let child = open_at(directory.as_raw_fd(), &item.raw_name, true)?;
+                self.search_directory(&child, &name, pattern, depth + 1, visited, found)?;
             }
         }
         Ok(())
     }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn open_relative(&self, supplied: &str, directory: bool) -> Result<fs::File, ToolError> {
+        let parts = relative_components(supplied)?;
+        if parts.is_empty() {
+            if directory {
+                return duplicate_file(&self.root);
+            }
+            return Err(ToolError::InvalidPath);
+        }
+        let mut current = duplicate_file(&self.root)?;
+        for (index, part) in parts.iter().enumerate() {
+            let last = index + 1 == parts.len();
+            current = open_at(current.as_raw_fd(), part, !last || directory)?;
+        }
+        let metadata = current.metadata()?;
+        if (directory && !metadata.is_dir()) || (!directory && !metadata.is_file()) {
+            return Err(ToolError::InvalidPath);
+        }
+        Ok(current)
+    }
+}
+
+fn validate_call_id(value: &str) -> Result<(), ToolError> {
+    if value.is_empty()
+        || value.len() > 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+    {
+        return Err(ToolError::InvalidPath);
+    }
+    Ok(())
+}
+
+fn validate_tool_argument(name: ToolName, value: &str) -> Result<(), ToolError> {
+    let limit = if name == ToolName::SearchFiles {
+        128
+    } else {
+        512
+    };
+    if value.is_empty() || value.len() > limit || value.chars().any(char::is_control) {
+        return Err(ToolError::InvalidPath);
+    }
+    if name != ToolName::SearchFiles {
+        let path = Path::new(value);
+        if path.is_absolute()
+            || path.components().any(|part| {
+                !matches!(part, Component::Normal(_))
+                    && !(value == "." && matches!(part, Component::CurDir))
+            })
+        {
+            return Err(ToolError::InvalidPath);
+        }
+    }
+    Ok(())
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(char::from(HEX[usize::from(byte >> 4)]));
+        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    output
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EntryKind {
+    File,
+    Directory,
+    Symlink,
+    Other,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct DirectoryEntry {
+    name: String,
+    raw_name: CString,
+    kind: EntryKind,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct DirectoryStream(*mut libc::DIR);
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl Drop for DirectoryStream {
+    fn drop(&mut self) {
+        // SAFETY: the pointer came from `fdopendir`, remains uniquely owned,
+        // and `closedir` consumes both the stream and its descriptor.
+        unsafe {
+            libc::closedir(self.0);
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn duplicate_file(file: &fs::File) -> Result<fs::File, ToolError> {
+    // SAFETY: `file` owns a live descriptor. `F_DUPFD_CLOEXEC` returns a new,
+    // independently owned descriptor or -1 without changing the source.
+    let descriptor = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    // SAFETY: the successful `fcntl` result is a new owned descriptor.
+    Ok(unsafe { fs::File::from_raw_fd(descriptor) })
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn relative_components(value: &str) -> Result<Vec<CString>, ToolError> {
+    if value == "." {
+        return Ok(Vec::new());
+    }
+    validate_tool_argument(ToolName::ReadFile, value)?;
+    Path::new(value)
+        .components()
+        .map(|part| match part {
+            Component::Normal(value) => {
+                CString::new(value.as_bytes()).map_err(|_| ToolError::InvalidPath)
+            }
+            _ => Err(ToolError::InvalidPath),
+        })
+        .collect()
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn open_at(parent: RawFd, name: &CStr, directory: bool) -> Result<fs::File, ToolError> {
+    let flags = libc::O_RDONLY
+        | libc::O_CLOEXEC
+        | libc::O_NOFOLLOW
+        | if directory { libc::O_DIRECTORY } else { 0 };
+    // SAFETY: `parent` is a live directory descriptor and `name` is a bounded,
+    // NUL-terminated single path component. No raw pointer outlives this call.
+    let descriptor = unsafe { libc::openat(parent, name.as_ptr(), flags) };
+    if descriptor < 0 {
+        let error = io::Error::last_os_error();
+        return if error.raw_os_error() == Some(libc::ELOOP) {
+            Err(ToolError::Symlink)
+        } else {
+            Err(error.into())
+        };
+    }
+    // SAFETY: successful `openat` returned a new owned descriptor.
+    Ok(unsafe { fs::File::from_raw_fd(descriptor) })
+}
+
+#[cfg(target_os = "linux")]
+unsafe fn errno_location() -> *mut libc::c_int {
+    // SAFETY: forwarded to libc's thread-local errno accessor.
+    unsafe { libc::__errno_location() }
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn errno_location() -> *mut libc::c_int {
+    // SAFETY: forwarded to libc's thread-local errno accessor.
+    unsafe { libc::__error() }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn read_directory(
+    directory: &fs::File,
+    visited: &mut usize,
+) -> Result<Vec<DirectoryEntry>, ToolError> {
+    let current = CString::new(".").expect("a literal dot has no NUL byte");
+    // Re-open the descriptor-relative directory instead of duplicating its fd:
+    // duplicated directory descriptors share one seek position and would make a
+    // second traversal start at EOF, silently bypassing global traversal limits.
+    let reopened = open_at(directory.as_raw_fd(), &current, true)?;
+    // SAFETY: ownership of this independently opened descriptor transfers to
+    // `fdopendir`.
+    let stream = unsafe { libc::fdopendir(reopened.into_raw_fd()) };
+    if stream.is_null() {
+        return Err(io::Error::last_os_error().into());
+    }
+    let stream = DirectoryStream(stream);
+    let mut output = Vec::new();
+    loop {
+        // SAFETY: errno is thread-local and the stream is exclusively owned.
+        unsafe {
+            *errno_location() = 0;
+        }
+        // SAFETY: the stream stays alive and unmoved for the duration of this call.
+        let entry = unsafe { libc::readdir(stream.0) };
+        if entry.is_null() {
+            // SAFETY: errno is read immediately after `readdir` returned null.
+            let errno = unsafe { *errno_location() };
+            if errno != 0 {
+                return Err(io::Error::from_raw_os_error(errno).into());
+            }
+            break;
+        }
+        // SAFETY: `d_name` is NUL-terminated for a successful `readdir` result
+        // and remains valid until the next call on this same stream.
+        let raw = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+        if raw.to_bytes() == b"." || raw.to_bytes() == b".." {
+            continue;
+        }
+        *visited = visited.checked_add(1).ok_or(ToolError::EntryLimit)?;
+        if *visited > MAX_TOOL_ENTRIES {
+            return Err(ToolError::EntryLimit);
+        }
+        let raw_name = raw.to_owned();
+        let name = raw.to_str().map_err(|_| ToolError::InvalidUtf8)?.to_owned();
+        if name.chars().any(char::is_control) {
+            return Err(ToolError::InvalidPath);
+        }
+        // SAFETY: `directory` and `raw_name` are live; `AT_SYMLINK_NOFOLLOW`
+        // inspects the directory entry itself rather than following a link.
+        let mut stat = unsafe { std::mem::zeroed::<libc::stat>() };
+        let result = unsafe {
+            libc::fstatat(
+                directory.as_raw_fd(),
+                raw_name.as_ptr(),
+                &mut stat,
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if result != 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+        let kind = match stat.st_mode & libc::S_IFMT {
+            libc::S_IFREG => EntryKind::File,
+            libc::S_IFDIR => EntryKind::Directory,
+            libc::S_IFLNK => EntryKind::Symlink,
+            _ => EntryKind::Other,
+        };
+        output.push(DirectoryEntry {
+            name,
+            raw_name,
+            kind,
+        });
+    }
+    Ok(output)
 }
 
 fn bounded_join(values: Vec<String>) -> Result<String, ToolError> {
@@ -412,14 +697,6 @@ fn bounded_join(values: Vec<String>) -> Result<String, ToolError> {
     } else {
         Ok(joined)
     }
-}
-
-fn required_field<'a>(fields: &'a [(String, String)], name: &str) -> Result<&'a str, ToolError> {
-    fields
-        .iter()
-        .find(|(key, _)| key == name)
-        .map(|(_, value)| value.as_str())
-        .ok_or(ToolError::InvalidPath)
 }
 
 fn string_object(value: &Value) -> Result<Vec<(String, String)>, ProviderError> {
@@ -527,18 +804,16 @@ fn response_blocks(
                 .with_status(ThinkingStatus::Complete),
             ),
             ResponseBlock::ToolUse { id, name, input } => {
-                let call_id = ToolCallId::new(id.clone())?;
-                let arguments = string_object(input)?
-                    .into_iter()
-                    .map(|(name, value)| ToolArgument::new(name, TypedValue::String(value)))
-                    .collect::<Result<Vec<_>, _>>()?;
-                pending.push(PendingToolRequest::new(
-                    call_id.clone(),
-                    name.clone(),
-                    input.clone(),
-                ));
+                let request = PendingToolRequest::parse(id, name, input)?;
+                let call_id = request.call_id.clone();
+                let tool_name = request.name.as_str();
+                let arguments = vec![ToolArgument::new(
+                    request.name.argument_name(),
+                    TypedValue::String(request.argument.clone()),
+                )?];
+                pending.push(request);
                 MessageBlock::ToolCall(
-                    ToolCallContent::new(call_id, name, arguments)?
+                    ToolCallContent::new(call_id, tool_name, arguments)?
                         .with_status(ToolCallStatus::Pending),
                 )
             }
@@ -549,6 +824,39 @@ fn response_blocks(
         return Err(ProviderError::UnsupportedBlock.into());
     }
     Ok((entries, pending))
+}
+
+#[cfg(test)]
+pub(crate) fn gh68_provider_adapter_view() -> AppResult<String> {
+    let mut state = ConversationState::new(0, std::num::NonZeroUsize::new(16).unwrap());
+    push_completed(
+        &mut state,
+        ChatRole::User,
+        vec![MessageBlockEntry::new(
+            BlockId::new(1),
+            MessageBlock::Text("Explain the release gate".to_owned()),
+        )],
+    )?;
+    let response = ChatResponse {
+        content: vec![ResponseBlock::Text {
+            text: "Use typed updates.".to_owned(),
+        }],
+    };
+    let (blocks, pending) = response_blocks(&response)?;
+    if !pending.is_empty() {
+        return Err(ProviderError::InvalidToolInput.into());
+    }
+    push_completed(&mut state, ChatRole::Assistant, blocks)?;
+    let root = rnk::components::Box::new()
+        .flex_direction(rnk::core::FlexDirection::Column)
+        .children(
+            state
+                .messages()
+                .iter()
+                .map(|message| ChatMessageView::new(message).into_element()),
+        )
+        .into_element();
+    Ok(rnk::render_to_string(&root, 60))
 }
 
 fn push_completed(
@@ -652,9 +960,8 @@ fn approve_and_execute(
 ) -> AppResult<String> {
     let phrase = request.approval_phrase();
     let supplied = prompt_line(&format!(
-        "Tool {} requests {}. Type `{phrase}` to approve: ",
-        request.call_id.as_str(),
-        request.name
+        "Tool request {}. Type `{phrase}` to approve: ",
+        request.exact_description()
     ))?;
     request.approve_exact(&supplied)?;
     Ok(request.execute_once(workspace)?)

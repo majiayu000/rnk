@@ -114,7 +114,7 @@ outside this repository has driven them.
 | `ChatComposerState`, `ComposerProjection`, `ChatComposerKeyMap`, `handle_key` | Advanced, settled | The draft, its wrapping, its cursor and its key bindings. Used by four examples and covered by grapheme, CJK, emoji and paste tests. Additive keymap actions are expected; existing outcomes should not change meaning. Reached through `rnk::components::chat`. |
 | `ConversationState` and its update/event types | Prelude, settled | Provider-independent conversation data. The update set may grow; applied events and guards are contract. |
 | `ChatMessageView`, `ChatBlockRenderer` | Advanced | Block rendering and custom renderers. Variant and override sets may grow. |
-| `MessageListState` and `message_list::*` | Prelude, advanced | Row-indexed transcript geometry. `MessageMeasureOutcome` and the error enums are `#[non_exhaustive]` and will gain variants. |
+| `MessageListState` and `message_list::*` | Prelude, advanced | Row-indexed transcript geometry. `MessageMeasureOutcome` is currently exhaustive; the error enums carrying `#[non_exhaustive]` may gain variants. |
 | `scrollback::*` — sinks, identity, ledger, outcomes | Experimental | The commit boundary. `ScrollbackCommitOutcome`, `NotCommittedCause` and `UnknownReason` are `#[non_exhaustive]`; new failure states are expected as more sinks exist. `DurableCommitStore` is the extension point and its contract is deliberately strict. |
 | `InlineChatShell`, `FullscreenChatShell` | Experimental | The lifecycle and layout shells. GH-68 now drives them through four in-repository examples and exact golden/convergence tests, but neither has yet been validated by an application outside this repository. Their outcome enums remain the part most likely to gain variants. |
 
@@ -128,8 +128,10 @@ stable `rnk` API.
 
 Migration posture for the chat surface before `1.0`:
 
-- Outcome and error enums are `#[non_exhaustive]`. Match with a wildcard arm, or
-  accept that a new variant is a compile error rather than a silent misread.
+- Only enums explicitly annotated `#[non_exhaustive]` accept forward-compatible
+  wildcard matching. `InlineCommitReport`, `InlineKeyOutcome`,
+  `FullscreenKeyOutcome`, and `MessageMeasureOutcome` are exhaustive today;
+  callers should match every variant and review any future additive break.
 - A variant will not change meaning in place. If a state's semantics need to
   change, it gets a new variant and the old one is documented as superseded.
 - `ScrollbackGuarantee` is the one value never to widen silently: a sink that

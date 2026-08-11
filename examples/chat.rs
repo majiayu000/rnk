@@ -165,6 +165,50 @@ fn append_user_message(
     Ok(())
 }
 
+#[cfg(test)]
+pub(crate) fn gh68_offline_adapter_view() -> Result<String, ConversationError> {
+    let mut state = ConversationState::new(0, NonZeroUsize::new(16).unwrap());
+    append_user_message(&mut state, "Explain the release gate".to_owned())?;
+    let identity = state.expected_sequence();
+    let message_id = MessageId::new(identity);
+    let message = ChatMessage::new(
+        message_id,
+        ChatRole::Assistant,
+        vec![MessageBlockEntry::new(
+            BlockId::new(identity),
+            MessageBlock::Text("Use typed updates.".to_owned()),
+        )],
+    )?;
+    state.apply_event(ConversationEvent::new(
+        UpdateId::new("offline-assistant")?,
+        state.expected_sequence(),
+        ConversationUpdate::push(ConversationGuard::new(state.revision()), message),
+    ))?;
+    let guard = MessageMutationGuard::new(
+        ConversationGuard::new(state.revision()),
+        message_id,
+        state
+            .message(message_id)
+            .ok_or(ConversationError::UnknownMessage { message_id })?
+            .revision(),
+    );
+    state.apply_event(ConversationEvent::new(
+        UpdateId::new("offline-complete")?,
+        state.expected_sequence(),
+        ConversationUpdate::complete(guard),
+    ))?;
+    let root = Box::new()
+        .flex_direction(FlexDirection::Column)
+        .children(
+            state
+                .messages()
+                .iter()
+                .map(|message| ChatMessageView::new(message).into_element()),
+        )
+        .into_element();
+    Ok(rnk::render_to_string(&root, 60))
+}
+
 /// Draws the exact rows projected by the shared composer.
 fn render_input(projection: &ComposerProjection) -> Element {
     Box::new()

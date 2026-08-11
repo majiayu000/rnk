@@ -4,15 +4,15 @@
 use rnk::Style;
 use rnk::components::chat::message_list::{
     BottomFollowState, HorizontalInsets, MessageCompositeMeasureConfig, MessageExpansionKey,
-    MessageListEntry, MessageListState, MessageMeasureOutcome, MessageRows,
-    MessageShellMeasureConfig, MessageVariantKey, RowOffset, ViewportRows,
+    MessageListEntry, MessageListState, MessageMeasureOutcome, MessageResizeConfigOutcome,
+    MessageRows, MessageShellMeasureConfig, MessageVariantKey, RowOffset, ViewportRows,
 };
 use rnk::components::chat::scrollback::NativeTerminalSink;
 use rnk::components::chat::{
-    BlockId, ChatMessage, ChatMessageView, ChatRole, ConversationEvent, ConversationGuard,
-    ConversationState, ConversationUpdate, InlineChatShell, InlineCommitReport, MessageBlock,
-    MessageBlockEntry, MessageId, MessageMutationGuard, MessageRevision, ProjectionContext,
-    ScrollbackNamespace, ThemeIdentity, UpdateId,
+    BlockId, ChatComposerState, ChatMessage, ChatMessageView, ChatRole, ConversationEvent,
+    ConversationGuard, ConversationState, ConversationUpdate, FullscreenChatShell, InlineChatShell,
+    InlineCommitReport, MessageBlock, MessageBlockEntry, MessageId, MessageMutationGuard,
+    MessageRevision, ProjectionContext, ScrollbackNamespace, ThemeIdentity, UpdateId,
 };
 use rnk::core::{Color, Dimension, Element, FlexDirection};
 use rnk::renderer::{ClipRegion, Output, render_to_string};
@@ -452,11 +452,77 @@ pub(crate) fn run_gh68_variable_height_prepend() -> Gh68Oracle {
 }
 
 pub(crate) fn run_gh68_continuous_resize() -> Gh68Oracle {
-    gh68_conversation_oracle(
-        GH68_WORKLOAD_NAMES[3],
-        &gh68_conversation(48),
-        &[32, 80, 41, 120, 24, 96],
-    )
+    let entries = (1..=48)
+        .map(|id| gh68_list_entry(id, 32))
+        .collect::<Vec<_>>();
+    let measure = |request: rnk::components::chat::message_list::MessageMeasureRequest<'_>| {
+        MessageMeasureOutcome::<(), ()>::Measured(
+            MessageRows::try_new(request.entry.message_id().get() % 7 + 1).unwrap(),
+        )
+    };
+    let transcript =
+        MessageListState::try_new(&entries, 32, ViewportRows::new(9), 64, measure).unwrap();
+    let mut shell =
+        FullscreenChatShell::try_new(transcript, ChatComposerState::new(), 32, 12, 1).unwrap();
+    assert!(matches!(
+        shell.transcript().follow_state(),
+        BottomFollowState::Following
+    ));
+    let revision = shell.transcript().revision();
+    shell
+        .transcript_mut()
+        .try_scroll_to(revision, RowOffset::new(20))
+        .unwrap();
+    let anchor = shell.transcript().stored_anchor().unwrap();
+    let sizes = [(80, 24), (41, 16), (120, 40), (24, 12), (96, 28)];
+    let mut observed = Vec::new();
+    for (width, height) in sizes {
+        shell.try_resize(width, height).unwrap();
+        let viewport = ViewportRows::new(u64::from(shell.layout().transcript().rows()));
+        let revision = shell.transcript().revision();
+        shell
+            .transcript_mut()
+            .try_resize(
+                revision,
+                width,
+                viewport,
+                |request| {
+                    MessageResizeConfigOutcome::<(), ()>::Rebuilt(
+                        gh68_list_entry(request.old_entry.message_id().get(), width)
+                            .measure_config()
+                            .clone(),
+                    )
+                },
+                measure,
+            )
+            .unwrap();
+        assert_eq!(shell.transcript().stored_anchor(), Some(anchor));
+        assert!(matches!(
+            shell.transcript().follow_state(),
+            BottomFollowState::Paused { .. }
+        ));
+        observed.extend_from_slice(&width.to_le_bytes());
+        observed.extend_from_slice(&height.to_le_bytes());
+        observed.extend_from_slice(&shell.transcript().scroll_offset().get().to_le_bytes());
+    }
+    let revision = shell.transcript().revision();
+    shell.transcript_mut().jump_to_bottom(revision).unwrap();
+    assert!(matches!(
+        shell.transcript().follow_state(),
+        BottomFollowState::Following
+    ));
+    Gh68Oracle {
+        name: GH68_WORKLOAD_NAMES[3],
+        message_order: entries
+            .iter()
+            .map(|entry| entry.message_id().get())
+            .collect(),
+        anchor: Some((anchor.message_id().get(), anchor.intra_message_row().get())),
+        bottom_follow: true,
+        commit_count: 0,
+        character_count: observed.len(),
+        semantic_checksum: gh68_checksum(observed),
+    }
 }
 
 pub(crate) fn run_gh68_inline_commit_churn() -> Gh68Oracle {
@@ -525,6 +591,37 @@ fn gh68_inline_commit_churn() {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Gh68EvidenceError(pub(crate) &'static str);
+
+pub(crate) fn gh68_benchmark_route_contract(
+    phase: &str,
+) -> Result<&'static str, Gh68EvidenceError> {
+    match std::env::var("GH68_BENCHMARK_ROUTE").as_deref() {
+        Ok("smoke_blocked_no_baseline") => {
+            if std::env::var_os("GH68_BENCHMARK_MODE").is_some()
+                || std::env::var_os("GH68_BENCHMARK_BASELINE").is_some()
+                || std::env::var_os("GH68_BENCHMARK_EVIDENCE").is_some()
+            {
+                return Err(Gh68EvidenceError("smoke route carries validation inputs"));
+            }
+            Ok("performance_status=not_available")
+        }
+        Ok("performance_validation") => {
+            match (phase, std::env::var("GH68_BENCHMARK_MODE").as_deref()) {
+                ("metadata", Ok("produce")) | ("comparison", Ok("validate")) => {
+                    Ok("performance_status=validation_required")
+                }
+                _ => Err(Gh68EvidenceError("benchmark phase and mode disagree")),
+            }
+        }
+        Ok(_) => Err(Gh68EvidenceError("unknown benchmark route")),
+        Err(_) => Err(Gh68EvidenceError("missing benchmark route")),
+    }
+}
+
+pub(crate) fn gh68_is_regression(candidate: u64, baseline: u64, mad: u64) -> bool {
+    candidate > baseline.saturating_mul(12) / 10
+        && candidate.saturating_sub(baseline) > mad.saturating_mul(3).max(1_000_000)
+}
 
 fn gh68_run(name: &str) -> Gh68Oracle {
     match name {
@@ -599,7 +696,7 @@ fn gh68_rfc3339_now() -> Result<String, Gh68EvidenceError> {
 }
 
 #[rustfmt::skip]
-fn gh68_sha256(bytes: &[u8]) -> String {
+pub(crate) fn gh68_sha256(bytes: &[u8]) -> String {
     const K: [u32; 64] = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
     let mut data=bytes.to_vec(); let bits=(data.len() as u64).wrapping_mul(8); data.push(0x80); while data.len()%64!=56 { data.push(0); } data.extend_from_slice(&bits.to_be_bytes());
     let mut h=[0x6a09e667_u32,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
@@ -697,7 +794,7 @@ pub(crate) fn gh68_benchmark_metadata_contract() -> Result<(), Gh68EvidenceError
     let results = workloads.iter().zip(baseline["workloads"].as_array().unwrap()).map(|(candidate, prior)| {
         let candidate_median=candidate["median_ns"].as_u64().unwrap(); let baseline_median=prior["median_ns"].as_u64().unwrap(); let mad=prior["mad_ns"].as_u64().unwrap();
         serde_json::json!({"name":candidate["name"],"candidate_median_ns":candidate_median,"baseline_median_ns":baseline_median,
-            "regression":candidate_median > baseline_median.saturating_mul(12)/10 && candidate_median.saturating_sub(baseline_median) > mad.saturating_mul(3).max(1_000_000)})
+            "regression":gh68_is_regression(candidate_median, baseline_median, mad)})
     }).collect::<Vec<_>>();
     let artifact = serde_json::json!({"schema":"gh68-benchmark-v1","head_sha":head,"base_main_sha":base,"generated_at":gh68_rfc3339_now()?,
         "environment":environment,"fixture":fixture,"workloads":workloads,"baseline":{"coordinate":coordinate,"source_sha256":gh68_sha256(&bytes),
@@ -778,8 +875,7 @@ pub(crate) fn gh68_benchmark_comparison_contract() -> Result<(), Gh68EvidenceErr
         let cm = candidate["median_ns"].as_u64().unwrap();
         let bm = prior["median_ns"].as_u64().unwrap();
         let mad = prior["mad_ns"].as_u64().unwrap();
-        let regression = cm > bm.saturating_mul(12) / 10
-            && cm.saturating_sub(bm) > mad.saturating_mul(3).max(1_000_000);
+        let regression = gh68_is_regression(cm, bm, mad);
         if result["name"] != candidate["name"]
             || result["candidate_median_ns"] != cm
             || result["baseline_median_ns"] != bm

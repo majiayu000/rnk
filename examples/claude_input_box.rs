@@ -17,11 +17,41 @@ use rnk::components::chat::scrollback::NativeTerminalSink;
 use rnk::components::chat::{
     ChatComposerKeyMap, ComposerProjection, InlineChatShell, InlineCommitReport, InlineKeyOutcome,
     LiveState, MessageId, MessageRevision, ProjectionContext, ScrollbackNamespace, ThemeIdentity,
+    UnknownResolution,
 };
 use rnk::prelude::*;
 
 const MAX_VISIBLE_INPUT_LINES: NonZeroUsize = NonZeroUsize::new(4).expect("four is non-zero");
 type ExampleShell = InlineChatShell<NativeTerminalSink<io::Stdout>>;
+
+#[derive(Clone)]
+pub(crate) struct PendingPublication {
+    id: MessageId,
+    text: String,
+    width: u16,
+    token: rnk::components::chat::SubmissionToken,
+}
+
+impl PendingPublication {
+    pub(crate) fn new(
+        id: MessageId,
+        text: String,
+        width: u16,
+        token: rnk::components::chat::SubmissionToken,
+    ) -> Self {
+        Self {
+            id,
+            text,
+            width,
+            token,
+        }
+    }
+}
+
+pub(crate) enum HumanResolutionReport {
+    AlreadyVisible,
+    Retried(InlineCommitReport),
+}
 
 fn main() -> io::Result<()> {
     render(app).run()
@@ -41,10 +71,12 @@ fn app() -> Element {
     });
     let status = use_signal(|| "ready".to_owned());
     let committed = use_signal(|| 0_u64);
+    let pending_publication = use_signal(|| None::<PendingPublication>);
 
     let input_shell = shell.clone();
     let input_status = status.clone();
     let input_committed = committed.clone();
+    let input_pending = pending_publication.clone();
     use_input(move |input, key| {
         if key.escape || (key.ctrl && input.eq_ignore_ascii_case("c")) {
             app.exit();
@@ -69,10 +101,61 @@ fn app() -> Element {
                 return;
             }
         };
-        match shell.handle_key(&ChatComposerKeyMap::new(), input, key) {
-            InlineKeyOutcome::Submitted(text) => {
-                commit_submission(&mut shell, text, width, &input_status, &input_committed)
+        if key.ctrl && matches!(input, "r" | "v") {
+            let Some(pending) = input_pending.get() else {
+                input_status.set("no retained or latched publication".to_owned());
+                return;
+            };
+            let resolution = if input == "v" {
+                UnknownResolution::AlreadyVisible
+            } else {
+                UnknownResolution::NotVisible
+            };
+            match resolve_publication(&mut shell, &pending, resolution) {
+                Ok(HumanResolutionReport::AlreadyVisible) => {
+                    match shell.composer_mut().acknowledge_success(pending.token) {
+                        Ok(()) => {
+                            input_pending.set(None);
+                            input_committed.set(pending.id.get());
+                            input_status
+                                .set("human confirmed the existing terminal line".to_owned());
+                        }
+                        Err(error) => input_status.set(format!(
+                            "human resolution acknowledgement failed: {error:?}"
+                        )),
+                    }
+                }
+                Ok(HumanResolutionReport::Retried(InlineCommitReport::Fixed { .. })) => {
+                    match shell.composer_mut().acknowledge_success(pending.token) {
+                        Ok(()) => {
+                            input_pending.set(None);
+                            input_committed.set(pending.id.get());
+                            input_status.set("human-approved retry was fixed".to_owned());
+                        }
+                        Err(error) => {
+                            input_status.set(format!("retry acknowledgement failed: {error:?}"))
+                        }
+                    }
+                }
+                Ok(HumanResolutionReport::Retried(InlineCommitReport::Retained { cause })) => {
+                    input_status.set(format!("human-approved retry retained: {cause}"));
+                }
+                Ok(HumanResolutionReport::Retried(InlineCommitReport::Latched { evidence })) => {
+                    input_status.set(format!("human-approved retry is still latched: {evidence}"));
+                }
+                Err(error) => input_status.set(format!("human resolution refused: {error}")),
             }
+            return;
+        }
+        match shell.handle_key(&ChatComposerKeyMap::new(), input, key) {
+            InlineKeyOutcome::Submitted(text) => commit_submission(
+                &mut shell,
+                text,
+                width,
+                &input_status,
+                &input_committed,
+                &input_pending,
+            ),
             InlineKeyOutcome::Cancelled => input_status.set("input cancelled".to_owned()),
             InlineKeyOutcome::Changed(_) => input_status.set("editing".to_owned()),
             InlineKeyOutcome::Handled => input_status.set("input handled".to_owned()),
@@ -96,6 +179,7 @@ fn commit_submission(
     width: u16,
     status: &Signal<String>,
     committed: &Signal<u64>,
+    pending_publication: &Signal<Option<PendingPublication>>,
 ) {
     let Some(token) = shell
         .composer()
@@ -157,6 +241,7 @@ fn commit_submission(
             disposition,
         } => match shell.composer_mut().acknowledge_success(token) {
             Ok(()) => {
+                pending_publication.set(None);
                 committed.set(next);
                 status.set(format!("fixed ({disposition:?}) as {receipt}"));
             }
@@ -164,19 +249,44 @@ fn commit_submission(
                 "fixed, but composer acknowledgement failed: {error:?}"
             )),
         },
-        InlineCommitReport::Retained { cause } => acknowledge_failure(
-            shell,
-            token,
-            status,
-            &format!("retained without terminal write: {cause}"),
-        ),
-        InlineCommitReport::Latched { evidence } => acknowledge_failure(
-            shell,
-            token,
-            status,
-            &format!("latched on undecidable terminal write: {evidence}"),
-        ),
+        InlineCommitReport::Retained { cause } => {
+            pending_publication.set(Some(PendingPublication::new(id, canonical, width, token)));
+            status.set(format!(
+                "retained without terminal write: {cause}; Ctrl+R explicitly retries"
+            ));
+        }
+        InlineCommitReport::Latched { evidence } => {
+            pending_publication.set(Some(PendingPublication::new(id, canonical, width, token)));
+            status.set(format!(
+                "latched on undecidable terminal write: {evidence}; Ctrl+V confirms visible, Ctrl+R confirms absent"
+            ));
+        }
     }
+}
+
+pub(crate) fn resolve_publication<W: io::Write>(
+    shell: &mut InlineChatShell<NativeTerminalSink<W>>,
+    pending: &PendingPublication,
+    resolution: UnknownResolution,
+) -> Result<HumanResolutionReport, String> {
+    match shell.live_state(pending.id) {
+        Some(LiveState::AwaitingResolution) => {
+            shell
+                .resolve(pending.id, resolution)
+                .map_err(|error| error.to_string())?;
+            if resolution == UnknownResolution::AlreadyVisible {
+                return Ok(HumanResolutionReport::AlreadyVisible);
+            }
+        }
+        Some(LiveState::AwaitingRetry) if resolution == UnknownResolution::NotVisible => {}
+        _ => return Err("publication is not eligible for this human resolution".to_owned()),
+    }
+    let context = ProjectionContext::new(pending.width, ThemeIdentity::new(1))
+        .map_err(|error| error.to_string())?;
+    shell
+        .finish(pending.id, MessageRevision::INITIAL, &pending.text, context)
+        .map(HumanResolutionReport::Retried)
+        .map_err(|error| error.to_string())
 }
 
 fn acknowledge_failure(

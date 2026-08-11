@@ -15,9 +15,9 @@ use rnk::components::chat::message_list::{
 };
 use rnk::components::chat::{
     BlockId, ChatComposerKeyMap, ChatComposerState, ChatMessage, ChatMessageMetadata,
-    ChatMessageView, ChatMessageViewOptions, ChatRole, FullscreenChatShell, FullscreenKeyOutcome,
-    MessageAuthor, MessageBlock, MessageBlockEntry, MessageId, MessageRevision, MessageStatus,
-    MessageTimestamp,
+    ChatMessageView, ChatMessageViewOptions, ChatRole, FullscreenChatShell, FullscreenFocus,
+    FullscreenFocusOutcome, FullscreenKeyOutcome, MessageAuthor, MessageBlock, MessageBlockEntry,
+    MessageId, MessageRevision, MessageStatus, MessageTimestamp,
 };
 use rnk::core::{Overflow, TextWrap};
 use rnk::hooks::{Key, use_window_size};
@@ -26,6 +26,7 @@ use rnk::layout::text_flow::{
     TextFlowCacheIdentity, TextFlowInput, TextFlowOptions, TextFlowSourceKind,
 };
 use rnk::prelude::*;
+use std::sync::{Arc, Mutex};
 
 const STATUS_ROWS: u16 = 1;
 const PAGE_ROWS: u64 = 5;
@@ -36,45 +37,62 @@ fn main() -> std::io::Result<()> {
 }
 
 #[derive(Clone)]
-struct ChatSurface {
+pub(crate) struct ChatSurface {
     messages: Vec<ChatMessage>,
     transcript: MessageListState,
     composer: ChatComposerState,
+    focus: FullscreenFocus,
+    overlay_open: bool,
     width: u16,
     height: u16,
+    revision: u64,
     typing: bool,
     status: String,
 }
 
 impl ChatSurface {
-    fn try_new(width: u16, height: u16) -> Result<Self, String> {
+    pub(crate) fn try_new(width: u16, height: u16) -> Result<Self, String> {
         let messages = initial_messages()?;
         let transcript = build_transcript(&messages, width, 1)?;
-        let candidate = Self {
+        let mut candidate = Self {
             messages,
             transcript,
             composer: ChatComposerState::new(),
+            focus: FullscreenFocus::Composer,
+            overlay_open: false,
             width,
             height,
+            revision: 0,
             typing: false,
             status: "ready".to_owned(),
         };
-        candidate.try_shell()?;
+        let shell = candidate.try_shell()?;
+        candidate.absorb_shell(&shell);
         Ok(candidate)
     }
 
-    fn try_shell(&self) -> Result<FullscreenChatShell, String> {
-        FullscreenChatShell::try_new(
+    pub(crate) fn try_shell(&self) -> Result<FullscreenChatShell, String> {
+        let mut shell = FullscreenChatShell::try_new(
             self.transcript.clone(),
             self.composer.clone(),
             self.width,
             self.height,
             STATUS_ROWS,
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+        shell.set_overlay_open(self.overlay_open);
+        shell.set_focus(self.focus);
+        Ok(shell)
     }
 
-    fn try_resize(&self, width: u16, height: u16) -> Result<Self, String> {
+    fn absorb_shell(&mut self, shell: &FullscreenChatShell) {
+        self.transcript = shell.transcript().clone();
+        self.composer = shell.composer().clone();
+        self.focus = shell.focus();
+        self.overlay_open = shell.overlay_open();
+    }
+
+    pub(crate) fn try_resize(&self, width: u16, height: u16) -> Result<Self, String> {
         let provisional = FullscreenChatShell::try_new(
             self.transcript.clone(),
             self.composer.clone(),
@@ -114,11 +132,16 @@ impl ChatSurface {
         candidate.width = width;
         candidate.height = height;
         candidate.status = format!("{}x{}", width, height);
-        candidate.try_shell()?;
+        let shell = candidate.try_shell()?;
+        candidate.absorb_shell(&shell);
+        candidate.revision = self
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| "surface revision exhausted".to_owned())?;
         Ok(candidate)
     }
 
-    fn try_scroll(&self, delta: i64) -> Result<Self, String> {
+    pub(crate) fn try_scroll(&self, delta: i64) -> Result<Self, String> {
         let mut candidate = self.clone();
         let current = i64::try_from(candidate.transcript.scroll_offset().get())
             .map_err(|_| "scroll offset exceeds signed range".to_owned())?;
@@ -128,17 +151,20 @@ impl ChatSurface {
             .try_scroll_to(candidate.transcript.revision(), RowOffset::new(target))
             .map_err(|error| error.to_string())?;
         candidate.try_shell()?;
+        candidate.revision = self
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| "surface revision exhausted".to_owned())?;
         Ok(candidate)
     }
 
-    fn try_key(&self, input: &str, key: &Key) -> Result<(Self, Option<String>), String> {
+    pub(crate) fn try_key(&self, input: &str, key: &Key) -> Result<(Self, Option<String>), String> {
         let mut shell = self.try_shell()?;
         let outcome = shell
             .handle_key(&ChatComposerKeyMap::new(), input, key)
             .map_err(|error| error.to_string())?;
         let mut candidate = self.clone();
-        candidate.transcript = shell.transcript().clone();
-        candidate.composer = shell.composer().clone();
+        candidate.absorb_shell(&shell);
 
         let submitted = match outcome {
             FullscreenKeyOutcome::Submitted(text) => {
@@ -173,6 +199,10 @@ impl ChatSurface {
             FullscreenKeyOutcome::Overlay => None,
         };
         candidate.try_shell()?;
+        candidate.revision = self
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| "surface revision exhausted".to_owned())?;
         Ok((candidate, submitted))
     }
 
@@ -197,13 +227,86 @@ impl ChatSurface {
         self.transcript = transcript;
         Ok(())
     }
+
+    pub(crate) fn try_set_focus(&self, focus: FullscreenFocus) -> Result<Self, String> {
+        let mut shell = self.try_shell()?;
+        match shell.set_focus(focus) {
+            FullscreenFocusOutcome::HeldByOverlay(_) => {
+                return Err("overlay owns focus".to_owned());
+            }
+            FullscreenFocusOutcome::Moved(_) | FullscreenFocusOutcome::Unchanged(_) => {}
+        }
+        let mut candidate = self.clone();
+        candidate.absorb_shell(&shell);
+        candidate.revision = self
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| "surface revision exhausted".to_owned())?;
+        Ok(candidate)
+    }
+
+    pub(crate) fn try_set_overlay(&self, open: bool) -> Result<Self, String> {
+        let mut shell = self.try_shell()?;
+        shell.set_overlay_open(open);
+        let mut candidate = self.clone();
+        candidate.absorb_shell(&shell);
+        candidate.revision = self
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| "surface revision exhausted".to_owned())?;
+        Ok(candidate)
+    }
+
+    pub(crate) fn try_reply(&self, expected_revision: u64, prompt: &str) -> Result<Self, String> {
+        if self.revision != expected_revision {
+            return Err(format!(
+                "reply revision is stale: expected {expected_revision}, current {}",
+                self.revision
+            ));
+        }
+        let mut candidate = self.clone();
+        let id = next_message_id(&candidate.messages)?;
+        candidate.try_push(message(
+            id,
+            ChatRole::Assistant,
+            "Assistant",
+            generate_response(prompt),
+        )?)?;
+        candidate.typing = false;
+        candidate.status = "ready".to_owned();
+        candidate.revision = self
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| "surface revision exhausted".to_owned())?;
+        candidate.try_shell()?;
+        Ok(candidate)
+    }
+
+    pub(crate) const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    #[cfg(test)]
+    pub(crate) fn status(&self) -> &str {
+        &self.status
+    }
+
+    #[cfg(test)]
+    pub(crate) fn message_ids(&self) -> Vec<u64> {
+        self.messages
+            .iter()
+            .map(|message| message.id().get())
+            .collect()
+    }
 }
 
 fn app() -> Element {
     let (terminal_width, terminal_height) = use_window_size();
     let surface = use_signal(|| {
-        ChatSurface::try_new(terminal_width, terminal_height)
-            .expect("fullscreen chat requires a non-zero usable terminal")
+        Arc::new(Mutex::new(
+            ChatSurface::try_new(terminal_width, terminal_height)
+                .expect("fullscreen chat requires a non-zero usable terminal"),
+        ))
     });
     let app = use_app();
     let input_surface = surface.clone();
@@ -213,8 +316,28 @@ fn app() -> Element {
             app.exit();
             return;
         }
-        let current = input_surface.get();
-        let candidate = if key.page_up {
+        let handle = input_surface.get();
+        let mut locked = match handle.lock() {
+            Ok(surface) => surface,
+            Err(_) => {
+                eprintln!("rnk_chat: chat state lock is poisoned; exiting");
+                app.exit();
+                return;
+            }
+        };
+        let current = locked.clone();
+        let candidate = if key.f1 {
+            current
+                .try_set_overlay(!current.overlay_open)
+                .map(|state| (state, None))
+        } else if key.tab {
+            let focus = if current.focus == FullscreenFocus::Composer {
+                FullscreenFocus::Transcript
+            } else {
+                FullscreenFocus::Composer
+            };
+            current.try_set_focus(focus).map(|state| (state, None))
+        } else if key.page_up {
             current
                 .try_scroll(-(PAGE_ROWS as i64))
                 .map(|state| (state, None))
@@ -227,61 +350,94 @@ fn app() -> Element {
         };
         match candidate {
             Ok((candidate, submitted)) => {
-                input_surface.set(candidate);
+                let reply_revision = candidate.revision();
+                *locked = candidate;
+                drop(locked);
+                input_surface.set(handle.clone());
                 if let Some(prompt) = submitted {
                     let reply_surface = input_surface.clone();
+                    let reply_handle = handle;
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_millis(800));
-                        let mut candidate = reply_surface.get();
-                        let result = next_message_id(&candidate.messages)
-                            .and_then(|id| {
-                                message(
-                                    id,
-                                    ChatRole::Assistant,
-                                    "Assistant",
-                                    generate_response(&prompt),
-                                )
-                            })
-                            .and_then(|reply| candidate.try_push(reply));
-                        match result {
-                            Ok(()) => {
-                                candidate.typing = false;
-                                candidate.status = "ready".to_owned();
+                        let Ok(mut locked) = reply_handle.lock() else {
+                            eprintln!("rnk_chat: asynchronous reply state lock is poisoned");
+                            reply_surface.set(reply_handle);
+                            return;
+                        };
+                        let current = locked.clone();
+                        *locked = match current.try_reply(reply_revision, &prompt) {
+                            Ok(candidate) => candidate,
+                            Err(error) => {
+                                let mut failure = current;
+                                failure.status = format!("reply failed: {error}");
+                                match failure.revision.checked_add(1) {
+                                    Some(revision) => failure.revision = revision,
+                                    None => {
+                                        failure.status =
+                                            "reply failed: surface revision exhausted".to_owned()
+                                    }
+                                }
+                                failure
                             }
-                            Err(error) => candidate.status = format!("reply failed: {error}"),
-                        }
-                        if candidate.try_shell().is_ok() {
-                            reply_surface.set(candidate);
-                        }
+                        };
+                        drop(locked);
+                        reply_surface.set(reply_handle);
                     });
                 }
             }
             Err(error) => {
                 let mut candidate = current;
                 candidate.status = format!("update refused: {error}");
-                input_surface.set(candidate);
+                if let Some(revision) = candidate.revision.checked_add(1) {
+                    candidate.revision = revision;
+                } else {
+                    candidate.status = "update refused: surface revision exhausted".to_owned();
+                }
+                *locked = candidate;
+                drop(locked);
+                input_surface.set(handle);
             }
         }
     });
 
-    let resize_needed = surface
-        .with(|current| current.width != terminal_width || current.height != terminal_height);
-    if resize_needed {
-        let current = surface.get();
-        match current.try_resize(terminal_width, terminal_height) {
-            Ok(candidate) => surface.set(candidate),
-            Err(error) => {
-                let mut candidate = current;
-                candidate.status = format!("resize refused: {error}");
-                surface.set(candidate);
+    let handle = surface.get();
+    let resize_result = match handle.lock() {
+        Ok(mut current) => {
+            if current.width == terminal_width && current.height == terminal_height {
+                None
+            } else {
+                let result = current.try_resize(terminal_width, terminal_height);
+                match result {
+                    Ok(candidate) => *current = candidate,
+                    Err(error) => {
+                        current.status = format!("resize refused: {error}");
+                        if let Some(revision) = current.revision.checked_add(1) {
+                            current.revision = revision;
+                        }
+                    }
+                }
+                Some(())
             }
         }
+        Err(_) => {
+            return Text::new("chat state lock is poisoned")
+                .color(Color::Red)
+                .into_element();
+        }
+    };
+    if resize_result.is_some() {
+        surface.set(handle.clone());
     }
 
-    surface.with(render_surface)
+    match handle.lock() {
+        Ok(surface) => render_surface(&surface),
+        Err(_) => Text::new("chat state lock is poisoned")
+            .color(Color::Red)
+            .into_element(),
+    }
 }
 
-fn render_surface(surface: &ChatSurface) -> Element {
+pub(crate) fn render_surface(surface: &ChatSurface) -> Element {
     let shell = match surface.try_shell() {
         Ok(shell) => shell,
         Err(error) => {

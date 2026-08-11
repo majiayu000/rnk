@@ -314,7 +314,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - "$RUNNER_TEMP/gh68-examples.txt" <<'PY'
-          import re, sys
+          import json, re, sys
           from pathlib import Path
           source = Path("examples/README.md").read_text(encoding="utf-8")
           names = re.findall(r"^- `([^`]+\.rs)`(?::|$)", source, re.MULTILINE)
@@ -325,6 +325,22 @@ jobs:
               raise SystemExit(f"example index drift: indexed={sorted(names)!r} actual={actual!r}")
           if "glm_chat.rs" not in names:
               raise SystemExit("glm_chat.rs is not in the public example ledger")
+          manifest_line = next(line for line in source.split("gh68-public-chat-examples-v1", 1)[1].splitlines() if line.startswith("{"))
+          manifest = json.loads(manifest_line)
+          if set(manifest) != {"schema", "records"} or manifest["schema"] != "gh68-public-chat-examples-v1":
+              raise SystemExit("invalid GH68 example record schema")
+          records = manifest["records"]
+          expected = {"chat.rs", "rnk_chat.rs", "claude_input_box.rs", "glm_chat.rs"}
+          categories = {"tutorial", "showcase", "debug", "internal"}
+          modes = {"offline_inline", "interactive_fullscreen", "interactive_inline", "provider_inline"}
+          readers = {"new_chat_user", "fullscreen_app_author", "inline_app_author", "provider_integrator"}
+          if len(records) != 4 or {item.get("example") for item in records} != expected:
+              raise SystemExit("GH68 example records are not the exact four-example set")
+          for item in records:
+              if set(item) != {"example", "category", "purpose", "runtime_mode", "target_reader"}:
+                  raise SystemExit("GH68 example record has unknown or missing fields")
+              if item["category"] not in categories or item["runtime_mode"] not in modes or item["target_reader"] not in readers or not item["purpose"].strip():
+                  raise SystemExit("GH68 example record has an out-of-contract value")
           Path(sys.argv[1]).write_text("\n".join(names) + "\n", encoding="utf-8")
           PY
           while IFS= read -r file; do
@@ -379,6 +395,22 @@ jobs:
                       lines[line] = max(lines.get(line, 0), region[4])
               return sum(value > 0 for value in lines.values()), len(lines)
 
+          def branch_totals(function, selected_lines=None):
+              covered = total = 0
+              for branch in function.get("branches", []):
+                  if len(branch) < 6 or (selected_lines is not None and branch[0] not in selected_lines):
+                      continue
+                  reported_true_count, false_execution_count = branch[4], branch[5]
+                  if (not isinstance(reported_true_count, int)
+                          or not isinstance(false_execution_count, int)
+                          or reported_true_count < 0 or false_execution_count < 0):
+                      raise SystemExit("invalid LLVM branch counters")
+                  execution_count = reported_true_count + false_execution_count
+                  true_count = execution_count - false_execution_count
+                  total += 2
+                  covered += int(true_count > 0) + int(false_execution_count > 0)
+              return covered, total
+
           critical = []
           for name in names:
               matches = [function for function in functions if test_file in normalized_files(function) and function["name"].endswith(name)]
@@ -387,9 +419,7 @@ jobs:
               line_covered, line_total = line_totals(matches[0])
               if line_total == 0 or line_covered != line_total:
                   raise SystemExit(f"critical line coverage is not 100%: {name}")
-              branches = matches[0].get("branches", [])
-              branch_total = len(branches) * 2
-              branch_covered = sum(int(branch[4] > 0) + int(branch[5] > 0) for branch in branches)
+              branch_covered, branch_total = branch_totals(matches[0])
               if branch_total and branch_covered != branch_total:
                   raise SystemExit(f"critical branch coverage is not 100%: {name}")
               critical.append({"file": test_file, "name": name,
@@ -420,9 +450,9 @@ jobs:
                           if region[4] > 0:
                               covered.add(line)
               if "validate_gh68_coverage_evidence" not in function["name"]:
-                  branches = function.get("branches", [])
-                  branch_total += len(branches) * 2
-                  branch_covered += sum(int(branch[4] > 0) + int(branch[5] > 0) for branch in branches)
+                  local_covered, local_total = branch_totals(function, changed)
+                  branch_total += local_total
+                  branch_covered += local_covered
           line_total = len(changed & executable)
           line_covered = len(changed & covered)
           if not line_total or not branch_total:
@@ -440,10 +470,39 @@ jobs:
           Path(output_path).write_text(json.dumps(summary, sort_keys=True, indent=2) + "\n", encoding="utf-8")
           PY
 
+      - name: Bind terminal matrix to current runner and head
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/gh68-terminal-evidence.json" "$GH68_IMPLEMENTATION_HEAD" <<'PY'
+          import json, platform, subprocess, sys
+          from pathlib import Path
+          output, head = sys.argv[1:]
+          source = Path("docs/TERMINAL_COMPATIBILITY.md").read_text(encoding="utf-8")
+          line = next(line for line in source.split("gh68-terminal-matrix-v1", 1)[1].splitlines() if line.startswith("{"))
+          matrix = json.loads(line)
+          if set(matrix) != {"schema", "cells"} or matrix["schema"] != "gh68-terminal-matrix-v1":
+              raise SystemExit("invalid terminal matrix schema")
+          cells = matrix["cells"]
+          vocabulary = {"verified", "best_effort", "terminal_dependent", "unsupported", "unverified"}
+          if len(cells) != 5 or len({cell.get("id") for cell in cells}) != len(cells):
+              raise SystemExit("terminal matrix cells are missing or duplicated")
+          for cell in cells:
+              if set(cell) != {"id", "status", "evidence"} or cell["status"] not in vocabulary or not cell["evidence"]:
+                  raise SystemExit("terminal matrix cell is not closed")
+          rustc = subprocess.check_output(["rustc", "-Vv"], text=True).strip()
+          artifact = {"schema":"gh68-terminal-evidence-v1", "head_sha":head,
+              "runner":{"os":platform.system(), "arch":platform.machine(), "rustc_vv":rustc}, "cells":cells}
+          Path(output).write_text(json.dumps(artifact, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+          PY
+
       - name: Run all fifteen exact GH68 selectors
         shell: bash
         env:
           GH68_COVERAGE_EVIDENCE: ${{ runner.temp }}/gh68-coverage.json
+          GH68_COVERAGE_RAW: ${{ runner.temp }}/gh68-coverage-raw.json
+          GH68_TERMINAL_EVIDENCE: ${{ runner.temp }}/gh68-terminal-evidence.json
+          GH68_BENCHMARK_ROUTE: smoke_blocked_no_baseline
         run: |
           set -euo pipefail
           python3 - "$RUNNER_TEMP/gh68-selectors.txt" <<'PY'
@@ -471,6 +530,9 @@ jobs:
         shell: bash
         env:
           GH68_COVERAGE_EVIDENCE: ${{ runner.temp }}/gh68-coverage.json
+          GH68_COVERAGE_RAW: ${{ runner.temp }}/gh68-coverage-raw.json
+          GH68_TERMINAL_EVIDENCE: ${{ runner.temp }}/gh68-terminal-evidence.json
+          GH68_BENCHMARK_ROUTE: smoke_blocked_no_baseline
         run: |
           set -euo pipefail
           cargo test --test golden_real_apps --all-features --locked
@@ -483,6 +545,8 @@ jobs:
           set -euo pipefail
           cargo bench --bench render --no-run --locked
           cargo bench --bench render --locked -- gh68 --test
+          printf '{"schema":"gh68-benchmark-status-v1","head_sha":"%s","route":"smoke_blocked_no_baseline","route_status":"valid","performance_status":"not_available","reason":"approved_baseline_unavailable"}\n' \
+            "$GH68_IMPLEMENTATION_HEAD" > "$RUNNER_TEMP/gh68-benchmark-status.json"
           echo "GH68 benchmark smoke completed; this is not a performance pass."
 
       - name: Bind evidence digests after all required checks
@@ -495,6 +559,8 @@ jobs:
           sha256sum "$RUNNER_TEMP/gh68-coverage-raw.json" \
             "$RUNNER_TEMP/gh68-coverage.json" \
             "$RUNNER_TEMP/gh68-exact-results.log" \
+            "$RUNNER_TEMP/gh68-terminal-evidence.json" \
+            "$RUNNER_TEMP/gh68-benchmark-status.json" \
             "$RUNNER_TEMP/gh68-head-binding.txt" \
             > "$RUNNER_TEMP/gh68-evidence-sha256.txt"
 
@@ -509,6 +575,8 @@ jobs:
             ${{ runner.temp }}/gh68-coverage-raw.json
             ${{ runner.temp }}/gh68-coverage.json
             ${{ runner.temp }}/gh68-exact-results.log
+            ${{ runner.temp }}/gh68-terminal-evidence.json
+            ${{ runner.temp }}/gh68-benchmark-status.json
             ${{ runner.temp }}/gh68-head-binding.txt
             ${{ runner.temp }}/gh68-evidence-sha256.txt
 
@@ -519,7 +587,9 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$GH68_ARTIFACT_ID"
-          printf '%s\n' "$GH68_ARTIFACT_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          digest="${GH68_ARTIFACT_DIGEST#sha256:}"
+          printf '%s\n' "$digest" | grep -Eq '^[0-9a-f]{64}$'
+          printf 'sha256:%s\n' "$digest" > "$RUNNER_TEMP/gh68-artifact-digest.txt"
 
   ci-gate:
     name: CI Gate

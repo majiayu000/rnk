@@ -7,13 +7,13 @@ environment.
 
 ## Status Terms
 
-| Term | Meaning |
+| Code | Meaning |
 |------|---------|
-| Implemented | `rnk` emits or handles the feature and has source-level tests where practical. |
-| Best effort | `rnk` emits standard terminal sequences, but the terminal decides the final behavior. |
-| Terminal-dependent | Behavior is outside `rnk` control and varies by emulator or configuration. |
-| Unsupported | `rnk` does not currently provide a safe contract for this behavior. |
-| Not automatically tested | The behavior needs a real terminal or emulator and is not proven by CI. |
+| `verified` | The named evidence ran on the recorded source head and environment. |
+| `best_effort` | `rnk` emits standard sequences, but the terminal decides the result. |
+| `terminal_dependent` | Behavior varies by emulator, transport, or configuration. |
+| `unsupported` | `rnk` has no safe contract for this behavior. |
+| `unverified` | No current-head evidence establishes the behavior. |
 
 ## Environment Matrix
 
@@ -36,12 +36,17 @@ They do not promote source or golden evidence into a claim about an emulator
 that CI did not run. CI records its current `GITHUB_SHA`, runner environment and
 the named evidence below in the job artifact.
 
+<!-- gh68-terminal-matrix-v1
+{"schema":"gh68-terminal-matrix-v1","cells":[{"evidence":"gh68_example_convergence_contract","id":"conversation_view","status":"verified"},{"evidence":"gh68_fullscreen_example_contract","id":"fullscreen_restoration","status":"verified"},{"evidence":"gh68_inline_example_contract","id":"inline_commit_resolution","status":"verified"},{"evidence":"gh68_provider_example_contract","id":"provider_tool_boundary","status":"verified"},{"evidence":"none","id":"named_emulator_certification","status":"unverified"}]}
+-->
+
 | Chat contract | Evidence kind | Environment and head binding | Status |
 |---|---|---|---|
-| Typed conversation and custom block view | Public API convergence test plus plain/ANSI golden | CI runner; exact checked-out `GITHUB_SHA` | Source-verified; terminal presentation is not automatically tested. |
-| Fullscreen row clipping and resize | Public `FullscreenChatShell`/`MessageList` test | CI runner; exact checked-out `GITHUB_SHA` | Source-verified; alternate-screen restoration remains terminal-dependent. |
-| Inline commit outcomes | Public `InlineChatShell` test with complete, zero-byte and partial writers | CI runner; exact checked-out `GITHUB_SHA` | Process-local outcomes verified; terminal scrollback display is not automatically tested. |
-| GLM provider/tool adapter | Offline typed-event and hostile workspace fixtures | CI runner; exact checked-out `GITHUB_SHA`; no network or secret | Adapter policy verified; provider service and real terminal are not automatically tested. |
+| Typed conversation and custom block view | Public API convergence test plus plain/ANSI golden | CI runner; exact checked-out `GITHUB_SHA` | `verified` |
+| Fullscreen row clipping, resize, and PTY restoration | Public shell test plus PTY raw/cursor/mouse/alternate-screen checks | CI runner; exact checked-out `GITHUB_SHA` | `verified` |
+| Inline commit outcomes and PTY restoration | Public shell test with complete, zero-byte, partial writers and PTY lifecycle | CI runner; exact checked-out `GITHUB_SHA` | `verified` |
+| GLM provider/tool adapter | Offline typed-event and hostile workspace fixtures | CI runner; exact checked-out `GITHUB_SHA`; no network or secret | `verified` |
+| Named terminal-emulator certification | No emulator-specific run | None | `unverified` |
 
 No cell in this matrix is a macOS Terminal, iTerm2, Windows Terminal, tmux or
 SSH certification. A real-terminal evidence record may say `verified` only when

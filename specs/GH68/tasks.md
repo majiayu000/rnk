@@ -64,7 +64,8 @@ cargo test --test golden_real_apps --all-features --locked <name> -- --exact
   `fullscreen-example-owner` | Done when: 只组合 public `FullscreenChatShell`、
   `MessageList`/`ChatMessageView`和public composer；authoritative root snapshot决定rows；
   slice message/viewport rows由固定高度hidden-scroll viewport真实裁剪；width/height/composer/
-  status/typing作为一个candidate原子提交，无item-count scroll或私有anchor |
+  status/typing连同shell修正后的transcript/focus/overlay作为一个candidate原子提交；async reply
+  绑定revision并CAS，stale/失败发布可见status，无item-count scroll或私有anchor |
   Verify: `cargo check --example rnk_chat --all-features --locked`；
   `cargo test --test golden_real_apps --all-features --locked gh68_fullscreen_example_contract -- --exact`。
   - File ownership: `examples/rnk_chat.rs`、`tests/golden_real_apps.rs`。
@@ -74,7 +75,8 @@ cargo test --test golden_real_apps --all-features --locked <name> -- --exact
 - [ ] `SP68-F5` 完成 `claude_input_box.rs` Inline showcase。Owner:
   `inline-example-owner` | Done when: 只组合 public `InlineChatShell`/composer与typed
   `Fixed`/`Retained`/`Latched` outcomes；只有`Fixed`被acknowledge；无私有cursor/wrapping、直接
-  `println` ledger或对`Unknown`的成功猜测 | Verify:
+  `println` ledger或对`Unknown`的成功猜测；`Retained`保持retry、`Latched`只接受显式human
+  `AlreadyVisible|NotVisible`resolution，只有`Fixed`acknowledge | Verify:
   `cargo check --example claude_input_box --all-features --locked`；
   `cargo test --test golden_real_apps --all-features --locked gh68_inline_example_contract -- --exact`。
   - File ownership: `examples/claude_input_box.rs`、`tests/golden_real_apps.rs`。
@@ -84,7 +86,9 @@ cargo test --test golden_real_apps --all-features --locked <name> -- --exact
 - [ ] `SP68-F6` 完成 `glm_chat` provider adapter并删除private prompt。Owner:
   `provider-example-owner` | Done when: provider response只映射到typed conversation/view/shell；
   缺key时零请求；`PendingToolRequest` default-deny，显式exact-call批准后最多执行一次；workspace
-  path canonical containment拒绝symlink escape，read/list限制depth/count/bytes且所有IO错误显式；
+  先closed验证tool name/call-id/args并以control-safe完整描述绑定approval；workspace使用opened root
+  descriptor、component-relative no-follow open消除canonicalize/open TOCTOU，read用MAX+1、遍历以
+  所有visited entries做global depth/count/byte限制并拒绝symlink/rename race，所有IO错误显式；
   prompt parity通过后删除`prompt_box.rs`及全部引用 | Verify:
   `cargo check --example glm_chat --all-features --locked`；`cargo test --example glm_chat --all-features --locked`；
   `cargo test --test golden_real_apps --all-features --locked gh68_provider_example_contract -- --exact`。
@@ -96,7 +100,8 @@ cargo test --test golden_real_apps --all-features --locked <name> -- --exact
 - [ ] `SP68-F7` 完成 golden、convergence、index、quickstart/API/matrix evidence。Owner:
   `docs-golden-owner` | Done when: plain/ANSI同fixture且去ANSI语义相等；四examples唯一分类；
   `Message`兼容；`CHAT_QUICKSTART`提供可编译Inline/Fullscreen/update/renderer/keymap/error/
-  non-goals；API maturity和terminal matrix不夸大未验证能力 | Verify: 逐名运行
+  non-goals，required两段由临时crate真实compile；API enum穷举性/NativeTerminalSink restart语义
+  truthful，terminal matrix使用closed vocabulary且current-head artifact逐cell绑定 | Verify: 逐名运行
   `gh68_example_convergence_contract`、`gh68_example_index_contract`、
   `gh68_message_compatibility_contract`、`gh68_public_docs_contract`、
   `gh68_compatibility_matrix_contract`，均使用统一`--test golden_real_apps`命令；运行
@@ -112,7 +117,9 @@ cargo test --test golden_real_apps --all-features --locked <name> -- --exact
 - [ ] `SP68-F8` 在既有 `render` target增加deterministic GH68 workloads。Owner:
   `benchmark-owner` | Done when: workloads覆盖long conversation、streaming、variable-height
   prepend、resize和Inline commit churn；每项先运行state/order/anchor/commit correctness oracle；
-  smoke只声明可运行，不提交虚构固定baseline或性能pass | Verify: 逐名运行
+  continuous-resize真实驱动`MessageListState`/Fullscreen anchor/follow transitions；smoke route固定
+  `smoke_blocked_no_baseline`且只声明`performance_status=not_available`，无批准baseline不得提交
+  虚构性能pass；performance validation exact selector缺route/env/baseline必须失败 | Verify: 逐名运行
   `gh68_stress_correctness_contract`、`gh68_benchmark_metadata_contract`、
   `gh68_benchmark_comparison_contract`、`gh68_current_head_coverage_contract`；
   `cargo bench --bench render --no-run --locked`；`cargo bench --bench render --locked -- gh68 --test`。
@@ -126,7 +133,9 @@ cargo test --test golden_real_apps --all-features --locked <name> -- --exact
   full golden target和render benchmark smoke；`nightly-2026-01-18` branch producer先生成并
   digest-bind raw/summary，changed executable line/branch各>=80%且denominator非零，critical
   逐项line 100%，真实有branch项branch 100%，真实零分支项显式N/A；保留原workspace gates，
-  禁止`continue-on-error`、stable branch claim或把smoke称为performance pass | Verify:
+  coverage summary闭合验证schema/head/base/toolchain/raw digest，true branch按execution-false计算且
+  changed scope只计changed executable lines；upload digest接受bare 64hex和`sha256:`形式。禁止
+  `continue-on-error`、缺evidence env、stable branch claim或把smoke称为performance pass | Verify:
   `cargo test --test golden_real_apps --all-features --locked gh68_ci_public_examples_contract -- --exact`；
   YAML parse；执行tech固定nightly coverage命令；fresh运行fmt/check/clippy/workspace/all-target/
   no-default/MSRV/examples/docs links/benchmark smoke和全部15 selectors。

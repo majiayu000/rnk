@@ -1,4 +1,4 @@
-[1;32muser[0m[2m · pending[0m
+[1;32muser[0m
 Explain the release gate
 [1;34massistant[0m
-Typed updates, row layout, and commit outcomes.
+Use typed updates.

@@ -1,4 +1,4 @@
-user · pending
+user
 Explain the release gate
 assistant
-Typed updates, row layout, and commit outcomes.
+Use typed updates.
