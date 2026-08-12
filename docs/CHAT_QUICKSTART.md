@@ -197,9 +197,11 @@ shell.resolve(id, UnknownResolution::AlreadyVisible)?; // drop it, do not rewrit
 shell.resolve(id, UnknownResolution::NotVisible)?;     // allow one more attempt
 ```
 
-Outcome and error enums across the chat surface are `#[non_exhaustive]`. Match
-with a wildcard arm, or accept a compile error when a new state appears — which
-is the point, since a silently misread state is worse.
+Error enums and the scrollback commit result enums that are marked
+`#[non_exhaustive]` should be matched with a wildcard arm. Routing and focus
+outcomes such as `InlineKeyOutcome` and `FullscreenKeyOutcome` are closed
+protocols today; before `1.0`, new variants there should fail loudly at compile
+time instead of being silently guessed.
 
 ## Non-goals
 

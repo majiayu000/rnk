@@ -1,3 +1,9 @@
+use rnk::components::chat::message_list::{
+    HorizontalInsets, MessageCompositeMeasureConfig, MessageExpansionKey, MessageListEntry,
+    MessageListState, MessageMeasureOutcome, MessageMeasureRequest, MessageRows,
+    MessageShellMeasureConfig, MessageVariantKey, RowOffset, ViewportRows,
+};
+use rnk::components::chat::{MessageId, MessageRevision};
 use rnk::components::{
     Badge, BadgeVariant, Box as RnkBox, Confirm, ConfirmState, Message, Progress, ProgressSymbols,
     SelectInput, SelectItem, Stat, Text, TextArea, TextAreaState,
@@ -149,4 +155,108 @@ fn textarea_flow_plain_golden() {
     GoldenTest::new("real_app_textarea")
         .with_size(80, 12)
         .assert_match(&textarea_flow());
+}
+
+#[test]
+fn gh68_visible_slices_keep_partial_top_and_bottom_rows() {
+    let entries = [gh68_entry(1, 4), gh68_entry(2, 3), gh68_entry(3, 2)];
+    let mut state = MessageListState::try_new(
+        &entries,
+        20,
+        ViewportRows::new(3),
+        16,
+        gh68_measure_by_variant,
+    )
+    .expect("valid message list");
+
+    state
+        .try_scroll_to(state.revision(), RowOffset::new(2))
+        .expect("valid row scroll");
+
+    let range = state.visible_range().expect("visible range");
+    let slices: Vec<_> = range
+        .slices
+        .iter()
+        .map(|slice| {
+            (
+                slice.message_id.get(),
+                slice.message_rows.clone(),
+                slice.viewport_rows.clone(),
+            )
+        })
+        .collect();
+
+    assert_eq!(slices, vec![(1, 2..4, 0..2), (2, 0..1, 2..3)]);
+}
+
+#[test]
+fn gh68_rnk_chat_renders_visible_message_slices() {
+    let source = include_str!("../examples/rnk_chat.rs");
+
+    assert!(source.contains("FullscreenChatShell"));
+    assert!(source.contains("MessageList::new"));
+    assert!(source.contains("slice.message_rows.clone()"));
+    assert!(source.contains("render_message_slice"));
+    assert!(source.contains("try_measure_composite"));
+    assert!(!source.contains("enum Role"));
+    assert!(!source.contains("children.push(render_message(message))"));
+}
+
+#[test]
+fn gh68_inline_example_commits_through_inline_shell() {
+    let source = include_str!("../examples/claude_input_box.rs");
+
+    assert!(source.contains("InlineChatShell"));
+    assert!(source.contains("NativeTerminalSink::new"));
+    assert!(source.contains(".finish("));
+    assert!(source.contains("InlineCommitReport::Latched"));
+    assert!(!source.contains("app_for_handler.println(user_message"));
+    assert!(!source.contains("fn wrap_text("));
+}
+
+#[test]
+fn gh68_glm_tools_are_authorized_before_execution() {
+    let source = include_str!("../examples/glm_chat.rs");
+
+    assert!(source.contains("RNK_GLM_CHAT_ALLOW_TOOLS"));
+    assert!(source.contains("Self::DisplayOnly"));
+    assert!(source.contains("execute_or_deny"));
+    assert!(source.contains("no provider request was sent"));
+    assert!(!source.contains("your_api_key_here"));
+    assert!(!source.contains("print_assistant_response"));
+}
+
+#[test]
+fn gh68_chat_docs_do_not_overstate_enum_stability() {
+    let api = include_str!("../docs/API_STABILITY.md");
+    let quickstart = include_str!("../docs/CHAT_QUICKSTART.md");
+
+    assert!(api.contains("callback protocol enums"));
+    assert!(api.contains("Routing and focus enums"));
+    assert!(quickstart.contains("Routing and focus"));
+    assert!(quickstart.contains("outcomes such as `InlineKeyOutcome`"));
+    assert!(!api.contains("Outcome and error enums are `#[non_exhaustive]`"));
+    assert!(!quickstart.contains("Outcome and error enums across the chat surface"));
+    assert!(quickstart.contains("NativeTerminalSink"));
+    assert!(quickstart.contains("ProcessLocalConfirmed"));
+}
+
+fn gh68_entry(id: u64, rows: u64) -> MessageListEntry {
+    let shell = MessageShellMeasureConfig::try_new(20, HorizontalInsets::new(0, 0), vec![])
+        .expect("valid shell");
+    let config = MessageCompositeMeasureConfig::try_new(vec![], shell).expect("valid config");
+
+    MessageListEntry::new(
+        MessageId::new(id),
+        MessageRevision::INITIAL,
+        MessageVariantKey::new(rows),
+        MessageExpansionKey::new(0),
+        config,
+    )
+}
+
+fn gh68_measure_by_variant(request: MessageMeasureRequest<'_>) -> MessageMeasureOutcome<(), ()> {
+    MessageMeasureOutcome::Measured(
+        MessageRows::try_new(request.entry.variant().get()).expect("non-zero fixture height"),
+    )
 }

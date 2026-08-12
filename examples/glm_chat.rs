@@ -31,6 +31,7 @@ use rnk::components::chat::{ChatComposerKeyMap, ChatComposerState, handle_key};
 use rnk::hooks::Key;
 
 const API_URL: &str = "https://open.bigmodel.cn/api/anthropic/v1/messages";
+const ALLOW_TOOLS_ENV: &str = "RNK_GLM_CHAT_ALLOW_TOOLS";
 
 #[derive(Serialize, Clone)]
 struct ChatRequest {
@@ -146,6 +147,30 @@ fn get_tools() -> Vec<Tool> {
     ]
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToolAuthorization {
+    DisplayOnly,
+    Execute,
+}
+
+impl ToolAuthorization {
+    fn from_env() -> Self {
+        match env::var(ALLOW_TOOLS_ENV) {
+            Ok(value) if value == "1" || value.eq_ignore_ascii_case("true") => Self::Execute,
+            _ => Self::DisplayOnly,
+        }
+    }
+
+    fn execute_or_deny(self, name: &str, input: &Value) -> String {
+        match self {
+            Self::Execute => execute_tool(name, input),
+            Self::DisplayOnly => format!(
+                "Not executed. Set {ALLOW_TOOLS_ENV}=1 after reviewing the request to allow this demo tool."
+            ),
+        }
+    }
+}
+
 fn execute_tool(name: &str, input: &Value) -> String {
     match name {
         "read_file" => {
@@ -234,6 +259,13 @@ fn render_banner() -> Element {
             Text::new("Type 'quit' to exit | 'clear' to clear screen")
                 .dim()
                 .into_element(),
+        )
+        .child(
+            Text::new(format!(
+                "Tool calls are display-only unless {ALLOW_TOOLS_ENV}=1"
+            ))
+            .dim()
+            .into_element(),
         )
         .into_element()
 }
@@ -334,11 +366,12 @@ fn print_element(element: &Element) {
     println!("{}", output);
 }
 
-// Direct ANSI print for AI response (bypasses layout engine to avoid indentation)
-fn print_assistant_response(text: &str) {
-    // ● prefix in default color, then white text
-    // \x1b[97m = bright white, \x1b[0m = reset
-    println!("\x1b[97m● {}\x1b[0m", text);
+fn render_assistant_response(text: &str) -> Element {
+    RnkBox::new()
+        .flex_direction(FlexDirection::Row)
+        .child(Text::new("● ").color(Color::BrightWhite).into_element())
+        .child(Text::new(text).color(Color::BrightWhite).into_element())
+        .into_element()
 }
 
 struct RawModeGuard;
@@ -587,20 +620,25 @@ fn format_tool_args(input: &Value) -> String {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Get API key from environment
-    let api_key = env::var("GLM_API_KEY").unwrap_or_else(|_| {
-        eprintln!("Warning: GLM_API_KEY not set, using default key");
-        "your_api_key_here".to_string()
-    });
+    println!();
+    print_element(&render_banner());
+    println!();
+
+    let api_key = match env::var("GLM_API_KEY") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => {
+            print_element(&render_error(
+                "GLM_API_KEY is required; no provider request was sent.",
+            ));
+            println!();
+            return Ok(());
+        }
+    };
 
     let client = Client::new();
     let mut messages: Vec<MessageParam> = Vec::new();
     let tools = get_tools();
-
-    // Print banner
-    println!();
-    print_element(&render_banner());
-    println!();
+    let tool_authorization = ToolAuthorization::from_env();
 
     loop {
         // Use custom input handler for a live Claude Code style prompt box.
@@ -665,7 +703,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ResponseBlock::Text { text } => {
                                 if !text.is_empty() {
                                     println!();
-                                    print_assistant_response(text);
+                                    print_element(&render_assistant_response(text));
                                 }
                             }
                             ResponseBlock::ToolUse { id, name, input } => {
@@ -673,7 +711,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 println!();
                                 print_element(&render_tool_call(name, &args));
 
-                                let tool_result = execute_tool(name, input);
+                                let tool_result = tool_authorization.execute_or_deny(name, input);
                                 print_element(&render_tool_result(&tool_result));
 
                                 tool_uses.push((id.clone(), tool_result));

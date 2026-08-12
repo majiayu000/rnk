@@ -133,7 +133,7 @@ impl From<MessageListStateError> for FullscreenShellError {
 }
 
 /// A fullscreen chat holding a transcript, a composer and a status bar.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FullscreenChatShell {
     transcript: MessageListState,
     composer: ChatComposerState,
@@ -188,6 +188,11 @@ impl FullscreenChatShell {
     /// Returns the composer.
     pub const fn composer(&self) -> &ChatComposerState {
         &self.composer
+    }
+
+    /// Returns the composer mutably, for application-level acknowledgements.
+    pub const fn composer_mut(&mut self) -> &mut ChatComposerState {
+        &mut self.composer
     }
 
     /// Returns which region owns the keyboard.
