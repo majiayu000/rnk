@@ -2,21 +2,23 @@
 //!
 //! This is the model used by Sage:
 //! - the live rnk component is only the bottom input box
-//! - submitted transcript is printed with `app.println()`
+//! - submitted transcript crosses `InlineChatShell`'s typed commit boundary
 //! - scrolling above the prompt is handled by the terminal's native scrollback
 //!
 //! Run with: cargo run --example claude_input_box
 
-use rnk::components::InteractionOutcome;
 use rnk::components::chat::{
-    ChatComposerKeyMap, ChatComposerState, ComposerProjection, handle_key,
+    ChatComposerKeyMap, ChatComposerState, ComposerProjection, InlineChatShell, InlineCommitReport,
+    InlineKeyOutcome, MessageId, MessageRevision, NativeTerminalSink, ProjectionContext,
+    ScrollbackNamespace, ScrollbackSink, ThemeIdentity,
 };
 use rnk::hooks::use_interval_when;
 use rnk::prelude::*;
 use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 const PROMPT: &str = "❯ ";
 const MAX_VISIBLE_INPUT_LINES: NonZeroUsize = NonZeroUsize::new(4).expect("four is non-zero");
@@ -37,14 +39,43 @@ const HEADER_LINES: [&str; 5] = [
     "",
 ];
 
+type TerminalInlineShell = InlineChatShell<NativeTerminalSink<std::io::Stdout>>;
+
+#[derive(Clone)]
+struct SharedInlineShell(Arc<Mutex<TerminalInlineShell>>);
+
+impl SharedInlineShell {
+    fn new() -> Self {
+        let namespace = ScrollbackNamespace::new("claude-input-box")
+            .expect("the example namespace is a valid constant");
+        let mut shell = InlineChatShell::new(namespace, NativeTerminalSink::new(std::io::stdout()));
+        *shell.composer_mut() =
+            ChatComposerState::new().with_max_visible_lines(MAX_VISIBLE_INPUT_LINES);
+        Self(Arc::new(Mutex::new(shell)))
+    }
+
+    fn with<R>(&self, operation: impl FnOnce(&TerminalInlineShell) -> R) -> R {
+        match self.0.lock() {
+            Ok(shell) => operation(&shell),
+            Err(poisoned) => operation(&poisoned.into_inner()),
+        }
+    }
+
+    fn update<R>(&self, operation: impl FnOnce(&mut TerminalInlineShell) -> R) -> R {
+        match self.0.lock() {
+            Ok(mut shell) => operation(&mut shell),
+            Err(poisoned) => operation(&mut poisoned.into_inner()),
+        }
+    }
+}
+
 fn main() -> std::io::Result<()> {
     render(app).run()
 }
 
 fn app() -> Element {
     let app = use_app();
-    let input_state =
-        use_signal(|| ChatComposerState::new().with_max_visible_lines(MAX_VISIBLE_INPUT_LINES));
+    let inline_shell = use_signal(SharedInlineShell::new);
     let submitted_count = use_signal(|| 0u32);
     let opening_frame = use_signal(|| 0usize);
     let intro_printed = use_signal(|| false);
@@ -76,7 +107,7 @@ fn app() -> Element {
         (opening_done, intro_already_printed),
     );
 
-    let input_for_handler = input_state.clone();
+    let shell_for_handler = inline_shell.clone();
     let count_for_handler = submitted_count.clone();
     let app_for_handler = app.clone();
     let input_ready = intro_printed.get();
@@ -96,39 +127,94 @@ fn app() -> Element {
         // One call covers editing, movement, newline and submission. Escape is
         // handled above because this example exits on it rather than treating
         // it as a cancel.
-        let mut state = input_for_handler.get();
-        let outcome = handle_key(&mut state, &keymap, input, key);
+        shell_for_handler.update(|shared| {
+            shared.update(|shell| {
+                let outcome = shell.handle_key(&keymap, input, key);
+                let InlineKeyOutcome::Submitted(submitted) = outcome else {
+                    return;
+                };
 
-        if let InteractionOutcome::Submitted(submitted) = outcome {
-            let message_number = count_for_handler.get() + 1;
-            count_for_handler.set(message_number);
-            let width = terminal_content_width();
-
-            app_for_handler.println(user_message(&submitted, width));
-            app_for_handler.println(assistant_message(
-                &format!(
+                let message_number = count_for_handler.get() + 1;
+                let width = terminal_content_width();
+                let reply = format!(
                     "Received message #{message_number}. It is now part of the terminal scrollback; use your terminal's normal scroll gesture to move upward."
-                ),
-                width,
-            ));
-            app_for_handler.println("");
+                );
+                let token = shell
+                    .composer()
+                    .pending_submission()
+                    .expect("Submitted always stages a token")
+                    .token();
 
-            // The composer keeps the draft until the send is confirmed, so it
-            // is cleared here rather than by Enter itself. A failed send would
-            // instead call `acknowledge_failure` and leave the text in place.
-            if let Some(token) = state.pending_submission().map(|pending| pending.token()) {
-                let _ = state.acknowledge_success(token);
-            }
-        }
-
-        input_for_handler.set(state);
+                match commit_inline_transcript(shell, message_number, &submitted, &reply, width) {
+                    Ok(InlineCommitReport::Fixed { .. }) => {
+                        if shell.composer_mut().acknowledge_success(token).is_ok() {
+                            count_for_handler.set(message_number);
+                        }
+                    }
+                    Ok(InlineCommitReport::Retained { cause }) => {
+                        let _ = shell.composer_mut().acknowledge_failure(token);
+                        app_for_handler.println(
+                            Text::new(format!(
+                                "scrollback commit retained; the draft is ready to retry: {cause}"
+                            ))
+                            .color(Color::Yellow)
+                            .into_element(),
+                        );
+                    }
+                    Ok(InlineCommitReport::Latched { evidence }) => {
+                        app_for_handler.println(
+                            Text::new(format!(
+                                "scrollback commit is latched for human inspection; the draft remains frozen: {evidence}"
+                            ))
+                            .color(Color::Yellow)
+                            .into_element(),
+                        );
+                    }
+                    Err(error) => {
+                        let _ = shell.composer_mut().acknowledge_failure(token);
+                        app_for_handler.println(
+                            Text::new(format!(
+                                "scrollback commit failed; the draft is ready to retry: {error}"
+                            ))
+                            .color(Color::Red)
+                            .into_element(),
+                        );
+                    }
+                }
+            });
+        });
     });
 
     if input_ready {
-        render_input_box(&input_state.get(), terminal_content_width())
+        inline_shell.with(|shared| {
+            shared.with(|shell| render_input_box(shell.composer(), terminal_content_width()))
+        })
     } else {
         render_opening_animation(opening_frame.get(), terminal_content_width())
     }
+}
+
+fn commit_inline_transcript<S: ScrollbackSink>(
+    shell: &mut InlineChatShell<S>,
+    message_number: u32,
+    submitted: &str,
+    reply: &str,
+    width: usize,
+) -> Result<InlineCommitReport, String> {
+    let context = ProjectionContext::new(
+        u16::try_from(width.max(1)).unwrap_or(u16::MAX),
+        ThemeIdentity::new(0),
+    )
+    .map_err(|error| format!("invalid projection context: {error}"))?;
+    let canonical = format!("You: {submitted}\nAssistant: {reply}");
+    shell
+        .finish(
+            MessageId::new(u64::from(message_number)),
+            MessageRevision::INITIAL,
+            &canonical,
+            context,
+        )
+        .map_err(|error| error.to_string())
 }
 
 fn render_opening_animation(frame: usize, width: usize) -> Element {
@@ -323,43 +409,6 @@ fn header_detail_span(index: usize, text: &str) -> Span {
     }
 }
 
-fn user_message(text: &str, width: usize) -> Element {
-    message_element("You: ", Color::BrightCyan, text, width)
-}
-
-fn assistant_message(text: &str, width: usize) -> Element {
-    message_element("● ", Color::BrightGreen, text, width)
-}
-
-fn message_element(prefix: &str, color: Color, text: &str, width: usize) -> Element {
-    let prefix_width = UnicodeWidthStr::width(prefix);
-    let continuation = " ".repeat(prefix_width);
-    let available_width = safe_terminal_width(width)
-        .saturating_sub(prefix_width)
-        .max(1);
-    let mut container = Box::new()
-        .flex_direction(FlexDirection::Column)
-        .width(safe_terminal_width(width) as i32);
-
-    for (index, line) in wrap_text(text, available_width).into_iter().enumerate() {
-        let line_prefix = if index == 0 {
-            prefix.to_string()
-        } else {
-            continuation.clone()
-        };
-
-        container = container.child(
-            Text::spans(vec![
-                Span::new(line_prefix).color(color).bold(),
-                Span::new(line),
-            ])
-            .into_element(),
-        );
-    }
-
-    container.into_element()
-}
-
 fn terminal_content_width() -> usize {
     let (width, _) = rnk::renderer::Terminal::size().unwrap_or((80, 24));
     width as usize
@@ -374,33 +423,138 @@ fn input_viewport_width(width: usize) -> usize {
     width.saturating_sub(prompt_width).max(1)
 }
 
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
-    let width = width.max(1);
-    let mut lines = Vec::new();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{self, Write};
 
-    for source_line in text.lines() {
-        let mut current = String::new();
-        let mut col = 0usize;
+    #[derive(Debug, Default)]
+    struct RejectOnceWriter {
+        rejected: bool,
+        bytes: Vec<u8>,
+    }
 
-        for ch in source_line.chars() {
-            let ch_width = ch.width().unwrap_or(0).max(1);
+    #[derive(Debug, Default)]
+    struct PartialThenFailWriter {
+        accepted_once: bool,
+        failed_once: bool,
+    }
 
-            if col > 0 && col + ch_width > width {
-                lines.push(current);
-                current = String::new();
-                col = 0;
+    impl Write for PartialThenFailWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if !self.accepted_once {
+                self.accepted_once = true;
+                return Ok(bytes.len().min(1));
             }
-
-            current.push(ch);
-            col += ch_width;
+            if !self.failed_once {
+                self.failed_once = true;
+                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "partial write"));
+            }
+            Ok(bytes.len())
         }
 
-        lines.push(current);
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 
-    if lines.is_empty() {
-        lines.push(String::new());
+    impl Write for RejectOnceWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if !self.rejected {
+                self.rejected = true;
+                return Err(io::Error::new(io::ErrorKind::WouldBlock, "try again"));
+            }
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 
-    lines
+    #[test]
+    fn retained_commit_keeps_the_same_shell_and_draft_available_for_retry() {
+        let namespace = ScrollbackNamespace::new("test-inline").expect("valid namespace");
+        let sink = NativeTerminalSink::new(RejectOnceWriter::default());
+        let mut shell = InlineChatShell::new(namespace, sink);
+        let keymap = ChatComposerKeyMap::new();
+
+        assert!(matches!(
+            shell.handle_key(&keymap, "hello", &Key::default()),
+            InlineKeyOutcome::Changed(_)
+        ));
+        let enter = Key {
+            return_key: true,
+            ..Key::default()
+        };
+        assert!(matches!(
+            shell.handle_key(&keymap, "", &enter),
+            InlineKeyOutcome::Submitted(_)
+        ));
+        let token = shell
+            .composer()
+            .pending_submission()
+            .expect("submission staged")
+            .token();
+
+        let first = commit_inline_transcript(&mut shell, 1, "hello", "reply", 80)
+            .expect("content is valid");
+        assert!(matches!(first, InlineCommitReport::Retained { .. }));
+        shell
+            .composer_mut()
+            .acknowledge_failure(token)
+            .expect("retry keeps draft");
+        assert_eq!(shell.composer().text(), "hello");
+
+        assert!(matches!(
+            shell.handle_key(&keymap, "", &enter),
+            InlineKeyOutcome::Submitted(_)
+        ));
+        let retry_token = shell
+            .composer()
+            .pending_submission()
+            .expect("retry staged")
+            .token();
+        let retry =
+            commit_inline_transcript(&mut shell, 1, "hello", "reply", 80).expect("retry is valid");
+        assert!(matches!(retry, InlineCommitReport::Fixed { .. }));
+        shell
+            .composer_mut()
+            .acknowledge_success(retry_token)
+            .expect("confirmed commit clears draft");
+        assert_eq!(shell.composer().text(), "");
+        assert!(shell.live_messages().is_empty());
+    }
+
+    #[test]
+    fn partial_write_latches_the_persistent_shell_and_blocks_automatic_retry() {
+        let namespace = ScrollbackNamespace::new("test-latched").expect("valid namespace");
+        let sink = NativeTerminalSink::new(PartialThenFailWriter::default());
+        let mut shell = InlineChatShell::new(namespace, sink);
+        let keymap = ChatComposerKeyMap::new();
+        shell.handle_key(&keymap, "hello", &Key::default());
+        let enter = Key {
+            return_key: true,
+            ..Key::default()
+        };
+        assert!(matches!(
+            shell.handle_key(&keymap, "", &enter),
+            InlineKeyOutcome::Submitted(_)
+        ));
+
+        let first = commit_inline_transcript(&mut shell, 1, "hello", "reply", 80)
+            .expect("content is valid");
+
+        assert!(matches!(first, InlineCommitReport::Latched { .. }));
+        assert_eq!(
+            shell.live_state(MessageId::new(1)),
+            Some(rnk::components::chat::LiveState::AwaitingResolution)
+        );
+        assert!(shell.composer().is_submitting(), "draft remains frozen");
+        assert!(matches!(
+            commit_inline_transcript(&mut shell, 1, "hello", "reply", 80),
+            Err(error) if error.contains("latched")
+        ));
+    }
 }
