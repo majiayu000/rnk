@@ -84,6 +84,18 @@ pub enum ComposerError {
     NoPendingSubmission,
 }
 
+impl core::fmt::Display for ComposerError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::RevisionOverflow => "the composer revision cannot advance",
+            Self::StaleToken => "the submission token is stale",
+            Self::NoPendingSubmission => "there is no pending submission",
+        })
+    }
+}
+
+impl std::error::Error for ComposerError {}
+
 /// Draft text, interaction mode, and in-flight submission.
 #[derive(Debug, Clone)]
 pub struct ChatComposerState {

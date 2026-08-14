@@ -114,14 +114,17 @@ outside this repository has driven them.
 | `ChatComposerState`, `ComposerProjection`, `ChatComposerKeyMap`, `handle_key` | Advanced, settled | The draft, its wrapping, its cursor and its key bindings. Used by four examples and covered by grapheme, CJK, emoji and paste tests. Additive keymap actions are expected; existing outcomes should not change meaning. Reached through `rnk::components::chat`. |
 | `ConversationState` and its update/event types | Prelude, settled | Provider-independent conversation data. The update set may grow; applied events and guards are contract. |
 | `ChatMessageView`, `ChatBlockRenderer` | Advanced | Block rendering and custom renderers. Variant and override sets may grow. |
-| `MessageListState` and `message_list::*` | Prelude, advanced | Row-indexed transcript geometry. `MessageMeasureOutcome` and the error enums are `#[non_exhaustive]` and will gain variants. |
+| `MessageListState` and `message_list::*` | Prelude, advanced | Row-indexed transcript geometry. The error enums are `#[non_exhaustive]`; callback protocol enums such as `MessageMeasureOutcome` and `MessageResizeConfigOutcome` are intentionally closed today. |
 | `scrollback::*` — sinks, identity, ledger, outcomes | Experimental | The commit boundary. `ScrollbackCommitOutcome`, `NotCommittedCause` and `UnknownReason` are `#[non_exhaustive]`; new failure states are expected as more sinks exist. `DurableCommitStore` is the extension point and its contract is deliberately strict. |
 | `InlineChatShell`, `FullscreenChatShell` | Experimental | The lifecycle and layout shells. Both are new; their outcome enums are the part most likely to gain variants, and neither has yet been driven by an application outside this repository. |
 
 Migration posture for the chat surface before `1.0`:
 
-- Outcome and error enums are `#[non_exhaustive]`. Match with a wildcard arm, or
-  accept that a new variant is a compile error rather than a silent misread.
+- Error enums and the scrollback commit result enums marked `#[non_exhaustive]`
+  should be matched with a wildcard arm. Routing and focus enums such as
+  `InlineKeyOutcome`, `FullscreenKeyOutcome` and their focus outcomes are
+  intentionally closed today; before `1.0`, additions there should be treated as
+  visible minor-version compile breaks rather than silently guessed states.
 - A variant will not change meaning in place. If a state's semantics need to
   change, it gets a new variant and the old one is documented as superseded.
 - `ScrollbackGuarantee` is the one value never to widen silently: a sink that

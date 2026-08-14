@@ -1,37 +1,23 @@
-//! rnk-chat: a terminal chat client built with rnk.
+//! rnk-chat: a fullscreen terminal chat client built with public chat pieces.
 //!
-//! Two things in here used to be hand-rolled and are now library concerns,
-//! because both were wrong in ways that only show up with real input.
-//!
-//! **Scrolling is by row, not by message.** This example used to page with
-//! `.skip(offset).take(12)`, which treats every message as one unit. A wrapped
-//! paragraph is four rows and an acknowledgement is one, so paging by count
-//! scrolls a different distance every time and never lands where the reader
-//! expects. `MessageListState` indexes the transcript by the rows its messages
-//! actually occupy, and `visible_range()` reports which rows of which messages
-//! fall inside the viewport — including the partly visible ones at each edge.
-//!
-//! **The draft is a `ChatComposerState`, not a `String`.** Backspace used to be
-//! `String::pop`, which removes one `char`; a `char` is not a user-perceived
-//! character, so deleting from an emoji built out of a ZWJ sequence took a piece
-//! off the end and left something else behind. The composer deletes by grapheme
-//! cluster and reports its cursor in terminal cells, which is the only unit that
-//! puts a cursor in the right column after a CJK character.
+//! The example owns only application data and deterministic replies. The
+//! fullscreen shell owns the transcript/composer/status layout, the message list
+//! owns row-based scrolling, and the composer owns editing and submission.
 //!
 //! Run with: cargo run --example rnk_chat
 
-use rnk::components::InteractionOutcome;
 use rnk::components::chat::message_list::{
-    HorizontalInsets, MessageCompositeMeasureConfig, MessageExpansionKey, MessageListEntry,
-    MessageListState, MessageMeasureOutcome, MessageMeasureRequest, MessageRows,
-    MessageShellMeasureConfig, MessageVariantKey, RowOffset, ViewportRows,
+    HorizontalInsets, MessageCompositeMeasureConfig, MessageExpansionKey, MessageList,
+    MessageListEntry, MessageListState, MessageMeasureOutcome, MessageMeasureRequest,
+    MessageResizeConfigOutcome, MessageShellMeasureConfig, MessageStructuralSegment,
+    MessageStructureSlotKey, MessageVariantKey, RowOffset, ViewportRows, try_measure_composite,
 };
 use rnk::components::chat::{
-    ChatComposerKeyMap, ChatComposerState, ComposerProjection, MessageId, MessageRevision,
-    handle_key,
+    ChatComposerKeyMap, ChatComposerState, ChatRole, ComposerProjection, FullscreenChatShell,
+    FullscreenKeyOutcome, FullscreenLayout, MessageId, MessageRevision,
 };
 use rnk::core::TextWrap;
-use rnk::hooks::use_window_size;
+use rnk::hooks::{Key, use_window_size};
 use rnk::layout::text_flow::{
     TextFlow, TextFlowCacheIdentity, TextFlowInput, TextFlowOptions, TextFlowSourceKind,
 };
@@ -39,15 +25,11 @@ use rnk::prelude::*;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-/// Columns a message bubble's content is laid out in.
-const BUBBLE_WIDTH: u16 = 60;
-
-/// Rows of chrome above and below the transcript: header, input box, footer.
-const CHROME_ROWS: u16 = 8;
-
-/// Rows a page-up or page-down moves.
+/// Maximum columns a message bubble occupies on a wide terminal.
+const MAX_BUBBLE_WIDTH: u16 = 60;
+const HEADER_ROWS: u16 = 1;
+const STATUS_ROWS: u16 = 1;
 const PAGE_ROWS: u64 = 5;
-
 const MEASUREMENT_CACHE: usize = 512;
 
 fn main() -> std::io::Result<()> {
@@ -56,159 +38,261 @@ fn main() -> std::io::Result<()> {
 
 #[derive(Clone)]
 struct ChatMessage {
-    role: Role,
+    role: ChatRole,
     content: String,
     timestamp: String,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Role {
-    User,
-    Assistant,
-    System,
-}
-
-/// The conversation, plus the row index that decides what is on screen.
-///
-/// Two fields rather than one because they answer different questions.
-/// `MessageListState` is a row index — it knows how tall each message is and
-/// nothing about what it says. The content lives here, and the two are joined by
-/// the message index that `visible_range()` reports.
 #[derive(Clone)]
 struct Transcript {
     messages: Vec<ChatMessage>,
-    rows: MessageListState,
+    shell: FullscreenChatShell,
 }
 
 impl Transcript {
-    fn new(messages: Vec<ChatMessage>, viewport_rows: u64) -> Self {
-        let entries = entries_for(&messages);
+    fn new(messages: Vec<ChatMessage>, terminal_width: u16, terminal_height: u16) -> Self {
+        let bubble_width = bubble_width(terminal_width);
+        let entries = entries_for(&messages, bubble_width);
         let rows = MessageListState::try_new(
             &entries,
-            BUBBLE_WIDTH,
-            ViewportRows::new(viewport_rows.max(1)),
+            bubble_width,
+            ViewportRows::new(1),
             MEASUREMENT_CACHE,
             measure,
         )
-        .expect("every message measures");
-        Self { messages, rows }
+        .expect("every seeded message measures");
+        let shell = FullscreenChatShell::try_new(
+            rows,
+            ChatComposerState::new(),
+            terminal_width.max(1),
+            shell_height(terminal_height).unwrap_or(3),
+            STATUS_ROWS,
+        )
+        .expect("the internal fallback shell uses the supported minimum");
+
+        Self { messages, shell }
     }
 
-    /// Appends a message and follows it if the reader is at the bottom.
-    ///
-    /// Following is the list's decision, not this example's: content arriving
-    /// while the reader has scrolled up must not yank them back down.
+    fn resized(&self, terminal_width: u16, terminal_height: u16) -> Result<Self, String> {
+        if terminal_width < 3 {
+            return Err("terminal is too narrow; at least three columns are required".to_string());
+        }
+        let width = terminal_width.max(1);
+        let height = shell_height(terminal_height).ok_or_else(|| {
+            "terminal is too short for header, transcript, composer, and status".to_string()
+        })?;
+        if self.shell.layout().width() == width && self.shell.layout().height() == height {
+            return Ok(self.clone());
+        }
+
+        let mut candidate = self.clone();
+        candidate
+            .shell
+            .try_resize(width, height)
+            .map_err(|error| error.to_string())?;
+
+        let message_width = bubble_width(width);
+        let viewport_rows =
+            ViewportRows::new(u64::from(candidate.shell.layout().transcript().rows()));
+        let messages = &candidate.messages;
+        let mut transcript = candidate.shell.transcript().clone();
+        transcript
+            .try_resize(
+                transcript.revision(),
+                message_width,
+                viewport_rows,
+                |request| match messages
+                    .get(request.message_index)
+                    .ok_or_else(|| "resize referenced an unknown message".to_string())
+                    .and_then(|message| measure_config(message, request.new_width))
+                {
+                    Ok(config) => MessageResizeConfigOutcome::Rebuilt(config),
+                    Err(error) => MessageResizeConfigOutcome::Failed(error),
+                },
+                measure,
+            )
+            .map_err(|error| format!("message resize failed: {error:?}"))?;
+        candidate
+            .shell
+            .try_replace_transcript(transcript)
+            .map_err(|error| error.to_string())?;
+
+        Ok(candidate)
+    }
+
+    fn layout(&self) -> FullscreenLayout {
+        self.shell.layout()
+    }
+
+    fn handle_input(&mut self, input: &str, key: &Key) -> Option<String> {
+        if key.page_up {
+            self.scroll_by(-(PAGE_ROWS as i64));
+            return None;
+        }
+        if key.page_down {
+            self.scroll_by(PAGE_ROWS as i64);
+            return None;
+        }
+
+        match self
+            .shell
+            .handle_key(&ChatComposerKeyMap::new(), input, key)
+        {
+            Ok(FullscreenKeyOutcome::Submitted(text)) => {
+                self.push(ChatMessage {
+                    role: ChatRole::User,
+                    content: text.clone(),
+                    timestamp: current_time(),
+                });
+                if let Some(token) = self
+                    .shell
+                    .composer()
+                    .pending_submission()
+                    .map(|pending| pending.token())
+                {
+                    if let Err(error) = self.shell.acknowledge_submission_success(token) {
+                        self.push(ChatMessage {
+                            role: ChatRole::System,
+                            content: format!("submission acknowledgement failed: {error}"),
+                            timestamp: current_time(),
+                        });
+                        return None;
+                    }
+                }
+                Some(text)
+            }
+            Ok(_) => None,
+            Err(error) => {
+                self.push(ChatMessage {
+                    role: ChatRole::System,
+                    content: format!("layout unavailable: {error}"),
+                    timestamp: current_time(),
+                });
+                None
+            }
+        }
+    }
+
     fn push(&mut self, message: ChatMessage) {
         self.messages.push(message);
+        let message_width = self.shell.transcript().width();
         let entry = entry_for(
             self.messages.len() - 1,
             self.messages.last().expect("just pushed"),
+            message_width,
         );
-        let revision = self.rows.revision();
-        if self
-            .rows
-            .try_append(revision, std::slice::from_ref(&entry), measure)
+        let mut transcript = self.shell.transcript().clone();
+        if transcript
+            .try_append(transcript.revision(), std::slice::from_ref(&entry), measure)
             .is_err()
         {
-            // Re-measuring from scratch is the honest fallback for an example:
-            // a half-updated index would report row positions that exist
-            // nowhere on screen.
-            *self = Self::new(self.messages.clone(), self.rows.viewport_rows().get());
+            let viewport_rows = transcript.viewport_rows();
+            transcript = MessageListState::try_new(
+                &entries_for(&self.messages, message_width),
+                message_width,
+                viewport_rows,
+                MEASUREMENT_CACHE,
+                measure,
+            )
+            .expect("rebuilt transcript measures");
         }
+        self.shell
+            .try_replace_transcript(transcript)
+            .expect("the replacement viewport matches the shell");
     }
 
     fn scroll_by(&mut self, delta: i64) {
-        let current = self.rows.scroll_offset().get() as i64;
+        let mut transcript = self.shell.transcript().clone();
+        let current = transcript.scroll_offset().get() as i64;
         let target = current.saturating_add(delta).max(0) as u64;
-        let revision = self.rows.revision();
-        // Clamping and the follow-state transition both belong to the list:
-        // landing exactly on the last row resumes following, and anything above
-        // it stays paused.
-        let _ = self.rows.try_scroll_to(revision, RowOffset::new(target));
-    }
-
-    fn resize_viewport(&mut self, viewport_rows: u64) {
-        let rows = ViewportRows::new(viewport_rows.max(1));
-        if rows == self.rows.viewport_rows() {
-            return;
+        if transcript
+            .try_scroll_to(transcript.revision(), RowOffset::new(target))
+            .is_ok()
+        {
+            self.shell
+                .try_replace_transcript(transcript)
+                .expect("scrolling cannot invalidate the shell viewport");
         }
-        let revision = self.rows.revision();
-        let _ = self.rows.try_set_viewport_rows(revision, rows);
     }
 }
 
-/// Builds the measurement entry for one message.
-///
-/// The key is derived from the message's own text, so editing content changes
-/// the key and the cached height is invalidated exactly where it should be.
-fn entry_for(index: usize, message: &ChatMessage) -> MessageListEntry {
-    let shell =
-        MessageShellMeasureConfig::try_new(BUBBLE_WIDTH, HorizontalInsets::new(1, 1), vec![])
-            .expect("a positive content width");
+fn shell_height(terminal_height: u16) -> Option<u16> {
+    terminal_height
+        .checked_sub(HEADER_ROWS)
+        .filter(|height| *height >= 3)
+}
+
+fn bubble_width(terminal_width: u16) -> u16 {
+    terminal_width.saturating_sub(2).clamp(1, MAX_BUBBLE_WIDTH)
+}
+
+fn entry_for(index: usize, message: &ChatMessage, width: u16) -> MessageListEntry {
+    MessageListEntry::new(
+        MessageId::new(index as u64 + 1),
+        MessageRevision::INITIAL,
+        MessageVariantKey::new(role_key(message.role)),
+        MessageExpansionKey::new(0),
+        measure_config(message, width).expect("message config matches its renderer"),
+    )
+}
+
+fn entries_for(messages: &[ChatMessage], width: u16) -> Vec<MessageListEntry> {
+    messages
+        .iter()
+        .enumerate()
+        .map(|(index, message)| entry_for(index, message, width))
+        .collect()
+}
+
+const fn role_key(role: ChatRole) -> u64 {
+    match role {
+        ChatRole::User => 0,
+        ChatRole::Assistant => 1,
+        ChatRole::System => 2,
+        ChatRole::Tool => 3,
+    }
+}
+
+fn measure_config(
+    message: &ChatMessage,
+    width: u16,
+) -> Result<MessageCompositeMeasureConfig, String> {
+    let shell = MessageShellMeasureConfig::try_new(
+        width,
+        HorizontalInsets::new(0, 0),
+        vec![MessageStructuralSegment::new(
+            MessageStructureSlotKey::new(0),
+            RowOffset::new(1),
+        )],
+    )
+    .map_err(|error| error.to_string())?;
     let identity = TextFlowCacheIdentity {
         input: TextFlowInput::plain(
             message.content.clone(),
             TextFlowSourceKind::Exact,
             Style::default(),
         ),
-        options: TextFlowOptions::new(usize::from(shell.content_width()), TextWrap::Wrap),
+        options: TextFlowOptions::new(usize::from(width), TextWrap::Wrap),
     };
-    MessageListEntry::new(
-        MessageId::new(index as u64 + 1),
-        MessageRevision::INITIAL,
-        MessageVariantKey::new(role_key(message.role)),
-        MessageExpansionKey::new(0),
-        MessageCompositeMeasureConfig::try_new(vec![identity], shell).expect("a valid config"),
-    )
+
+    MessageCompositeMeasureConfig::try_new(vec![identity], shell).map_err(|error| error.to_string())
 }
 
-fn entries_for(messages: &[ChatMessage]) -> Vec<MessageListEntry> {
-    messages
-        .iter()
-        .enumerate()
-        .map(|(index, message)| entry_for(index, message))
-        .collect()
-}
-
-const fn role_key(role: Role) -> u64 {
-    match role {
-        Role::User => 0,
-        Role::Assistant => 1,
-        Role::System => 2,
-    }
-}
-
-/// Rows one bubble occupies: its wrapped content, plus the name line.
-///
-/// Measured through the same `TextFlow` the renderer wraps with. A separate
-/// estimate here would make the index and the paint disagree about how tall a
-/// message is, and the transcript would scroll to rows that are not where it
-/// thinks they are.
 fn measure(request: MessageMeasureRequest<'_>) -> MessageMeasureOutcome<String, ()> {
-    let mut rows = 1u64; // the name and timestamp line
-    for flow in request.key.config().text_flows() {
-        match TextFlow::try_build(&flow.input, &flow.options) {
-            Ok(built) => rows += built.row_count() as u64,
-            Err(error) => return MessageMeasureOutcome::Failed(error.to_string()),
-        }
-    }
-    match MessageRows::try_new(rows) {
+    match try_measure_composite(request) {
         Ok(rows) => MessageMeasureOutcome::Measured(rows),
         Err(error) => MessageMeasureOutcome::Failed(error.to_string()),
     }
 }
 
 fn app() -> Element {
-    let (_, terminal_height) = use_window_size();
-    let viewport_rows = u64::from(terminal_height.saturating_sub(CHROME_ROWS).max(1));
-
-    let transcript = use_signal(|| Transcript::new(initial_messages(), viewport_rows));
-    let composer = use_signal(ChatComposerState::new);
+    let (terminal_width, terminal_height) = use_window_size();
+    let transcript =
+        use_signal(|| Transcript::new(initial_messages(), terminal_width, terminal_height));
     let is_typing = use_signal(|| false);
     let app = use_app();
 
     let transcript_input = transcript.clone();
-    let composer_input = composer.clone();
     let is_typing_input = is_typing.clone();
 
     use_input(move |input, key| {
@@ -217,72 +301,57 @@ fn app() -> Element {
             return;
         }
 
-        if key.page_up {
-            transcript_input.update(|state| state.scroll_by(-(PAGE_ROWS as i64)));
-            return;
-        }
-        if key.page_down {
-            transcript_input.update(|state| state.scroll_by(PAGE_ROWS as i64));
-            return;
-        }
+        let mut submitted = None;
+        transcript_input.update(|state| {
+            submitted = state.handle_input(input, key);
+        });
 
-        // Editing, deletion, movement and submission in one call. The example
-        // decides none of it.
-        let mut state = composer_input.get();
-        let outcome = handle_key(&mut state, &ChatComposerKeyMap::new(), input, key);
-
-        if let InteractionOutcome::Submitted(text) = outcome {
-            transcript_input.update(|transcript| {
-                transcript.push(ChatMessage {
-                    role: Role::User,
-                    content: text.clone(),
-                    timestamp: current_time(),
-                });
-            });
-
+        if let Some(prompt) = submitted {
             is_typing_input.set(true);
             let transcript_reply = transcript_input.clone();
             let typing_reply = is_typing_input.clone();
-            let prompt = text.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(800));
                 typing_reply.set(false);
                 transcript_reply.update(|transcript| {
                     transcript.push(ChatMessage {
-                        role: Role::Assistant,
+                        role: ChatRole::Assistant,
                         content: generate_response(&prompt),
                         timestamp: current_time(),
                     });
                 });
             });
-
-            // The draft survives Enter and is cleared only once the send is
-            // known to have succeeded.
-            if let Some(token) = state.pending_submission().map(|pending| pending.token()) {
-                let _ = state.acknowledge_success(token);
-            }
         }
-
-        composer_input.set(state);
     });
 
-    // Checked before updating, and read without cloning. `Signal::update` calls
-    // `trigger_render()` unconditionally, so an unconditional update here would
-    // schedule a render from inside a render and spin forever.
-    let viewport_changed = transcript
-        .with(|state| state.rows.viewport_rows() != ViewportRows::new(viewport_rows.max(1)));
+    if terminal_width < 3 {
+        return terminal_too_small(terminal_width, terminal_height);
+    }
+    let Some(desired_height) = shell_height(terminal_height) else {
+        return terminal_too_small(terminal_width, terminal_height);
+    };
+    let viewport_changed = transcript.with(|state| {
+        state.layout().width() != terminal_width.max(1) || state.layout().height() != desired_height
+    });
     if viewport_changed {
-        transcript.update(|state| state.resize_viewport(viewport_rows));
+        match transcript.with(|state| state.resized(terminal_width, terminal_height)) {
+            Ok(resized) => transcript.set(resized),
+            Err(error) => return terminal_error(terminal_width, error),
+        }
     }
 
-    // Borrowed rather than cloned: `get()` would copy the whole transcript —
-    // every message plus the row index — on every frame.
-    let transcript_view = transcript.with(|state| message_list(state, is_typing.get()));
-    let composer_view = composer.with(input_area);
+    let typing = is_typing.get();
+    let (transcript_view, composer_view, status_view) = transcript.with(|state| {
+        (
+            message_list(state),
+            input_area(state.shell.composer(), state.layout().width()),
+            footer(typing, state.layout().status().rows()),
+        )
+    });
 
     Box::new()
         .flex_direction(FlexDirection::Column)
-        .children(vec![header(), transcript_view, composer_view, footer()])
+        .children(vec![header(), transcript_view, composer_view, status_view])
         .into_element()
 }
 
@@ -290,6 +359,7 @@ fn header() -> Element {
     Box::new()
         .flex_direction(FlexDirection::Row)
         .justify_content(JustifyContent::SpaceBetween)
+        .height(i32::from(HEADER_ROWS))
         .padding_x(1.0)
         .background(Color::Ansi256(236))
         .children(vec![
@@ -302,163 +372,181 @@ fn header() -> Element {
         .into_element()
 }
 
-fn message_list(transcript: &Transcript, is_typing: bool) -> Element {
-    let mut children = Vec::new();
+fn terminal_too_small(width: u16, height: u16) -> Element {
+    terminal_error(
+        width,
+        format!(
+            "terminal {width}x{height} is too small; at least 3 columns by 4 rows are required"
+        ),
+    )
+}
 
-    if transcript.messages.is_empty() {
-        children.push(
-            Box::new()
-                .flex_grow(1.0)
-                .justify_content(JustifyContent::Center)
-                .align_items(AlignItems::Center)
-                .child(
-                    Text::new("Start a conversation...")
-                        .color(Color::BrightBlack)
-                        .into_element(),
-                )
-                .into_element(),
-        );
-    } else {
-        // Which rows of which messages are on screen — including the messages
-        // only partly visible at the top and bottom edges, which paging by
-        // message count cannot express at all.
-        match transcript.rows.visible_range() {
-            Ok(range) => {
-                for slice in &range.slices {
-                    if let Some(message) = transcript.messages.get(slice.message_index) {
-                        children.push(render_message(message));
-                    }
-                }
-            }
-            // Reported rather than silently drawing an empty transcript: an
-            // index that cannot answer is a bug worth seeing.
-            Err(error) => children.push(
-                Text::new(format!("transcript unavailable: {error}"))
-                    .color(Color::Red)
-                    .into_element(),
-            ),
-        }
-    }
-
-    if is_typing {
-        children.push(
-            Box::new()
-                .padding_x(1.0)
-                .margin_top(0.5)
-                .child(
-                    Text::new("Assistant is typing...")
-                        .color(Color::BrightBlack)
-                        .italic()
-                        .into_element(),
-                )
-                .into_element(),
-        );
-    }
-
+fn terminal_error(width: u16, message: String) -> Element {
     Box::new()
-        .flex_direction(FlexDirection::Column)
-        .flex_grow(1.0)
-        .padding(1)
-        .children(children)
+        .width(i32::from(width.max(1)))
+        .height(1)
+        .child(Text::new(message).color(Color::Yellow).into_element())
         .into_element()
 }
 
-fn render_message(msg: &ChatMessage) -> Element {
-    let (name, name_color, content_color, align) = match msg.role {
-        Role::User => ("You", Color::Blue, Color::White, JustifyContent::FlexEnd),
-        Role::Assistant => (
-            "Assistant",
-            Color::Green,
-            Color::Reset,
-            JustifyContent::FlexStart,
-        ),
-        Role::System => (
-            "System",
-            Color::Yellow,
-            Color::BrightBlack,
-            JustifyContent::Center,
-        ),
-    };
+fn message_list(transcript: &Transcript) -> Element {
+    let layout = transcript.layout();
+    let message_width = transcript.shell.transcript().width();
+    if transcript.messages.is_empty() {
+        return Box::new()
+            .height(i32::from(layout.transcript().rows()))
+            .justify_content(JustifyContent::Center)
+            .align_items(AlignItems::Center)
+            .child(
+                Text::new("Start a conversation...")
+                    .color(Color::BrightBlack)
+                    .into_element(),
+            )
+            .into_element();
+    }
 
-    let bubble_bg = match msg.role {
-        Role::User => Color::Ansi256(24),
-        Role::Assistant => Color::Ansi256(238),
-        Role::System => Color::Ansi256(236),
+    let body = MessageList::new(transcript.shell.transcript()).try_into_element(
+        |_entry, _key, slice| -> Result<Element, String> {
+            let message = transcript
+                .messages
+                .get(slice.message_index)
+                .ok_or_else(|| "visible slice pointed outside the transcript".to_string())?;
+            Ok(render_message_slice(
+                message,
+                slice.message_rows.clone(),
+                message_width,
+            ))
+        },
+    );
+
+    Box::new()
+        .flex_direction(FlexDirection::Column)
+        .height(i32::from(layout.transcript().rows()))
+        .padding_x(1.0)
+        .child(match body {
+            Ok(element) => element,
+            Err(error) => Text::new(format!("transcript unavailable: {error}"))
+                .color(Color::Red)
+                .into_element(),
+        })
+        .into_element()
+}
+
+fn render_message_slice(message: &ChatMessage, rows: core::ops::Range<u64>, width: u16) -> Element {
+    let rendered = rendered_rows(message, width);
+    let start = usize::try_from(rows.start).unwrap_or(usize::MAX);
+    let end = usize::try_from(rows.end)
+        .unwrap_or(usize::MAX)
+        .min(rendered.len());
+
+    let mut container = Box::new().flex_direction(FlexDirection::Column);
+    for row in rendered
+        .into_iter()
+        .skip(start)
+        .take(end.saturating_sub(start))
+    {
+        container = container.child(render_message_row(message.role, row, width));
+    }
+    container.into_element()
+}
+
+#[derive(Clone)]
+enum RenderedRow {
+    Header(String),
+    Body(String),
+}
+
+fn rendered_rows(message: &ChatMessage, width: u16) -> Vec<RenderedRow> {
+    let mut rows = vec![RenderedRow::Header(format!(
+        "{} {}",
+        role_label(message.role),
+        message.timestamp
+    ))];
+    let flow = TextFlow::try_build(
+        &TextFlowInput::plain(
+            message.content.clone(),
+            TextFlowSourceKind::Exact,
+            Style::default(),
+        ),
+        &TextFlowOptions::new(usize::from(width), TextWrap::Wrap),
+    );
+    match flow {
+        Ok(flow) => rows.extend(flow.rows().iter().cloned().map(RenderedRow::Body)),
+        Err(error) => rows.push(RenderedRow::Body(format!("message unavailable: {error}"))),
+    }
+    rows
+}
+
+fn render_message_row(role: ChatRole, row: RenderedRow, width: u16) -> Element {
+    let (align, color) = match role {
+        ChatRole::User => (JustifyContent::FlexEnd, Color::White),
+        ChatRole::Assistant => (JustifyContent::FlexStart, Color::Reset),
+        ChatRole::System => (JustifyContent::Center, Color::BrightBlack),
+        ChatRole::Tool => (JustifyContent::FlexStart, Color::Magenta),
+    };
+    let text = match row {
+        RenderedRow::Header(text) => Text::new(text)
+            .color(role_color(role))
+            .bold()
+            .into_element(),
+        RenderedRow::Body(text) => Text::new(text).color(color).into_element(),
     };
 
     Box::new()
         .flex_direction(FlexDirection::Row)
         .justify_content(align)
-        .margin_bottom(0.5)
-        .child(
-            Box::new()
-                .flex_direction(FlexDirection::Column)
-                .max_width(i32::from(BUBBLE_WIDTH))
-                .padding_x(1.0)
-                .padding_y(0.5)
-                .background(bubble_bg)
-                .border_style(BorderStyle::Round)
-                .border_color(Color::Ansi256(240))
-                .children(vec![
-                    Box::new()
-                        .flex_direction(FlexDirection::Row)
-                        .justify_content(JustifyContent::SpaceBetween)
-                        .children(vec![
-                            Text::new(name).color(name_color).bold().into_element(),
-                            Text::new(&msg.timestamp).dim().into_element(),
-                        ])
-                        .into_element(),
-                    Text::new(&msg.content).color(content_color).into_element(),
-                ])
-                .into_element(),
-        )
+        .width(i32::from(width))
+        .child(text)
         .into_element()
 }
 
-fn input_area(composer: &ChatComposerState) -> Element {
-    let projection = ComposerProjection::build(composer, BUBBLE_WIDTH);
+fn role_label(role: ChatRole) -> &'static str {
+    match role {
+        ChatRole::User => "You",
+        ChatRole::Assistant => "Assistant",
+        ChatRole::System => "System",
+        ChatRole::Tool => "Tool",
+    }
+}
+
+fn role_color(role: ChatRole) -> Color {
+    match role {
+        ChatRole::User => Color::Blue,
+        ChatRole::Assistant => Color::Green,
+        ChatRole::System => Color::Yellow,
+        ChatRole::Tool => Color::Magenta,
+    }
+}
+
+fn input_area(composer: &ChatComposerState, width: u16) -> Element {
+    let projection = ComposerProjection::build(composer, width.max(1));
     let first_row = projection.scroll_offset();
     let mut lines = Box::new().flex_direction(FlexDirection::Column);
 
-    if composer.text().is_empty() {
-        lines = lines.child(
-            Box::new()
-                .flex_direction(FlexDirection::Row)
-                .children(vec![
-                    Text::new("> ").color(Color::Cyan).bold().into_element(),
-                    Text::new("Type a message...")
-                        .color(Color::BrightBlack)
-                        .into_element(),
-                    cell(" ", true),
-                ])
-                .into_element(),
-        );
-    } else {
-        for (offset, row) in projection.visible_slice().iter().enumerate() {
-            let absolute_row = first_row + offset;
-            let cursor_column =
-                (absolute_row == projection.cursor_row()).then(|| projection.cursor_column());
-            lines = lines.child(input_line(row, cursor_column, offset == 0));
-        }
+    for (offset, row) in projection.visible_slice().iter().enumerate() {
+        let absolute_row = first_row + offset;
+        let cursor_column =
+            (absolute_row == projection.cursor_row()).then(|| projection.cursor_column());
+        lines = lines.child(input_line(row, cursor_column));
     }
 
     Box::new()
-        .padding_x(1.0)
-        .padding_y(0.5)
-        .border_style(BorderStyle::Round)
-        .border_color(Color::Cyan)
-        .margin_x(1.0)
+        .flex_direction(FlexDirection::Column)
+        .height(i32::try_from(projection.visible_rows()).unwrap_or(i32::MAX))
         .child(lines.into_element())
         .into_element()
 }
 
-fn input_line(row: &str, cursor_column: Option<usize>, first: bool) -> Element {
-    let mut line = Box::new().flex_direction(FlexDirection::Row).child(
-        Text::new(if first { "> " } else { "  " })
-            .color(Color::Cyan)
-            .bold()
-            .into_element(),
-    );
+fn input_line(row: &str, cursor_column: Option<usize>) -> Element {
+    let mut line = Box::new().flex_direction(FlexDirection::Row);
+
+    if row.is_empty() {
+        line = line.child(
+            Text::new("Type a message...")
+                .color(Color::BrightBlack)
+                .into_element(),
+        );
+    }
 
     let mut column = 0usize;
     let mut painted_cursor = false;
@@ -466,7 +554,6 @@ fn input_line(row: &str, cursor_column: Option<usize>, first: bool) -> Element {
         let at_cursor = cursor_column == Some(column);
         painted_cursor |= at_cursor;
         line = line.child(cell(cluster, at_cursor));
-        // Cells, not clusters: a CJK character occupies two columns.
         column += UnicodeWidthStr::width(cluster).max(1);
     }
     if let Some(target) = cursor_column
@@ -490,26 +577,19 @@ fn cell(cluster: &str, at_cursor: bool) -> Element {
     }
 }
 
-fn footer() -> Element {
+fn footer(is_typing: bool, rows: u16) -> Element {
+    let status = if is_typing {
+        "Assistant is typing..."
+    } else {
+        "Enter Send | PgUp/PgDn Scroll | Esc Exit"
+    };
+
     Box::new()
         .flex_direction(FlexDirection::Row)
+        .height(i32::from(rows))
         .padding_x(1.0)
         .background(Color::Ansi256(236))
-        .gap(2.0)
-        .children(vec![
-            Text::new("Enter")
-                .color(Color::Yellow)
-                .bold()
-                .into_element(),
-            Text::new("Send").dim().into_element(),
-            Text::new("PgUp/PgDn")
-                .color(Color::Yellow)
-                .bold()
-                .into_element(),
-            Text::new("Scroll").dim().into_element(),
-            Text::new("Esc").color(Color::Yellow).bold().into_element(),
-            Text::new("Exit").dim().into_element(),
-        ])
+        .child(Text::new(status).dim().into_element())
         .into_element()
 }
 
@@ -538,8 +618,6 @@ fn generate_response(input: &str) -> String {
     } else if input_lower.contains("thank") {
         "You're welcome! Let me know if you need anything else.".to_string()
     } else {
-        // Truncated by grapheme cluster. Slicing to byte 30 panics the moment
-        // someone types a multi-byte character, which is any non-ASCII one.
         let preview: String = input.graphemes(true).take(30).collect();
         format!("I received your message: \"{preview}\". How can I assist you further?")
     }
@@ -548,15 +626,73 @@ fn generate_response(input: &str) -> String {
 fn initial_messages() -> Vec<ChatMessage> {
     vec![
         ChatMessage {
-            role: Role::System,
+            role: ChatRole::System,
             content: "Welcome to rnk-chat! This is a demo of rnk's chat UI capabilities."
                 .to_string(),
             timestamp: current_time(),
         },
         ChatMessage {
-            role: Role::Assistant,
+            role: ChatRole::Assistant,
             content: "Hi! I'm an AI assistant. How can I help you today?".to_string(),
             timestamp: current_time(),
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(content: &str) -> ChatMessage {
+        ChatMessage {
+            role: ChatRole::Assistant,
+            content: content.to_string(),
+            timestamp: "12:34".to_string(),
+        }
+    }
+
+    #[test]
+    fn partial_slice_paints_only_the_requested_message_rows() {
+        let element = render_message_slice(&message("first\nsecond\nthird"), 2..4, 20);
+        let rendered = rnk::render_to_string(&element, 20);
+
+        assert!(!rendered.contains("Assistant 12:34"));
+        assert!(!rendered.contains("first"));
+        assert!(rendered.contains("second"));
+        assert!(rendered.contains("third"));
+    }
+
+    #[test]
+    fn narrow_resize_remeasures_messages_and_preserves_region_agreement() {
+        let transcript = Transcript::new(
+            vec![message(
+                "a message long enough to wrap after the terminal narrows",
+            )],
+            80,
+            24,
+        );
+        let rows_before = transcript
+            .shell
+            .transcript()
+            .message_rows(MessageId::new(1))
+            .expect("known message")
+            .get();
+
+        let resized = transcript.resized(12, 12).expect("supported terminal");
+        let rows_after = resized
+            .shell
+            .transcript()
+            .message_rows(MessageId::new(1))
+            .expect("known message")
+            .get();
+
+        assert_eq!(resized.shell.transcript().width(), bubble_width(12));
+        assert!(rows_after > rows_before);
+        assert_eq!(
+            resized.shell.transcript().viewport_rows(),
+            ViewportRows::new(u64::from(resized.layout().transcript().rows()))
+        );
+        assert!(transcript.resized(12, 3).is_err());
+        assert!(transcript.resized(2, 12).is_err());
+    }
 }

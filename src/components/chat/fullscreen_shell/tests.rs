@@ -136,6 +136,23 @@ fn a_resize_the_terminal_cannot_hold_leaves_the_old_layout_in_force() {
     );
 }
 
+#[test]
+fn replacing_a_transcript_cannot_publish_a_mismatched_viewport() {
+    let mut shell = shell(24);
+    let layout = shell.layout();
+    let mut candidate = shell.transcript().clone();
+    candidate
+        .try_set_viewport_rows(candidate.revision(), ViewportRows::new(1))
+        .expect("candidate can differ before publication");
+
+    shell
+        .try_replace_transcript(candidate)
+        .expect("shell normalizes the candidate");
+
+    assert_eq!(shell.layout(), layout);
+    assert_layout_and_viewport_agree(&shell, "transcript replacement");
+}
+
 /// The invariant every mutating path has to preserve: the layout's transcript
 /// region and the transcript's own viewport are the same number of rows.
 ///
@@ -180,15 +197,18 @@ fn layout_and_viewport_agree_after_every_operation() {
 
         // So does appending to the transcript, which must not touch the regions.
         let id = u64::from(height) + 100;
-        let revision = shell.transcript().revision();
-        shell
-            .transcript_mut()
+        let mut transcript = shell.transcript().clone();
+        let revision = transcript.revision();
+        transcript
             .try_append(
                 revision,
                 &[entry_with_rows(id, 3)],
                 measure_from_table(&[(id, 3)]),
             )
             .expect("appends");
+        shell
+            .try_replace_transcript(transcript)
+            .expect("replacement preserves the shell viewport");
         assert_layout_and_viewport_agree(&shell, &format!("an append at height {height}"));
     }
 }
@@ -411,11 +431,14 @@ fn streaming_into_a_message_grows_it_without_disturbing_the_regions() {
 
     let grown = entry_with_rows(4, 9);
     let table = [(4u64, 9u64)];
-    let revision = shell.transcript().revision();
-    shell
-        .transcript_mut()
+    let mut transcript = shell.transcript().clone();
+    let revision = transcript.revision();
+    transcript
         .try_update(revision, grown, measure_from_table(&table))
         .expect("the streamed message re-measures");
+    shell
+        .try_replace_transcript(transcript)
+        .expect("replacement preserves the shell viewport");
 
     assert_eq!(
         shell
@@ -445,11 +468,14 @@ fn prepending_history_keeps_the_transcript_viewport_agreeing_with_its_region() {
 
     let older = [entry_with_rows(90, 6), entry_with_rows(91, 2)];
     let table = [(90u64, 6u64), (91, 2)];
-    let revision = shell.transcript().revision();
-    shell
-        .transcript_mut()
+    let mut transcript = shell.transcript().clone();
+    let revision = transcript.revision();
+    transcript
         .try_prepend(revision, &older, measure_from_table(&table))
         .expect("older history measures");
+    shell
+        .try_replace_transcript(transcript)
+        .expect("replacement preserves the shell viewport");
 
     assert_eq!(shell.transcript().total_rows().expect("measured"), 32);
     assert_eq!(
@@ -516,8 +542,51 @@ fn a_draft_that_outgrows_the_terminal_is_reported_rather_than_clipped() {
         .expect_err("a second composer row leaves no transcript row");
 
     assert!(matches!(refused, FullscreenShellError::Layout(_)));
-    // The old layout still stands, so nothing is drawn overlapping while the
-    // caller decides what to do.
+    // Both sides of the invariant roll back together, so drawing the next frame
+    // cannot expose a draft that no longer fits the retained layout.
     assert_eq!(shell.layout(), before);
+    assert_eq!(shell.composer().text(), "\n");
     assert!(!shell.layout().has_overlap());
+}
+
+#[test]
+fn acknowledging_a_multiline_submission_reflows_the_shell_atomically() {
+    let mut shell = shell(24);
+    let keymap = ChatComposerKeyMap::new();
+    let newline = Key {
+        return_key: true,
+        shift: true,
+        ..Key::default()
+    };
+    shell
+        .handle_key(&keymap, "first", &Key::default())
+        .expect("first line fits");
+    shell
+        .handle_key(&keymap, "", &newline)
+        .expect("newline fits");
+    shell
+        .handle_key(&keymap, "second", &Key::default())
+        .expect("second line fits");
+    let composer_rows_before = shell.layout().composer().rows();
+
+    let submit = Key {
+        return_key: true,
+        ..Key::default()
+    };
+    assert!(matches!(
+        shell.handle_key(&keymap, "", &submit),
+        Ok(FullscreenKeyOutcome::Submitted(_))
+    ));
+    let token = shell
+        .composer()
+        .pending_submission()
+        .expect("submission staged")
+        .token();
+    shell
+        .acknowledge_submission_success(token)
+        .expect("clearing a draft can only free rows");
+
+    assert_eq!(shell.composer().text(), "");
+    assert!(shell.layout().composer().rows() < composer_rows_before);
+    assert_layout_and_viewport_agree(&shell, "submission acknowledgement");
 }

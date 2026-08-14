@@ -197,17 +197,21 @@ shell.resolve(id, UnknownResolution::AlreadyVisible)?; // drop it, do not rewrit
 shell.resolve(id, UnknownResolution::NotVisible)?;     // allow one more attempt
 ```
 
-Outcome and error enums across the chat surface are `#[non_exhaustive]`. Match
-with a wildcard arm, or accept a compile error when a new state appears — which
-is the point, since a silently misread state is worse.
+Error enums and the scrollback commit result enums that are marked
+`#[non_exhaustive]` should be matched with a wildcard arm. Routing and focus
+outcomes such as `InlineKeyOutcome` and `FullscreenKeyOutcome` are closed
+protocols today; before `1.0`, new variants there should fail loudly at compile
+time instead of being silently guessed.
 
 ## Non-goals
 
 These are out of scope by design, not yet-to-do:
 
-- **Model requests, retries, tool execution and session persistence.** The chat
-  module is data, geometry and terminal I/O. It has no provider SDK dependency
-  and no network code, and examples do not introduce one.
+- **Model requests, retries, tool execution and session persistence in the chat
+  module.** The reusable module is data, geometry and terminal I/O and has no
+  provider SDK dependency. `glm_chat` is a deliberately networked provider
+  example; its tools are omitted by default and require per-call approval when
+  explicitly enabled.
 - **Simulating a terminal scrollback buffer.** Inline hands lines to the terminal
   and stops tracking them.
 - **Rewriting history already committed to a terminal.** Once bytes are in the

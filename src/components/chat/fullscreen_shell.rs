@@ -42,7 +42,10 @@ use std::fmt;
 use crate::components::interaction::InteractionOutcome;
 use crate::hooks::Key;
 
-use super::composer::{ChatComposerKeyMap, ChatComposerState, ComposerProjection, handle_key};
+use super::composer::{
+    ChatComposerKeyMap, ChatComposerState, ComposerError, ComposerProjection, SubmissionToken,
+    handle_key,
+};
 use super::message_list::{MessageListState, MessageListStateError, ViewportRows};
 
 pub use layout::{FullscreenLayout, FullscreenLayoutError, Region};
@@ -100,6 +103,8 @@ pub enum FullscreenShellError {
     Layout(FullscreenLayoutError),
     /// The transcript refused the viewport change.
     Transcript(MessageListStateError),
+    /// The composer refused an application acknowledgement.
+    Composer(ComposerError),
 }
 
 impl fmt::Display for FullscreenShellError {
@@ -107,6 +112,7 @@ impl fmt::Display for FullscreenShellError {
         match self {
             Self::Layout(error) => fmt::Display::fmt(error, f),
             Self::Transcript(error) => fmt::Display::fmt(error, f),
+            Self::Composer(error) => fmt::Display::fmt(error, f),
         }
     }
 }
@@ -116,6 +122,7 @@ impl std::error::Error for FullscreenShellError {
         match self {
             Self::Layout(error) => Some(error),
             Self::Transcript(error) => Some(error),
+            Self::Composer(error) => Some(error),
         }
     }
 }
@@ -132,8 +139,14 @@ impl From<MessageListStateError> for FullscreenShellError {
     }
 }
 
+impl From<ComposerError> for FullscreenShellError {
+    fn from(error: ComposerError) -> Self {
+        Self::Composer(error)
+    }
+}
+
 /// A fullscreen chat holding a transcript, a composer and a status bar.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FullscreenChatShell {
     transcript: MessageListState,
     composer: ChatComposerState,
@@ -180,9 +193,25 @@ impl FullscreenChatShell {
         &self.transcript
     }
 
-    /// Returns the transcript mutably, for appends, prepends and scrolling.
-    pub const fn transcript_mut(&mut self) -> &mut MessageListState {
-        &mut self.transcript
+    /// Replaces the transcript as one validated shell transaction.
+    ///
+    /// The candidate's viewport is synchronized to the transcript region before
+    /// it becomes observable. Callers may freely build and mutate a clone of
+    /// [`Self::transcript`], but cannot publish geometry that disagrees with the
+    /// shell layout.
+    ///
+    /// # Errors
+    ///
+    /// If the candidate refuses the required viewport, the current transcript
+    /// and layout both remain unchanged.
+    pub fn try_replace_transcript(
+        &mut self,
+        mut transcript: MessageListState,
+    ) -> Result<(), FullscreenShellError> {
+        let rows = ViewportRows::new(u64::from(self.layout.transcript().rows()));
+        transcript.try_set_viewport_rows(transcript.revision(), rows)?;
+        self.transcript = transcript;
+        Ok(())
     }
 
     /// Returns the composer.
@@ -233,12 +262,9 @@ impl FullscreenChatShell {
     ///
     /// # Errors
     ///
-    /// An error means the keystroke *was* applied to the draft and the layout
-    /// could not follow it — the terminal is now too short for the composer the
-    /// user just grew. The previous layout is still in force, so nothing is
-    /// drawn overlapping, but the caller must resolve it rather than draw
-    /// another frame. Reported rather than swallowed: silently keeping the old
-    /// layout would clip the line being typed with no way to notice.
+    /// An error leaves both the draft and layout unchanged. Applying the edit
+    /// without its matching layout would expose a frame whose regions overlap,
+    /// so the shell rolls the composer back before returning the error.
     pub fn handle_key(
         &mut self,
         keymap: &ChatComposerKeyMap,
@@ -257,8 +283,12 @@ impl FullscreenChatShell {
             ));
         }
 
+        let composer_before = self.composer.clone();
         let outcome = handle_key(&mut self.composer, keymap, input, key);
-        self.reflow_for_composer()?;
+        if let Err(error) = self.reflow_for_composer() {
+            self.composer = composer_before;
+            return Err(error);
+        }
         Ok(match outcome {
             InteractionOutcome::Submitted(text) => FullscreenKeyOutcome::Submitted(text),
             InteractionOutcome::Cancelled => FullscreenKeyOutcome::Cancelled,
@@ -270,6 +300,34 @@ impl FullscreenChatShell {
                 FullscreenKeyOutcome::Unconsumed(FullscreenFocus::Composer)
             }
         })
+    }
+
+    /// Confirms the pending submission and atomically reflows the cleared draft.
+    ///
+    /// # Errors
+    ///
+    /// The acknowledgement is refused when `token` is stale or no submission
+    /// is pending. If the new geometry cannot be committed, both the composer
+    /// and layout remain exactly as they were before this call.
+    pub fn acknowledge_submission_success(
+        &mut self,
+        token: SubmissionToken,
+    ) -> Result<(), FullscreenShellError> {
+        self.mutate_composer_and_reflow(|composer| composer.acknowledge_success(token))
+    }
+
+    /// Rejects the pending submission while retaining its draft and reflowing
+    /// through the same atomic shell boundary.
+    ///
+    /// # Errors
+    ///
+    /// The acknowledgement is refused when `token` is stale or no submission
+    /// is pending. A layout failure rolls back the composer acknowledgement.
+    pub fn acknowledge_submission_failure(
+        &mut self,
+        token: SubmissionToken,
+    ) -> Result<(), FullscreenShellError> {
+        self.mutate_composer_and_reflow(|composer| composer.acknowledge_failure(token))
     }
 
     /// Applies a new terminal size.
@@ -296,6 +354,22 @@ impl FullscreenChatShell {
         let layout = FullscreenLayout::try_new(width, height, composer_rows, self.status_rows)?;
         self.commit_layout(layout)?;
         Ok(layout)
+    }
+
+    fn mutate_composer_and_reflow(
+        &mut self,
+        mutation: impl FnOnce(&mut ChatComposerState) -> Result<(), ComposerError>,
+    ) -> Result<(), FullscreenShellError> {
+        let composer_before = self.composer.clone();
+        if let Err(error) = mutation(&mut self.composer) {
+            self.composer = composer_before;
+            return Err(error.into());
+        }
+        if let Err(error) = self.reflow_for_composer() {
+            self.composer = composer_before;
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Adopts `layout`, but only once the transcript has accepted its viewport.
