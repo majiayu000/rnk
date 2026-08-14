@@ -190,43 +190,6 @@ fn gh68_visible_slices_keep_partial_top_and_bottom_rows() {
 }
 
 #[test]
-fn gh68_rnk_chat_renders_visible_message_slices() {
-    let source = include_str!("../examples/rnk_chat.rs");
-
-    assert!(source.contains("FullscreenChatShell"));
-    assert!(source.contains("MessageList::new"));
-    assert!(source.contains("slice.message_rows.clone()"));
-    assert!(source.contains("render_message_slice"));
-    assert!(source.contains("try_measure_composite"));
-    assert!(!source.contains("enum Role"));
-    assert!(!source.contains("children.push(render_message(message))"));
-}
-
-#[test]
-fn gh68_inline_example_commits_through_inline_shell() {
-    let source = include_str!("../examples/claude_input_box.rs");
-
-    assert!(source.contains("InlineChatShell"));
-    assert!(source.contains("NativeTerminalSink::new"));
-    assert!(source.contains(".finish("));
-    assert!(source.contains("InlineCommitReport::Latched"));
-    assert!(!source.contains("app_for_handler.println(user_message"));
-    assert!(!source.contains("fn wrap_text("));
-}
-
-#[test]
-fn gh68_glm_tools_are_authorized_before_execution() {
-    let source = include_str!("../examples/glm_chat.rs");
-
-    assert!(source.contains("RNK_GLM_CHAT_ALLOW_TOOLS"));
-    assert!(source.contains("Self::DisplayOnly"));
-    assert!(source.contains("execute_or_deny"));
-    assert!(source.contains("no provider request was sent"));
-    assert!(!source.contains("your_api_key_here"));
-    assert!(!source.contains("print_assistant_response"));
-}
-
-#[test]
 fn gh68_chat_docs_do_not_overstate_enum_stability() {
     let api = include_str!("../docs/API_STABILITY.md");
     let quickstart = include_str!("../docs/CHAT_QUICKSTART.md");

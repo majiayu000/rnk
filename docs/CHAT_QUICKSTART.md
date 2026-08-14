@@ -207,9 +207,11 @@ time instead of being silently guessed.
 
 These are out of scope by design, not yet-to-do:
 
-- **Model requests, retries, tool execution and session persistence.** The chat
-  module is data, geometry and terminal I/O. It has no provider SDK dependency
-  and no network code, and examples do not introduce one.
+- **Model requests, retries, tool execution and session persistence in the chat
+  module.** The reusable module is data, geometry and terminal I/O and has no
+  provider SDK dependency. `glm_chat` is a deliberately networked provider
+  example; its tools are omitted by default and require per-call approval when
+  explicitly enabled.
 - **Simulating a terminal scrollback buffer.** Inline hands lines to the terminal
   and stops tracking them.
 - **Rewriting history already committed to a terminal.** Once bytes are in the

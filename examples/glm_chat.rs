@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use std::env;
 use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -32,6 +32,23 @@ use rnk::hooks::Key;
 
 const API_URL: &str = "https://open.bigmodel.cn/api/anthropic/v1/messages";
 const ALLOW_TOOLS_ENV: &str = "RNK_GLM_CHAT_ALLOW_TOOLS";
+const TOOL_ROOT_ENV: &str = "RNK_GLM_CHAT_TOOL_ROOT";
+const MAX_TOOL_ROUNDS: usize = 8;
+
+#[derive(Debug, Default)]
+struct ToolRoundBudget {
+    completed: usize,
+}
+
+impl ToolRoundBudget {
+    const fn permits_execution(&self) -> bool {
+        self.completed < MAX_TOOL_ROUNDS
+    }
+
+    fn record_completed_round(&mut self) {
+        self.completed = self.completed.saturating_add(1);
+    }
+}
 
 #[derive(Serialize, Clone)]
 struct ChatRequest {
@@ -147,45 +164,114 @@ fn get_tools() -> Vec<Tool> {
     ]
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum ToolAuthorization {
-    DisplayOnly,
-    Execute,
+    Disabled,
+    Prompt { root: PathBuf },
 }
 
 impl ToolAuthorization {
-    fn from_env() -> Self {
+    fn from_env() -> io::Result<Self> {
         match env::var(ALLOW_TOOLS_ENV) {
-            Ok(value) if value == "1" || value.eq_ignore_ascii_case("true") => Self::Execute,
-            _ => Self::DisplayOnly,
+            Ok(value) if value == "1" || value.eq_ignore_ascii_case("true") => {
+                let configured = env::var_os(TOOL_ROOT_ENV)
+                    .map(PathBuf::from)
+                    .unwrap_or(env::current_dir()?);
+                let root = configured.canonicalize().map_err(|error| {
+                    io::Error::new(
+                        error.kind(),
+                        format!("cannot resolve tool root {}: {error}", configured.display()),
+                    )
+                })?;
+                Ok(Self::Prompt { root })
+            }
+            _ => Ok(Self::Disabled),
         }
     }
 
-    fn execute_or_deny(self, name: &str, input: &Value) -> String {
+    fn advertised_tools(&self) -> Vec<Tool> {
         match self {
-            Self::Execute => execute_tool(name, input),
-            Self::DisplayOnly => format!(
-                "Not executed. Set {ALLOW_TOOLS_ENV}=1 after reviewing the request to allow this demo tool."
-            ),
+            Self::Disabled => Vec::new(),
+            Self::Prompt { .. } => get_tools(),
+        }
+    }
+
+    fn review_and_execute(&self, name: &str, input: &Value) -> ToolDecision {
+        self.review_and_execute_with(name, input, |root| {
+            print!(
+                "Approve this one tool call inside {}? [y/N]: ",
+                root.display()
+            );
+            if io::stdout().flush().is_err() {
+                return false;
+            }
+            let mut answer = String::new();
+            io::stdin()
+                .read_line(&mut answer)
+                .is_ok_and(|_| answer.trim().eq_ignore_ascii_case("y"))
+        })
+    }
+
+    fn review_and_execute_with(
+        &self,
+        name: &str,
+        input: &Value,
+        confirm: impl FnOnce(&Path) -> bool,
+    ) -> ToolDecision {
+        let Self::Prompt { root } = self else {
+            return ToolDecision::Denied(format!(
+                "Not executed. Restart with {ALLOW_TOOLS_ENV}=1 to enable per-request approval."
+            ));
+        };
+
+        if !confirm(root) {
+            return ToolDecision::Denied("Not executed: denied by the user.".to_string());
+        }
+
+        match execute_tool(root, name, input) {
+            Ok(result) => ToolDecision::Executed(result),
+            Err(error) => ToolDecision::Denied(format!("Not executed: {error}")),
         }
     }
 }
 
-fn execute_tool(name: &str, input: &Value) -> String {
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ToolDecision {
+    Executed(String),
+    Denied(String),
+}
+
+impl ToolDecision {
+    fn result(&self) -> &str {
+        match self {
+            Self::Executed(result) | Self::Denied(result) => result,
+        }
+    }
+
+    const fn was_denied(&self) -> bool {
+        matches!(self, Self::Denied(_))
+    }
+}
+
+fn execute_tool(root: &Path, name: &str, input: &Value) -> Result<String, String> {
     match name {
         "read_file" => {
-            let path = input["path"].as_str().unwrap_or("");
-            match fs::read_to_string(path) {
+            let path = confined_path(root, input)?;
+            match fs::read_to_string(&path) {
                 Ok(content) => {
                     let lines: Vec<&str> = content.lines().take(100).collect();
-                    format!("Read {} lines", lines.len())
+                    Ok(format!(
+                        "Read {} lines from {}",
+                        lines.len(),
+                        path.display()
+                    ))
                 }
-                Err(e) => format!("Error: {}", e),
+                Err(error) => Err(format!("cannot read {}: {error}", path.display())),
             }
         }
         "list_files" => {
-            let path = input["path"].as_str().unwrap_or(".");
-            match fs::read_dir(path) {
+            let path = confined_path(root, input)?;
+            match fs::read_dir(&path) {
                 Ok(entries) => {
                     let files: Vec<String> = entries
                         .filter_map(|e| e.ok())
@@ -199,23 +285,52 @@ fn execute_tool(name: &str, input: &Value) -> String {
                             }
                         })
                         .collect();
-                    files.join(", ")
+                    Ok(files.join(", "))
                 }
-                Err(e) => format!("Error: {}", e),
+                Err(error) => Err(format!("cannot list {}: {error}", path.display())),
             }
         }
         "search_files" => {
-            let pattern = input["pattern"].as_str().unwrap_or("*");
+            let pattern = input
+                .get("pattern")
+                .and_then(Value::as_str)
+                .filter(|pattern| !pattern.is_empty())
+                .ok_or_else(|| "search_files requires a non-empty string pattern".to_string())?;
             let mut results = Vec::new();
-            search_recursive(Path::new("."), pattern, &mut results, 0, 3);
+            search_recursive(root, pattern, &mut results, 0, 3);
             if results.is_empty() {
-                "No files found".to_string()
+                Ok("No files found".to_string())
             } else {
-                format!("Found {} files", results.len())
+                Ok(format!("Found {} files", results.len()))
             }
         }
-        _ => format!("Unknown tool: {}", name),
+        _ => Err(format!("unknown tool: {name}")),
     }
+}
+
+fn confined_path(root: &Path, input: &Value) -> Result<PathBuf, String> {
+    let raw = input
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| "tool requires a non-empty string path".to_string())?;
+    let requested = Path::new(raw);
+    let candidate = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        root.join(requested)
+    };
+    let canonical = candidate
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve {}: {error}", candidate.display()))?;
+    if !canonical.starts_with(root) {
+        return Err(format!(
+            "{} escapes the approved tool root {}",
+            canonical.display(),
+            root.display()
+        ));
+    }
+    Ok(canonical)
 }
 
 fn search_recursive(
@@ -237,7 +352,11 @@ fn search_recursive(
                 results.push(path.display().to_string());
             }
 
-            if path.is_dir() && !name.starts_with('.') {
+            let is_real_directory = entry
+                .file_type()
+                .map(|file_type| file_type.is_dir())
+                .unwrap_or(false);
+            if is_real_directory && !name.starts_with('.') {
                 search_recursive(&path, pattern, results, depth + 1, max_depth);
             }
         }
@@ -262,7 +381,7 @@ fn render_banner() -> Element {
         )
         .child(
             Text::new(format!(
-                "Tool calls are display-only unless {ALLOW_TOOLS_ENV}=1"
+                "Tools are omitted unless {ALLOW_TOOLS_ENV}=1; enabled calls require approval"
             ))
             .dim()
             .into_element(),
@@ -552,12 +671,7 @@ async fn send_request(
     tools: &[Tool],
     api_key: &str,
 ) -> Result<ChatResponse, Box<dyn std::error::Error + Send + Sync>> {
-    let request = ChatRequest {
-        model: "claude-3-5-sonnet-20241022".to_string(),
-        max_tokens: 8192,
-        messages: messages.to_vec(),
-        tools: Some(tools.to_vec()),
-    };
+    let request = build_request(messages, tools);
 
     let response = client
         .post(API_URL)
@@ -574,6 +688,15 @@ async fn send_request(
     }
 
     Ok(response.json().await?)
+}
+
+fn build_request(messages: &[MessageParam], tools: &[Tool]) -> ChatRequest {
+    ChatRequest {
+        model: "claude-3-5-sonnet-20241022".to_string(),
+        max_tokens: 8192,
+        messages: messages.to_vec(),
+        tools: (!tools.is_empty()).then(|| tools.to_vec()),
+    }
 }
 
 /// Send request with cancellation support
@@ -637,8 +760,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = Client::new();
     let mut messages: Vec<MessageParam> = Vec::new();
-    let tools = get_tools();
-    let tool_authorization = ToolAuthorization::from_env();
+    let tool_authorization = ToolAuthorization::from_env()?;
+    let tools = tool_authorization.advertised_tools();
 
     loop {
         // Use custom input handler for a live Claude Code style prompt box.
@@ -674,6 +797,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
         // Handle multi-turn tool calls
+        let mut tool_budget = ToolRoundBudget::default();
         loop {
             let spinner = Spinner::new("Thinking...");
             let cancel_rx = spinner.get_cancel_receiver();
@@ -693,6 +817,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match result {
                 Ok(Some(response)) => {
                     let mut tool_uses = Vec::new();
+                    let mut stop_tool_turn = false;
 
                     for block in &response.content {
                         match block {
@@ -711,10 +836,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 println!();
                                 print_element(&render_tool_call(name, &args));
 
-                                let tool_result = tool_authorization.execute_or_deny(name, input);
-                                print_element(&render_tool_result(&tool_result));
+                                let decision = if !tool_budget.permits_execution() {
+                                    ToolDecision::Denied(format!(
+                                        "Not executed: tool round limit ({MAX_TOOL_ROUNDS}) reached."
+                                    ))
+                                } else {
+                                    tool_authorization.review_and_execute(name, input)
+                                };
+                                print_element(&render_tool_result(decision.result()));
+                                stop_tool_turn |= decision.was_denied();
 
-                                tool_uses.push((id.clone(), tool_result));
+                                tool_uses.push((id.clone(), decision.result().to_string()));
                             }
                         }
                     }
@@ -756,6 +888,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             role: "user".to_string(),
                             content: MessageContent::Blocks(tool_results),
                         });
+                        if stop_tool_turn {
+                            println!();
+                            break;
+                        }
+                        tool_budget.record_completed_round();
                         continue;
                     }
 
@@ -778,4 +915,101 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disabled_tools_are_not_advertised_to_the_provider() {
+        let authorization = ToolAuthorization::Disabled;
+        let tools = authorization.advertised_tools();
+        let request = build_request(&[], &tools);
+        let json = serde_json::to_value(request).expect("request serializes");
+
+        assert!(tools.is_empty());
+        assert!(json.get("tools").is_none());
+    }
+
+    #[test]
+    fn every_enabled_tool_call_still_requires_a_user_decision() {
+        let root = env::current_dir().expect("repository root");
+        let authorization = ToolAuthorization::Prompt {
+            root: root.canonicalize().expect("canonical root"),
+        };
+        let mut prompts = 0;
+        let decision =
+            authorization.review_and_execute_with("list_files", &json!({"path": "."}), |_| {
+                prompts += 1;
+                false
+            });
+
+        assert_eq!(prompts, 1);
+        assert!(decision.was_denied());
+        assert!(decision.result().contains("denied by the user"));
+    }
+
+    #[test]
+    fn canonical_paths_cannot_escape_the_approved_root() {
+        let repository = env::current_dir()
+            .expect("repository root")
+            .canonicalize()
+            .expect("canonical repository root");
+        let root = repository
+            .join("examples")
+            .canonicalize()
+            .expect("examples root");
+        let input = json!({"path": repository.join("Cargo.toml")});
+
+        let error = execute_tool(&root, "read_file", &input).expect_err("escape denied");
+
+        assert!(error.contains("escapes the approved tool root"));
+    }
+
+    #[test]
+    fn model_controlled_tool_rounds_stop_at_the_budget() {
+        let mut budget = ToolRoundBudget::default();
+        let mut executed = 0;
+
+        for _ in 0..(MAX_TOOL_ROUNDS + 3) {
+            if !budget.permits_execution() {
+                break;
+            }
+            executed += 1;
+            budget.record_completed_round();
+        }
+
+        assert_eq!(executed, MAX_TOOL_ROUNDS);
+        assert!(!budget.permits_execution());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_search_does_not_follow_a_symlink_outside_the_root() {
+        use std::os::unix::fs::symlink;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        let base = env::temp_dir().join(format!("rnk-glm-search-{}-{unique}", std::process::id()));
+        let root = base.join("root");
+        let outside = base.join("outside");
+        fs::create_dir_all(&root).expect("root created");
+        fs::create_dir_all(&outside).expect("outside created");
+        fs::write(outside.join("secret-match.txt"), "secret").expect("fixture written");
+        symlink(&outside, root.join("escape-link")).expect("symlink created");
+
+        let mut results = Vec::new();
+        search_recursive(&root, "secret-match", &mut results, 0, 3);
+
+        let cleanup = fs::remove_dir_all(&base);
+        assert!(
+            results.is_empty(),
+            "search escaped through symlink: {results:?}"
+        );
+        cleanup.expect("fixture removed");
+    }
 }
