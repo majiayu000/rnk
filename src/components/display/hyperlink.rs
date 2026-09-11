@@ -132,16 +132,17 @@ impl Hyperlink {
 
     /// Force render as OSC 8 hyperlink (ignoring detection)
     pub fn render_osc8(&self) -> String {
+        // Sanitize immediately before interpolation so stored values stay intact
+        // while OSC 8 output cannot be broken by C0/C1 controls or terminators.
         let id_param = match &self.id {
-            Some(id) => format!("id={}", id),
+            Some(id) => format!("id={}", sanitize_osc8_payload(id)),
             None => String::new(),
         };
+        let url = sanitize_osc8_payload(&self.url);
+        let text = sanitize_osc8_payload(&self.text);
 
         // OSC 8 ; params ; URI ST text OSC 8 ; ; ST
-        format!(
-            "\x1b]8;{};{}\x1b\\{}\x1b]8;;\x1b\\",
-            id_param, self.url, self.text
-        )
+        format!("\x1b]8;{};{}\x1b\\{}\x1b]8;;\x1b\\", id_param, url, text)
     }
 
     /// Render fallback (just text, or text with URL)
@@ -164,6 +165,14 @@ impl Hyperlink {
             fallback(&self.text, &self.url)
         }
     }
+}
+
+/// Strip C0/C1 controls (including ESC, BEL, ST) before OSC 8 interpolation.
+///
+/// Mirrors `use_window_title::sanitize_title`: security boundary is render output,
+/// not stored field getters.
+fn sanitize_osc8_payload(value: &str) -> String {
+    value.chars().filter(|ch| !ch.is_control()).collect()
 }
 
 /// Builder for creating styled hyperlinks
@@ -365,5 +374,87 @@ mod tests {
 
         // Reset
         HYPERLINKS_CHECKED.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_sanitize_osc8_payload_strips_c0_and_c1_controls() {
+        let controls: String = (0..=0x1f)
+            .chain(0x7f..=0x9f)
+            .filter_map(char::from_u32)
+            .collect();
+        assert_eq!(
+            sanitize_osc8_payload(&format!("before{controls}after")),
+            "beforeafter"
+        );
+    }
+
+    #[test]
+    fn test_render_osc8_strips_esc_bel_st_and_nested_osc() {
+        let _guard = test_lock().lock().unwrap();
+
+        // ESC, BEL, 7-bit ST (\x1b\), C1 ST (U+009C), and nested OSC.
+        let malicious_url = "https://evil.example/\x1b]0;owned\x07\x1b\\trail\u{009c}";
+        let malicious_text = "click\x07me\x1b]8;;https://nested\x1b\\";
+        let malicious_id = "id\x1b]2;hijack\x07\u{009c}";
+
+        let link = Hyperlink::new(malicious_url, malicious_text).with_id(malicious_id);
+        let rendered = link.render_osc8();
+
+        // Getters keep stored values unchanged (security boundary is render only).
+        assert_eq!(link.get_url(), malicious_url);
+        assert_eq!(link.get_text(), malicious_text);
+        assert_eq!(link.id.as_deref(), Some(malicious_id));
+
+        // Exactly two OSC 8 wrappers: open + close. No early ST/BEL breakout.
+        assert_eq!(
+            rendered.matches("\x1b]8;").count(),
+            2,
+            "nested OSC must not create extra wrappers: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains('\x07'),
+            "BEL must not appear outside intentional ST (we use ESC\\): {rendered:?}"
+        );
+        assert!(
+            !rendered.contains('\u{009c}'),
+            "C1 ST must be stripped: {rendered:?}"
+        );
+
+        // Extract URI and display text payloads between the structural ST markers.
+        let open_end = rendered.find("\x1b\\").expect("open ST missing");
+        let close_start = rendered
+            .rfind("\x1b]8;;\x1b\\")
+            .expect("close wrapper missing");
+        let header = &rendered[..open_end];
+        let text_payload = &rendered[open_end + 2..close_start];
+
+        assert!(
+            header.chars().all(|ch| !ch.is_control() || ch == '\x1b'),
+            "header params/url must not embed control breakouts: {header:?}"
+        );
+        // After the opening ESC], remaining header body should be control-free.
+        let header_body = header.strip_prefix("\x1b]8;").expect("OSC 8 open prefix");
+        assert!(
+            header_body.chars().all(|ch| !ch.is_control()),
+            "OSC 8 params/url payload must be control-free: {header_body:?}"
+        );
+        assert!(
+            text_payload.chars().all(|ch| !ch.is_control()),
+            "display text payload must be control-free: {text_payload:?}"
+        );
+
+        assert!(header_body.contains("https://evil.example/]0;owned\\trail"));
+        assert!(header_body.contains("id=id]2;hijack"));
+        assert_eq!(text_payload, "clickme]8;;https://nested\\");
+    }
+
+    #[test]
+    fn test_render_osc8_safe_inputs_unchanged() {
+        let _guard = test_lock().lock().unwrap();
+        let link = Hyperlink::new("https://example.com/path?q=1", "Example Link").with_id("link-1");
+        assert_eq!(
+            link.render_osc8(),
+            "\x1b]8;id=link-1;https://example.com/path?q=1\x1b\\Example Link\x1b]8;;\x1b\\"
+        );
     }
 }
