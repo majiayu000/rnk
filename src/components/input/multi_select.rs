@@ -473,16 +473,12 @@ pub fn handle_multi_select_input(
     }
 
     if input == "a" && key.ctrl {
-        for selected in &mut state.selected {
-            *selected = true;
-        }
+        state.selected.fill(true);
         return InteractionOutcome::Changed(state.selected_indices());
     }
 
     if input == "d" && key.ctrl {
-        for selected in &mut state.selected {
-            *selected = false;
-        }
+        state.selected.fill(false);
         return InteractionOutcome::Changed(state.selected_indices());
     }
 
