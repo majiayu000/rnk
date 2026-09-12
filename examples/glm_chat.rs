@@ -121,7 +121,7 @@ fn get_tools() -> Vec<Tool> {
     vec![
         Tool {
             name: "read_file".to_string(),
-            description: "Read file content at specified path".to_string(),
+            description: "Read file content at specified path (first 100 lines)".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -259,12 +259,20 @@ fn execute_tool(root: &Path, name: &str, input: &Value) -> Result<String, String
             let path = confined_path(root, input)?;
             match fs::read_to_string(&path) {
                 Ok(content) => {
-                    let lines: Vec<&str> = content.lines().take(100).collect();
-                    Ok(format!(
-                        "Read {} lines from {}",
-                        lines.len(),
-                        path.display()
-                    ))
+                    let mut lines: Vec<&str> = content.lines().take(101).collect();
+                    let truncated = lines.len() > 100;
+                    if truncated {
+                        lines.pop();
+                    }
+                    let body = lines.join("\n");
+                    if truncated {
+                        Ok(format!(
+                            "{body}\n\n[truncated: capped at 100 lines from {}]",
+                            path.display()
+                        ))
+                    } else {
+                        Ok(body)
+                    }
                 }
                 Err(error) => Err(format!("cannot read {}: {error}", path.display())),
             }
@@ -965,6 +973,75 @@ mod tests {
         let error = execute_tool(&root, "read_file", &input).expect_err("escape denied");
 
         assert!(error.contains("escapes the approved tool root"));
+    }
+
+    #[test]
+    fn read_file_returns_truncated_file_body_not_metadata_only() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        let root =
+            env::temp_dir().join(format!("rnk-glm-read-file-{}-{unique}", std::process::id()));
+        fs::create_dir_all(&root).expect("root created");
+        let fixture = root.join("sample.txt");
+        let body = "alpha\nbeta\ngamma";
+        fs::write(&fixture, body).expect("fixture written");
+        let root = root.canonicalize().expect("canonical root");
+
+        let result = execute_tool(&root, "read_file", &json!({"path": "sample.txt"}))
+            .expect("read_file succeeds");
+        let cleanup = fs::remove_dir_all(&root);
+
+        assert!(
+            result.contains("alpha") && result.contains("beta") && result.contains("gamma"),
+            "expected file body in tool result, got: {result:?}"
+        );
+        assert!(
+            !result.starts_with("Read ") || !result.contains("lines from"),
+            "metadata-only result is a declaration/execution gap: {result:?}"
+        );
+        cleanup.expect("fixture removed");
+    }
+
+    #[test]
+    fn read_file_notes_truncation_when_over_line_cap() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        let root = env::temp_dir().join(format!(
+            "rnk-glm-read-file-cap-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("root created");
+        let fixture = root.join("long.txt");
+        let mut lines = String::new();
+        for i in 0..120 {
+            lines.push_str(&format!("line-{i}\n"));
+        }
+        fs::write(&fixture, &lines).expect("fixture written");
+        let root = root.canonicalize().expect("canonical root");
+
+        let result = execute_tool(&root, "read_file", &json!({"path": "long.txt"}))
+            .expect("read_file succeeds");
+        let cleanup = fs::remove_dir_all(&root);
+
+        assert!(result.contains("line-0"), "expected first line in body");
+        assert!(result.contains("line-99"), "expected 100th line in body");
+        assert!(
+            !result.contains("line-100"),
+            "line past cap should be omitted: {result:?}"
+        );
+        assert!(
+            result.contains("truncated") && result.contains("100 lines"),
+            "expected explicit truncation note: {result:?}"
+        );
+        cleanup.expect("fixture removed");
     }
 
     #[test]
