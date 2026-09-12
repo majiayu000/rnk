@@ -10,9 +10,10 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::env;
+use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::io::{self, Read, Write};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -253,41 +254,34 @@ impl ToolDecision {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenMode {
+    File,
+    Directory,
+}
+
 fn execute_tool(root: &Path, name: &str, input: &Value) -> Result<String, String> {
     match name {
         "read_file" => {
-            let path = confined_path(root, input)?;
-            match fs::read_to_string(&path) {
-                Ok(content) => {
+            let (display, mut file) = open_confined(root, input, OpenMode::File)?;
+            let mut content = String::new();
+            match file.read_to_string(&mut content) {
+                Ok(_) => {
                     let lines: Vec<&str> = content.lines().take(100).collect();
                     Ok(format!(
                         "Read {} lines from {}",
                         lines.len(),
-                        path.display()
+                        display.display()
                     ))
                 }
-                Err(error) => Err(format!("cannot read {}: {error}", path.display())),
+                Err(error) => Err(format!("cannot read {}: {error}", display.display())),
             }
         }
         "list_files" => {
-            let path = confined_path(root, input)?;
-            match fs::read_dir(&path) {
-                Ok(entries) => {
-                    let files: Vec<String> = entries
-                        .filter_map(|e| e.ok())
-                        .take(20)
-                        .map(|e| {
-                            let name = e.file_name().to_string_lossy().to_string();
-                            if e.path().is_dir() {
-                                format!("{}/", name)
-                            } else {
-                                name
-                            }
-                        })
-                        .collect();
-                    Ok(files.join(", "))
-                }
-                Err(error) => Err(format!("cannot list {}: {error}", path.display())),
+            let (display, file) = open_confined(root, input, OpenMode::Directory)?;
+            match list_confined_dir(&display, file) {
+                Ok(files) => Ok(files.join(", ")),
+                Err(error) => Err(format!("cannot list {}: {error}", display.display())),
             }
         }
         "search_files" => {
@@ -308,29 +302,215 @@ fn execute_tool(root: &Path, name: &str, input: &Value) -> Result<String, String
     }
 }
 
-fn confined_path(root: &Path, input: &Value) -> Result<PathBuf, String> {
-    let raw = input
+fn tool_path_input(input: &Value) -> Result<&str, String> {
+    input
         .get("path")
         .and_then(Value::as_str)
         .filter(|path| !path.is_empty())
-        .ok_or_else(|| "tool requires a non-empty string path".to_string())?;
-    let requested = Path::new(raw);
-    let candidate = if requested.is_absolute() {
-        requested.to_path_buf()
+        .ok_or_else(|| "tool requires a non-empty string path".to_string())
+}
+
+fn escapes_root(path: &Path, root: &Path) -> String {
+    format!(
+        "{} escapes the approved tool root {}",
+        path.display(),
+        root.display()
+    )
+}
+
+/// Lexically confine `requested` under `root` without following symlinks.
+/// Returns a display path and the normalized components to walk with openat.
+fn confined_components(root: &Path, requested: &Path) -> Result<(PathBuf, Vec<OsString>), String> {
+    let relative = if requested.is_absolute() {
+        requested
+            .strip_prefix(root)
+            .map_err(|_| escapes_root(requested, root))?
     } else {
-        root.join(requested)
+        requested
     };
-    let canonical = candidate
-        .canonicalize()
-        .map_err(|error| format!("cannot resolve {}: {error}", candidate.display()))?;
-    if !canonical.starts_with(root) {
-        return Err(format!(
-            "{} escapes the approved tool root {}",
-            canonical.display(),
-            root.display()
-        ));
+
+    let mut stack = Vec::new();
+    for component in relative.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if stack.pop().is_none() {
+                    return Err(escapes_root(&root.join(relative), root));
+                }
+            }
+            Component::Normal(name) => stack.push(name.to_os_string()),
+            Component::Prefix(_) | Component::RootDir => {
+                return Err(escapes_root(requested, root));
+            }
+        }
     }
-    Ok(canonical)
+
+    let mut display = root.to_path_buf();
+    for part in &stack {
+        display.push(part);
+    }
+    Ok((display, stack))
+}
+
+fn open_confined(
+    root: &Path,
+    input: &Value,
+    mode: OpenMode,
+) -> Result<(PathBuf, fs::File), String> {
+    let requested = Path::new(tool_path_input(input)?);
+    let (display, components) = confined_components(root, requested)?;
+    open_confined_at(root, display, &components, mode)
+}
+
+#[cfg(unix)]
+fn open_confined_at(
+    root: &Path,
+    display: PathBuf,
+    components: &[OsString],
+    mode: OpenMode,
+) -> Result<(PathBuf, fs::File), String> {
+    use std::fs::OpenOptions;
+    use std::os::fd::OwnedFd;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    // Root is operator-approved and already canonicalized; open it normally.
+    let mut current: OwnedFd = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
+        .open(root)
+        .map_err(|error| format!("cannot open tool root {}: {error}", root.display()))?
+        .into();
+
+    if components.is_empty() {
+        return match mode {
+            OpenMode::Directory => Ok((display, fs::File::from(current))),
+            OpenMode::File => Err(format!("cannot read {}: is a directory", display.display())),
+        };
+    }
+
+    for (index, component) in components.iter().enumerate() {
+        let is_last = index + 1 == components.len();
+        let directory = !is_last || mode == OpenMode::Directory;
+        current = openat_nofollow(&current, component, directory)
+            .map_err(|error| format!("cannot open {}: {error}", display.display()))?;
+    }
+
+    Ok((display, fs::File::from(current)))
+}
+
+#[cfg(unix)]
+fn openat_nofollow(
+    dir: &std::os::fd::OwnedFd,
+    name: &OsStr,
+    directory: bool,
+) -> Result<std::os::fd::OwnedFd, io::Error> {
+    use std::ffi::CString;
+    use std::os::fd::{FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::io::AsRawFd;
+
+    let c_name = CString::new(name.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path component contains NUL"))?;
+    let mut flags = libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW;
+    if directory {
+        flags |= libc::O_DIRECTORY;
+    }
+    let fd = unsafe { libc::openat(dir.as_raw_fd(), c_name.as_ptr(), flags) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+#[cfg(unix)]
+fn list_confined_dir(_display: &Path, file: fs::File) -> Result<Vec<String>, String> {
+    use std::ffi::CStr;
+    use std::os::fd::IntoRawFd;
+
+    let fd = file.into_raw_fd();
+    unsafe {
+        let dir = libc::fdopendir(fd);
+        if dir.is_null() {
+            let error = io::Error::last_os_error();
+            libc::close(fd);
+            return Err(error.to_string());
+        }
+
+        let mut files = Vec::new();
+        loop {
+            let entry = libc::readdir(dir);
+            if entry.is_null() {
+                break;
+            }
+            let name = CStr::from_ptr((*entry).d_name.as_ptr());
+            let name = match name.to_str() {
+                Ok("." | "..") => continue,
+                Ok(name) => name,
+                Err(_) => continue,
+            };
+            let label = if (*entry).d_type == libc::DT_DIR {
+                format!("{name}/")
+            } else {
+                name.to_string()
+            };
+            files.push(label);
+            if files.len() == 20 {
+                break;
+            }
+        }
+
+        if libc::closedir(dir) != 0 {
+            return Err(io::Error::last_os_error().to_string());
+        }
+        Ok(files)
+    }
+}
+
+#[cfg(not(unix))]
+fn open_confined_at(
+    root: &Path,
+    display: PathBuf,
+    components: &[OsString],
+    mode: OpenMode,
+) -> Result<(PathBuf, fs::File), String> {
+    // Best-effort on non-Unix: reject lexical escapes, then open by final path.
+    // TOCTOU symlink races are mitigated on Unix via openat(O_NOFOLLOW).
+    let mut path = root.to_path_buf();
+    for component in components {
+        path.push(component);
+    }
+    let file = match mode {
+        OpenMode::File => fs::File::open(&path),
+        OpenMode::Directory => fs::File::open(&path).and_then(|file| {
+            let metadata = file.metadata()?;
+            if metadata.is_dir() {
+                Ok(file)
+            } else {
+                Err(io::Error::other("not a directory"))
+            }
+        }),
+    }
+    .map_err(|error| format!("cannot open {}: {error}", display.display()))?;
+    Ok((display, file))
+}
+
+#[cfg(not(unix))]
+fn list_confined_dir(display: &Path, file: fs::File) -> Result<Vec<String>, String> {
+    drop(file);
+    let entries = fs::read_dir(display).map_err(|error| error.to_string())?;
+    let files: Vec<String> = entries
+        .filter_map(|entry| entry.ok())
+        .take(20)
+        .map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if entry.path().is_dir() {
+                format!("{name}/")
+            } else {
+                name
+            }
+        })
+        .collect();
+    Ok(files)
 }
 
 fn search_recursive(
@@ -982,6 +1162,42 @@ mod tests {
 
         assert_eq!(executed, MAX_TOOL_ROUNDS);
         assert!(!budget.permits_execution());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn toctou_symlink_swap_of_final_component_is_denied() {
+        use std::os::unix::fs::symlink;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        let base = env::temp_dir().join(format!("rnk-glm-toctou-{}-{unique}", std::process::id()));
+        let root = base.join("root");
+        let outside = base.join("outside");
+        fs::create_dir_all(&root).expect("root created");
+        fs::create_dir_all(&outside).expect("outside created");
+        fs::write(outside.join("secret.txt"), "secret").expect("secret written");
+
+        // An otherwise-approvable regular file under the root.
+        let target = root.join("approved.txt");
+        fs::write(&target, "ok").expect("approved file written");
+
+        // After approval would succeed, swap the final component for an outside symlink.
+        fs::remove_file(&target).expect("approved file removed");
+        symlink(outside.join("secret.txt"), &target).expect("symlink planted");
+
+        let error = execute_tool(&root, "read_file", &json!({"path": "approved.txt"}))
+            .expect_err("symlink swap must be denied");
+
+        let cleanup = fs::remove_dir_all(&base);
+        assert!(
+            error.contains("cannot open") || error.contains("symbolic link"),
+            "expected hardened open denial, got: {error}"
+        );
+        cleanup.expect("fixture removed");
     }
 
     #[cfg(unix)]
