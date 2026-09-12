@@ -135,11 +135,11 @@ impl Hyperlink {
         // Sanitize immediately before interpolation so stored values stay intact
         // while OSC 8 output cannot be broken by C0/C1 controls or terminators.
         let id_param = match &self.id {
-            Some(id) => format!("id={}", sanitize_osc8_payload(id)),
+            Some(id) => format!("id={}", sanitize_hyperlink_field(id)),
             None => String::new(),
         };
-        let url = sanitize_osc8_payload(&self.url);
-        let text = sanitize_osc8_payload(&self.text);
+        let url = sanitize_hyperlink_field(&self.url);
+        let text = sanitize_hyperlink_field(&self.text);
 
         // OSC 8 ; params ; URI ST text OSC 8 ; ; ST
         format!("\x1b]8;{};{}\x1b\\{}\x1b]8;;\x1b\\", id_param, url, text)
@@ -147,10 +147,13 @@ impl Hyperlink {
 
     /// Render fallback (just text, or text with URL)
     pub fn render_fallback(&self) -> String {
-        if self.text == self.url {
-            self.text.clone()
+        // Same control-stripping as OSC 8: fallback still writes to the terminal.
+        let text = sanitize_hyperlink_field(&self.text);
+        let url = sanitize_hyperlink_field(&self.url);
+        if text == url {
+            text
         } else {
-            format!("{} ({})", self.text, self.url)
+            format!("{} ({})", text, url)
         }
     }
 
@@ -162,16 +165,20 @@ impl Hyperlink {
         if supports_hyperlinks() {
             self.render_osc8()
         } else {
-            fallback(&self.text, &self.url)
+            // Sanitize before the caller callback so unsupported-hyperlink paths
+            // cannot emit raw ESC/BEL/C1 even when using a custom format.
+            let text = sanitize_hyperlink_field(&self.text);
+            let url = sanitize_hyperlink_field(&self.url);
+            fallback(&text, &url)
         }
     }
 }
 
-/// Strip C0/C1 controls (including ESC, BEL, ST) before OSC 8 interpolation.
+/// Strip C0/C1 controls (including ESC, BEL, ST) before terminal render output.
 ///
-/// Mirrors `use_window_title::sanitize_title`: security boundary is render output,
-/// not stored field getters.
-fn sanitize_osc8_payload(value: &str) -> String {
+/// Used by OSC 8 and fallback paths. Mirrors `use_window_title::sanitize_title`:
+/// security boundary is render output, not stored field getters.
+fn sanitize_hyperlink_field(value: &str) -> String {
     value.chars().filter(|ch| !ch.is_control()).collect()
 }
 
@@ -377,15 +384,65 @@ mod tests {
     }
 
     #[test]
-    fn test_sanitize_osc8_payload_strips_c0_and_c1_controls() {
+    fn test_sanitize_hyperlink_field_strips_c0_and_c1_controls() {
         let controls: String = (0..=0x1f)
             .chain(0x7f..=0x9f)
             .filter_map(char::from_u32)
             .collect();
         assert_eq!(
-            sanitize_osc8_payload(&format!("before{controls}after")),
+            sanitize_hyperlink_field(&format!("before{controls}after")),
             "beforeafter"
         );
+    }
+
+    #[test]
+    fn test_render_fallback_strips_controls_when_hyperlinks_disabled() {
+        let _guard = test_lock().lock().unwrap();
+        set_hyperlinks_supported(false);
+
+        let malicious_url = "https://evil.example/\x1b]0;owned\x07trail\u{009c}";
+        let malicious_text = "click\x07me\x1b]8;;nested";
+
+        let link = Hyperlink::new(malicious_url, malicious_text);
+
+        // Getters keep stored values unchanged (security boundary is render only).
+        assert_eq!(link.get_url(), malicious_url);
+        assert_eq!(link.get_text(), malicious_text);
+
+        let via_render = link.render();
+        let via_fallback = link.render_fallback();
+        let via_custom = link.render_with_fallback(|text, url| format!("[{}]({})", text, url));
+
+        assert_eq!(via_render, via_fallback);
+        assert_eq!(
+            via_fallback,
+            "clickme]8;;nested (https://evil.example/]0;ownedtrail)"
+        );
+        assert!(
+            via_fallback.chars().all(|ch| !ch.is_control()),
+            "fallback output must be control-free: {via_fallback:?}"
+        );
+        assert!(
+            via_custom.chars().all(|ch| !ch.is_control()),
+            "custom fallback args must be sanitized: {via_custom:?}"
+        );
+        assert_eq!(
+            via_custom,
+            "[clickme]8;;nested](https://evil.example/]0;ownedtrail)"
+        );
+
+        // Safe ASCII URLs/text remain unchanged.
+        let safe = Hyperlink::new("https://example.com/path?q=1", "Example Link");
+        assert_eq!(
+            safe.render_fallback(),
+            "Example Link (https://example.com/path?q=1)"
+        );
+        assert_eq!(
+            Hyperlink::url("https://example.com").render_fallback(),
+            "https://example.com"
+        );
+
+        HYPERLINKS_CHECKED.store(false, Ordering::SeqCst);
     }
 
     #[test]
