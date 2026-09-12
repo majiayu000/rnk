@@ -301,7 +301,20 @@ fn execute_tool(root: &Path, name: &str, input: &Value) -> Result<String, String
             if results.is_empty() {
                 Ok("No files found".to_string())
             } else {
-                Ok(format!("Found {} files", results.len()))
+                let relative_paths: Vec<String> = results
+                    .iter()
+                    .map(|absolute| {
+                        Path::new(absolute)
+                            .strip_prefix(root)
+                            .map(|relative| relative.display().to_string())
+                            .unwrap_or_else(|_| absolute.clone())
+                    })
+                    .collect();
+                Ok(format!(
+                    "Found {} files:\n{}",
+                    relative_paths.len(),
+                    relative_paths.join("\n")
+                ))
             }
         }
         _ => Err(format!("unknown tool: {name}")),
@@ -982,6 +995,48 @@ mod tests {
 
         assert_eq!(executed, MAX_TOOL_ROUNDS);
         assert!(!budget.permits_execution());
+    }
+
+    #[test]
+    fn search_files_success_payload_includes_relative_matched_paths() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        let base = env::temp_dir().join(format!(
+            "rnk-glm-search-paths-{}-{unique}",
+            std::process::id()
+        ));
+        let root = base.join("root");
+        let nested = root.join("nested");
+        fs::create_dir_all(&nested).expect("fixture dirs created");
+        fs::write(root.join("match-alpha.txt"), "alpha").expect("root fixture written");
+        fs::write(nested.join("match-beta.rs"), "beta").expect("nested fixture written");
+        fs::write(root.join("other.txt"), "skip").expect("non-match written");
+
+        let payload = execute_tool(&root, "search_files", &json!({"pattern": "match"}))
+            .expect("search_files succeeds");
+        let cleanup = fs::remove_dir_all(&base);
+
+        assert!(
+            payload.contains("Found 2 files"),
+            "expected count in payload, got: {payload}"
+        );
+        assert!(
+            payload.contains("match-alpha.txt"),
+            "expected root match path in payload, got: {payload}"
+        );
+        assert!(
+            payload.contains("nested") && payload.contains("match-beta.rs"),
+            "expected nested relative match path in payload, got: {payload}"
+        );
+        assert!(
+            !payload.contains(root.to_string_lossy().as_ref()),
+            "payload should prefer paths relative to the tool root, got: {payload}"
+        );
+        cleanup.expect("fixture removed");
     }
 
     #[cfg(unix)]
