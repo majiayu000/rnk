@@ -1,3 +1,5 @@
+> **Status:** frozen for new framework scope. The published crate remains the install path. No new features.
+
 # rnk
 
 A React-like declarative terminal UI framework for Rust, inspired by [Ink](https://github.com/vadimdemedes/ink) and [Bubbletea](https://github.com/charmbracelet/bubbletea).
