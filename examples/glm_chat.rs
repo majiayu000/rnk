@@ -10,9 +10,10 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::env;
+use std::ffi::OsString;
 use std::fs;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::io::{self, Read, Write};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -34,6 +35,7 @@ const API_URL: &str = "https://open.bigmodel.cn/api/anthropic/v1/messages";
 const ALLOW_TOOLS_ENV: &str = "RNK_GLM_CHAT_ALLOW_TOOLS";
 const TOOL_ROOT_ENV: &str = "RNK_GLM_CHAT_TOOL_ROOT";
 const MAX_TOOL_ROUNDS: usize = 8;
+const MAX_LISTED_ENTRIES: usize = 20;
 
 #[derive(Debug, Default)]
 struct ToolRoundBudget {
@@ -256,39 +258,12 @@ impl ToolDecision {
 fn execute_tool(root: &Path, name: &str, input: &Value) -> Result<String, String> {
     match name {
         "read_file" => {
-            let path = confined_path(root, input)?;
-            match fs::read_to_string(&path) {
-                Ok(content) => {
-                    let lines: Vec<&str> = content.lines().take(100).collect();
-                    Ok(format!(
-                        "Read {} lines from {}",
-                        lines.len(),
-                        path.display()
-                    ))
-                }
-                Err(error) => Err(format!("cannot read {}: {error}", path.display())),
-            }
+            let approved = approve_confined_path(root, input)?;
+            read_approved(root, &approved)
         }
         "list_files" => {
-            let path = confined_path(root, input)?;
-            match fs::read_dir(&path) {
-                Ok(entries) => {
-                    let files: Vec<String> = entries
-                        .filter_map(|e| e.ok())
-                        .take(20)
-                        .map(|e| {
-                            let name = e.file_name().to_string_lossy().to_string();
-                            if e.path().is_dir() {
-                                format!("{}/", name)
-                            } else {
-                                name
-                            }
-                        })
-                        .collect();
-                    Ok(files.join(", "))
-                }
-                Err(error) => Err(format!("cannot list {}: {error}", path.display())),
-            }
+            let approved = approve_confined_path(root, input)?;
+            list_approved(root, &approved)
         }
         "search_files" => {
             let pattern = input
@@ -308,29 +283,299 @@ fn execute_tool(root: &Path, name: &str, input: &Value) -> Result<String, String
     }
 }
 
-fn confined_path(root: &Path, input: &Value) -> Result<PathBuf, String> {
+struct ApprovedPath {
+    display: PathBuf,
+    #[cfg(unix)]
+    components: Vec<OsString>,
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum OpenMode {
+    File,
+    Directory,
+}
+
+/// Approve `input`'s path without looking at the filesystem.
+///
+/// `root` is the already-canonical tool root. The requested target is walked
+/// lexically (`..` may not leave `root`, `.` is dropped) and is not
+/// canonicalized, so a later symlink swap cannot reuse a checked `PathBuf`.
+fn approve_confined_path(root: &Path, input: &Value) -> Result<ApprovedPath, String> {
     let raw = input
         .get("path")
         .and_then(Value::as_str)
         .filter(|path| !path.is_empty())
         .ok_or_else(|| "tool requires a non-empty string path".to_string())?;
     let requested = Path::new(raw);
-    let candidate = if requested.is_absolute() {
-        requested.to_path_buf()
+    let relative = if requested.is_absolute() {
+        requested
+            .strip_prefix(root)
+            .map_err(|_| escapes_root(requested, root))?
     } else {
-        root.join(requested)
+        requested
     };
-    let canonical = candidate
-        .canonicalize()
-        .map_err(|error| format!("cannot resolve {}: {error}", candidate.display()))?;
-    if !canonical.starts_with(root) {
-        return Err(format!(
-            "{} escapes the approved tool root {}",
-            canonical.display(),
-            root.display()
+
+    let mut components: Vec<OsString> = Vec::new();
+    for component in relative.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(name) => components.push(name.to_os_string()),
+            Component::ParentDir => {
+                if components.pop().is_none() {
+                    let escaped = if requested.is_absolute() {
+                        requested.to_path_buf()
+                    } else {
+                        root.join(requested)
+                    };
+                    return Err(escapes_root(&escaped, root));
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(escapes_root(requested, root));
+            }
+        }
+    }
+
+    let mut display = root.to_path_buf();
+    for component in &components {
+        display.push(component);
+    }
+    Ok(ApprovedPath {
+        display,
+        #[cfg(unix)]
+        components,
+    })
+}
+
+fn escapes_root(path: &Path, root: &Path) -> String {
+    format!(
+        "{} escapes the approved tool root {}",
+        path.display(),
+        root.display()
+    )
+}
+
+fn read_approved(root: &Path, approved: &ApprovedPath) -> Result<String, String> {
+    let mut file = open_for_read(root, approved)
+        .map_err(|error| format!("cannot read {}: {error}", approved.display.display()))?;
+    let mut content = String::new();
+    file.read_to_string(&mut content)
+        .map_err(|error| format!("cannot read {}: {error}", approved.display.display()))?;
+    let line_count = content.lines().take(100).count();
+    Ok(format!(
+        "Read {line_count} lines from {}",
+        approved.display.display()
+    ))
+}
+
+fn list_approved(root: &Path, approved: &ApprovedPath) -> Result<String, String> {
+    let names = list_approved_names(root, approved)
+        .map_err(|error| format!("cannot list {}: {error}", approved.display.display()))?;
+    Ok(names.join(", "))
+}
+
+#[cfg(unix)]
+fn open_for_read(root: &Path, approved: &ApprovedPath) -> io::Result<fs::File> {
+    open_nofollow(root, approved, OpenMode::File)
+}
+
+#[cfg(not(unix))]
+fn open_for_read(_root: &Path, approved: &ApprovedPath) -> io::Result<fs::File> {
+    fs::File::open(&approved.display)
+}
+
+#[cfg(unix)]
+fn list_approved_names(root: &Path, approved: &ApprovedPath) -> io::Result<Vec<String>> {
+    let file = open_nofollow(root, approved, OpenMode::Directory)?;
+    list_from_owned_fd(file.into())
+}
+
+#[cfg(not(unix))]
+fn list_approved_names(_root: &Path, approved: &ApprovedPath) -> io::Result<Vec<String>> {
+    let mut names = Vec::new();
+    for entry in fs::read_dir(&approved.display)?.filter_map(|entry| entry.ok()) {
+        if names.len() == MAX_LISTED_ENTRIES {
+            break;
+        }
+        let mut label = entry.file_name().to_string_lossy().into_owned();
+        if entry.path().is_dir() {
+            label.push('/');
+        }
+        names.push(label);
+    }
+    Ok(names)
+}
+
+#[cfg(unix)]
+fn open_nofollow(root: &Path, approved: &ApprovedPath, mode: OpenMode) -> io::Result<fs::File> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let root_file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
+        .open(root)?;
+    let mut current: OwnedFd = root_file.into();
+
+    if approved.components.is_empty() {
+        return match mode {
+            OpenMode::Directory => Ok(fs::File::from(current)),
+            OpenMode::File => Err(io::Error::new(
+                io::ErrorKind::IsADirectory,
+                "is a directory",
+            )),
+        };
+    }
+
+    for (index, component) in approved.components.iter().enumerate() {
+        reject_special_component(component)?;
+        let directory =
+            index + 1 < approved.components.len() || matches!(mode, OpenMode::Directory);
+        let name = CString::new(component.as_bytes()).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "path component contains NUL")
+        })?;
+        let mut flags = libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW;
+        if directory {
+            flags |= libc::O_DIRECTORY;
+        }
+        let fd = unsafe { libc::openat(current.as_raw_fd(), name.as_ptr(), flags) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // Safety: openat just returned a new owned descriptor, or we returned above.
+        current = unsafe { OwnedFd::from_raw_fd(fd) };
+    }
+
+    Ok(fs::File::from(current))
+}
+
+#[cfg(unix)]
+fn reject_special_component(component: &std::ffi::OsStr) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let bytes = component.as_bytes();
+    if bytes.is_empty() || bytes == b"." || bytes == b".." || bytes.contains(&b'/') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "refusing special path component",
         ));
     }
-    Ok(canonical)
+    Ok(())
+}
+
+#[cfg(unix)]
+fn list_from_owned_fd(fd: std::os::fd::OwnedFd) -> io::Result<Vec<String>> {
+    use std::os::fd::AsRawFd;
+
+    // Safety: fd is an open directory descriptor. On failure fdopendir leaves it
+    // open and OwnedFd closes it. On success the DIR owns it until closedir.
+    let dir = unsafe { libc::fdopendir(fd.as_raw_fd()) };
+    if dir.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    std::mem::forget(fd);
+    let entries = OpenDir { dir };
+    read_dir_entries(entries.dir)
+}
+
+#[cfg(unix)]
+struct OpenDir {
+    dir: *mut libc::DIR,
+}
+
+#[cfg(unix)]
+impl Drop for OpenDir {
+    fn drop(&mut self) {
+        if !self.dir.is_null() {
+            unsafe {
+                libc::closedir(self.dir);
+            }
+            self.dir = std::ptr::null_mut();
+        }
+    }
+}
+
+#[cfg(unix)]
+fn read_dir_entries(dir: *mut libc::DIR) -> io::Result<Vec<String>> {
+    use std::ffi::CStr;
+
+    let mut names = Vec::new();
+    loop {
+        clear_errno();
+        // Safety: dir came from fdopendir and OpenDir has not closed it yet.
+        let entry = unsafe { libc::readdir(dir) };
+        if entry.is_null() {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(0) {
+                break;
+            }
+            return Err(error);
+        }
+        // Safety: readdir's dirent, including d_name, is valid until the next call.
+        let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+        if name.to_bytes() == b"." || name.to_bytes() == b".." {
+            continue;
+        }
+        let directory = entry_is_directory(dir, entry, name)?;
+        let mut label = name.to_string_lossy().into_owned();
+        if directory {
+            label.push('/');
+        }
+        names.push(label);
+        if names.len() == MAX_LISTED_ENTRIES {
+            break;
+        }
+    }
+    Ok(names)
+}
+
+#[cfg(unix)]
+fn entry_is_directory(
+    dir: *mut libc::DIR,
+    entry: *mut libc::dirent,
+    name: &std::ffi::CStr,
+) -> io::Result<bool> {
+    // Safety: entry is the current readdir result and name points at its d_name.
+    let dtype = unsafe { (*entry).d_type };
+    if dtype == libc::DT_DIR {
+        return Ok(true);
+    }
+    if dtype != libc::DT_UNKNOWN {
+        return Ok(false);
+    }
+    let dirfd = unsafe { libc::dirfd(dir) };
+    if dirfd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut info = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let rc = unsafe {
+        libc::fstatat(
+            dirfd,
+            name.as_ptr(),
+            info.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let info = unsafe { info.assume_init() };
+    Ok(info.st_mode & libc::S_IFMT == libc::S_IFDIR)
+}
+
+#[cfg(unix)]
+fn clear_errno() {
+    #[cfg(target_os = "linux")]
+    unsafe {
+        *libc::__errno_location() = 0;
+    }
+    #[cfg(target_os = "macos")]
+    unsafe {
+        *libc::__error() = 0;
+    }
 }
 
 fn search_recursive(
@@ -920,6 +1165,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct RemoveOnDrop(PathBuf);
+
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_root(label: &str) -> (RemoveOnDrop, PathBuf) {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        let base = env::temp_dir().join(format!("rnk-glm-{label}-{}-{unique}", std::process::id()));
+        fs::create_dir_all(base.join("root")).expect("root created");
+        let root = base.join("root").canonicalize().expect("canonical root");
+        (RemoveOnDrop(base), root)
+    }
+
+    fn listed_names(result: &str) -> BTreeSet<&str> {
+        if result.is_empty() {
+            BTreeSet::new()
+        } else {
+            result.split(", ").collect()
+        }
+    }
 
     #[test]
     fn disabled_tools_are_not_advertised_to_the_provider() {
@@ -965,6 +1239,154 @@ mod tests {
         let error = execute_tool(&root, "read_file", &input).expect_err("escape denied");
 
         assert!(error.contains("escapes the approved tool root"));
+
+        let relative = execute_tool(&root, "read_file", &json!({"path": "../Cargo.toml"}))
+            .expect_err("parent escape denied");
+        assert!(
+            relative.contains("escapes the approved tool root"),
+            "unexpected parent escape error: {relative}"
+        );
+    }
+
+    #[test]
+    fn empty_tool_path_is_rejected() {
+        let root = env::temp_dir();
+        for tool in ["read_file", "list_files"] {
+            let missing = execute_tool(&root, tool, &json!({})).expect_err("missing path");
+            assert_eq!(missing, "tool requires a non-empty string path");
+            let empty = execute_tool(&root, tool, &json!({"path": ""})).expect_err("empty path");
+            assert_eq!(empty, "tool requires a non-empty string path");
+        }
+    }
+
+    #[test]
+    fn in_root_file_and_directory_still_open() {
+        let (_scratch, root) = temp_root("ok");
+        fs::write(root.join("note.txt"), "hello\n").expect("note written");
+        fs::create_dir(root.join("sub")).expect("sub created");
+        fs::write(root.join("sub").join("a.txt"), "a\n").expect("child written");
+
+        let expected = format!("Read 1 lines from {}", root.join("note.txt").display());
+        let read =
+            execute_tool(&root, "read_file", &json!({"path": "note.txt"})).expect("relative read");
+        assert_eq!(read, expected);
+        let dotted =
+            execute_tool(&root, "read_file", &json!({"path": "./note.txt"})).expect("dot read");
+        assert_eq!(dotted, expected);
+        let parent = execute_tool(&root, "read_file", &json!({"path": "sub/../note.txt"}))
+            .expect("parent read");
+        assert_eq!(parent, expected);
+        let absolute = execute_tool(&root, "read_file", &json!({"path": root.join("note.txt")}))
+            .expect("absolute read");
+        assert_eq!(absolute, expected);
+
+        let listed = execute_tool(&root, "list_files", &json!({"path": "."})).expect("list dot");
+        assert_eq!(listed_names(&listed), BTreeSet::from(["note.txt", "sub/"]));
+        let listed_root =
+            execute_tool(&root, "list_files", &json!({"path": root})).expect("list absolute root");
+        assert_eq!(listed_names(&listed_root), listed_names(&listed));
+        let listed_sub =
+            execute_tool(&root, "list_files", &json!({"path": "sub"})).expect("list sub");
+        assert_eq!(listed_sub, "a.txt");
+    }
+
+    #[test]
+    fn directory_listing_is_capped_at_twenty_names() {
+        let (_scratch, root) = temp_root("cap");
+        for index in 0..25 {
+            fs::write(root.join(format!("f{index:02}")), "x").expect("fixture written");
+        }
+
+        let listed = execute_tool(&root, "list_files", &json!({"path": "."})).expect("list");
+        let names = listed_names(&listed);
+        assert_eq!(names.len(), MAX_LISTED_ENTRIES);
+        assert!(names.is_disjoint(&BTreeSet::from([".", ".."])));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_components_fail_closed_even_inside_the_root() {
+        use std::os::unix::fs::symlink;
+
+        let (_scratch, root) = temp_root("inside-link");
+        fs::write(root.join("inside.txt"), "inside\n").expect("inside written");
+        fs::create_dir(root.join("real")).expect("real created");
+        fs::write(root.join("real").join("inside.txt"), "inside\n").expect("child written");
+        symlink("inside.txt", root.join("alias.txt")).expect("file symlink");
+        symlink("real", root.join("via")).expect("directory symlink");
+
+        let alias = execute_tool(&root, "read_file", &json!({"path": "alias.txt"}))
+            .expect_err("final symlink denied");
+        let through = execute_tool(&root, "read_file", &json!({"path": "via/inside.txt"}))
+            .expect_err("intermediate symlink denied");
+        let listed = execute_tool(&root, "list_files", &json!({"path": "via"}))
+            .expect_err("symlink directory denied");
+        assert!(!alias.contains("Read "));
+        assert!(!through.contains("Read "));
+        assert!(!listed.contains("inside.txt"));
+
+        let real = execute_tool(&root, "read_file", &json!({"path": "inside.txt"}))
+            .expect("regular file still opens");
+        assert!(real.starts_with("Read 1 lines from "));
+        let names =
+            execute_tool(&root, "list_files", &json!({"path": "."})).expect("list real directory");
+        let names = listed_names(&names);
+        assert!(names.contains("alias.txt"));
+        assert!(names.contains("via"));
+        assert!(names.contains("real/"));
+        assert!(!names.contains("via/"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn swapped_final_component_is_not_followed() {
+        use std::os::unix::fs::symlink;
+
+        let (_scratch, root) = temp_root("toctou");
+        let outside = root.parent().expect("scratch").join("outside");
+        fs::create_dir_all(&outside).expect("outside created");
+        fs::write(outside.join("secret.txt"), "secret\n").expect("secret written");
+        fs::write(outside.join("outside-secret.txt"), "name\n").expect("outside name written");
+
+        fs::write(root.join("approved.txt"), "ok\n").expect("approved file written");
+        assert!(root.join("approved.txt").is_file());
+        assert!(
+            !root
+                .join("approved.txt")
+                .symlink_metadata()
+                .expect("metadata")
+                .file_type()
+                .is_symlink()
+        );
+        let approved_file =
+            approve_confined_path(&root, &json!({"path": "approved.txt"})).expect("file approved");
+        fs::remove_file(root.join("approved.txt")).expect("approved file removed");
+        symlink(outside.join("secret.txt"), root.join("approved.txt")).expect("file symlink");
+        let followed = fs::read_to_string(root.join("approved.txt")).expect("std open follows");
+        assert_eq!(followed, "secret\n");
+        let read_error =
+            read_approved(&root, &approved_file).expect_err("read_file open denies the swap");
+        assert!(!read_error.contains("secret"));
+
+        fs::create_dir(root.join("approved-dir")).expect("approved dir created");
+        assert!(root.join("approved-dir").is_dir());
+        let approved_dir = approve_confined_path(&root, &json!({"path": "approved-dir"}))
+            .expect("directory approved");
+        fs::remove_dir(root.join("approved-dir")).expect("approved dir removed");
+        symlink(&outside, root.join("approved-dir")).expect("dir symlink");
+        let followed_names: Vec<_> = fs::read_dir(root.join("approved-dir"))
+            .expect("std list follows")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            followed_names
+                .iter()
+                .any(|name| name == "outside-secret.txt")
+        );
+        let list_error =
+            list_approved(&root, &approved_dir).expect_err("list_files open denies the swap");
+        assert!(!list_error.contains("outside-secret.txt"));
     }
 
     #[test]
