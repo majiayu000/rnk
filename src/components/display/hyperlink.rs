@@ -132,10 +132,11 @@ impl Hyperlink {
 
     /// Force render as OSC 8 hyperlink (ignoring detection)
     pub fn render_osc8(&self) -> String {
-        // Sanitize immediately before interpolation so stored values stay intact
-        // while OSC 8 output cannot be broken by C0/C1 controls or terminators.
+        // Sanitize immediately before interpolation so stored values stay intact.
+        // The id sits inside params, so ';' and ':' are percent-encoded there.
+        // url and text only drop C0/C1 controls.
         let id_param = match &self.id {
-            Some(id) => format!("id={}", sanitize_hyperlink_field(id)),
+            Some(id) => format!("id={}", sanitize_hyperlink_id(id)),
             None => String::new(),
         };
         let url = sanitize_hyperlink_field(&self.url);
@@ -176,10 +177,29 @@ impl Hyperlink {
 
 /// Strip C0/C1 controls (including ESC, BEL, ST) before terminal render output.
 ///
-/// Used by OSC 8 and fallback paths. Mirrors `use_window_title::sanitize_title`:
+/// Used by OSC 8 url/text and fallback paths. Mirrors `use_window_title::sanitize_title`:
 /// security boundary is render output, not stored field getters.
 fn sanitize_hyperlink_field(value: &str) -> String {
     value.chars().filter(|ch| !ch.is_control()).collect()
+}
+
+/// Sanitize an OSC 8 id: drop C0/C1 controls and percent-encode `;` and `:`.
+///
+/// OSC 8 splits the header on `;` (params vs URI) and params on `:` (key=value).
+/// Encoding those two characters keeps the URI slot equal to the url argument.
+fn sanitize_hyperlink_id(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if ch.is_control() {
+            continue;
+        }
+        match ch {
+            ';' => out.push_str("%3B"),
+            ':' => out.push_str("%3A"),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Builder for creating styled hyperlinks
@@ -501,8 +521,92 @@ mod tests {
         );
 
         assert!(header_body.contains("https://evil.example/]0;owned\\trail"));
-        assert!(header_body.contains("id=id]2;hijack"));
+        assert!(header_body.contains("id=id]2%3Bhijack"));
         assert_eq!(text_payload, "clickme]8;;https://nested\\");
+    }
+
+    /// OSC 8 splits the open header on `;` (params vs URI) and params on `:`.
+    /// The id is percent-encoded so those separators cannot move the URI slot.
+    fn osc8_open_header_fields(rendered: &str) -> Vec<&str> {
+        assert!(
+            rendered.starts_with("\x1b]8;"),
+            "OSC 8 must open with ESC ] 8 ; : {rendered:?}"
+        );
+        let st = rendered.find("\x1b\\").expect("open ST");
+        let body = &rendered["\x1b]8;".len()..st];
+        body.split(';').collect()
+    }
+
+    fn uri_authority_host(uri: &str) -> &str {
+        let after_scheme = uri
+            .split_once("://")
+            .unwrap_or_else(|| panic!("URI missing scheme separator: {uri:?}"))
+            .1;
+        after_scheme.split('/').next().unwrap_or(after_scheme)
+    }
+
+    #[test]
+    fn test_render_osc8_percent_encodes_id_separators() {
+        let _guard = test_lock().lock().unwrap();
+        let url = "https://good.example/docs";
+        let text = "docs";
+
+        let semicolon_id = "x;https://evil.example/phish";
+        let link = Hyperlink::new(url, text).with_id(semicolon_id);
+        let rendered = link.render_osc8();
+
+        assert_eq!(link.get_url(), url);
+        assert_eq!(link.get_text(), text);
+        assert_eq!(link.id.as_deref(), Some(semicolon_id));
+        assert_eq!(
+            rendered,
+            "\x1b]8;id=x%3Bhttps%3A//evil.example/phish;https://good.example/docs\x1b\\docs\x1b]8;;\x1b\\"
+        );
+
+        let fields = osc8_open_header_fields(&rendered);
+        assert_eq!(
+            fields.len(),
+            2,
+            "header must be exactly params;URI: {rendered:?}"
+        );
+        let id_value = fields[0]
+            .strip_prefix("id=")
+            .expect("params key must be id");
+        assert!(
+            !id_value.contains(';') && !id_value.contains(':'),
+            "id value must not contain raw separators: {id_value:?}"
+        );
+        assert_eq!(fields[1], url);
+        assert_eq!(uri_authority_host(fields[1]), "good.example");
+
+        let colon_id = "x:id=https://evil.example/phish";
+        let colon_link = Hyperlink::new(url, text).with_id(colon_id);
+        let colon_rendered = colon_link.render_osc8();
+
+        assert_eq!(colon_link.get_url(), url);
+        assert_eq!(colon_link.get_text(), text);
+        assert_eq!(colon_link.id.as_deref(), Some(colon_id));
+        assert_eq!(
+            colon_rendered,
+            "\x1b]8;id=x%3Aid=https%3A//evil.example/phish;https://good.example/docs\x1b\\docs\x1b]8;;\x1b\\"
+        );
+
+        let colon_fields = osc8_open_header_fields(&colon_rendered);
+        assert_eq!(colon_fields.len(), 2, "{colon_rendered:?}");
+        assert_eq!(colon_fields[1], url);
+        assert_eq!(uri_authority_host(colon_fields[1]), "good.example");
+        assert_eq!(
+            colon_fields[0].split(':').count(),
+            1,
+            "colon in id must stay inside one params segment: {colon_fields:?}"
+        );
+        let colon_value = colon_fields[0]
+            .strip_prefix("id=")
+            .expect("params key must be id");
+        assert!(
+            !colon_value.contains(';') && !colon_value.contains(':'),
+            "id value must not contain raw separators: {colon_value:?}"
+        );
     }
 
     #[test]
