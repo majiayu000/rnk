@@ -414,9 +414,11 @@ fn open_nofollow(root: &Path, approved: &ApprovedPath, mode: OpenMode) -> io::Re
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::OpenOptionsExt;
 
+    // O_NOFOLLOW rejects a symlink planted in place of the canonical root.
+    // The descriptor stays local to this open; approval does not hold one.
     let root_file = fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
+        .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW)
         .open(root)?;
     let mut current: OwnedFd = root_file.into();
 
@@ -1387,6 +1389,81 @@ mod tests {
         let list_error =
             list_approved(&root, &approved_dir).expect_err("list_files open denies the swap");
         assert!(!list_error.contains("outside-secret.txt"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn swapped_root_directory_is_not_followed() {
+        use std::os::unix::fs::symlink;
+
+        let (_scratch, root) = temp_root("root-swap");
+        let base = root.parent().expect("scratch").to_path_buf();
+        fs::write(root.join("note.txt"), "ok\n").expect("note written");
+        let outside = base.join("outside");
+        fs::create_dir_all(&outside).expect("outside created");
+        fs::write(outside.join("secret.txt"), "secret\n").expect("secret written");
+        fs::write(outside.join("outside-secret.txt"), "name\n").expect("outside name written");
+
+        let approved_file =
+            approve_confined_path(&root, &json!({"path": "note.txt"})).expect("file approved");
+        let approved_dir =
+            approve_confined_path(&root, &json!({"path": "."})).expect("directory approved");
+
+        let displaced = base.join("displaced-root");
+        fs::rename(&root, &displaced).expect("root displaced");
+        symlink(&outside, &root).expect("root replaced with symlink");
+        assert!(
+            root.symlink_metadata()
+                .expect("root metadata")
+                .file_type()
+                .is_symlink()
+        );
+
+        let followed =
+            fs::read_to_string(root.join("secret.txt")).expect("std open follows root symlink");
+        assert_eq!(followed, "secret\n");
+        let followed_names: Vec<_> = fs::read_dir(&root)
+            .expect("std list follows root symlink")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            followed_names
+                .iter()
+                .any(|name| name == "outside-secret.txt")
+        );
+
+        let read_error =
+            read_approved(&root, &approved_file).expect_err("read_file denies swapped root");
+        assert!(
+            read_error.starts_with("cannot read "),
+            "unexpected read error: {read_error}"
+        );
+        assert!(!read_error.contains("secret"));
+        let tool_read = execute_tool(&root, "read_file", &json!({"path": "note.txt"}))
+            .expect_err("read_file tool denies swapped root");
+        assert!(
+            tool_read.starts_with("cannot read "),
+            "unexpected tool read error: {tool_read}"
+        );
+        assert!(!tool_read.contains("secret"));
+
+        let list_error =
+            list_approved(&root, &approved_dir).expect_err("list_files denies swapped root");
+        assert!(
+            list_error.starts_with("cannot list "),
+            "unexpected list error: {list_error}"
+        );
+        assert!(!list_error.contains("outside-secret.txt"));
+        assert!(!list_error.contains("secret"));
+        let tool_list = execute_tool(&root, "list_files", &json!({"path": "."}))
+            .expect_err("list_files tool denies swapped root");
+        assert!(
+            tool_list.starts_with("cannot list "),
+            "unexpected tool list error: {tool_list}"
+        );
+        assert!(!tool_list.contains("outside-secret.txt"));
+        assert!(!tool_list.contains("secret"));
     }
 
     #[test]
