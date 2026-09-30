@@ -12,9 +12,10 @@ artifacts are also available from the GitHub Releases page.
 
 ### Fixed
 
-- GLM chat filename search now returns up to 20 regular-file paths as a JSON
-  array, escaping filename delimiters and using held, no-follow directories on
-  Unix to prevent symlink swaps from disclosing outside-root filenames.
+- GLM chat filename search now returns up to 20 relative regular-file paths as
+  a JSON array, including matches under non-UTF-8 roots. Unix searches hold the
+  root from authorization and use no-follow directories to prevent root,
+  ancestor, or child symlink swaps from disclosing outside-root filenames.
 
 ## 0.19.3 - 2026-06-29
 

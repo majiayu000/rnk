@@ -151,7 +151,7 @@ fn get_tools() -> Vec<Tool> {
         },
         Tool {
             name: "search_files".to_string(),
-            description: "Search for matching regular filenames in current directory; return up to 20 paths as a JSON array".to_string(),
+            description: "Search for matching regular filenames in current directory; return up to 20 relative paths as a JSON array".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -166,10 +166,14 @@ fn get_tools() -> Vec<Tool> {
     ]
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 enum ToolAuthorization {
     Disabled,
-    Prompt { root: PathBuf },
+    Prompt {
+        root: PathBuf,
+        #[cfg(unix)]
+        search_root: fs::File,
+    },
 }
 
 impl ToolAuthorization {
@@ -185,10 +189,39 @@ impl ToolAuthorization {
                         format!("cannot resolve tool root {}: {error}", configured.display()),
                     )
                 })?;
-                Ok(Self::Prompt { root })
+                Self::prompt(root)
             }
             _ => Ok(Self::Disabled),
         }
+    }
+
+    fn prompt(root: PathBuf) -> io::Result<Self> {
+        #[cfg(unix)]
+        let search_root = {
+            // Canonical roots are absolute. Walk every component without following
+            // symlinks, then hold the directory for the authorization's lifetime.
+            let approved = ApprovedPath {
+                display: root.clone(),
+                components: root
+                    .components()
+                    .filter_map(|component| match component {
+                        Component::Normal(name) => Some(name.to_os_string()),
+                        _ => None,
+                    })
+                    .collect(),
+            };
+            open_nofollow(Path::new("/"), &approved, OpenMode::Directory).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!("cannot open tool root {}: {error}", root.display()),
+                )
+            })?
+        };
+        Ok(Self::Prompt {
+            root,
+            #[cfg(unix)]
+            search_root,
+        })
     }
 
     fn advertised_tools(&self) -> Vec<Tool> {
@@ -220,7 +253,12 @@ impl ToolAuthorization {
         input: &Value,
         confirm: impl FnOnce(&Path) -> bool,
     ) -> ToolDecision {
-        let Self::Prompt { root } = self else {
+        let Self::Prompt {
+            root,
+            #[cfg(unix)]
+            search_root,
+        } = self
+        else {
             return ToolDecision::Denied(format!(
                 "Not executed. Restart with {ALLOW_TOOLS_ENV}=1 to enable per-request approval."
             ));
@@ -230,7 +268,13 @@ impl ToolAuthorization {
             return ToolDecision::Denied("Not executed: denied by the user.".to_string());
         }
 
-        match execute_tool(root, name, input) {
+        #[cfg(not(unix))]
+        let search_root = root;
+        let result = match name {
+            "search_files" => search_files(search_root, input),
+            _ => execute_tool(root, name, input),
+        };
+        match result {
             Ok(result) => ToolDecision::Executed(result),
             Err(error) => ToolDecision::Denied(format!("Not executed: {error}")),
         }
@@ -265,21 +309,29 @@ fn execute_tool(root: &Path, name: &str, input: &Value) -> Result<String, String
             let approved = approve_confined_path(root, input)?;
             list_approved(root, &approved)
         }
-        "search_files" => {
-            let pattern = input
-                .get("pattern")
-                .and_then(Value::as_str)
-                .filter(|pattern| !pattern.is_empty())
-                .ok_or_else(|| "search_files requires a non-empty string pattern".to_string())?;
-            let mut results = Vec::new();
-            search_recursive(root, pattern, &mut results, 0, 3);
-            if results.is_empty() {
-                Ok("No files found".to_string())
-            } else {
-                Ok(format!("Found {} files\n{}", results.len(), json!(results)))
-            }
-        }
         _ => Err(format!("unknown tool: {name}")),
+    }
+}
+
+fn search_files(
+    #[cfg(unix)] root: &fs::File,
+    #[cfg(not(unix))] root: &Path,
+    input: &Value,
+) -> Result<String, String> {
+    let pattern = input
+        .get("pattern")
+        .and_then(Value::as_str)
+        .filter(|pattern| !pattern.is_empty())
+        .ok_or_else(|| "search_files requires a non-empty string pattern".to_string())?;
+    let mut results = Vec::new();
+    #[cfg(unix)]
+    search_recursive(root, pattern, &mut results, 0, 3);
+    #[cfg(not(unix))]
+    search_recursive(root, Path::new(""), pattern, &mut results, 0, 3);
+    if results.is_empty() {
+        Ok("No files found".to_string())
+    } else {
+        Ok(format!("Found {} files\n{}", results.len(), json!(results)))
     }
 }
 
@@ -602,21 +654,31 @@ fn clear_errno() {
 
 #[cfg(unix)]
 fn search_recursive(
-    dir: &Path,
+    root: &fs::File,
     pattern: &str,
     results: &mut Vec<String>,
     depth: usize,
     max_depth: usize,
 ) {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
     if depth > max_depth || results.len() >= MAX_LISTED_ENTRIES {
         return;
     }
-    let approved = ApprovedPath {
-        display: dir.to_path_buf(),
-        components: Vec::new(),
+    // Open "." from the held root to get an independent directory cursor for
+    // each search. Duplicating the descriptor would share readdir's offset.
+    // Safety: root is held open and the pathname is a NUL-terminated constant.
+    let fd = unsafe {
+        libc::openat(
+            root.as_raw_fd(),
+            c".".as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
     };
-    if let Ok(file) = open_nofollow(dir, &approved, OpenMode::Directory) {
-        search_from_owned_fd(file.into(), dir, pattern, results, depth, max_depth);
+    if fd >= 0 {
+        // Safety: openat returned a newly owned directory descriptor.
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        search_from_owned_fd(fd, Path::new(""), pattern, results, depth, max_depth);
     }
 }
 
@@ -660,7 +722,7 @@ fn search_from_owned_fd(
         let component = OsStr::from_bytes(name.to_bytes());
         let child_path = path.join(component);
         if dtype == libc::DT_REG && component.to_string_lossy().contains(pattern) {
-            // The tool accepts JSON strings; non-UTF-8 paths cannot round-trip.
+            // Relative JSON paths need UTF-8 only below the approved root.
             if let Some(path) = child_path.to_str() {
                 results.push(path.to_string());
             }
@@ -677,6 +739,7 @@ fn search_from_owned_fd(
 #[cfg(not(unix))]
 fn search_recursive(
     dir: &Path,
+    relative: &Path,
     pattern: &str,
     results: &mut Vec<String>,
     depth: usize,
@@ -691,18 +754,26 @@ fn search_recursive(
                 break;
             }
             let path = entry.path();
+            let relative_path = relative.join(entry.file_name());
             let name = entry.file_name().to_string_lossy().to_string();
 
             let Ok(file_type) = entry.file_type() else {
                 continue;
             };
             if file_type.is_file() && name.contains(pattern) {
-                if let Some(path) = path.to_str() {
+                if let Some(path) = relative_path.to_str() {
                     results.push(path.to_string());
                 }
             }
             if file_type.is_dir() && !name.starts_with('.') {
-                search_recursive(&path, pattern, results, depth + 1, max_depth);
+                search_recursive(
+                    &path,
+                    &relative_path,
+                    pattern,
+                    results,
+                    depth + 1,
+                    max_depth,
+                );
             }
         }
     }
@@ -1287,6 +1358,20 @@ mod tests {
         (RemoveOnDrop(base), root)
     }
 
+    fn search_in_root(root: &Path, input: &Value) -> Result<String, String> {
+        let ToolAuthorization::Prompt {
+            root: _root,
+            #[cfg(unix)]
+            search_root,
+        } = ToolAuthorization::prompt(root.to_path_buf()).expect("root held")
+        else {
+            unreachable!("prompt authorization");
+        };
+        #[cfg(not(unix))]
+        let search_root = _root;
+        search_files(&search_root, input)
+    }
+
     fn listed_names(result: &str) -> BTreeSet<&str> {
         if result.is_empty() {
             BTreeSet::new()
@@ -1309,9 +1394,8 @@ mod tests {
     #[test]
     fn every_enabled_tool_call_still_requires_a_user_decision() {
         let root = env::current_dir().expect("repository root");
-        let authorization = ToolAuthorization::Prompt {
-            root: root.canonicalize().expect("canonical root"),
-        };
+        let authorization = ToolAuthorization::prompt(root.canonicalize().expect("canonical root"))
+            .expect("root held");
         let mut prompts = 0;
         let decision =
             authorization.review_and_execute_with("list_files", &json!({"path": "."}), |_| {
@@ -1334,7 +1418,7 @@ mod tests {
             fs::write(path, "found\n").expect("matching file written");
         }
         fs::write(root.join("other.txt"), "other\n").expect("nonmatching file written");
-        let authorization = ToolAuthorization::Prompt { root: root.clone() };
+        let authorization = ToolAuthorization::prompt(root.clone()).expect("root held");
 
         let decision = authorization.review_and_execute_with(
             "search_files",
@@ -1346,10 +1430,86 @@ mod tests {
         assert_eq!(count, "Found 2 files");
         let paths: Vec<PathBuf> = serde_json::from_str(encoded).expect("JSON paths");
         let paths: BTreeSet<_> = paths.into_iter().collect();
+        let expected_paths =
+            expected_paths.map(|path| path.strip_prefix(&root).expect("in root").to_path_buf());
         assert_eq!(paths, BTreeSet::from(expected_paths));
         for path in paths {
             execute_tool(&root, "read_file", &json!({"path": path}))
                 .expect("returned path can be read");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn approved_search_files_keeps_root_after_ancestor_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let (_scratch, base_root) = temp_root("search-ancestor");
+        let ancestor = base_root.join("ancestor");
+        let root = ancestor.join("approved");
+        let outside = base_root.join("outside");
+        fs::create_dir_all(&root).expect("approved root created");
+        fs::create_dir_all(outside.join("approved")).expect("outside root created");
+        fs::write(root.join("inside-match.txt"), "inside\n").expect("inside file written");
+        fs::write(outside.join("approved/secret-match.txt"), "secret\n")
+            .expect("outside file written");
+        let authorization = ToolAuthorization::prompt(root.clone()).expect("root held");
+
+        fs::rename(&ancestor, base_root.join("displaced-ancestor")).expect("ancestor displaced");
+        symlink(&outside, &ancestor).expect("ancestor replaced with symlink");
+        for _ in 0..2 {
+            let decision = authorization.review_and_execute_with(
+                "search_files",
+                &json!({"pattern": "match"}),
+                |_| true,
+            );
+            assert!(matches!(decision, ToolDecision::Executed(_)));
+            assert!(
+                !decision.result().contains("secret-match"),
+                "search reopened the replaced ancestor: {}",
+                decision.result()
+            );
+            let (count, encoded) = decision.result().split_once('\n').expect("count and paths");
+            assert_eq!(count, "Found 1 files");
+            let paths: Vec<String> = serde_json::from_str(encoded).expect("JSON paths");
+            assert_eq!(paths, ["inside-match.txt"]);
+        }
+        assert!(
+            ToolAuthorization::prompt(root).is_err(),
+            "initialization must reject a symlink in the root's ancestor"
+        );
+    }
+
+    // APFS rejects non-UTF-8 names; this fixture needs a Linux filesystem.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn approved_search_files_returns_relative_paths_from_non_utf8_root() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let (_scratch, base) = temp_root("search-non-utf8-root");
+        let root = base.join(OsString::from_vec(b"approved-\xff".to_vec()));
+        fs::create_dir_all(root.join("sub")).expect("root and child created");
+        fs::write(root.join("match.txt"), "root\n").expect("root file written");
+        fs::write(root.join("sub/match-child.txt"), "child\n").expect("child file written");
+        let authorization = ToolAuthorization::prompt(root.clone()).expect("root held");
+
+        let decision = authorization.review_and_execute_with(
+            "search_files",
+            &json!({"pattern": "match"}),
+            |_| true,
+        );
+        assert!(matches!(decision, ToolDecision::Executed(_)));
+        let (count, encoded) = decision.result().split_once('\n').expect("count and paths");
+        assert_eq!(count, "Found 2 files");
+        let paths: Vec<String> = serde_json::from_str(encoded).expect("JSON paths");
+        let paths: BTreeSet<_> = paths.into_iter().collect();
+        assert_eq!(
+            paths,
+            BTreeSet::from(["match.txt".to_string(), "sub/match-child.txt".to_string()])
+        );
+        for path in paths {
+            execute_tool(&root, "read_file", &json!({"path": path}))
+                .expect("relative result can be read under a non-UTF-8 root");
         }
     }
 
@@ -1360,11 +1520,10 @@ mod tests {
         for index in 0..25 {
             let path = root.join(format!("match-{index:02}.txt"));
             fs::write(&path, "found\n").expect("matching file written");
-            expected_paths.insert(path);
+            expected_paths.insert(path.strip_prefix(&root).expect("in root").to_path_buf());
         }
 
-        let result = execute_tool(&root, "search_files", &json!({"pattern": "match"}))
-            .expect("search succeeds");
+        let result = search_in_root(&root, &json!({"pattern": "match"})).expect("search succeeds");
         let (count, encoded) = result.split_once('\n').expect("count and paths");
         assert_eq!(count, "Found 20 files");
         let paths: Vec<PathBuf> = serde_json::from_str(encoded).expect("JSON paths");
@@ -1379,7 +1538,7 @@ mod tests {
         let (_scratch, root) = temp_root("search-delimiters");
         let path = root.join("match\nchild\"\\.txt");
         fs::write(&path, "found\n").expect("matching file written");
-        let authorization = ToolAuthorization::Prompt { root: root.clone() };
+        let authorization = ToolAuthorization::prompt(root.clone()).expect("root held");
 
         let decision = authorization.review_and_execute_with(
             "search_files",
@@ -1390,7 +1549,14 @@ mod tests {
         let (count, encoded) = decision.result().split_once('\n').expect("count and paths");
         assert_eq!(count, "Found 1 files");
         let paths: Vec<String> = serde_json::from_str(encoded).expect("unambiguous JSON paths");
-        assert_eq!(paths, [path.to_str().expect("UTF-8 path")]);
+        assert_eq!(
+            paths,
+            [path
+                .strip_prefix(&root)
+                .expect("in root")
+                .to_str()
+                .expect("UTF-8 path")]
+        );
         execute_tool(&root, "read_file", &json!({"path": paths[0]}))
             .expect("decoded path can be read");
     }
@@ -1413,12 +1579,13 @@ mod tests {
                 .expect("matching symlink created");
         }
 
-        let result = execute_tool(&root, "search_files", &json!({"pattern": "match"}))
-            .expect("search succeeds");
+        let result = search_in_root(&root, &json!({"pattern": "match"})).expect("search succeeds");
         let (count, encoded) = result.split_once('\n').expect("count and paths");
         assert_eq!(count, "Found 2 files");
         let paths: Vec<PathBuf> = serde_json::from_str(encoded).expect("JSON paths");
         let paths: BTreeSet<_> = paths.into_iter().collect();
+        let expected_paths =
+            expected_paths.map(|path| path.strip_prefix(&root).expect("in root").to_path_buf());
         assert_eq!(paths, BTreeSet::from(expected_paths));
     }
 
@@ -1441,20 +1608,24 @@ mod tests {
         fs::rename(&child, root.join("displaced-child")).expect("child displaced");
         symlink(&outside, &child).expect("child replaced with symlink");
 
-        // Reproduce the path reopened after the caller observed a real directory.
-        let mut results = Vec::new();
-        search_recursive(&child, "secret-match", &mut results, 1, 3);
         assert!(
-            results.is_empty(),
-            "search followed swapped child: {results:?}"
+            ToolAuthorization::prompt(child).is_err(),
+            "swapped child rejected"
         );
+        let authorization = ToolAuthorization::prompt(root.clone()).expect("root held");
 
         let displaced = root.parent().expect("scratch").join("displaced-root");
         fs::rename(&root, &displaced).expect("root displaced");
         symlink(&outside, &root).expect("root replaced with symlink");
-        let result = execute_tool(&root, "search_files", &json!({"pattern": "secret-match"}))
-            .expect("search remains best effort");
-        assert_eq!(result, "No files found");
+        let decision = authorization.review_and_execute_with(
+            "search_files",
+            &json!({"pattern": "secret-match"}),
+            |_| true,
+        );
+        assert_eq!(
+            decision,
+            ToolDecision::Executed("No files found".to_string())
+        );
     }
 
     #[cfg(unix)]
@@ -1489,25 +1660,19 @@ mod tests {
         symlink(&outside, &root).expect("root replaced with symlink");
 
         let mut results = Vec::new();
-        search_from_owned_fd(root_file.into(), &root, "match", &mut results, 0, 3);
-        search_from_owned_fd(child_fd, &child, "match", &mut results, 1, 3);
-        assert_eq!(
-            results,
-            [
-                root.join("inside-match.txt").to_str().expect("UTF-8 path"),
-                child.join("child-match.txt").to_str().expect("UTF-8 path"),
-            ]
-        );
+        search_from_owned_fd(root_file.into(), Path::new(""), "match", &mut results, 0, 3);
+        search_from_owned_fd(child_fd, Path::new("child"), "match", &mut results, 1, 3);
+        assert_eq!(results, ["inside-match.txt", "child/child-match.txt"]);
     }
 
     #[test]
     fn search_files_preserves_no_match_and_invalid_pattern_results() {
         let (_scratch, root) = temp_root("search-empty");
-        let result = execute_tool(&root, "search_files", &json!({"pattern": "missing"}))
+        let result = search_in_root(&root, &json!({"pattern": "missing"}))
             .expect("no-match search succeeds");
         assert_eq!(result, "No files found");
         for input in [json!({}), json!({"pattern": ""}), json!({"pattern": 1})] {
-            let error = execute_tool(&root, "search_files", &input).expect_err("invalid pattern");
+            let error = search_in_root(&root, &input).expect_err("invalid pattern");
             assert_eq!(error, "search_files requires a non-empty string pattern");
         }
     }
@@ -1783,17 +1948,18 @@ mod tests {
         let root = base.join("root");
         let outside = base.join("outside");
         fs::create_dir_all(&root).expect("root created");
+        let root = root.canonicalize().expect("canonical root");
         fs::create_dir_all(&outside).expect("outside created");
         fs::write(outside.join("secret-match.txt"), "secret").expect("fixture written");
         symlink(&outside, root.join("escape-link")).expect("symlink created");
 
-        let mut results = Vec::new();
-        search_recursive(&root, "secret-match", &mut results, 0, 3);
+        let result =
+            search_in_root(&root, &json!({"pattern": "secret-match"})).expect("search succeeds");
 
         let cleanup = fs::remove_dir_all(&base);
         assert!(
-            results.is_empty(),
-            "search escaped through symlink: {results:?}"
+            result == "No files found",
+            "search escaped through symlink: {result}"
         );
         cleanup.expect("fixture removed");
     }
