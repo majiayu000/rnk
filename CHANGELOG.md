@@ -12,8 +12,9 @@ artifacts are also available from the GitHub Releases page.
 
 ### Fixed
 
-- GLM chat filename search now returns matched paths and consistently limits
-  results to 20 entries.
+- GLM chat filename search now returns up to 20 regular-file paths as a JSON
+  array, escaping filename delimiters and using held, no-follow directories on
+  Unix to prevent symlink swaps from disclosing outside-root filenames.
 
 ## 0.19.3 - 2026-06-29
 

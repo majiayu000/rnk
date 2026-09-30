@@ -151,7 +151,7 @@ fn get_tools() -> Vec<Tool> {
         },
         Tool {
             name: "search_files".to_string(),
-            description: "Search for matching filenames in current directory".to_string(),
+            description: "Search for matching regular filenames in current directory; return up to 20 paths as a JSON array".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -276,11 +276,7 @@ fn execute_tool(root: &Path, name: &str, input: &Value) -> Result<String, String
             if results.is_empty() {
                 Ok("No files found".to_string())
             } else {
-                Ok(format!(
-                    "Found {} files\n{}",
-                    results.len(),
-                    results.join("\n")
-                ))
+                Ok(format!("Found {} files\n{}", results.len(), json!(results)))
             }
         }
         _ => Err(format!("unknown tool: {name}")),
@@ -413,9 +409,7 @@ fn list_approved_names(_root: &Path, approved: &ApprovedPath) -> io::Result<Vec<
 
 #[cfg(unix)]
 fn open_nofollow(root: &Path, approved: &ApprovedPath, mode: OpenMode) -> io::Result<fs::File> {
-    use std::ffi::CString;
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-    use std::os::unix::ffi::OsStrExt;
+    use std::os::fd::{AsRawFd, OwnedFd};
     use std::os::unix::fs::OpenOptionsExt;
 
     // O_NOFOLLOW rejects a symlink planted in place of the canonical root.
@@ -437,25 +431,41 @@ fn open_nofollow(root: &Path, approved: &ApprovedPath, mode: OpenMode) -> io::Re
     }
 
     for (index, component) in approved.components.iter().enumerate() {
-        reject_special_component(component)?;
-        let directory =
-            index + 1 < approved.components.len() || matches!(mode, OpenMode::Directory);
-        let name = CString::new(component.as_bytes()).map_err(|_| {
-            io::Error::new(io::ErrorKind::InvalidInput, "path component contains NUL")
-        })?;
-        let mut flags = libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW;
-        if directory {
-            flags |= libc::O_DIRECTORY;
-        }
-        let fd = unsafe { libc::openat(current.as_raw_fd(), name.as_ptr(), flags) };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // Safety: openat just returned a new owned descriptor, or we returned above.
-        current = unsafe { OwnedFd::from_raw_fd(fd) };
+        let mode = if index + 1 < approved.components.len() || matches!(mode, OpenMode::Directory) {
+            OpenMode::Directory
+        } else {
+            OpenMode::File
+        };
+        current = open_child_nofollow(current.as_raw_fd(), component, mode)?;
     }
 
     Ok(fs::File::from(current))
+}
+
+#[cfg(unix)]
+fn open_child_nofollow(
+    parent_fd: std::os::fd::RawFd,
+    component: &std::ffi::OsStr,
+    mode: OpenMode,
+) -> io::Result<std::os::fd::OwnedFd> {
+    use std::ffi::CString;
+    use std::os::fd::{FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    reject_special_component(component)?;
+    let name = CString::new(component.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path component contains NUL"))?;
+    let mut flags = libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW;
+    if matches!(mode, OpenMode::Directory) {
+        flags |= libc::O_DIRECTORY;
+    }
+    // Safety: parent_fd is held open by the caller and name is NUL-terminated.
+    let fd = unsafe { libc::openat(parent_fd, name.as_ptr(), flags) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // Safety: openat just returned a new owned descriptor, or we returned above.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
 #[cfg(unix)]
@@ -474,6 +484,12 @@ fn reject_special_component(component: &std::ffi::OsStr) -> io::Result<()> {
 
 #[cfg(unix)]
 fn list_from_owned_fd(fd: std::os::fd::OwnedFd) -> io::Result<Vec<String>> {
+    let entries = open_dir_from_owned_fd(fd)?;
+    read_dir_entries(entries.dir)
+}
+
+#[cfg(unix)]
+fn open_dir_from_owned_fd(fd: std::os::fd::OwnedFd) -> io::Result<OpenDir> {
     use std::os::fd::AsRawFd;
 
     // Safety: fd is an open directory descriptor. On failure fdopendir leaves it
@@ -483,8 +499,7 @@ fn list_from_owned_fd(fd: std::os::fd::OwnedFd) -> io::Result<Vec<String>> {
         return Err(io::Error::last_os_error());
     }
     std::mem::forget(fd);
-    let entries = OpenDir { dir };
-    read_dir_entries(entries.dir)
+    Ok(OpenDir { dir })
 }
 
 #[cfg(unix)]
@@ -525,7 +540,7 @@ fn read_dir_entries(dir: *mut libc::DIR) -> io::Result<Vec<String>> {
         if name.to_bytes() == b"." || name.to_bytes() == b".." {
             continue;
         }
-        let directory = entry_is_directory(dir, entry, name)?;
+        let directory = entry_type(dir, entry, name)? == libc::DT_DIR;
         let mut label = name.to_string_lossy().into_owned();
         if directory {
             label.push('/');
@@ -539,18 +554,15 @@ fn read_dir_entries(dir: *mut libc::DIR) -> io::Result<Vec<String>> {
 }
 
 #[cfg(unix)]
-fn entry_is_directory(
+fn entry_type(
     dir: *mut libc::DIR,
     entry: *mut libc::dirent,
     name: &std::ffi::CStr,
-) -> io::Result<bool> {
+) -> io::Result<u8> {
     // Safety: entry is the current readdir result and name points at its d_name.
     let dtype = unsafe { (*entry).d_type };
-    if dtype == libc::DT_DIR {
-        return Ok(true);
-    }
     if dtype != libc::DT_UNKNOWN {
-        return Ok(false);
+        return Ok(dtype);
     }
     let dirfd = unsafe { libc::dirfd(dir) };
     if dirfd < 0 {
@@ -569,7 +581,11 @@ fn entry_is_directory(
         return Err(io::Error::last_os_error());
     }
     let info = unsafe { info.assume_init() };
-    Ok(info.st_mode & libc::S_IFMT == libc::S_IFDIR)
+    Ok(match info.st_mode & libc::S_IFMT {
+        libc::S_IFDIR => libc::DT_DIR,
+        libc::S_IFREG => libc::DT_REG,
+        _ => libc::DT_UNKNOWN,
+    })
 }
 
 #[cfg(unix)]
@@ -584,6 +600,7 @@ fn clear_errno() {
     }
 }
 
+#[cfg(unix)]
 fn search_recursive(
     dir: &Path,
     pattern: &str,
@@ -591,26 +608,100 @@ fn search_recursive(
     depth: usize,
     max_depth: usize,
 ) {
-    if depth > max_depth || results.len() >= 20 {
+    if depth > max_depth || results.len() >= MAX_LISTED_ENTRIES {
+        return;
+    }
+    let approved = ApprovedPath {
+        display: dir.to_path_buf(),
+        components: Vec::new(),
+    };
+    if let Ok(file) = open_nofollow(dir, &approved, OpenMode::Directory) {
+        search_from_owned_fd(file.into(), dir, pattern, results, depth, max_depth);
+    }
+}
+
+#[cfg(unix)]
+fn search_from_owned_fd(
+    fd: std::os::fd::OwnedFd,
+    path: &Path,
+    pattern: &str,
+    results: &mut Vec<String>,
+    depth: usize,
+    max_depth: usize,
+) {
+    use std::ffi::{CStr, OsStr};
+    use std::os::unix::ffi::OsStrExt;
+
+    if depth > max_depth || results.len() >= MAX_LISTED_ENTRIES {
+        return;
+    }
+    let Ok(entries) = open_dir_from_owned_fd(fd) else {
+        return;
+    };
+    // Safety: entries owns a live DIR until this traversal finishes.
+    let parent_fd = unsafe { libc::dirfd(entries.dir) };
+    if parent_fd < 0 {
+        return;
+    }
+    while results.len() < MAX_LISTED_ENTRIES {
+        // Safety: entries owns the directory and the result stays valid until
+        // the next readdir call on this DIR.
+        let entry = unsafe { libc::readdir(entries.dir) };
+        if entry.is_null() {
+            break;
+        }
+        let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+        if name.to_bytes() == b"." || name.to_bytes() == b".." {
+            continue;
+        }
+        let Ok(dtype) = entry_type(entries.dir, entry, name) else {
+            continue;
+        };
+        let component = OsStr::from_bytes(name.to_bytes());
+        let child_path = path.join(component);
+        if dtype == libc::DT_REG && component.to_string_lossy().contains(pattern) {
+            // The tool accepts JSON strings; non-UTF-8 paths cannot round-trip.
+            if let Some(path) = child_path.to_str() {
+                results.push(path.to_string());
+            }
+        } else if dtype == libc::DT_DIR
+            && !name.to_bytes().starts_with(b".")
+            && depth < max_depth
+            && let Ok(child) = open_child_nofollow(parent_fd, component, OpenMode::Directory)
+        {
+            search_from_owned_fd(child, &child_path, pattern, results, depth + 1, max_depth);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn search_recursive(
+    dir: &Path,
+    pattern: &str,
+    results: &mut Vec<String>,
+    depth: usize,
+    max_depth: usize,
+) {
+    if depth > max_depth || results.len() >= MAX_LISTED_ENTRIES {
         return;
     }
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.filter_map(|e| e.ok()) {
-            if results.len() >= 20 {
+            if results.len() >= MAX_LISTED_ENTRIES {
                 break;
             }
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
 
-            if name.contains(pattern) {
-                results.push(path.display().to_string());
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_file() && name.contains(pattern) {
+                if let Some(path) = path.to_str() {
+                    results.push(path.to_string());
+                }
             }
-
-            let is_real_directory = entry
-                .file_type()
-                .map(|file_type| file_type.is_dir())
-                .unwrap_or(false);
-            if is_real_directory && !name.starts_with('.') {
+            if file_type.is_dir() && !name.starts_with('.') {
                 search_recursive(&path, pattern, results, depth + 1, max_depth);
             }
         }
@@ -1251,9 +1342,10 @@ mod tests {
             |_| true,
         );
         assert!(matches!(decision, ToolDecision::Executed(_)));
-        let mut lines = decision.result().lines();
-        assert_eq!(lines.next(), Some("Found 2 files"));
-        let paths: BTreeSet<_> = lines.map(PathBuf::from).collect();
+        let (count, encoded) = decision.result().split_once('\n').expect("count and paths");
+        assert_eq!(count, "Found 2 files");
+        let paths: Vec<PathBuf> = serde_json::from_str(encoded).expect("JSON paths");
+        let paths: BTreeSet<_> = paths.into_iter().collect();
         assert_eq!(paths, BTreeSet::from(expected_paths));
         for path in paths {
             execute_tool(&root, "read_file", &json!({"path": path}))
@@ -1273,11 +1365,139 @@ mod tests {
 
         let result = execute_tool(&root, "search_files", &json!({"pattern": "match"}))
             .expect("search succeeds");
-        let mut lines = result.lines();
-        assert_eq!(lines.next(), Some("Found 20 files"));
-        let paths: BTreeSet<_> = lines.map(PathBuf::from).collect();
+        let (count, encoded) = result.split_once('\n').expect("count and paths");
+        assert_eq!(count, "Found 20 files");
+        let paths: Vec<PathBuf> = serde_json::from_str(encoded).expect("JSON paths");
+        let paths: BTreeSet<_> = paths.into_iter().collect();
         assert_eq!(paths.len(), 20);
         assert!(paths.is_subset(&expected_paths));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn approved_search_files_round_trips_delimiters_in_paths() {
+        let (_scratch, root) = temp_root("search-delimiters");
+        let path = root.join("match\nchild\"\\.txt");
+        fs::write(&path, "found\n").expect("matching file written");
+        let authorization = ToolAuthorization::Prompt { root: root.clone() };
+
+        let decision = authorization.review_and_execute_with(
+            "search_files",
+            &json!({"pattern": "match"}),
+            |_| true,
+        );
+        assert!(matches!(decision, ToolDecision::Executed(_)));
+        let (count, encoded) = decision.result().split_once('\n').expect("count and paths");
+        assert_eq!(count, "Found 1 files");
+        let paths: Vec<String> = serde_json::from_str(encoded).expect("unambiguous JSON paths");
+        assert_eq!(paths, [path.to_str().expect("UTF-8 path")]);
+        execute_tool(&root, "read_file", &json!({"path": paths[0]}))
+            .expect("decoded path can be read");
+    }
+
+    #[test]
+    fn search_files_counts_only_regular_files_toward_the_cap() {
+        let (_scratch, root) = temp_root("search-types");
+        for index in 0..25 {
+            fs::create_dir(root.join(format!("match-dir-{index:02}")))
+                .expect("matching directory created");
+        }
+        let nested = root.join("match-dir-00");
+        let expected_paths = [root.join("match.txt"), nested.join("match-child.txt")];
+        for path in &expected_paths {
+            fs::write(path, "found\n").expect("matching file written");
+        }
+        #[cfg(unix)]
+        for index in 0..25 {
+            std::os::unix::fs::symlink("match.txt", root.join(format!("match-link-{index:02}")))
+                .expect("matching symlink created");
+        }
+
+        let result = execute_tool(&root, "search_files", &json!({"pattern": "match"}))
+            .expect("search succeeds");
+        let (count, encoded) = result.split_once('\n').expect("count and paths");
+        assert_eq!(count, "Found 2 files");
+        let paths: Vec<PathBuf> = serde_json::from_str(encoded).expect("JSON paths");
+        let paths: BTreeSet<_> = paths.into_iter().collect();
+        assert_eq!(paths, BTreeSet::from(expected_paths));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_search_rejects_a_directory_swapped_for_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let (_scratch, root) = temp_root("search-swapped-dir");
+        let child = root.join("child");
+        let outside = root.parent().expect("scratch").join("outside");
+        fs::create_dir(&child).expect("child created");
+        fs::create_dir(&outside).expect("outside created");
+        fs::write(outside.join("secret-match.txt"), "secret").expect("secret written");
+        assert!(
+            fs::symlink_metadata(&child)
+                .expect("child metadata")
+                .is_dir()
+        );
+        fs::rename(&child, root.join("displaced-child")).expect("child displaced");
+        symlink(&outside, &child).expect("child replaced with symlink");
+
+        // Reproduce the path reopened after the caller observed a real directory.
+        let mut results = Vec::new();
+        search_recursive(&child, "secret-match", &mut results, 1, 3);
+        assert!(
+            results.is_empty(),
+            "search followed swapped child: {results:?}"
+        );
+
+        let displaced = root.parent().expect("scratch").join("displaced-root");
+        fs::rename(&root, &displaced).expect("root displaced");
+        symlink(&outside, &root).expect("root replaced with symlink");
+        let result = execute_tool(&root, "search_files", &json!({"pattern": "secret-match"}))
+            .expect("search remains best effort");
+        assert_eq!(result, "No files found");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_search_keeps_held_directories_after_path_swaps() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::symlink;
+
+        let (_scratch, root) = temp_root("search-held-dirs");
+        let base = root.parent().expect("scratch");
+        let child = root.join("child");
+        let outside = base.join("outside");
+        fs::create_dir(&child).expect("child created");
+        fs::create_dir(&outside).expect("outside created");
+        fs::write(root.join("inside-match.txt"), "inside").expect("root file written");
+        fs::write(child.join("child-match.txt"), "inside").expect("child file written");
+        fs::write(outside.join("secret-match.txt"), "secret").expect("secret written");
+        let approved = approve_confined_path(&root, &json!({"path": "."})).expect("root approved");
+        let root_file = open_nofollow(&root, &approved, OpenMode::Directory).expect("root held");
+        let child_fd =
+            open_child_nofollow(root_file.as_raw_fd(), "child".as_ref(), OpenMode::Directory)
+                .expect("child held");
+
+        fs::rename(&child, base.join("displaced-child")).expect("child displaced");
+        symlink(&outside, &child).expect("child replaced with symlink");
+        assert!(
+            open_child_nofollow(root_file.as_raw_fd(), "child".as_ref(), OpenMode::Directory)
+                .is_err(),
+            "a child swapped after its type check must not be opened"
+        );
+        fs::rename(&root, base.join("displaced-root")).expect("root displaced");
+        symlink(&outside, &root).expect("root replaced with symlink");
+
+        let mut results = Vec::new();
+        search_from_owned_fd(root_file.into(), &root, "match", &mut results, 0, 3);
+        search_from_owned_fd(child_fd, &child, "match", &mut results, 1, 3);
+        assert_eq!(
+            results,
+            [
+                root.join("inside-match.txt").to_str().expect("UTF-8 path"),
+                child.join("child-match.txt").to_str().expect("UTF-8 path"),
+            ]
+        );
     }
 
     #[test]
