@@ -10,6 +10,11 @@ artifacts are also available from the GitHub Releases page.
 - Prepared the release workflow for crates.io trusted publishing through GitHub
   OIDC, with fail-fast crates.io version checks before publish.
 
+### Fixed
+
+- GLM chat filename search now returns matched paths and consistently limits
+  results to 20 entries.
+
 ## 0.19.3 - 2026-06-29
 
 ### Added
