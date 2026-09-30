@@ -36,6 +36,8 @@ const ALLOW_TOOLS_ENV: &str = "RNK_GLM_CHAT_ALLOW_TOOLS";
 const TOOL_ROOT_ENV: &str = "RNK_GLM_CHAT_TOOL_ROOT";
 const MAX_TOOL_ROUNDS: usize = 8;
 const MAX_LISTED_ENTRIES: usize = 20;
+const MAX_READ_LINES: usize = 100;
+const MAX_READ_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Default)]
 struct ToolRoundBudget {
@@ -123,7 +125,9 @@ fn get_tools() -> Vec<Tool> {
     vec![
         Tool {
             name: "read_file".to_string(),
-            description: "Read file content at specified path (up to 100 lines)".to_string(),
+            description: format!(
+                "Read file content at specified path (up to {MAX_READ_LINES} lines and {MAX_READ_BYTES} bytes)"
+            ),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -363,17 +367,30 @@ fn read_approved(root: &Path, approved: &ApprovedPath) -> Result<String, String>
     file.read_to_string(&mut content)
         .map_err(|error| format!("cannot read {}: {error}", approved.display.display()))?;
     let mut content_lines = content.lines();
-    let lines: Vec<_> = content_lines.by_ref().take(100).collect();
-    let truncation = if content_lines.next().is_some() {
-        "\n\n[Truncated to first 100 lines]"
+    let lines: Vec<_> = content_lines.by_ref().take(MAX_READ_LINES).collect();
+    let line_truncated = content_lines.next().is_some();
+    let mut preview = lines.join("\n");
+    let byte_truncated = preview.len() > MAX_READ_BYTES;
+    let shown_lines = if byte_truncated {
+        let mut end = MAX_READ_BYTES;
+        while !preview.is_char_boundary(end) {
+            end -= 1;
+        }
+        preview.truncate(end);
+        preview.lines().count()
     } else {
-        ""
+        lines.len()
+    };
+    let truncation = if byte_truncated {
+        format!("\n\n[Truncated to first {MAX_READ_BYTES} bytes]")
+    } else if line_truncated {
+        format!("\n\n[Truncated to first {MAX_READ_LINES} lines]")
+    } else {
+        String::new()
     };
     Ok(format!(
-        "Read {} lines from {}\n\n{}{truncation}",
-        lines.len(),
-        approved.display.display(),
-        lines.join("\n")
+        "Read {shown_lines} lines from {}\n\n{preview}{truncation}",
+        approved.display.display()
     ))
 }
 
@@ -1285,12 +1302,96 @@ mod tests {
     }
 
     #[test]
+    fn approved_read_file_bounds_a_huge_single_line() {
+        let (_scratch, root) = temp_root("read-huge-line");
+        fs::write(root.join("note.txt"), "x".repeat(1024 * 1024)).expect("note written");
+        let authorization = ToolAuthorization::Prompt { root: root.clone() };
+
+        let decision = authorization.review_and_execute_with(
+            "read_file",
+            &json!({"path": "note.txt"}),
+            |_| true,
+        );
+
+        assert_eq!(
+            decision,
+            ToolDecision::Executed(format!(
+                "Read 1 lines from {}\n\n{}\n\n[Truncated to first 16384 bytes]",
+                root.join("note.txt").display(),
+                "x".repeat(16 * 1024)
+            ))
+        );
+    }
+
+    #[test]
+    fn approved_read_file_byte_cap_preserves_utf8_and_reports_shown_lines() {
+        let (_scratch, root) = temp_root("read-byte-cap");
+        let authorization = ToolAuthorization::Prompt { root: root.clone() };
+        let cap = 16 * 1024;
+        let cases = [
+            ("x".repeat(cap - 1), "x".repeat(cap - 1), 1, false),
+            ("x".repeat(cap), "x".repeat(cap), 1, false),
+            ("x".repeat(cap + 1), "x".repeat(cap), 1, true),
+            (
+                format!("{}中", "x".repeat(cap - 3)),
+                format!("{}中", "x".repeat(cap - 3)),
+                1,
+                false,
+            ),
+            (
+                format!("{}中", "x".repeat(cap - 1)),
+                "x".repeat(cap - 1),
+                1,
+                true,
+            ),
+            (
+                format!("first\n{}\nlast", "x".repeat(cap)),
+                format!("first\n{}", "x".repeat(cap - 6)),
+                2,
+                true,
+            ),
+            (
+                format!("{}\nlast", "x".repeat(cap - 1)),
+                format!("{}\n", "x".repeat(cap - 1)),
+                1,
+                true,
+            ),
+            (
+                format!("{}{}", "x".repeat(cap + 1), "\nlast".repeat(100)),
+                "x".repeat(cap),
+                1,
+                true,
+            ),
+        ];
+
+        for (body, preview, shown_lines, truncated) in cases {
+            fs::write(root.join("note.txt"), body).expect("note written");
+            let decision = authorization.review_and_execute_with(
+                "read_file",
+                &json!({"path": "note.txt"}),
+                |_| true,
+            );
+            let mut expected = format!(
+                "Read {shown_lines} lines from {}\n\n{preview}",
+                root.join("note.txt").display()
+            );
+            if truncated {
+                expected.push_str("\n\n[Truncated to first 16384 bytes]");
+            }
+            assert_eq!(decision, ToolDecision::Executed(expected));
+        }
+    }
+
+    #[test]
     fn failed_read_file_remains_a_denied_decision() {
         let (_scratch, root) = temp_root("read-error");
         fs::write(root.join("invalid.txt"), [0xff]).expect("invalid UTF-8 written");
+        let mut invalid_tail = vec![b'x'; 16 * 1024];
+        invalid_tail.push(0xff);
+        fs::write(root.join("invalid-tail.txt"), invalid_tail).expect("invalid UTF-8 tail written");
         let authorization = ToolAuthorization::Prompt { root: root.clone() };
 
-        for path in ["missing.txt", "invalid.txt"] {
+        for path in ["missing.txt", "invalid.txt", "invalid-tail.txt"] {
             let decision =
                 authorization
                     .review_and_execute_with("read_file", &json!({"path": path}), |_| true);
