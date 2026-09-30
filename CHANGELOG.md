@@ -22,8 +22,9 @@ artifacts are also available from the GitHub Releases page.
   root from authorization and use no-follow directories to prevent root,
   ancestor, or child symlink swaps from disclosing outside-root filenames.
   Unix reads also reuse the held root so ancestor replacements cannot disclose
-  outside-root contents. Search fails closed with an unsupported-platform error
-  on non-Unix systems where the approved root cannot be held safely.
+  outside-root contents. Reads and searches fail closed with an unsupported-platform
+  error on non-Unix systems where the approved root cannot be held safely.
+  Linux and macOS root traversal requires only search permission on ancestors.
 
 ## 0.19.3 - 2026-06-29
 

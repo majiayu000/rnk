@@ -371,6 +371,7 @@ struct ApprovedPath {
 enum OpenMode {
     File,
     Directory,
+    Traverse,
 }
 
 /// Approve `input`'s path without looking at the filesystem.
@@ -483,8 +484,11 @@ fn open_for_read(root: &fs::File, approved: &ApprovedPath) -> io::Result<fs::Fil
 }
 
 #[cfg(not(unix))]
-fn open_for_read(_root: &Path, approved: &ApprovedPath) -> io::Result<fs::File> {
-    fs::File::open(&approved.display)
+fn open_for_read(_root: &Path, _approved: &ApprovedPath) -> io::Result<fs::File> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "read_file is unsupported on this platform: cannot safely hold the approved root",
+    ))
 }
 
 #[cfg(unix)]
@@ -533,7 +537,7 @@ fn open_from_held_root(
     let mut current: OwnedFd = root.try_clone()?.into();
     if approved.components.is_empty() {
         return match mode {
-            OpenMode::Directory => Ok(fs::File::from(current)),
+            OpenMode::Directory | OpenMode::Traverse => Ok(fs::File::from(current)),
             OpenMode::File => Err(io::Error::new(
                 io::ErrorKind::IsADirectory,
                 "is a directory",
@@ -542,10 +546,10 @@ fn open_from_held_root(
     }
 
     for (index, component) in approved.components.iter().enumerate() {
-        let mode = if index + 1 < approved.components.len() || matches!(mode, OpenMode::Directory) {
-            OpenMode::Directory
+        let mode = if index + 1 < approved.components.len() {
+            OpenMode::Traverse
         } else {
-            OpenMode::File
+            mode
         };
         current = open_child_nofollow(current.as_raw_fd(), component, mode)?;
     }
@@ -567,8 +571,19 @@ fn open_child_nofollow(
     let name = CString::new(component.as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path component contains NUL"))?;
     let mut flags = libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW;
-    if matches!(mode, OpenMode::Directory) {
+    if matches!(mode, OpenMode::Directory | OpenMode::Traverse) {
         flags |= libc::O_DIRECTORY;
+    }
+    if matches!(mode, OpenMode::Traverse) {
+        // Ancestors need lookup permission, not permission to enumerate names.
+        #[cfg(target_os = "linux")]
+        {
+            flags |= libc::O_PATH;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            flags |= libc::O_SEARCH;
+        }
     }
     // Safety: parent_fd is held open by the caller and name is NUL-terminated.
     let fd = unsafe { libc::openat(parent_fd, name.as_ptr(), flags) };
@@ -1556,12 +1571,49 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn tool_root_can_be_opened_below_execute_only_ancestors() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_scratch, base) = temp_root("execute-only-ancestor");
+        let ancestor = base.join("ancestor");
+        let root = ancestor.join("approved");
+        fs::create_dir_all(&root).expect("approved root created");
+        fs::write(root.join("note.txt"), "approved body").expect("inside written");
+        fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o111))
+            .expect("ancestor is searchable but not readable");
+        let canonical = root.canonicalize();
+        let readable = fs::read_to_string(root.join("note.txt"));
+        let authorization = canonical.and_then(ToolAuthorization::prompt);
+        fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o700))
+            .expect("ancestor permissions restored for cleanup");
+
+        assert_eq!(
+            readable.expect("normal file access succeeds"),
+            "approved body"
+        );
+        let authorization = authorization.expect("ancestor read permission is unnecessary");
+        let decision = authorization.review_and_execute_with(
+            "read_file",
+            &json!({"path": "note.txt"}),
+            |_| true,
+        );
+        assert_eq!(
+            decision,
+            ToolDecision::Executed(format!(
+                "Read 1 lines from {}\n\napproved body",
+                root.join("note.txt").display()
+            ))
+        );
+    }
+
     #[cfg(not(unix))]
     #[test]
-    fn approved_search_files_fails_closed_on_unsupported_platforms() {
+    fn approved_tools_fail_closed_on_unsupported_platforms() {
         let (_scratch, root) = temp_root("search-unsupported");
         fs::write(root.join("match.txt"), "found").expect("matching file written");
-        let authorization = ToolAuthorization::prompt(root).expect("authorization created");
+        let authorization = ToolAuthorization::prompt(root.clone()).expect("authorization created");
         let decision = authorization.review_and_execute_with(
             "search_files",
             &json!({"pattern": "match"}),
@@ -1573,11 +1625,23 @@ mod tests {
                 "Not executed: search_files is unsupported on this platform: cannot safely hold the approved root".to_string()
             )
         );
+        let read = authorization.review_and_execute_with(
+            "read_file",
+            &json!({"path": "match.txt"}),
+            |_| true,
+        );
+        assert_eq!(
+            read,
+            ToolDecision::Denied(format!(
+                "Not executed: cannot read {}: read_file is unsupported on this platform: cannot safely hold the approved root",
+                root.join("match.txt").display()
+            ))
+        );
     }
 
     #[cfg(windows)]
     #[test]
-    fn approved_search_files_denies_a_replacement_root_junction() {
+    fn approved_tools_deny_a_replacement_root_junction() {
         let (_scratch, root) = temp_root("search-junction");
         let base = root.parent().expect("scratch");
         let outside = base.join("outside");
@@ -1597,17 +1661,33 @@ mod tests {
                 .expect("pathname follows junction")
                 .any(|entry| entry.expect("entry").file_name() == "secret-match.txt")
         );
-        let decision = authorization.review_and_execute_with(
+        assert_eq!(
+            fs::read_to_string(root.join("secret-match.txt")).expect("pathname follows junction"),
+            "secret"
+        );
+        let search = authorization.review_and_execute_with(
             "search_files",
             &json!({"pattern": "match"}),
             |_| true,
         );
+        let read = authorization.review_and_execute_with(
+            "read_file",
+            &json!({"path": "secret-match.txt"}),
+            |_| true,
+        );
         fs::remove_dir(&root).expect("junction removed without removing its target");
         assert_eq!(
-            decision,
+            search,
             ToolDecision::Denied(
                 "Not executed: search_files is unsupported on this platform: cannot safely hold the approved root".to_string()
             )
+        );
+        assert_eq!(
+            read,
+            ToolDecision::Denied(format!(
+                "Not executed: cannot read {}: read_file is unsupported on this platform: cannot safely hold the approved root",
+                root.join("secret-match.txt").display()
+            ))
         );
     }
 
@@ -1813,6 +1893,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn approved_read_file_returns_the_file_body() {
         let (_scratch, root) = temp_root("read-body");
@@ -1835,6 +1916,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn approved_read_file_caps_content_and_marks_only_truncated_results() {
         let (_scratch, root) = temp_root("read-cap");
@@ -1863,6 +1945,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn approved_read_file_bounds_a_huge_single_line() {
         let (_scratch, root) = temp_root("read-huge-line");
@@ -1885,6 +1968,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn approved_read_file_byte_cap_preserves_utf8_and_reports_shown_lines() {
         let (_scratch, root) = temp_root("read-byte-cap");
@@ -2007,22 +2091,26 @@ mod tests {
         fs::create_dir(root.join("sub")).expect("sub created");
         fs::write(root.join("sub").join("a.txt"), "a\n").expect("child written");
 
-        let expected = format!(
-            "Read 1 lines from {}\n\nhello",
-            root.join("note.txt").display()
-        );
-        let read =
-            execute_tool(&root, "read_file", &json!({"path": "note.txt"})).expect("relative read");
-        assert_eq!(read, expected);
-        let dotted =
-            execute_tool(&root, "read_file", &json!({"path": "./note.txt"})).expect("dot read");
-        assert_eq!(dotted, expected);
-        let parent = execute_tool(&root, "read_file", &json!({"path": "sub/../note.txt"}))
-            .expect("parent read");
-        assert_eq!(parent, expected);
-        let absolute = execute_tool(&root, "read_file", &json!({"path": root.join("note.txt")}))
-            .expect("absolute read");
-        assert_eq!(absolute, expected);
+        #[cfg(unix)]
+        {
+            let expected = format!(
+                "Read 1 lines from {}\n\nhello",
+                root.join("note.txt").display()
+            );
+            let read = execute_tool(&root, "read_file", &json!({"path": "note.txt"}))
+                .expect("relative read");
+            assert_eq!(read, expected);
+            let dotted =
+                execute_tool(&root, "read_file", &json!({"path": "./note.txt"})).expect("dot read");
+            assert_eq!(dotted, expected);
+            let parent = execute_tool(&root, "read_file", &json!({"path": "sub/../note.txt"}))
+                .expect("parent read");
+            assert_eq!(parent, expected);
+            let absolute =
+                execute_tool(&root, "read_file", &json!({"path": root.join("note.txt")}))
+                    .expect("absolute read");
+            assert_eq!(absolute, expected);
+        }
 
         let listed = execute_tool(&root, "list_files", &json!({"path": "."})).expect("list dot");
         assert_eq!(listed_names(&listed), BTreeSet::from(["note.txt", "sub/"]));
