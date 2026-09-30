@@ -21,6 +21,9 @@ artifacts are also available from the GitHub Releases page.
   a JSON array, including matches under non-UTF-8 roots. Unix searches hold the
   root from authorization and use no-follow directories to prevent root,
   ancestor, or child symlink swaps from disclosing outside-root filenames.
+  Unix reads also reuse the held root so ancestor replacements cannot disclose
+  outside-root contents. Search fails closed with an unsupported-platform error
+  on non-Unix systems where the approved root cannot be held safely.
 
 ## 0.19.3 - 2026-06-29
 
