@@ -276,7 +276,11 @@ fn execute_tool(root: &Path, name: &str, input: &Value) -> Result<String, String
             if results.is_empty() {
                 Ok("No files found".to_string())
             } else {
-                Ok(format!("Found {} files", results.len()))
+                Ok(format!(
+                    "Found {} files\n{}",
+                    results.len(),
+                    results.join("\n")
+                ))
             }
         }
         _ => Err(format!("unknown tool: {name}")),
@@ -592,6 +596,9 @@ fn search_recursive(
     }
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.filter_map(|e| e.ok()) {
+            if results.len() >= 20 {
+                break;
+            }
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
 
@@ -1224,6 +1231,65 @@ mod tests {
         assert_eq!(prompts, 1);
         assert!(decision.was_denied());
         assert!(decision.result().contains("denied by the user"));
+    }
+
+    #[test]
+    fn approved_search_files_returns_usable_matched_paths() {
+        let (_scratch, root) = temp_root("search-paths");
+        let nested = root.join("sub");
+        fs::create_dir(&nested).expect("sub created");
+        let expected_paths = [root.join("match.txt"), nested.join("match-child.txt")];
+        for path in &expected_paths {
+            fs::write(path, "found\n").expect("matching file written");
+        }
+        fs::write(root.join("other.txt"), "other\n").expect("nonmatching file written");
+        let authorization = ToolAuthorization::Prompt { root: root.clone() };
+
+        let decision = authorization.review_and_execute_with(
+            "search_files",
+            &json!({"pattern": "match"}),
+            |_| true,
+        );
+        assert!(matches!(decision, ToolDecision::Executed(_)));
+        let mut lines = decision.result().lines();
+        assert_eq!(lines.next(), Some("Found 2 files"));
+        let paths: BTreeSet<_> = lines.map(PathBuf::from).collect();
+        assert_eq!(paths, BTreeSet::from(expected_paths));
+        for path in paths {
+            execute_tool(&root, "read_file", &json!({"path": path}))
+                .expect("returned path can be read");
+        }
+    }
+
+    #[test]
+    fn search_files_returns_at_most_twenty_matched_paths() {
+        let (_scratch, root) = temp_root("search-cap");
+        let mut expected_paths = BTreeSet::new();
+        for index in 0..25 {
+            let path = root.join(format!("match-{index:02}.txt"));
+            fs::write(&path, "found\n").expect("matching file written");
+            expected_paths.insert(path);
+        }
+
+        let result = execute_tool(&root, "search_files", &json!({"pattern": "match"}))
+            .expect("search succeeds");
+        let mut lines = result.lines();
+        assert_eq!(lines.next(), Some("Found 20 files"));
+        let paths: BTreeSet<_> = lines.map(PathBuf::from).collect();
+        assert_eq!(paths.len(), 20);
+        assert!(paths.is_subset(&expected_paths));
+    }
+
+    #[test]
+    fn search_files_preserves_no_match_and_invalid_pattern_results() {
+        let (_scratch, root) = temp_root("search-empty");
+        let result = execute_tool(&root, "search_files", &json!({"pattern": "missing"}))
+            .expect("no-match search succeeds");
+        assert_eq!(result, "No files found");
+        for input in [json!({}), json!({"pattern": ""}), json!({"pattern": 1})] {
+            let error = execute_tool(&root, "search_files", &input).expect_err("invalid pattern");
+            assert_eq!(error, "search_files requires a non-empty string pattern");
+        }
     }
 
     #[test]
