@@ -209,25 +209,30 @@ impl MessageListState {
         )))
     }
 
-    /// Whether a mutation added rows below where the reader was looking.
+    /// Whether newly inserted or grown rows extend below the reader's view.
     ///
-    /// Compared against the pre-mutation viewport end rather than guessed from
-    /// "was it the last message", which is wrong as soon as anything is
-    /// inserted above the tail.
+    /// Use the restored offset so rows added above the anchor shift the view
+    /// and the changed interval together, rather than looking like tail growth.
     pub(super) fn growth_below_viewport(
         &self,
-        previous_total: u64,
         candidate: &ListStructure<'_>,
+        restored_offset: RowOffset,
     ) -> Result<bool, MessageListStateError> {
-        let new_total = candidate.total_rows()?;
-        if new_total <= previous_total {
-            return Ok(false);
-        }
-        let viewport_end = self
-            .scroll_offset
+        let viewport_end = restored_offset
             .get()
             .saturating_add(self.viewport_rows.get());
-        Ok(new_total > viewport_end)
+        for (index, entry) in candidate.entries.iter().enumerate() {
+            let previous_rows = self
+                .positions
+                .get(&entry.message_id())
+                .map_or(0, |index| self.rows[*index].get());
+            if candidate.rows[index].get() > previous_rows
+                && candidate.index.prefix_sum(index + 1)? > viewport_end
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
