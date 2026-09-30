@@ -123,7 +123,7 @@ fn get_tools() -> Vec<Tool> {
     vec![
         Tool {
             name: "read_file".to_string(),
-            description: "Read file content at specified path".to_string(),
+            description: "Read file content at specified path (up to 100 lines)".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -362,10 +362,18 @@ fn read_approved(root: &Path, approved: &ApprovedPath) -> Result<String, String>
     let mut content = String::new();
     file.read_to_string(&mut content)
         .map_err(|error| format!("cannot read {}: {error}", approved.display.display()))?;
-    let line_count = content.lines().take(100).count();
+    let mut content_lines = content.lines();
+    let lines: Vec<_> = content_lines.by_ref().take(100).collect();
+    let truncation = if content_lines.next().is_some() {
+        "\n\n[Truncated to first 100 lines]"
+    } else {
+        ""
+    };
     Ok(format!(
-        "Read {line_count} lines from {}",
-        approved.display.display()
+        "Read {} lines from {}\n\n{}{truncation}",
+        lines.len(),
+        approved.display.display(),
+        lines.join("\n")
     ))
 }
 
@@ -1227,6 +1235,74 @@ mod tests {
     }
 
     #[test]
+    fn approved_read_file_returns_the_file_body() {
+        let (_scratch, root) = temp_root("read-body");
+        let body = "first line\n\n最后一行";
+        fs::write(root.join("note.txt"), body).expect("note written");
+        let authorization = ToolAuthorization::Prompt { root: root.clone() };
+
+        let decision = authorization.review_and_execute_with(
+            "read_file",
+            &json!({"path": "note.txt"}),
+            |_| true,
+        );
+
+        assert_eq!(
+            decision,
+            ToolDecision::Executed(format!(
+                "Read 3 lines from {}\n\n{body}",
+                root.join("note.txt").display()
+            ))
+        );
+    }
+
+    #[test]
+    fn approved_read_file_caps_content_and_marks_only_truncated_results() {
+        let (_scratch, root) = temp_root("read-cap");
+        let authorization = ToolAuthorization::Prompt { root: root.clone() };
+
+        for line_count in [0, 100, 101] {
+            let lines: Vec<_> = (1..=line_count)
+                .map(|index| format!("line {index}"))
+                .collect();
+            fs::write(root.join("note.txt"), lines.join("\n")).expect("note written");
+            let decision = authorization.review_and_execute_with(
+                "read_file",
+                &json!({"path": "note.txt"}),
+                |_| true,
+            );
+            let mut expected = format!(
+                "Read {} lines from {}\n\n{}",
+                line_count.min(100),
+                root.join("note.txt").display(),
+                lines[..line_count.min(100)].join("\n")
+            );
+            if line_count > 100 {
+                expected.push_str("\n\n[Truncated to first 100 lines]");
+            }
+            assert_eq!(decision, ToolDecision::Executed(expected));
+        }
+    }
+
+    #[test]
+    fn failed_read_file_remains_a_denied_decision() {
+        let (_scratch, root) = temp_root("read-error");
+        fs::write(root.join("invalid.txt"), [0xff]).expect("invalid UTF-8 written");
+        let authorization = ToolAuthorization::Prompt { root: root.clone() };
+
+        for path in ["missing.txt", "invalid.txt"] {
+            let decision =
+                authorization
+                    .review_and_execute_with("read_file", &json!({"path": path}), |_| true);
+            assert!(decision.was_denied());
+            assert!(decision.result().starts_with(&format!(
+                "Not executed: cannot read {}:",
+                root.join(path).display()
+            )));
+        }
+    }
+
+    #[test]
     fn canonical_paths_cannot_escape_the_approved_root() {
         let repository = env::current_dir()
             .expect("repository root")
@@ -1268,7 +1344,10 @@ mod tests {
         fs::create_dir(root.join("sub")).expect("sub created");
         fs::write(root.join("sub").join("a.txt"), "a\n").expect("child written");
 
-        let expected = format!("Read 1 lines from {}", root.join("note.txt").display());
+        let expected = format!(
+            "Read 1 lines from {}\n\nhello",
+            root.join("note.txt").display()
+        );
         let read =
             execute_tool(&root, "read_file", &json!({"path": "note.txt"})).expect("relative read");
         assert_eq!(read, expected);
