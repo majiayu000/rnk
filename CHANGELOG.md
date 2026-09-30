@@ -7,6 +7,9 @@ artifacts are also available from the GitHub Releases page.
 
 ### Changed
 
+- Corrected the paused message-list new-content indicator so older rows added
+  above the reader do not raise it; growth below the viewport and already-raised
+  indicators still do.
 - Prepared the release workflow for crates.io trusted publishing through GitHub
   OIDC, with fail-fast crates.io version checks before publish.
 

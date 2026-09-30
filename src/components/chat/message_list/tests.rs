@@ -100,6 +100,7 @@ fn prepending_history_keeps_the_reader_on_the_same_message_row() {
 
     let anchor = state.stored_anchor().expect("paused list is anchored");
     let offset_before = state.scroll_offset();
+    assert!(!state.observation().new_content_below);
 
     let older = [entry_with_rows(90, 7), entry_with_rows(91, 3)];
     let table = [(90_u64, 7_u64), (91, 3)];
@@ -117,6 +118,114 @@ fn prepending_history_keeps_the_reader_on_the_same_message_row() {
         offset_before.get() + 10,
         "the anchored row did not shift by the height of the prepended history"
     );
+    assert!(!state.observation().new_content_below);
+}
+
+#[test]
+fn inserted_rows_raise_the_flag_only_when_they_extend_below_the_reader() {
+    for (index, height, expected_flag) in [
+        (0, 10, false),
+        (1, 10, false),
+        (2, 1, false),
+        (2, 2, true),
+        (3, 1, true),
+    ] {
+        let mut state = sized_state(&[4, 4, 4], 4, 12);
+        state
+            .try_scroll_to(state.revision(), RowOffset::new(5))
+            .unwrap();
+        let anchor = state.stored_anchor();
+        state
+            .try_insert::<(), (), _>(
+                state.revision(),
+                index,
+                entry_with_rows(90, height),
+                measure_from_table(&[(90, height)]),
+            )
+            .unwrap();
+
+        assert_eq!(state.stored_anchor(), anchor);
+        assert_eq!(
+            state.scroll_offset().get(),
+            5 + if index <= 1 { height } else { 0 }
+        );
+        assert_eq!(
+            state.observation().new_content_below,
+            expected_flag,
+            "insert at {index}, height {height}"
+        );
+    }
+}
+
+#[test]
+fn streamed_rows_raise_the_flag_only_when_they_extend_below_the_reader() {
+    for (id, height, expected_flag) in [(1, 14, false), (2, 5, false), (2, 6, true), (3, 5, true)] {
+        let mut state = sized_state(&[4, 4, 4], 4, 12);
+        state
+            .try_scroll_to(state.revision(), RowOffset::new(5))
+            .unwrap();
+        let anchor = state.stored_anchor();
+        state
+            .try_update::<(), (), _>(
+                state.revision(),
+                entry_with_rows(id, height),
+                measure_from_table(&[(id, height)]),
+            )
+            .unwrap();
+
+        assert_eq!(state.stored_anchor(), anchor);
+        assert_eq!(
+            state.scroll_offset().get(),
+            5 + if id == 1 { height - 4 } else { 0 }
+        );
+        assert_eq!(
+            state.observation().new_content_below,
+            expected_flag,
+            "update {id} to {height} rows"
+        );
+    }
+}
+
+#[test]
+fn replacing_the_list_with_older_history_keeps_the_new_content_flag_clear() {
+    let mut state = sized_state(&[4, 4, 4], 4, 12);
+    state
+        .try_scroll_to(state.revision(), RowOffset::new(5))
+        .unwrap();
+    let anchor = state.stored_anchor();
+    let mut entries = vec![entry_with_rows(90, 10)];
+    entries.extend_from_slice(state.entries());
+    state
+        .try_replace_all::<(), (), _>(state.revision(), &entries, measure_from_table(&[(90, 10)]))
+        .unwrap();
+
+    assert_eq!(state.stored_anchor(), anchor);
+    assert_eq!(state.scroll_offset().get(), 15);
+    assert!(!state.observation().new_content_below);
+}
+
+#[test]
+fn prepending_history_preserves_an_existing_new_content_flag() {
+    let mut state = sized_state(&[4, 4, 4], 4, 12);
+    state
+        .try_scroll_to(state.revision(), RowOffset::new(5))
+        .unwrap();
+    state
+        .try_append::<(), (), _>(
+            state.revision(),
+            &[entry_with_rows(90, 1)],
+            measure_from_table(&[(90, 1)]),
+        )
+        .unwrap();
+    assert!(state.observation().new_content_below);
+    state
+        .try_prepend::<(), (), _>(
+            state.revision(),
+            &[entry_with_rows(91, 10)],
+            measure_from_table(&[(91, 10)]),
+        )
+        .unwrap();
+    assert!(state.observation().new_content_below);
 }
 
 #[test]
