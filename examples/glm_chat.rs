@@ -946,6 +946,10 @@ fn build_request(messages: &[MessageParam], tools: &[Tool]) -> ChatRequest {
     }
 }
 
+fn rollback_failed_request(messages: &mut Vec<MessageParam>, history_checkpoint: usize) {
+    messages.truncate(history_checkpoint);
+}
+
 /// Send request with cancellation support
 async fn send_request_cancellable(
     client: &Client,
@@ -1038,6 +1042,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Display user message in Claude Code style
         print_element(&render_user_message(input));
 
+        // A failed first request removes only this new user message.
+        let mut history_checkpoint = messages.len();
         messages.push(MessageParam {
             role: "user".to_string(),
             content: MessageContent::Text(input.to_string()),
@@ -1053,10 +1059,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let was_cancelled = spinner.stop();
 
             // Handle cancellation
-            if was_cancelled {
+            if was_cancelled || matches!(&result, Ok(None)) {
                 println!();
                 print_element(&render_cancelled());
-                messages.pop(); // Remove the user message since we cancelled
+                rollback_failed_request(&mut messages, history_checkpoint);
                 println!();
                 break;
             }
@@ -1098,6 +1104,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
 
+                    // Roll back the whole tool-use/result pair if its continuation fails.
+                    history_checkpoint = messages.len();
                     // Save assistant message
                     let assistant_content: Vec<ContentBlock> = response
                         .content
@@ -1154,7 +1162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!();
                     print_element(&render_error(&e.to_string()));
                     println!();
-                    messages.pop();
+                    rollback_failed_request(&mut messages, history_checkpoint);
                     break;
                 }
             }
@@ -1195,6 +1203,78 @@ mod tests {
         } else {
             result.split(", ").collect()
         }
+    }
+
+    fn tool_round(id: &str) -> Vec<MessageParam> {
+        serde_json::from_value(json!([
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": id, "name": "read_file", "input": {"path": "note.txt"}},
+                {"type": "tool_use", "id": format!("{id}-second"), "name": "list_files", "input": {"path": "."}}
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": id, "content": "note content"},
+                {"type": "tool_result", "tool_use_id": format!("{id}-second"), "content": "note.txt"}
+            ]}
+        ]))
+        .expect("tool round fixture")
+    }
+
+    #[test]
+    fn failed_first_request_removes_only_the_new_user_message() {
+        let mut messages: Vec<MessageParam> = serde_json::from_value(json!([
+            {"role": "user", "content": "previous question"}
+        ]))
+        .expect("user fixture");
+        messages.extend(tool_round("previous"));
+        let before = serde_json::to_value(&messages).expect("history serializes");
+        let history_checkpoint = messages.len();
+        messages.push(MessageParam {
+            role: "user".to_string(),
+            content: MessageContent::Text("new question".to_string()),
+        });
+
+        rollback_failed_request(&mut messages, history_checkpoint);
+
+        assert_eq!(serde_json::to_value(&messages).unwrap(), before);
+    }
+
+    #[test]
+    fn failed_continuation_removes_tool_use_and_all_matching_results() {
+        let user = json!({"role": "user", "content": "read note.txt"});
+        let mut messages: Vec<MessageParam> =
+            serde_json::from_value(json!([user])).expect("user fixture");
+        let history_checkpoint = messages.len();
+        messages.extend(tool_round("current"));
+
+        rollback_failed_request(&mut messages, history_checkpoint);
+
+        assert_eq!(serde_json::to_value(&messages).unwrap(), json!([user]));
+    }
+
+    #[test]
+    fn failed_later_continuation_preserves_earlier_pairs_in_the_next_request() {
+        let mut messages: Vec<MessageParam> = serde_json::from_value(json!([
+            {"role": "user", "content": "read note.txt"}
+        ]))
+        .expect("user fixture");
+        messages.extend(tool_round("earlier"));
+        let history_checkpoint = messages.len();
+        let mut expected = messages.clone();
+        messages.extend(tool_round("current"));
+
+        rollback_failed_request(&mut messages, history_checkpoint);
+
+        let next_user = MessageParam {
+            role: "user".to_string(),
+            content: MessageContent::Text("next question".to_string()),
+        };
+        messages.push(next_user.clone());
+        expected.push(next_user);
+        let request = build_request(&messages, &[]);
+        assert_eq!(
+            serde_json::to_value(&request.messages).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
     }
 
     #[test]
