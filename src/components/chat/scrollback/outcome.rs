@@ -275,8 +275,9 @@ impl std::error::Error for NotCommittedCause {
 
 /// What was observed before a commit's outcome became undecidable.
 ///
-/// The accepted byte count is the important field: it is nonzero (or unknown),
-/// which is exactly why a retry cannot be safe.
+/// The count reports only bytes known to have been accepted. A durable store
+/// may report no known accepted bytes even though its transaction may have
+/// applied, so a zero count does not make an unknown outcome retryable.
 #[derive(Debug)]
 pub struct UnknownEvidence {
     stage: TransportStage,
@@ -306,6 +307,8 @@ impl UnknownEvidence {
     }
 
     /// Returns how many transport bytes the terminal is known to have accepted.
+    ///
+    /// Zero means none are known, not that none were accepted.
     pub const fn accepted_transport_bytes(&self) -> usize {
         self.accepted_transport_bytes
     }
@@ -325,7 +328,7 @@ impl fmt::Display for UnknownEvidence {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{} after {} transport byte(s) accepted in the {}",
+            "{} with {} transport byte(s) known accepted in the {}",
             self.reason, self.accepted_transport_bytes, self.stage
         )?;
         if let Some(source) = &self.source {
@@ -361,6 +364,10 @@ pub enum UnknownReason {
     /// The transcript line exists and the process cannot prove it does, which is
     /// the one case where the terminal is ahead of the ledger.
     LedgerNotRecorded,
+    /// The durable transaction may or may not have applied.
+    ///
+    /// No accepted byte count or successful flush can be inferred.
+    DurableTransactionUnknown,
 }
 
 impl fmt::Display for UnknownReason {
@@ -370,6 +377,9 @@ impl fmt::Display for UnknownReason {
             Self::WriteStalledAfterAccept => "the write stalled without progress",
             Self::FlushFailed => "the flush failed",
             Self::LedgerNotRecorded => "the commit was flushed but could not be recorded",
+            Self::DurableTransactionUnknown => {
+                "the durable transaction may or may not have applied"
+            }
         })
     }
 }

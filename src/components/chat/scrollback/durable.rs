@@ -240,8 +240,8 @@ impl<S: DurableCommitStore> ScrollbackSink for DurableScrollbackSink<S> {
                     DurableCertainty::Unknown => ScrollbackCommitOutcome::Unknown {
                         evidence: UnknownEvidence::new(
                             TransportStage::Body,
-                            content.encode().total_len(),
-                            UnknownReason::LedgerNotRecorded,
+                            0,
+                            UnknownReason::DurableTransactionUnknown,
                             Some(error),
                         ),
                     },
@@ -423,7 +423,35 @@ mod tests {
 
         let outcome = sink.commit(&commit_id(1, "hello"), &content("hello"));
 
-        assert!(matches!(outcome, ScrollbackCommitOutcome::Unknown { .. }));
+        let ScrollbackCommitOutcome::Unknown { evidence } = &outcome else {
+            panic!("expected Unknown, got {outcome:?}");
+        };
+        assert!(store.transcript().is_empty());
+        assert_eq!(evidence.accepted_transport_bytes(), 0);
+        assert_eq!(evidence.reason(), UnknownReason::DurableTransactionUnknown);
+        assert_eq!(evidence.stage(), TransportStage::Body);
+        let source = evidence
+            .source_error()
+            .expect("the store error is retained");
+        assert_eq!(source.kind(), io::ErrorKind::Other);
+        assert_eq!(
+            source
+                .get_ref()
+                .and_then(|error| error.downcast_ref::<StoreError>())
+                .expect("the original store error type is retained")
+                .0,
+            "the store rejected the transaction"
+        );
+        let rendered = evidence.to_string();
+        assert!(
+            rendered.contains("may or may not have applied"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("0 transport byte(s) known accepted"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("flushed"), "{rendered}");
         assert!(!outcome.permits_retry());
         assert!(!outcome.permits_live_removal());
     }
