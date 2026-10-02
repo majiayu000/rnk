@@ -12,6 +12,7 @@ pub struct ElementId(u64);
 
 impl ElementId {
     /// Create a new unique element ID
+    #[allow(deprecated, reason = "try_update requires Rust 1.95; MSRV is 1.88")]
     pub fn new() -> Self {
         let id = ELEMENT_ID_COUNTER
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
