@@ -47,6 +47,9 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --lib --all-features --locked --verbose
 
+      - name: GLM tool regressions
+        run: cargo test --example glm_chat --all-features --locked --verbose
+
   workspace:
     name: Workspace All Targets
     runs-on: ubuntu-latest
