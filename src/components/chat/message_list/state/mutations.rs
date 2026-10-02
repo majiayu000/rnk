@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use super::{Candidate, ListStructure, MessageListState};
+use super::{Candidate, MessageListState};
 use crate::components::chat::MessageId;
 use crate::components::chat::message_list::cache::BoundedMeasurementCache;
 use crate::components::chat::message_list::error::{
@@ -302,7 +302,6 @@ impl MessageListState {
     {
         let previous_revision = self.revision;
         let applied_revision = self.revision.checked_next()?;
-        let previous_total = self.index.total_rows()?;
 
         let key = entry.measure_key();
         let measured = match self.measurements.get(&key) {
@@ -347,25 +346,18 @@ impl MessageListState {
         self.rows[index] = measured;
         self.active_keys[index] = key.clone();
 
-        let growth_below = {
-            let structure = self.structure();
-            let new_total = structure.total_rows()?;
-            new_total > previous_total
-                && new_total
-                    > self
-                        .scroll_offset
-                        .get()
-                        .saturating_add(self.viewport_rows.get())
-        };
-        let restored = {
-            let structure = ListStructure {
-                entries: &self.entries,
-                positions: &self.positions,
-                rows: &self.rows,
-                index: &self.index,
-            };
-            self.restore_view(&structure, growth_below)?
-        };
+        let mut restored = self.restore_view(&self.structure(), false)?;
+        if delta > 0
+            && self.index.prefix_sum(index + 1)?
+                > restored
+                    .scroll_offset
+                    .get()
+                    .saturating_add(self.viewport_rows.get())
+        {
+            if let BottomFollowState::Paused { new_content_below } = &mut restored.follow {
+                *new_content_below = true;
+            }
+        }
 
         self.measurements.insert(key, measured);
         self.scroll_offset = restored.scroll_offset;
@@ -542,7 +534,6 @@ impl MessageListState {
     {
         let previous_revision = self.revision;
         let applied_revision = self.revision.checked_next()?;
-        let previous_total = self.index.total_rows()?;
 
         let mut measurements = self.measurements.clone();
         let (rows, active_keys) = measure_all(&staged, &mut measurements, measure)?;
@@ -551,8 +542,12 @@ impl MessageListState {
         }
 
         let candidate = Candidate::try_build(staged, rows, active_keys)?;
-        let growth_below = self.growth_below_viewport(previous_total, &candidate.structure())?;
-        let restored = self.restore_view(&candidate.structure(), growth_below)?;
+        let mut restored = self.restore_view(&candidate.structure(), false)?;
+        if self.growth_below_viewport(&candidate.structure(), restored.scroll_offset)? {
+            if let BottomFollowState::Paused { new_content_below } = &mut restored.follow {
+                *new_content_below = true;
+            }
+        }
 
         self.measurements = measurements;
         self.commit(candidate, restored.into_parts());
