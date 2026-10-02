@@ -5,6 +5,11 @@ artifacts are also available from the GitHub Releases page.
 
 ## Unreleased
 
+### Fixed
+
+- Returned file content from the GLM chat example's approved `read_file` tool,
+  capped at 100 lines and 16 KiB with an explicit truncation notice.
+
 ### Changed
 
 - Prepared the release workflow for crates.io trusted publishing through GitHub
