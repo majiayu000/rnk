@@ -3,9 +3,20 @@
 All notable release notes for this repository live here. Older generated release
 artifacts are also available from the GitHub Releases page.
 
-## Unreleased
+## 0.20.0 - Unreleased candidate
+
+### Changed
+
+- Assigned the unreleased chat API its own 0.20.0 candidate version. Published
+  0.19.3 does not include `components::chat`; the chat quickstart now names
+  the required source and shows consumption from a local packaged crate.
+- Connected bracketed paste and composer/transcript focus in `rnk_chat`.
+- Corrected the terminal contract to describe grapheme-based renderer output.
 
 ### Fixed
+
+- Forwarded real terminal paste events to existing `use_paste` handlers; the
+  event loop previously ignored them even when bracketed paste was enabled.
 
 - Returned file content from the GLM chat example's approved `read_file` tool,
   capped at 100 lines and 16 KiB with an explicit truncation notice.

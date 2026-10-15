@@ -162,6 +162,11 @@ impl EventLoop {
                 // Request re-render after mouse event
                 self.runtime.request_render();
             }
+            Event::Paste(content) => {
+                crate::hooks::dispatch_paste(&content);
+                crate::hooks::record_activity();
+                self.runtime.request_render();
+            }
             Event::Resize(_new_width, _new_height) => {
                 // Resize is handled by the App itself
                 // Just request re-render
