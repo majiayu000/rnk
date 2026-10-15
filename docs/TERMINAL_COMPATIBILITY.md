@@ -105,6 +105,8 @@ Source tests cover resize decisions and buffer clipping. On Unix,
 a PTY: Unicode input, bracketed multiline paste, focus routing, terminal resize,
 local deterministic replies, and exit. It checks terminal line flags and the
 cursor/alternate-screen/paste restoration sequences.
+The Unix chat test also uses a job-control shell to check Ctrl+Z/fg and pasting
+after resume. Paste mode is disabled during the handoff and restored on resume.
 
 A PTY proves terminal I/O and kernel terminal state, not visual rendering in
 every emulator, tmux forwarding, screen-reader usability, or a human acceptance

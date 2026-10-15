@@ -774,11 +774,14 @@ mod pty_tests {
             before.c_lflag & (libc::ECHO | libc::ICANON),
             libc::ECHO | libc::ICANON
         );
-        let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
-        command.args(["--exact", "pty_tests::application_child", "--nocapture"]);
+        // An interactive shell provides a real job-control parent for Ctrl+Z/fg.
+        let mut command = CommandBuilder::new("/bin/bash");
+        command.args(["--noprofile", "--norc", "-i"]);
         command.env(CHILD, "1");
         command.env("TERM", "xterm-256color");
         command.env("NO_COLOR", "1");
+        command.env("PS1", "RNK_PTY_SHELL> ");
+        command.env("INPUTRC", "/dev/null");
         let mut child = pty.slave.spawn_command(command).expect("spawn app");
         // Kill on panic as well as success; a failed assertion must not leave
         // an interactive application waiting forever in the test runner.
@@ -802,9 +805,50 @@ mod pty_tests {
             }
         });
         let mut output = Vec::new();
+        receive_until(&rx, &mut output, "RNK_PTY_SHELL> ");
+        writer
+            .write_all(b"bind 'set enable-bracketed-paste off'\n")
+            .expect("configure shell paste mode");
+        writer.flush().expect("flush");
+        output.clear();
+        receive_until(&rx, &mut output, "RNK_PTY_SHELL> ");
+        let shell_flags = termios(fd).c_lflag;
+        let executable = std::env::current_exe().expect("test executable");
+        let invocation = format!(
+            "'{}' --exact pty_tests::application_child --nocapture\n",
+            executable.to_string_lossy().replace('\'', "'\\''")
+        );
+        writer.write_all(invocation.as_bytes()).expect("launch app");
+        writer.flush().expect("flush");
+        output.clear();
         receive_until(&rx, &mut output, "Composer | Tab Focus");
         assert_eq!(termios(fd).c_lflag & (libc::ECHO | libc::ICANON), 0);
         assert!(String::from_utf8_lossy(&output).contains("\x1b[?2004h"));
+
+        writer.write_all(b"\x1a").expect("suspend app");
+        writer.flush().expect("flush");
+        output.clear();
+        receive_until(&rx, &mut output, "RNK_PTY_SHELL> ");
+        assert!(
+            String::from_utf8_lossy(&output).contains("\x1b[?2004l"),
+            "suspend must disable bracketed paste before handing off to the shell"
+        );
+        assert_eq!(
+            termios(fd).c_lflag,
+            shell_flags,
+            "restore shell terminal flags"
+        );
+        // Model a shell/child program changing terminal paste mode while suspended.
+        writer
+            .write_all(b"printf '\\033[?2004l'; fg\n")
+            .expect("resume app");
+        writer.flush().expect("flush");
+        output.clear();
+        receive_until(&rx, &mut output, "Composer | Tab Focus");
+        assert!(
+            String::from_utf8_lossy(&output).contains("\x1b[?2004h"),
+            "resume must restore bracketed paste"
+        );
 
         writer
             .write_all("你好👩‍💻".as_bytes())
@@ -863,6 +907,11 @@ mod pty_tests {
         writer.flush().expect("flush");
         output.clear();
         receive_until(&rx, &mut output, "\x1b[?2004l");
+        receive_until(&rx, &mut output, "RNK_PTY_SHELL> ");
+        writer
+            .write_all(b"exit $?\n")
+            .expect("exit shell with application status");
+        writer.flush().expect("flush");
         assert!(child.wait().expect("wait for app").success());
         assert_eq!(
             termios(fd).c_lflag,
