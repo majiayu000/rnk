@@ -11,13 +11,13 @@ To use the chat API immediately from a reproducible source revision:
 
 ```toml
 [dependencies]
-rnk = { git = "https://github.com/majiayu000/rnk", rev = "a86de7d7a9781297aafc4acd83ab8e34c05521f4" }
+rnk = { git = "https://github.com/majiayu000/rnk", rev = "ded12b698aaab6de5db2aea654304bd0cb681c28" }
 ```
 
-That revision contains the chat module but still labels itself 0.19.3; Cargo
+That revision contains the unpublished 0.20.0 candidate, including bracketed
+paste, Tab focus routing and paste-mode restoration after Ctrl+Z/fg. Cargo
 identifies it by git source and revision, separately from crates.io 0.19.3.
-The candidate checkout fixes that version ambiguity. To consume its actual
-package locally, run from the candidate repository root:
+To consume its actual package locally, run from the candidate repository root:
 
 ```bash
 cargo package -p rnk --locked
