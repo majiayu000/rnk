@@ -58,13 +58,15 @@ Measurement, wrapping, and truncation in `layout::measure` are grapheme-aware.
 They use Unicode grapheme clusters and display width, so combining marks and
 emoji sequences are handled as clusters rather than independent scalar values.
 
-Renderer output is terminal-cell based. `renderer::Output` writes `char` values
-using `UnicodeWidthChar`; wide characters occupy two cells and the second cell is
-stored internally as a placeholder. A wide character that cannot fit at the right
-edge is not split across cells.
+Renderer output is terminal-cell based and grapheme-aware. `renderer::Output`
+segments text with `UnicodeSegmentation` and measures clusters using
+`UnicodeWidthStr`. It retains the full cluster in its lead-cell metadata, with
+continuation cells for the remaining display width. Combining marks and ZWJ
+emoji are not rendered as independent scalar cells. A cluster that cannot fit
+at the right edge is not split across cells.
 
 Viewport clipping is cell-offset based. If a horizontal offset lands inside a
-wide character, the whole wide character is skipped. If a wide character would
+wide grapheme cluster, the whole cluster is skipped. If a cluster would
 overflow the right edge of the viewport, it is omitted instead of being split.
 
 Ambiguous-width Unicode characters are resolved by the Unicode width crate and
@@ -98,6 +100,12 @@ Line-level rendering clears changed lines before writing new text and clears
 rows that disappeared from the previous frame. This covers shorter replacement
 lines and stale rows in the application's managed output region.
 
-CI tests cover the source-level resize decision and buffer clipping behavior.
-They do not prove real emulator resize delivery, tmux forwarding, or terminal
-scrollback restoration.
+Source tests cover resize decisions and buffer clipping. On Unix,
+`cargo test --example rnk_chat --locked` also drives the actual chat app through
+a PTY: Unicode input, bracketed multiline paste, focus routing, terminal resize,
+local deterministic replies, and exit. It checks terminal line flags and the
+cursor/alternate-screen/paste restoration sequences.
+
+A PTY proves terminal I/O and kernel terminal state, not visual rendering in
+every emulator, tmux forwarding, screen-reader usability, or a human acceptance
+pass. Those remain terminal-dependent and require separate validation.

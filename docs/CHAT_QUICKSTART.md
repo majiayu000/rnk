@@ -1,5 +1,45 @@
 # Building a Chat With rnk
 
+## Install the matching source first
+
+This guide uses `components::chat`, which is absent from the published
+`rnk 0.19.3` crate. This checkout prepares **0.20.0 as a local candidate**;
+0.20.0 has not been published. `cargo add rnk` currently installs the released
+API, not this chat API.
+
+To use the chat API immediately from a reproducible source revision:
+
+```toml
+[dependencies]
+rnk = { git = "https://github.com/majiayu000/rnk", rev = "a86de7d7a9781297aafc4acd83ab8e34c05521f4" }
+```
+
+That revision contains the chat module but still labels itself 0.19.3; Cargo
+identifies it by git source and revision, separately from crates.io 0.19.3.
+The candidate checkout fixes that version ambiguity. To consume its actual
+package locally, run from the candidate repository root:
+
+```bash
+cargo package -p rnk --locked
+mkdir -p /tmp/rnk-chat-package
+tar -xzf target/package/rnk-0.20.0.crate -C /tmp/rnk-chat-package
+cargo new /tmp/rnk-chat-consumer
+cd /tmp/rnk-chat-consumer
+cargo add rnk --path /tmp/rnk-chat-package/rnk-0.20.0
+cargo add unicode-segmentation@1.12 unicode-width@0.2
+cp /tmp/rnk-chat-package/rnk-0.20.0/examples/rnk_chat.rs src/main.rs
+cargo run
+```
+
+Use fresh temporary directories if these names already exist. The interactive
+example uses local deterministic replies, with no model API or credentials.
+Enter submits, Tab switches composer/transcript focus, PgUp/PgDn scroll, and
+Esc exits. Bracketed paste inserts text without submitting it. The snippets
+below explain individual pieces and assume application state; the complete
+`rnk_chat` example above is the runnable entry point.
+
+## Choose a shape
+
 Two shapes, one set of parts. Pick the shape first, because it decides what you
 can undo.
 

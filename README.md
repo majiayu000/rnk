@@ -1,4 +1,4 @@
-> **Status:** frozen for new framework scope. The published crate remains the install path. No new features.
+> **Status:** frozen for new framework scope. Use the published crate for released APIs; the chat API below is an unpublished candidate. No new framework features.
 
 # rnk
 
@@ -12,9 +12,10 @@ A React-like declarative terminal UI framework for Rust, inspired by [Ink](https
 
 ## Version Status
 
-The Crates.io badge above is the source of truth for published installs. This
-checkout currently declares `0.19.3`; when the checkout is ahead of the latest
-published release, use the git dependency below for the latest source version.
+The published release is `0.19.3`; it does **not** contain `components::chat`.
+This checkout declares the **unpublished `0.20.0` candidate**, which includes
+the chat API. Changing this manifest does not publish a release. The Crates.io
+badge above is the source of truth for subsequent published installs.
 Release notes live in [CHANGELOG.md](CHANGELOG.md); older published release
 artifacts remain available on
 [GitHub Releases](https://github.com/majiayu000/rnk/releases).
@@ -97,12 +98,10 @@ cargo add rnk
 
 If you edit `Cargo.toml` manually, use the current version shown on the Crates.io badge or package page.
 
-For the latest source version before the next release is published:
-
-```toml
-[dependencies]
-rnk = { git = "https://github.com/majiayu000/rnk" }
-```
+For the unreleased chat API, follow the pinned source and local package
+instructions in the
+[chat quickstart](https://github.com/majiayu000/rnk/blob/main/docs/CHAT_QUICKSTART.md).
+Do not substitute `rnk = "0.19.3"` for that dependency.
 
 The `rnk` binary target is a minimal repository demo and does not expose a
 standalone CLI surface. Keep installation docs centered on Cargo dependencies
