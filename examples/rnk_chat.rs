@@ -14,7 +14,7 @@ use rnk::components::chat::message_list::{
 };
 use rnk::components::chat::{
     ChatComposerKeyMap, ChatComposerState, ChatRole, ComposerProjection, FullscreenChatShell,
-    FullscreenKeyOutcome, FullscreenLayout, MessageId, MessageRevision,
+    FullscreenFocus, FullscreenKeyOutcome, FullscreenLayout, MessageId, MessageRevision,
 };
 use rnk::core::TextWrap;
 use rnk::hooks::{Key, use_window_size};
@@ -33,6 +33,7 @@ const PAGE_ROWS: u64 = 5;
 const MEASUREMENT_CACHE: usize = 512;
 
 fn main() -> std::io::Result<()> {
+    let _paste = rnk::hooks::BracketedPasteGuard::new()?;
     render(app).fullscreen().run()
 }
 
@@ -125,6 +126,14 @@ impl Transcript {
     }
 
     fn handle_input(&mut self, input: &str, key: &Key) -> Option<String> {
+        if key.tab {
+            let focus = match self.shell.focus() {
+                FullscreenFocus::Composer => FullscreenFocus::Transcript,
+                FullscreenFocus::Transcript => FullscreenFocus::Composer,
+            };
+            self.shell.set_focus(focus);
+            return None;
+        }
         if key.page_up {
             self.scroll_by(-(PAGE_ROWS as i64));
             return None;
@@ -292,6 +301,13 @@ fn app() -> Element {
     let is_typing = use_signal(|| false);
     let app = use_app();
 
+    let transcript_paste = transcript.clone();
+    use_paste(move |event| {
+        transcript_paste.update(|state| {
+            state.handle_input(event.content(), &Key::default());
+        });
+    });
+
     let transcript_input = transcript.clone();
     let is_typing_input = is_typing.clone();
 
@@ -345,7 +361,7 @@ fn app() -> Element {
         (
             message_list(state),
             input_area(state.shell.composer(), state.layout().width()),
-            footer(typing, state.layout().status().rows()),
+            footer(typing, state.shell.focus(), state.layout().status().rows()),
         )
     });
 
@@ -577,11 +593,16 @@ fn cell(cluster: &str, at_cursor: bool) -> Element {
     }
 }
 
-fn footer(is_typing: bool, rows: u16) -> Element {
+fn footer(is_typing: bool, focus: FullscreenFocus, rows: u16) -> Element {
     let status = if is_typing {
         "Assistant is typing..."
     } else {
-        "Enter Send | PgUp/PgDn Scroll | Esc Exit"
+        match focus {
+            FullscreenFocus::Composer => {
+                "Composer | Tab Focus | Enter Send | PgUp/PgDn Scroll | Esc Exit"
+            }
+            FullscreenFocus::Transcript => "Transcript | Tab Focus | PgUp/PgDn Scroll | Esc Exit",
+        }
     };
 
     Box::new()
@@ -694,5 +715,162 @@ mod tests {
         );
         assert!(transcript.resized(12, 3).is_err());
         assert!(transcript.resized(2, 12).is_err());
+    }
+}
+
+// This exercises the same application entry point as `cargo run`, through real
+// Unix terminal I/O. It does not certify an emulator's visual rendering.
+#[cfg(all(test, unix))]
+mod pty_tests {
+    use super::*;
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::io::{Read, Write};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    const CHILD: &str = "RNK_CHAT_PTY_CHILD";
+
+    #[test]
+    fn application_child() {
+        if std::env::var_os(CHILD).is_some() {
+            main().expect("chat application exits cleanly");
+        }
+    }
+
+    fn termios(fd: std::os::fd::RawFd) -> libc::termios {
+        // SAFETY: the caller owns an open PTY master and the output is sized.
+        let mut state = unsafe { std::mem::zeroed() };
+        assert_eq!(unsafe { libc::tcgetattr(fd, &mut state) }, 0);
+        state
+    }
+
+    fn receive_until(rx: &mpsc::Receiver<Vec<u8>>, output: &mut Vec<u8>, needle: &str) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !String::from_utf8_lossy(output).contains(needle) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let bytes = rx.recv_timeout(remaining).unwrap_or_else(|error| {
+                panic!(
+                    "waiting for {needle:?}: {error}; output: {}",
+                    String::from_utf8_lossy(output)
+                )
+            });
+            output.extend(bytes);
+        }
+    }
+
+    #[test]
+    fn chat_terminal_journey() {
+        let pty = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 100,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("open PTY");
+        let fd = pty.master.as_raw_fd().expect("Unix PTY fd");
+        let before = termios(fd);
+        assert_eq!(
+            before.c_lflag & (libc::ECHO | libc::ICANON),
+            libc::ECHO | libc::ICANON
+        );
+        let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+        command.args(["--exact", "pty_tests::application_child", "--nocapture"]);
+        command.env(CHILD, "1");
+        command.env("TERM", "xterm-256color");
+        command.env("NO_COLOR", "1");
+        let mut child = pty.slave.spawn_command(command).expect("spawn app");
+        // Kill on panic as well as success; a failed assertion must not leave
+        // an interactive application waiting forever in the test runner.
+        struct Cleanup(std::boxed::Box<dyn portable_pty::ChildKiller + Send + Sync>);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+            }
+        }
+        let _cleanup = Cleanup(child.clone_killer());
+        let mut reader = pty.master.try_clone_reader().expect("reader");
+        let mut writer = pty.master.take_writer().expect("writer");
+        drop(pty.slave);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buffer = [0; 8192];
+            while let Ok(count) = reader.read(&mut buffer) {
+                if count == 0 || tx.send(buffer[..count].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut output = Vec::new();
+        receive_until(&rx, &mut output, "Composer | Tab Focus");
+        assert_eq!(termios(fd).c_lflag & (libc::ECHO | libc::ICANON), 0);
+        assert!(String::from_utf8_lossy(&output).contains("\x1b[?2004h"));
+
+        writer
+            .write_all("你好👩‍💻".as_bytes())
+            .expect("Unicode typing");
+        writer.flush().expect("flush");
+        output.clear();
+        receive_until(&rx, &mut output, "你好👩‍💻");
+        writer.write_all(b"\t").expect("focus transcript");
+        writer.flush().expect("flush");
+        output.clear();
+        receive_until(&rx, &mut output, "Transcript | Tab Focus");
+        // Neither typed nor pasted text may edit the composer while unfocused.
+        writer
+            .write_all(b"BLOCKED\x1b[200~PASTE_BLOCKED\x1b[201~\t")
+            .expect("focus route");
+        writer.flush().expect("flush");
+        output.clear();
+        receive_until(&rx, &mut output, "Composer | Tab Focus");
+        assert!(!String::from_utf8_lossy(&output).contains("BLOCKED"));
+        writer
+            .write_all("\x1b[200~ pasted\n第二行\x1b[201~".as_bytes())
+            .expect("multiline paste");
+        writer.flush().expect("flush");
+        output.clear();
+        receive_until(&rx, &mut output, "第二行");
+        assert!(!String::from_utf8_lossy(&output).contains("Assistant is typing"));
+        writer.write_all(b"\r").expect("submit");
+        writer.flush().expect("flush");
+        output.clear();
+        receive_until(&rx, &mut output, "Assistant is typing");
+        receive_until(&rx, &mut output, "I received your message:");
+        assert!(String::from_utf8_lossy(&output).contains("你好👩‍💻 pasted"));
+        assert!(!String::from_utf8_lossy(&output).contains("BLOCKED"));
+
+        pty.master
+            .resize(PtySize {
+                rows: 3,
+                cols: 90,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("narrow resize");
+        output.clear();
+        receive_until(&rx, &mut output, "terminal 90x3 is too small");
+        output.clear();
+        pty.master
+            .resize(PtySize {
+                rows: 16,
+                cols: 90,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("restore size");
+        receive_until(&rx, &mut output, "Composer | Tab Focus");
+        writer.write_all(b"\x1b").expect("exit");
+        writer.flush().expect("flush");
+        output.clear();
+        receive_until(&rx, &mut output, "\x1b[?2004l");
+        assert!(child.wait().expect("wait for app").success());
+        assert_eq!(
+            termios(fd).c_lflag,
+            before.c_lflag,
+            "restore terminal flags"
+        );
+        let output = String::from_utf8_lossy(&output);
+        assert!(output.contains("\x1b[?1049l"), "leave alternate screen");
+        assert!(output.contains("\x1b[?25h"), "restore cursor");
     }
 }
