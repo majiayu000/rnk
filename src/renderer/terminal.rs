@@ -144,6 +144,8 @@ pub struct Terminal {
     raw_mode: bool,
     /// Whether mouse mode is enabled
     mouse_enabled: bool,
+    /// Paste mode to restore after handing the terminal to a shell or child.
+    suspended_bracketed_paste: bool,
     /// Number of lines rendered in inline mode (for cursor positioning)
     inline_lines_rendered: usize,
 }
@@ -158,6 +160,7 @@ impl Terminal {
             cursor_hidden: false,
             raw_mode: false,
             mouse_enabled: false,
+            suspended_bracketed_paste: false,
             inline_lines_rendered: 0,
         }
     }
@@ -626,6 +629,10 @@ impl Terminal {
     ///
     /// Call `resume()` after the external process exits to restore TUI state.
     pub fn suspend(&mut self) -> std::io::Result<()> {
+        self.suspended_bracketed_paste = crate::hooks::is_bracketed_paste_enabled();
+        if self.suspended_bracketed_paste {
+            crate::hooks::disable_bracketed_paste()?;
+        }
         let mut stdout = stdout();
 
         // Disable mouse capture
@@ -680,6 +687,11 @@ impl Terminal {
         // Re-enable mouse capture if it was enabled
         if self.mouse_enabled {
             execute!(stdout, EnableMouseCapture)?;
+        }
+
+        if self.suspended_bracketed_paste {
+            crate::hooks::enable_bracketed_paste()?;
+            self.suspended_bracketed_paste = false;
         }
 
         stdout.flush()?;

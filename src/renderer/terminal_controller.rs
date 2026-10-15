@@ -115,10 +115,10 @@ impl TerminalController {
                 execute!(stdout(), crossterm::event::DisableMouseCapture)?;
             }
             TerminalCmd::EnableBracketedPaste => {
-                execute!(stdout(), crossterm::event::EnableBracketedPaste)?;
+                crate::hooks::enable_bracketed_paste()?;
             }
             TerminalCmd::DisableBracketedPaste => {
-                execute!(stdout(), crossterm::event::DisableBracketedPaste)?;
+                crate::hooks::disable_bracketed_paste()?;
             }
         }
         Ok(())

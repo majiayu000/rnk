@@ -15,6 +15,9 @@ artifacts are also available from the GitHub Releases page.
 
 ### Fixed
 
+- Disable bracketed paste while suspended and restore it on resume, including
+  Ctrl+Z/fg and external-process handoff.
+
 - Forwarded real terminal paste events to existing `use_paste` handlers; the
   event loop previously ignored them even when bracketed paste was enabled.
 
