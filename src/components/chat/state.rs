@@ -345,17 +345,15 @@ fn validate_snapshot(value: &ConversationStateSnapshot) -> Result<(), Conversati
                 return invalid_snapshot("active block history is contradictory");
             }
             match &entry.block {
-                MessageBlock::Thinking(thinking) => {
-                    if !active_thinking.entry(message.id).or_default().insert(thinking.id.clone()) {
-                        return invalid_snapshot("active thinking identity is duplicated");
-                    }
+                MessageBlock::Thinking(thinking)
+                    if !active_thinking.entry(message.id).or_default().insert(thinking.id.clone()) => {
+                    return invalid_snapshot("active thinking identity is duplicated");
                 }
-                MessageBlock::ToolCall(call) => {
+                MessageBlock::ToolCall(call)
                     if !seen_tool_calls.contains(&call.call_id)
                         || retired_tool_calls.contains(&call.call_id)
-                        || active_calls.insert(call.call_id.clone(), &call.status).is_some() {
-                        return invalid_snapshot("active tool-call history is contradictory");
-                    }
+                        || active_calls.insert(call.call_id.clone(), &call.status).is_some() => {
+                    return invalid_snapshot("active tool-call history is contradictory");
                 }
                 MessageBlock::ToolResult(result) => {
                     let location = ToolResultLocation::new(message.id, entry.id);

@@ -674,12 +674,11 @@ fn validate_conversation(state: &ConversationState) -> Result<(), ConversationEr
         for entry in &message.blocks {
             targeted::record_block_visits(1);
             match &entry.block {
-                MessageBlock::ToolCall(value) => {
-                    if calls.insert(value.call_id.clone(), &value.status).is_some() {
-                        return Err(ConversationError::DuplicateToolCallId {
-                            call_id: value.call_id.as_str().to_owned(),
-                        });
-                    }
+                MessageBlock::ToolCall(value)
+                    if calls.insert(value.call_id.clone(), &value.status).is_some() => {
+                    return Err(ConversationError::DuplicateToolCallId {
+                        call_id: value.call_id.as_str().to_owned(),
+                    });
                 }
                 MessageBlock::ToolResult(value)
                     if results.insert(value.call_id.clone(), (&value.status,
