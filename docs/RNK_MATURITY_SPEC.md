@@ -6,7 +6,8 @@ terminal UI. `rnk` is not a desktop, mobile, or web GUI toolkit.
 
 ## Baseline
 
-- Current crate version: `0.19.3`.
+- Latest published crate release: `0.19.3`.
+- This checkout declares the unpublished `0.20.0` candidate.
 - Current public distribution: the `rnk` Rust crate.
 - Current binary target: a minimal repository demo, not a supported user CLI.
 - Local verification baseline for this spec tranche:
