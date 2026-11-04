@@ -89,14 +89,15 @@ impl Cmd<()> {
             {
                 use reqwest;
 
-                let client = reqwest::Client::new();
-                let mut req = match request.method.as_str() {
-                    "GET" => client.get(&request.url),
-                    "POST" => client.post(&request.url),
-                    "PUT" => client.put(&request.url),
-                    "DELETE" => client.delete(&request.url),
-                    _ => client.get(&request.url),
+                let method = match reqwest::Method::from_bytes(request.method.as_bytes()) {
+                    Ok(method) => method,
+                    Err(error) => {
+                        on_response(Err(format!("Invalid HTTP method: {error}")));
+                        return;
+                    }
                 };
+                let client = reqwest::Client::new();
+                let mut req = client.request(method, &request.url);
 
                 // Add headers
                 for (key, value) in request.headers {
@@ -322,6 +323,102 @@ mod tests {
         assert_eq!(req.method, "POST");
         assert!(req.body.is_some());
         assert_eq!(req.body.unwrap(), r#"{"key": "value"}"#);
+    }
+
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn test_http_preserves_methods_and_payload() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+        for method in [
+            "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "CUSTOM", "patch",
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let callbacks = Arc::new(AtomicUsize::new(0));
+            let observed_callbacks = Arc::clone(&callbacks);
+            let request = HttpRequest {
+                method: method.into(),
+                ..HttpRequest::get(format!("http://{address}/resource"))
+            }
+            .header("X-Test", "retained")
+            .body("payload");
+            let Cmd::Perform { future } = Cmd::http(request, move |result| {
+                observed_callbacks.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(result.unwrap().status, 200);
+            }) else {
+                panic!("HTTP request must produce a Perform command");
+            };
+
+            let server = async {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut stream = BufReader::new(stream);
+                let mut request_line = String::new();
+                stream.read_line(&mut request_line).await.unwrap();
+                assert_eq!(request_line, format!("{method} /resource HTTP/1.1\r\n"));
+                let mut headers = String::new();
+                loop {
+                    let mut line = String::new();
+                    assert_ne!(stream.read_line(&mut line).await.unwrap(), 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                    headers.push_str(&line.to_ascii_lowercase());
+                }
+                assert!(headers.contains("x-test: retained\r\n"));
+                assert!(headers.contains("content-length: 7\r\n"));
+                let mut body = [0; 7];
+                stream.read_exact(&mut body).await.unwrap();
+                assert_eq!(&body, b"payload");
+                stream
+                    .get_mut()
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await
+                    .unwrap();
+            };
+            tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::join!(future, server);
+            })
+            .await
+            .expect("HTTP request timed out");
+            assert_eq!(callbacks.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn test_http_rejects_invalid_methods_without_connecting() {
+        use std::sync::{Arc, Mutex};
+
+        for method in ["", "bad method", "GET\r\nX-Test: injected", "méthode"] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let request = HttpRequest {
+                method: method.into(),
+                ..HttpRequest::get(format!("http://{}/", listener.local_addr().unwrap()))
+            };
+            let responses = Arc::new(Mutex::new(Vec::new()));
+            let observed_responses = Arc::clone(&responses);
+            let Cmd::Perform { future } = Cmd::http(request, move |result| {
+                observed_responses.lock().unwrap().push(result);
+            }) else {
+                panic!("HTTP request must produce a Perform command");
+            };
+            tokio::time::timeout(Duration::from_secs(1), future)
+                .await
+                .expect("invalid method must fail without waiting for a response");
+            let responses = responses.lock().unwrap();
+            assert_eq!(responses.len(), 1);
+            assert!(responses[0].is_err());
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+        }
     }
 
     #[tokio::test]
