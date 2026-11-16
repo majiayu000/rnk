@@ -375,22 +375,26 @@ impl ScrollHandle {
 
     try_write!(
         /// Try to scroll to top, returning false if lock is poisoned
-        try_scroll_to_top, scroll_to_top
+        try_scroll_to_top,
+        scroll_to_top
     );
 
     try_write!(
         /// Try to scroll to bottom, returning false if lock is poisoned
-        try_scroll_to_bottom, scroll_to_bottom
+        try_scroll_to_bottom,
+        scroll_to_bottom
     );
 
     try_write!(
         /// Try to page up, returning false if lock is poisoned
-        try_page_up, page_up
+        try_page_up,
+        page_up
     );
 
     try_write!(
         /// Try to page down, returning false if lock is poisoned
-        try_page_down, page_down
+        try_page_down,
+        page_down
     );
 
     try_write!(
